@@ -1,0 +1,15 @@
+[package]
+name = "macpepdb"
+version = "0.1.0"
+authors = ["Dirk Winkelhardt <dirk.winkelhardt@rub.de>"] 
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "macpepdb"
+path = "src/lib.rs"
+
+[[bin]]
+name = "macpepdb"
+path = "src/bin.rs"
