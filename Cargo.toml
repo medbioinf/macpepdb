@@ -13,3 +13,9 @@ path = "src/lib.rs"
 [[bin]]
 name = "macpepdb"
 path = "src/bin.rs"
+
+[dependencies]
+anyhow = "1.0.69"
+chrono = "0.4.23"
+fallible-iterator = "0.2.0"
+lazy_static = "1.4.0"
