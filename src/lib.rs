@@ -9,6 +9,7 @@ pub mod mass;
 pub mod tools;
 
 // internal imports
+pub mod chemistry;
 pub mod entities;
 pub mod io;
 
