@@ -1,5 +1,5 @@
 #[allow(unused_imports)]
-#[macro_use]    // Used in unit tests
+#[macro_use]
 extern crate lazy_static;
 
 // internal imports including macros
@@ -11,6 +11,7 @@ pub mod tools;
 // internal imports
 pub mod biology;
 pub mod chemistry;
+pub mod database;
 pub mod entities;
 pub mod io;
 

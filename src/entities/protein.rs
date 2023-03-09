@@ -1,3 +1,4 @@
+#[derive(Clone)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
 /// 
 pub struct Protein {
