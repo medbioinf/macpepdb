@@ -7,7 +7,7 @@ use std::io::prelude::*;
 use std::path::Path;
 
 // 3rd party imports
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use chrono::NaiveDate;
 use fallible_iterator::FallibleIterator;
 
@@ -105,7 +105,14 @@ impl FallibleIterator for Reader {
                     }
                     "OX" => {
                         // Process OX line by parsing the taxonomy ID after 'NCBI_TaxID=' up to the following semicolon
-                        taxonomy_id = line[16..line.len()-1].parse::<i64>()?;
+                        // Get end of taxonomy ID which is either the next whitespace or the end of the line
+                        let taxonomy_id_end = match line[16..].find(" ") {
+                            Some(match_idx) => match_idx + 16,
+                            None => line.len()-1
+                        };
+                        taxonomy_id = line[16..taxonomy_id_end]
+                            .parse::<i64>()
+                            .with_context(|| format!("could not parse taxonomy ID from line: {},\n parsing: {}", line, &line[16..line.len()-1]))?;
                     }
                     "DR" => {
                         /*
@@ -159,13 +166,19 @@ impl FallibleIterator for Reader {
                          */
                         if let Some(mut name_start) = line.find(GN_NAME_ATTRIBUTE) {
                             name_start += GN_NAME_ATTRIBUTE.len();
-                            let name_end = line[name_start..].find(';').unwrap_or(line.len()-1);
-                            genes.push(line[name_start..name_start+name_end].trim().to_string());
+                            let name_end = match line[name_start..].find(';') {
+                                Some(match_idx) => match_idx + name_start,
+                                None => line.len()-1
+                            };
+                            genes.push(line[name_start..name_end].trim().to_string());
                         }
                         if let Some(mut synonyms_start) = line.find(GN_SYNONYMS_ATTRIBUTE) {
                             synonyms_start += GN_SYNONYMS_ATTRIBUTE.len();
-                            let synonyms_end = line[synonyms_start..].find(';').unwrap_or(line.len()-1);
-                            genes.extend(line[synonyms_start..synonyms_start+synonyms_end].trim().split(",").map(|s| s.trim().to_string()));
+                            let synonyms_end = match line[synonyms_start..].find(';') {
+                                Some(match_idx) => match_idx + synonyms_start,
+                                None => line.len()-1
+                            };
+                            genes.extend(line[synonyms_start..synonyms_end].trim().split(",").map(|s| s.trim().to_string()));
                         }
                     }
                     "  " => {
