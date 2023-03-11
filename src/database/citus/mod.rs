@@ -1,5 +1,6 @@
 /// Module for storing and retrieving data from the Citus database.
 pub mod protein_table;
+pub mod table;
 
 
 mod embedded {

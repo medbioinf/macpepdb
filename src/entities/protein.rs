@@ -1,3 +1,6 @@
+// 3rd party imports
+use postgres::Row;
+
 #[derive(Clone)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
 /// 
@@ -102,5 +105,22 @@ impl Protein {
     /// 
     pub fn get_updated_at(&self) -> i64 {
         self.updated_at
+    }
+}
+
+impl From<Row> for Protein {
+    fn from(row: Row) -> Self {
+        Protein {
+            accession: row.get("accession"),
+            secondary_accessions: row.get("secondary_accessions"),
+            entry_name: row.get("entry_name"),
+            name: row.get("name"),
+            genes: row.get("genes"),
+            taxonomy_id: row.get("taxonomy_id"),
+            proteome_id: row.get("proteome_id"),
+            is_reviewed: row.get("is_reviewed"),
+            sequence: row.get("sequence"),
+            updated_at: row.get("updated_at")
+        }
     }
 }

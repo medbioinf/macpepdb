@@ -1,12 +1,11 @@
 
 // 3rd party imports
 use anyhow::Result;
-use fallible_iterator::FallibleIterator;
-use postgres::{Client, Row, RowIter, ToStatement};
-use postgres::types::{BorrowToSql, ToSql};
+use postgres::{Client, Row};
 
 // internal imports
 use crate::entities::protein::Protein;
+use crate::database::citus::table::Table;
 
 const TABLE_NAME: &'static str = "proteins";
 
@@ -34,144 +33,11 @@ lazy_static! {
 }
 
 
-impl From<Row> for Protein {
-    fn from(row: Row) -> Self {
-        return Protein::new(
-            row.get("accession"),
-            row.get("secondary_accessions"),
-            row.get("entry_name"),
-            row.get("name"),
-            row.get("genes"),
-            row.get("taxonomy_id"),
-            row.get("proteome_id"),
-            row.get("is_reviewed"),
-            row.get("sequence"),
-            row.get("updated_at")
-        );
-    }
-}
-
-pub struct ProteinStream<'a>{
-    inner_iter: RowIter<'a>
-}
-
-impl FallibleIterator for ProteinStream<'_> {
-    type Item = Protein;
-    type Error = anyhow::Error;
-
-    fn next(&mut self) -> Result<Option<Self::Item>> {
-        if let Some(row) = self.inner_iter.next()? {
-            return Ok(Some(Protein::from(row)));
-        }
-        return Ok(None);
-    }
-}
-
 pub struct ProteinTable<'a> {
     client: &'a mut Client
 }
 
 impl<'a> ProteinTable<'a> {
-    /// Creates a new instance of the ProteinTable
-    pub fn new(client: &'a mut Client) -> Self {
-        return ProteinTable {
-            client
-        };
-    }
-
-    /// Selects proteins and returns them as rows.
-    /// 
-    /// # Arguments
-    /// * `cols` - The columns to select
-    /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
-    /// * `params` - The parameters to use in the query
-    /// 
-    pub fn raw_select_multiple(&mut self, cols: &str, additional: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>> {
-        let mut statement = format!("SELECT {} FROM {}", cols, TABLE_NAME);
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-        return Ok(self.client.query(&statement, params)?);
-    }
-
-    /// Selects a protein and returns it as row. If no protein is found, None is returned.
-    /// 
-    /// # Arguments
-    /// * `cols` - The columns to select
-    /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
-    /// * `params` - The parameters to use in the query
-    /// 
-    pub fn raw_select(&mut self, cols: &str, additional: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>> {
-        let mut statement = format!("SELECT {} FROM {}", cols, TABLE_NAME);
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-        return Ok(self.client.query_opt(&statement, params)?);
-    }
-
-    /// Selects proteins and returns them.
-    /// 
-    /// # Arguments
-    /// * `cols` - The columns to select
-    /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
-    /// * `params` - The parameters to use in the query
-    /// 
-    pub fn select_multiple(&mut self, additional: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Protein>> {
-        let rows = self.raw_select_multiple(SELECT_COLS, additional, params)?;
-        let mut proteins = Vec::new();
-        for row in rows {
-            proteins.push(Protein::from(row));
-        }
-        return Ok(proteins);
-    }
-
-    /// Selects a protein and returns it. If no protein is found, None is returned.
-    /// 
-    /// # Arguments
-    /// * `cols` - The columns to select
-    /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
-    /// * `params` - The parameters to use in the query
-    /// 
-    pub fn select(&mut self, additional: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Protein>> {
-        let row = self.raw_select(SELECT_COLS, additional, params)?;
-        if row.is_none() {
-            return Ok(None);
-        }
-        return Ok(Some(Protein::from(row.unwrap())));
-    }
-
-    /// Selects proteins and returns it them row iterator.
-    /// 
-    /// # Arguments
-    /// * `cols` - The columns to select
-    /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
-    /// * `params` - The parameters to use in the query
-    /// 
-    pub fn raw_stream<T, P, I>(&mut self, cols: &str, additional: &str, params: I) -> Result<RowIter<'_>>
-        where T: ?Sized + ToStatement, P: BorrowToSql, I : IntoIterator<Item = P>, I::IntoIter: ExactSizeIterator {
-        let mut statement = format!("SELECT {} FROM {}", cols, TABLE_NAME);
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-        return Ok(self.client.query_raw(&statement, params)?);
-    }
-
-    /// Selects proteins and returns them as iterator.
-    /// 
-    /// # Arguments
-    /// * `cols` - The columns to select
-    /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
-    /// * `params` - The parameters to use in the query
-    /// 
-    pub fn stream<T, P, I>(&mut self, additional: &str, params: I) -> Result<ProteinStream<'_>>
-        where T: ?Sized + ToStatement, P: BorrowToSql, I : IntoIterator<Item = P>, I::IntoIter: ExactSizeIterator {
-        return Ok(ProteinStream {
-            inner_iter: self.raw_stream::<T, P, I>(SELECT_COLS, additional, params)?
-        });
-    }
 
     pub fn insert(&mut self, protein: &Protein) -> Result<()> {
         let statement = format!(
@@ -232,12 +98,35 @@ impl<'a> ProteinTable<'a> {
     }
 }
 
+impl<'b> Table<'b, Protein> for ProteinTable<'b> {
+    fn new(client: &'b mut Client) -> Self {
+        Self {
+            client
+        }
+    }
+
+    fn get_client(&mut self) -> &mut Client {
+        return self.client;
+    }
+
+    fn table_name() -> &'static str {
+        return TABLE_NAME;
+    }
+
+    fn select_cols() -> &'static str {
+        return SELECT_COLS;
+    }
+}
+
+
+
 #[cfg(test)]
 mod tests {
     // std imports
     use std::path::Path;
 
     // external imports
+    use fallible_iterator::FallibleIterator;
     use serial_test::serial;
 
     // internal imports
