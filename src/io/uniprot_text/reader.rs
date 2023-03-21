@@ -2,7 +2,10 @@
 
 // std imports
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{
+    BufReader, 
+    SeekFrom
+};
 use std::io::prelude::*;
 use std::path::Path;
 
@@ -50,6 +53,34 @@ impl Reader {
         Ok(Self {
             internal_reader: BufReader::with_capacity(buffer_size, uniprot_txt_file),
         })
+    }
+    
+    /// Resets the reader to the beginning of the file
+    /// 
+    pub fn reset(&mut self) -> Result<()> {
+        self.internal_reader.seek(SeekFrom::Start(0))?;
+        return Ok(());
+    }
+
+    /// Returns the number of entries in the file.
+    /// This is much faster than iterating over all entries.
+    /// Attention: Resets the reader to the beginning of the file.
+    /// 
+    pub fn count_proteins(&mut self) -> Result<usize> {
+        let mut count: usize = 0;
+        let mut line = String::new();
+        self.reset()?;
+        while let Ok(num_bytes) = self.internal_reader.read_line(&mut line) {
+            if num_bytes == 0 {
+                break;
+            }
+            if line.starts_with("//") {
+                count += 1;
+            }
+            line.clear();
+        }
+        self.reset()?;
+        Ok(count)
     }
 }
 
@@ -308,5 +339,11 @@ mod tests {
             ctr += 1;
         }
         assert_eq!(ctr, 3);
+    }
+
+    #[test]
+    fn test_count_proteins() {
+        let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
+        assert_eq!(reader.count_proteins().unwrap(), 3);
     }
 }
