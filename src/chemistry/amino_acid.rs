@@ -6,6 +6,9 @@ use std::collections::HashMap;
 // 3rd party imports
 use anyhow::{Result, bail};
 
+// internal imports
+use crate::chemistry::molecule::WATER;
+
 pub struct AminoAcid {
     name: &'static str,
     one_letter_code: char,
@@ -143,6 +146,14 @@ lazy_static! {
         'B' => [&ASPARTIC_ACID, &ASPARAGINE],
         'Z' => [&GLUTAMIC_ACID, &GLUTAMINE]
     };
+}
+
+pub fn calc_sequence_mass(sequence: &str) -> Result<i64> {
+    let mut mass: i64 = WATER.get_mono_mass();
+    for c in sequence.chars() {
+        mass += AminoAcid::get_by_one_letter_code(c)?.get_mono_mass();
+    }
+    return Ok(mass);
 }
 
 
