@@ -200,11 +200,42 @@ impl BloomFilter {
         );
     }
 
+    /// Saves bloom filter to hdf5 file
+    /// 
+    /// # Arguments
+    /// * `path` - Path to hdf5 file
+    /// 
+    pub fn save(&self, path: &PathBuf) -> Result<()> {
+        let file = HDF5File::create(path)?;
+        file.new_dataset::<u64>().create("size")?.write_scalar(&(self.size as u64))?;
+        file.new_dataset::<u32>().create("hash_count")?.write_scalar(&self.hash_count)?;
+        file.new_dataset::<f64>().create("fp_prob")?.write_scalar(&self.fp_prob)?;
+        // Convert bitvec to hex string
+        let s_ascii = Self::encode_hex(&self.bitvec)?.iter()
+            .map(|b| format!("{:02X}", b))
+            .collect::<String>();
+        // Save hex string to hdf5 file
+        file.new_dataset::<VarLenAscii>()
+            .create("bit_array")?
+            .write_scalar(
+                &VarLenAscii::from_ascii(&s_ascii)?
+            )?;
+        Ok(())
+    }
+
     pub fn decode_hex(s: &str) -> Result<Vec<u8>, ParseIntError> {
         (0..s.len())
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16))
             .collect()
+    }
+
+    pub fn encode_hex(bit_array: &BitVec<u8, Msb0>) -> Result<Vec<u8>> {
+        let mut bytes: Vec<u8> = Vec::with_capacity(bit_array.len() / 8);
+        for start in (0..bit_array.len()).step_by(8) {
+            bytes.push(bit_array[start..(start + 8)].load::<u8>());
+        }
+        return Ok(bytes);
     }
 }
 
@@ -213,6 +244,7 @@ impl BloomFilter {
 mod tests {
     // std imports
     use std::path::Path;
+    use std::env::temp_dir;
 
     // 3rd party imports
     use fallible_iterator::FallibleIterator;
@@ -232,6 +264,39 @@ mod tests {
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
             assert!(bloom_filter.contains(&protein.get_accession()).unwrap());
+        }
+    }
+
+    #[test]
+    fn test_save_and_load() {
+        let mut bloom_filter = BloomFilter::new_by_item_count_and_fp_prob(100, 0.01).unwrap();
+
+        let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
+        while let Some(protein) = reader.next().unwrap() {
+            bloom_filter.add(&protein.get_accession()).unwrap();
+        }
+
+        let temp_file = temp_dir().join("macpepdb_bloomfilter_test_save_and_load.h5");
+        if temp_file.is_file() {
+            std::fs::remove_file(&temp_file).unwrap();
+        }
+
+        bloom_filter.save(&temp_file).unwrap();
+
+        let read_bloom_filter = BloomFilter::load(&temp_file).unwrap();
+
+        assert!(bloom_filter.size == read_bloom_filter.size);
+        assert!(bloom_filter.hash_count == read_bloom_filter.hash_count);
+        assert!(bloom_filter.fp_prob == read_bloom_filter.fp_prob);
+        assert!(bloom_filter.bitvec == read_bloom_filter.bitvec);
+
+        let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
+        while let Some(protein) = reader.next().unwrap() {
+            assert!(read_bloom_filter.contains(&protein.get_accession()).unwrap());
+        }
+
+        if temp_file.is_file() {
+            std::fs::remove_file(&temp_file).unwrap();
         }
     }
 }
