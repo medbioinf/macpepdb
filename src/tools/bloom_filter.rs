@@ -17,7 +17,7 @@ pub struct BloomFilter {
     fp_prob: f64, // False positive probability
     size: u128, // Size of the bloom filter. Allowed us a max of u64 but we store it as u128 so it only converted once
     hash_count: u32, // Number of hash functions
-    bitvec: BitVec<u8, Msb0>, // Bit vector
+    bitvec: BitBox<u8, Msb0> // Bit vector
 }
 
 impl BloomFilter {
@@ -30,7 +30,7 @@ impl BloomFilter {
     /// * `hash_count` - Number of hash functions to use
     /// * `bitvec` - Bit vector
     ///
-    pub fn new(fp_prob: f64, size: u64, hash_count: u32, bitvec: BitVec<u8, Msb0>) -> Result<Self> {
+    pub fn new(fp_prob: f64, size: u64, hash_count: u32, bitvec: BitBox<u8, Msb0>) -> Result<Self> {
         Ok(Self {
             fp_prob,
             hash_count,
@@ -59,7 +59,7 @@ impl BloomFilter {
 
     /// Get bit vector
     /// 
-    pub fn get_bitvec(&self) -> &BitVec<u8, Msb0> {
+    pub fn get_bitvec(&self) -> &BitBox<u8, Msb0> {
         return &self.bitvec;
     }
 
@@ -77,16 +77,13 @@ impl BloomFilter {
         let hash_count = Self::calc_hash_count(size, items_count)?;
 
         // Bit array of given size
-        let mut bitvec = BitVec::new();
-
-        // initialize all bits as 0
-        bitvec.resize(size as usize, false);
+        let bitvec = bitvec!(u8, Msb0; 0; size as usize);
 
         return Self::new(
             fp_prob,
             size,
             hash_count,
-            bitvec
+            bitvec.into_boxed_bitslice()
         );
     }
 
@@ -108,9 +105,9 @@ impl BloomFilter {
     pub fn add(&mut self, item: &str) -> Result<()> {
         for i in 0..self.hash_count {
 
-            // create digest for given item.
-            // i work as seed to mmh3.hash() function
-            // With different seed, digest created is different
+        // create digest for given item.
+        // i work as seed to mmh3.hash() function
+        // With different seed, digest created is different
             let digest = self.calc_item_position(item, i)?;
 
             // set the bit True in bitvec
@@ -196,7 +193,7 @@ impl BloomFilter {
             fp_prob, 
             size,
             hash_count, 
-            BitVec::<u8, Msb0>::from_slice(&bytes)
+            BitVec::<u8, Msb0>::from_slice(&bytes).into_boxed_bitslice()
         );
     }
 
@@ -230,7 +227,7 @@ impl BloomFilter {
             .collect()
     }
 
-    pub fn encode_hex(bit_array: &BitVec<u8, Msb0>) -> Result<Vec<u8>> {
+    pub fn encode_hex(bit_array: &BitBox<u8, Msb0>) -> Result<Vec<u8>> {
         let mut bytes: Vec<u8> = Vec::with_capacity(bit_array.len() / 8);
         for start in (0..bit_array.len()).step_by(8) {
             bytes.push(bit_array[start..(start + 8)].load::<u8>());
