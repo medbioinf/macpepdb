@@ -21,7 +21,6 @@ pub struct BloomFilter {
 }
 
 impl BloomFilter {
-
     /// Class for Bloom filter, using murmur3 hash function
     /// 
     /// Arguments:
@@ -104,13 +103,10 @@ impl BloomFilter {
     /// 
     pub fn add(&mut self, item: &str) -> Result<()> {
         for i in 0..self.hash_count {
-
-        // create digest for given item.
-        // i work as seed to mmh3.hash() function
-        // With different seed, digest created is different
+            // Create hash for given item.
+            // `i` works as seed to mmh3.hash() function
             let digest = self.calc_item_position(item, i)?;
-
-            // set the bit True in bitvec
+            // Set the bit to true
             self.bitvec.set(digest as usize, true)
         }
         return Ok(());
@@ -135,7 +131,7 @@ impl BloomFilter {
     /// following formula
     /// m = -(n * lg(p)) / (lg(2)^2)
     /// 
-    /// Rounded up to nearest mutiple of 8
+    /// Rounded up to nearest multiple of 8
     /// 
     /// # Arguments
     ///
