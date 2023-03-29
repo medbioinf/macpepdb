@@ -86,6 +86,28 @@ impl BloomFilter {
         );
     }
 
+    /// Creates a bloom filter with the given size and false positive probability
+    ///
+    /// # Arguments
+    /// * `size` - Number of bits in bloom filter
+    /// * `fp_prob` - False Positive probability in decimal
+    ///
+    pub fn new_by_size_and_fp_prob(size: u64, fp_prob: f64) -> Result<Self> {
+        let rounded_size = size + 8 - (size % 8);
+
+        let (_, hash_count) = Self::calc_item_size_and_hash_count(rounded_size, fp_prob);
+
+        // Bit array of given size
+        let bitvec = bitvec!(u8, Msb0; 0; rounded_size as usize);
+
+        return Self::new(
+            fp_prob,
+            rounded_size,
+            hash_count,
+            bitvec.into_boxed_bitslice()
+        );
+    }
+
     fn calc_item_position(&self, item: &str, seed: u32) -> Result<usize> {
         return Ok(
             (murmur3hash(
@@ -162,6 +184,28 @@ impl BloomFilter {
             bail!("Hash count is too large");
         }
         return Ok(k as u32);
+    }
+
+    /// Calculates item size and hash count
+    /// by increasing the hash_count to fit the maximum possible number of items.
+    /// 
+    /// # Arguments
+    /// * `hash_count` - Number of hash functions to use
+    /// * `fp_prob` - False Positive probability in decimal
+    /// 
+    pub fn calc_item_size_and_hash_count(size: u64, fp_prob: f64) -> (u64, u32) {
+        let size_f = size as f64;
+        let mut item_size: u64 = 0;
+        for i in 1..=u32::MAX {
+            let i_f = i as f64;
+            let temp_item_size = (size_f / (-i_f / (1_f64 - (fp_prob.ln() / i_f).exp()).ln())).ceil() as u64;
+            if item_size > temp_item_size {
+                return (item_size, i - 1);
+            } else {
+                item_size = temp_item_size;
+            }
+        }
+        return (item_size, u32::MAX);
     }
 
     /// Loads bloom filter from hdf5 file
