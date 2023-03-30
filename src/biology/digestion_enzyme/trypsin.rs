@@ -5,6 +5,8 @@ use fancy_regex::Regex;
 // internal imports
 use crate::biology::digestion_enzyme::enzyme::Enzyme;
 
+pub const NAME: &'static str = "trypsin";
+
 lazy_static! {
     static ref CLEAVAGE_SITE_REGEX: Regex = Regex::new("(?<=[KR])(?!P)").unwrap();
 }
@@ -38,6 +40,10 @@ impl Enzyme for Trypsin {
 
     fn get_max_peptide_length(&self) -> usize {
         return self.max_peptide_length;
+    }
+
+    fn get_name(&self) -> &str {
+        return NAME;
     }
 }
 

@@ -6,7 +6,10 @@ use anyhow::{bail, Result};
 
 // internal imports
 use crate::biology::digestion_enzyme::enzyme::Enzyme;
-use crate::biology::digestion_enzyme::trypsin::Trypsin;
+use crate::biology::digestion_enzyme::trypsin::{
+    Trypsin, 
+    NAME as TRYPSIN_NAME
+};
 
 /// Returns an enzyme by name
 /// 
@@ -21,7 +24,7 @@ pub fn get_enzyme_by_name(
     min_peptide_length: usize, max_peptide_length: usize
 ) -> Result<Box<dyn Enzyme>> {
     match name.to_lowercase().as_str() {
-        "trypsin" => Ok(Box::new(Trypsin::new(
+        TRYPSIN_NAME => Ok(Box::new(Trypsin::new(
             max_number_of_missed_cleavages,
             min_peptide_length,
             max_peptide_length

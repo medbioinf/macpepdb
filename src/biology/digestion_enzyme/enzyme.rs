@@ -9,7 +9,7 @@ use fancy_regex::Regex;
 use crate::chemistry::amino_acid::{UNKNOWN, REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOOKUP};
 use crate::tools::fancy_regex::split as fancy_regex_split_string;
 
-/// Trait defining the behavior fo a digestion enzyme
+/// Trait defining the behavior for a digestion enzyme
 pub trait Enzyme {
     /// Returns a new instance of the enzyme
     /// 
@@ -27,6 +27,8 @@ pub trait Enzyme {
     fn get_min_peptide_length(&self) -> usize;
     /// Returns the maximum peptide length
     fn get_max_peptide_length(&self) -> usize;
+    /// Returns the name of the enzyme
+    fn get_name(&self) -> &str;
 
     /// Digests a protein into peptides
     fn digest(&self, amino_acid_sequence: &str) -> HashMap<String, i16> {
