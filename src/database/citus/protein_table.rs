@@ -1,7 +1,7 @@
 
 // 3rd party imports
 use anyhow::Result;
-use postgres::{Client, Row};
+use postgres::GenericClient;
 
 // internal imports
 use crate::entities::protein::Protein;
@@ -33,20 +33,17 @@ lazy_static! {
 }
 
 
-pub struct ProteinTable<'a> {
-    client: &'a mut Client
-}
+pub struct ProteinTable{}
 
-impl<'a> ProteinTable<'a> {
-
-    pub fn insert(&mut self, protein: &Protein) -> Result<()> {
+impl ProteinTable {
+    pub fn insert<'a, C: GenericClient>(client: &mut C, protein: &Protein) -> Result<()> {
         let statement = format!(
             "INSERT INTO {} ({}) VALUES ({})", 
             TABLE_NAME,
             INSERT_COLS,
             INSERT_PLACEHOLDERS.as_str()
         );
-        self.client.execute(&statement, &[
+        client.execute(&statement, &[
             protein.get_accession(),
             protein.get_secondary_accessions(),
             protein.get_entry_name(),
@@ -61,7 +58,7 @@ impl<'a> ProteinTable<'a> {
         return Ok(());
     }
 
-    pub fn update(&mut self, old_prot: &Protein, updated_prot: &Protein) -> Result<()> {
+    pub fn update<'a, C: GenericClient>(client: &mut C, old_prot: &Protein, updated_prot: &Protein) -> Result<()> {
         let statement = format!(
             "UPDATE {} SET {} WHERE accession = ${}",
             TABLE_NAME,
@@ -69,7 +66,7 @@ impl<'a> ProteinTable<'a> {
             UPDATE_COLS_WHERE_ACCESSION_NUM.to_string()
         );
         
-        self.client.execute(&statement, &[
+        client.execute(&statement, &[
             updated_prot.get_accession(),
             updated_prot.get_secondary_accessions(),
             updated_prot.get_entry_name(),
@@ -85,30 +82,20 @@ impl<'a> ProteinTable<'a> {
         return Ok(());
     }
 
-    pub fn delete(&mut self, protein: &Protein) -> Result<()> {
+    pub fn delete<'a, C: GenericClient>(client: &mut C, protein: &Protein) -> Result<()> {
         let statement = format!(
             "DELETE FROM {} WHERE accession = $1",
             TABLE_NAME
         );
         
-        self.client.execute(&statement, &[
+        client.execute(&statement, &[
             protein.get_accession()
         ])?;
         return Ok(());
     }
 }
 
-impl<'b> Table<'b, Protein> for ProteinTable<'b> {
-    fn new(client: &'b mut Client) -> Self {
-        Self {
-            client
-        }
-    }
-
-    fn get_client(&mut self) -> &mut Client {
-        return self.client;
-    }
-
+impl Table<Protein> for ProteinTable {
     fn table_name() -> &'static str {
         return TABLE_NAME;
     }
@@ -208,10 +195,9 @@ mod tests {
         prepare_database_for_tests();
         let mut client = get_client();
 
-        let mut protein_table = ProteinTable::new(&mut client);
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
-            protein_table.insert(&protein).unwrap();
+            ProteinTable::insert(&mut client, &protein).unwrap();
         }
         let count_statement = format!("SELECT count(*) FROM {}", TABLE_NAME);
         let row = client.query_one(&count_statement, &[]).unwrap();
@@ -227,8 +213,8 @@ mod tests {
         test_insert();
         let mut client = get_client();
 
-        let mut protein_table = ProteinTable::new(&mut client);
-        let row = protein_table.raw_select(
+        let row = ProteinTable::raw_select(
+            &mut client,
             SELECT_COLS, 
             "WHERE accession = $1 ", 
             &[TRYPSIN.get_accession()]
@@ -252,10 +238,10 @@ mod tests {
     fn test_update() {
         test_insert();
         let mut client = get_client();
-        let mut protein_table = ProteinTable::new(&mut client);
-        protein_table.update(&TRYPSIN, &UPDATED_TRYPSIN).unwrap();
+        ProteinTable::update(&mut client, &TRYPSIN, &UPDATED_TRYPSIN).unwrap();
         
-        let row = protein_table.raw_select(
+        let row = ProteinTable::raw_select(
+            &mut client,
             SELECT_COLS, 
             "WHERE accession = $1 ", 
             &[UPDATED_TRYPSIN.get_accession()]
@@ -279,10 +265,10 @@ mod tests {
     fn test_delete() {
         test_insert();
         let mut client = get_client();
-        let mut protein_table = ProteinTable::new(&mut client);
-        protein_table.delete(&TRYPSIN).unwrap();
+        ProteinTable::delete(&mut client, &TRYPSIN).unwrap();
         
-        let row_opt = protein_table.raw_select(
+        let row_opt = ProteinTable::raw_select(
+            &mut client,
             SELECT_COLS, 
             "WHERE accession = $1 ", 
             &[TRYPSIN.get_accession()]
