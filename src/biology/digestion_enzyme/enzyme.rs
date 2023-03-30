@@ -11,6 +11,14 @@ use crate::tools::fancy_regex::split as fancy_regex_split_string;
 
 /// Trait defining the behavior fo a digestion enzyme
 pub trait Enzyme {
+    /// Returns a new instance of the enzyme
+    /// 
+    /// # Arguments
+    /// * `max_number_of_missed_cleavages` - Maximum number of missed cleavages
+    /// * `min_peptide_length` - Minimum length of a peptide
+    /// * `max_peptide_length` - Maximum length of a peptide
+    /// 
+    fn new(max_number_of_missed_cleavages: usize, min_peptide_length: usize, max_peptide_length: usize) -> Self where Self: Sized;
     /// Returns the regex for finding the cleavage sites
     fn get_cleavages_site_regex(&self) -> &Regex;
     /// Returns the maximum number of missed cleavages

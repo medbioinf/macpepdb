@@ -15,17 +15,15 @@ pub struct Trypsin {
     max_peptide_length: usize
 }
 
-impl Trypsin {
-    pub fn new(max_number_of_missed_cleavages: usize, min_peptide_length: usize, max_peptide_length: usize) -> Self {
+impl Enzyme for Trypsin {
+    fn new(max_number_of_missed_cleavages: usize, min_peptide_length: usize, max_peptide_length: usize) -> Self {
         return Self {
             max_number_of_missed_cleavages,
             min_peptide_length,
             max_peptide_length
         };
     }
-}
 
-impl Enzyme for Trypsin {
     fn get_cleavages_site_regex(&self) -> &Regex {
         return &CLEAVAGE_SITE_REGEX;
     }
