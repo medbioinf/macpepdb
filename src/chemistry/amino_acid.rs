@@ -194,6 +194,9 @@ mod test {
         ("Unknown Amino Acid",              'X',    "Xaa",  0.0_f64,            0.0_f64)
     ];
 
+    const PEPTIDE: &'static str = "VEYLDDRNTFRHSVVVPYEPPEVGSDCTTIHYNYMCNSSCMGGMNR";
+    const EXPECTED_PEPTIDE_MASS: i64 = 5285286805612;
+
     // Test if the amino acids attributes are equal to to the tuple values. This ensures, that the tuple and the amino acid is matching and if the mass is converted successfully with the macro.
     fn test_equality_of_amino_acid_attributes_and_raw_value_tuple(amino_acid: &AminoAcid, raw_value_tuple: &(&'static str, char, &'static str, f64, f64)) {
         assert_eq!(amino_acid.name, raw_value_tuple.0);
@@ -243,5 +246,10 @@ mod test {
             println!("Did not found {} in `RAW_AMINO_ACID_VALUES`.", amino_acid.name);
             panic!("See error above.");
         }
+    }
+
+    #[test]
+    fn test_calc_sequence_mass() {
+        assert_eq!(calc_sequence_mass(PEPTIDE).unwrap(), EXPECTED_PEPTIDE_MASS);
     }
 }
