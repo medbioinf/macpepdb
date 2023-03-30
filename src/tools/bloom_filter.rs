@@ -160,7 +160,7 @@ impl BloomFilter {
     /// `n` - number of items expected to be stored in filter
     /// `p` - False Positive probability in decimal
     ///
-    fn calc_size(n: u64, p: f64) -> u64 {
+    pub fn calc_size(n: u64, p: f64) -> u64 {
         let mut m = (
             -(n as f64 * p.log(E))/(2.0_f64.log(E).powi(2))
         ) as u64
@@ -178,7 +178,7 @@ impl BloomFilter {
     /// * `m` - size of bit array
     /// * `n` - number of items expected to be stored in filter
     /// 
-    fn calc_hash_count(m: u64, n: u64) -> Result<u32> {
+    pub fn calc_hash_count(m: u64, n: u64) -> Result<u32> {
         let k = ((m as f64) / (n as f64)) * 2.0_f64.log(E);
         if k > u32::MAX as f64 {
             bail!("Hash count is too large");

@@ -21,10 +21,12 @@ chrono = "0.4.23"
 fallible-iterator = "0.2.0"
 fancy-regex = "0.11.0"
 hdf5 = "0.8.1"
+kdam = "0.3.0"
 lazy_static = "1.4.0"
 murmur3 = "0.5.2"
 postgres = "0.19.4"
 refinery = { version = "0.8.7", features = ["postgres"] }
+sysinfo = "0.28.2"
 
 [dev-dependencies]
 serial_test = "*"
