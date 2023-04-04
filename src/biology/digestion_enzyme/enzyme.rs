@@ -10,7 +10,7 @@ use crate::chemistry::amino_acid::{UNKNOWN, REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOO
 use crate::tools::fancy_regex::split as fancy_regex_split_string;
 
 /// Trait defining the behavior for a digestion enzyme
-pub trait Enzyme {
+pub trait Enzyme: Send + Sync {
     /// Returns a new instance of the enzyme
     /// 
     /// # Arguments
