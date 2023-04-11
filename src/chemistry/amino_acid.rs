@@ -9,6 +9,8 @@ use anyhow::{Result, bail};
 // internal imports
 use crate::chemistry::molecule::WATER;
 
+/// Contains various information about an amino acid.
+/// 
 pub struct AminoAcid {
     name: &'static str,
     one_letter_code: char,
@@ -142,12 +144,19 @@ const ALL: [&'static AminoAcid; 26] = [
 ];
 
 lazy_static! {
+    /// A HashMap with all amino acids, which are ambigous.
+    /// 
     pub static ref REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOOKUP: HashMap<char, [&'static AminoAcid; 2]> = collection! {
         'B' => [&ASPARTIC_ACID, &ASPARAGINE],
         'Z' => [&GLUTAMIC_ACID, &GLUTAMINE]
     };
 }
 
+/// Calculates the theoretical mass of a sequence in Dalton.
+/// 
+/// # Arguments
+/// * `sequence` - Amino acid sequence
+/// 
 pub fn calc_sequence_mass(sequence: &str) -> Result<i64> {
     let mut mass: i64 = WATER.get_mono_mass();
     for c in sequence.chars() {

@@ -1,17 +1,26 @@
+#![doc = include_str!("../README.md")]
+
+// 3rd party imports
 #[allow(unused_imports)]
 #[macro_use]
 extern crate lazy_static;
 
-// internal imports including macros
+// Internal imports including macros
+/// Contains mass related functions
 #[macro_use]
 pub mod mass;
+/// Contains handy functions
 #[macro_use]
 pub mod tools;
 
-// internal imports
+/// Biology related functions, e.g. digestion enzymes
 pub mod biology;
+/// Chemistry related functions and information, e.g. molecule masses
 pub mod chemistry;
+/// Functions to maintain and access the database
 pub mod database;
+/// Contains different entities, e.g. proteins, peptides, etc.
 pub mod entities;
+/// Input and output functions
 pub mod io;
 

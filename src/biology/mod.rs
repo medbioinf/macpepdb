@@ -1,2 +1,2 @@
-/// Module containing biological functions
+/// Various enzymes for in silico digestion
 pub mod digestion_enzyme;

@@ -1,10 +1,8 @@
-/// Module containing different molecules.
-/// As amino acids have a special place in proteomics, they got their own module.
-/// 
-
 // 3rd party imports
 use anyhow::{Result, bail};
 
+/// Keeps information about a molecule.
+/// 
 pub struct Molecule {
     name: &'static str,
     mono_mass: i64,
@@ -24,18 +22,26 @@ impl Molecule {
         };
     }
 
+    /// Returns all molecules.
+    /// 
     pub fn get_all() -> &'static [&'static Molecule; 1] {
         return &ALL;
     }
 
+    /// Returns the name of the molecule.
+    /// 
     pub fn get_name(&self) -> &'static str {
         return &self.name;
     }
 
+    /// Returns the monoisotopic mass of the molecule.
+    /// 
     pub fn get_mono_mass(&self) -> i64 {
         return self.mono_mass;
     }
 
+    /// Returns the average mass of the molecule.
+    /// 
     pub fn get_average_mass(&self) -> i64 {
         return self.average_mass;
     }
@@ -45,6 +51,8 @@ impl Molecule {
 
 pub const WATER: Molecule = Molecule{name: "Water", mono_mass: mass_to_int!(18.010564700_f64), average_mass: mass_to_int!(18.015_f64)};
 
+/// List of all defined molecules.
+/// 
 const ALL: [&'static Molecule; 1] = [
     &WATER,
 ];

@@ -5,12 +5,15 @@ use fancy_regex::Regex;
 // internal imports
 use crate::biology::digestion_enzyme::enzyme::Enzyme;
 
+/// Name of the enzyme
 pub const NAME: &'static str = "trypsin";
 
 lazy_static! {
     static ref CLEAVAGE_SITE_REGEX: Regex = Regex::new("(?<=[KR])(?!P)").unwrap();
 }
 
+/// Digestion enzyme Trypsin, which cuts after K and R not followed by P.
+/// 
 pub struct Trypsin {
     max_number_of_missed_cleavages: usize,
     min_peptide_length: usize,

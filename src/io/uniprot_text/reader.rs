@@ -36,7 +36,7 @@ const GN_SYNONYMS_ATTRIBUTE: &'static str = "Synonyms=";
 
 
 /// Reader for Uniprot text files
-/// https://web.expasy.org/docs/userman.html
+/// <https://web.expasy.org/docs/userman.html>
 pub struct Reader {
     internal_reader: BufReader<File>
 }
