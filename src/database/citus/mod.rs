@@ -1,6 +1,8 @@
 /// Module for storing and retrieving data from the Citus database.
 pub mod protein_table;
 pub mod table;
+/// Module for storing and retrieving configuration data from the Citus database.
+pub mod configuration_table;
 
 
 mod embedded {
@@ -17,6 +19,7 @@ mod tests {
     use postgres::{Client, NoTls};
 
     // internal imports
+    use table::Table; // import for trait methods
     use super::*;
 
     const DATABASE_URL: &str = "postgresql://postgres:developer@localhost:5433/macpepdb_dev";
@@ -40,9 +43,11 @@ mod tests {
         if row.get::<_, bool>(0) {
             transaction.execute("DELETE FROM refinery_schema_history", &[]).unwrap();
         }
-        let drop_table_res = transaction.execute("DROP TABLE IF EXISTS proteins", &[]);
-        assert!(drop_table_res.is_ok(), "Failed to drop table: {:?}", drop_table_res);
-
+        for table in [protein_table::ProteinTable::table_name(), configuration_table::ConfigurationTable::table_name()].iter() {
+            let drop_table_res = transaction.execute(&format!("DROP TABLE IF EXISTS {}", table), &[]);
+            assert!(drop_table_res.is_ok(), "Failed to drop table: {:?}", drop_table_res);
+        }
+        
         transaction.commit().unwrap();
         sleep(std::time::Duration::from_secs(5)); // Wait for the database to finish dropping the tables.
         let migration_result = embedded::migrations::runner().run(&mut client);

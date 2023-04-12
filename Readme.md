@@ -35,6 +35,14 @@ In theory `X` is also ambiguous, encoding **all** amino acids. Practically a lot
 ## Database structure
 MaCPepDB utilizes a denormalized database structure for efficient record storage and compatibility with various database engines. Denormalization consolidates data into fewer tables, minimizing redundant data such as multi-column primary key of peptides. However, this approach may result in a loss of certain SQL functionalities, such as foreign keys and cascade operations that ensure database integrity. To compensate for this, the lost functionality is implemented in the application code. Manual alterations to the database are discouraged and should be done using MaCPepDB.
 
+### Configuration
+Table: config   
+
+| Column | Type | Data |
+| --- | --- | --- |
+| conf_key | String (max. length 256) | key to find configuration value |
+| value | JSON | Value of configuration key wrapped in a JSON object: `{"wrapper": value>}`
+
 ### Proteins
 Table: proteins   
 

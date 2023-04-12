@@ -24,8 +24,10 @@ hdf5 = "0.8.1"
 kdam = "0.3.0"
 lazy_static = "1.4.0"
 murmur3 = "0.5.2"
-postgres = "0.19.4"
+postgres = { version = "0.19.4", features = ["with-serde_json-1"] }
 refinery = { version = "0.8.7", features = ["postgres"] }
+serde = "1.0.160"
+serde_json = "1.0.95"
 sysinfo = "0.28.2"
 
 [dev-dependencies]
