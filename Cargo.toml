@@ -20,7 +20,9 @@ bitvec = "1.0.1"
 chrono = "0.4.23"
 fallible-iterator = "0.2.0"
 fancy-regex = "0.11.0"
-hdf5 = "0.8.1"
+# Support for hdf4 1.15. If PR https://github.com/aldanor/hdf5-rust/pull/227 is accepted, this can be removed
+hdf5 = { git = "https://github.com/mulimoen/hdf5-rust.git", branch = "feature/hdf5_1_14"}
+# hdf5 = "0.8.1"
 kdam = "0.3.0"
 lazy_static = "1.4.0"
 murmur3 = "0.5.2"
