@@ -2,12 +2,15 @@ name: Rust
 
 on:
   push:
-    branches: ["cicd"]
+    branches: ["main"]
   pull_request:
-    branches: ["cicd"]
+    branches: ["main"]
 
 env:
   CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -16,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Start containers
-        run: docker-compose -f "docker-compose.yaml" up -d --build
+        run: docker-compose up -d --build
       - name: Install Custom C Dependencies
         run: sudo apt install -y libhdf5-serial-dev
       - name: Build
@@ -25,4 +28,4 @@ jobs:
         run: cargo test --verbose
       - name: Stop containers
         if: always()
-        run: docker-compose -f "docker-compose.yml" down
+        run: docker-compose down
