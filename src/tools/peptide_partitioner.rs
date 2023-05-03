@@ -150,28 +150,25 @@ impl<'a> PeptidePartitioner<'a> {
     /// 
     pub fn partition(
         &self, num_partitions: u64, peptide_protein_ratio: Option<f64>,
-        show_progress_bar: bool, verbose: bool
+        progress_bar: &mut Bar, verbose: bool
     ) -> Result<Vec<i64>> {
+        progress_bar.set_description("partitioning");
+
         let mut protein_ctr: usize = 0;
 
-        if show_progress_bar || peptide_protein_ratio.is_some() {
+        if !progress_bar.get_disable() || peptide_protein_ratio.is_some() {
             if verbose {
-                println!("Counting proteins... ");
+                progress_bar.write("Counting proteins... ");
             }
             for path in self.protein_file_paths.iter() {
                 if verbose {
-                    println!("... {}", path.display());
+                    progress_bar.write(format!("... {}", path.display()));
                 }
                 protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
             }
         }
-
-        let mut progress_bar = tqdm!(
-            total = protein_ctr,
-            desc = "partitioning",
-            animation = "ascii",
-            disable = !show_progress_bar
-        );
+        progress_bar.reset(Some(protein_ctr));
+        progress_bar.set_counter(0);
 
         // Calculate the average partition windows (60 is the max number of amino acids per peptide ,
         // so 60 times tryptophan is the heaviest peptide possible)
@@ -297,6 +294,13 @@ mod test {
             }
         }
 
+        let mut progress_bar = tqdm!(
+            total = 0,
+            desc = "partitioning",
+            animation = "ascii",
+            disable = true
+        );
+
         let protein_file_paths = vec![protein_file_paths.clone()];
         let partitioner = PeptidePartitioner::new(
             &protein_file_paths,
@@ -308,7 +312,7 @@ mod test {
         let partition_limits = partitioner.partition(
             NUM_PARTITIONS,
             None,
-            false,
+            &mut progress_bar,
             false
         ).unwrap(); // this will fail if the partitioning is not correct
 
