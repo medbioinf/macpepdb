@@ -118,6 +118,11 @@ impl<'a> PeptidePartitioner<'a> {
             progress_bar.update(1);
         }
 
+        // Equalizing will set the last limit to the last partition which contains peptides.
+        // So let set the last limit to the max mass.
+        let last_idx = equalized_partition_contents.len() - 1;
+        equalized_partition_contents[last_idx].1 = *MAX_MASS;
+
         // Sanity check. Limits should be monotonically increasing
         for idx in 1..equalized_partition_contents.len(){
             if equalized_partition_contents[idx].1 <= equalized_partition_contents[idx-1].1 {
@@ -308,6 +313,7 @@ mod test {
         ).unwrap(); // this will fail if the partitioning is not correct
 
         assert_eq!(partition_limits.len(), NUM_PARTITIONS as usize);
+        assert_eq!(partition_limits[partition_limits.len() - 1], *MAX_MASS);
 
     }
 }
