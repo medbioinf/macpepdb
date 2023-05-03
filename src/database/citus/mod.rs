@@ -1,4 +1,5 @@
 /// Module for storing and retrieving data from the Citus database.
+pub mod peptide_table;
 pub mod protein_table;
 pub mod table;
 /// Module for storing and retrieving configuration data from the Citus database.
@@ -43,8 +44,15 @@ mod tests {
         if row.get::<_, bool>(0) {
             transaction.execute("DELETE FROM refinery_schema_history", &[]).unwrap();
         }
-        for table in [protein_table::ProteinTable::table_name(), configuration_table::ConfigurationTable::table_name()].iter() {
-            let drop_table_res = transaction.execute(&format!("DROP TABLE IF EXISTS {}", table), &[]);
+        for table in [
+            protein_table::ProteinTable::table_name(),
+            configuration_table::ConfigurationTable::table_name(),
+            peptide_table::PeptideTable::table_name()
+        ].iter() {
+            let drop_table_res = transaction.execute(
+                &format!("DROP TABLE IF EXISTS {}", table), 
+                &[]
+            );
             assert!(drop_table_res.is_ok(), "Failed to drop table: {:?}", drop_table_res);
         }
         

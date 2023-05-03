@@ -3,14 +3,15 @@ use std::hash::{Hash, Hasher};
 
 // 3rd party imports
 use anyhow::Result;
+use postgres::Row;
 
 #[derive(Clone)]
 pub struct Peptide {
     partition: i64,
     mass: i64,
     sequence: String,
-    missed_cleavages: i8,
-    aa_counts: Vec<i8>,
+    missed_cleavages: i16,
+    aa_counts: Vec<i16>,
     proteins: Vec<String>,
     is_swiss_prot: bool,
     is_trembl: bool,
@@ -38,7 +39,7 @@ impl Peptide {
         partition: i64,
         mass: i64,
         sequence: String,
-        missed_cleavages: i8,
+        missed_cleavages: i16,
         proteins: Vec<String>,
         is_swiss_prot: bool,
         is_trembl: bool,
@@ -94,18 +95,18 @@ impl Peptide {
     }
 
     /// Returns the number of missed cleavages
-    pub fn get_missed_cleavages(&self) -> i8 {
+    pub fn get_missed_cleavages(&self) -> i16 {
         return self.missed_cleavages;
     }
 
     /// Returns the number of missed cleavages as ref
-    pub fn get_missed_cleavages_as_ref(&self) -> &i8 {
+    pub fn get_missed_cleavages_as_ref(&self) -> &i16 {
         return &self.missed_cleavages;
     }
 
     /// Returns the amino acid counts
     /// 
-    pub fn get_aa_counts(&self) -> &Vec<i8> {
+    pub fn get_aa_counts(&self) -> &Vec<i16> {
         return &self.aa_counts;
     }
 
@@ -168,5 +169,23 @@ impl Eq for Peptide {}
 impl Hash for Peptide {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.sequence.hash(state);
+    }
+}
+
+impl From<Row> for Peptide {
+    fn from(row: Row) -> Self {
+        Self{
+            partition: row.get("partition"),
+            mass: row.get("mass"),
+            sequence: row.get("sequence"),
+            missed_cleavages: row.get("missed_cleavages"),
+            aa_counts: row.get("aa_counts"),
+            proteins: row.get("proteins"),
+            is_swiss_prot: row.get("is_swiss_prot"),
+            is_trembl: row.get("is_trembl"),
+            taxonomy_ids: row.get("taxonomy_ids"),
+            unique_taxonomy_ids: row.get("unique_taxonomy_ids"),
+            proteome_ids: row.get("proteome_ids")
+        }
     }
 }
