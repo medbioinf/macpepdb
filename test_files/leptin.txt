@@ -1,0 +1,137 @@
+ID   LEP_CAPHI               Reviewed;         167 AA.
+AC   Q257X2;
+DT   16-MAY-2006, integrated into UniProtKB/Swiss-Prot.
+DT   18-APR-2006, sequence version 1.
+DT   22-FEB-2023, entry version 64.
+DE   RecName: Full=Leptin;
+DE   AltName: Full=Obesity factor;
+DE   Flags: Precursor;
+GN   Name=LEP; Synonyms=OB;
+OS   Capra hircus (Goat).
+OC   Eukaryota; Metazoa; Chordata; Craniata; Vertebrata; Euteleostomi; Mammalia;
+OC   Eutheria; Laurasiatheria; Artiodactyla; Ruminantia; Pecora; Bovidae;
+OC   Caprinae; Capra.
+OX   NCBI_TaxID=9925;
+RN   [1]
+RP   NUCLEOTIDE SEQUENCE [GENOMIC DNA].
+RC   TISSUE=Blood;
+RA   Di Vittorio M.D.;
+RT   "Sequence of the gene coding for the goat leptin.";
+RL   Submitted (MAR-2006) to the EMBL/GenBank/DDBJ databases.
+CC   -!- FUNCTION: Key player in the regulation of energy balance and body
+CC       weight control. Once released into the circulation, has central and
+CC       peripheral effects by binding LEPR, found in many tissues, which
+CC       results in the activation of several major signaling pathways (By
+CC       similarity). In the hypothalamus, acts as an appetite-regulating factor
+CC       that induces a decrease in food intake and an increase in energy
+CC       consumption by inducing anorexinogenic factors and suppressing
+CC       orexigenic neuropeptides, also regulates bone mass and secretion of
+CC       hypothalamo-pituitary-adrenal hormones. In the periphery, increases
+CC       basal metabolism, influences reproductive function, regulates
+CC       pancreatic beta-cell function and insulin secretion, is pro-angiogenic
+CC       for endothelial cell and affects innate and adaptive immunity (By
+CC       similarity). In the arcuate nucleus of the hypothalamus, activates by
+CC       depolarization POMC neurons inducing FOS and SOCS3 expression to
+CC       release anorexigenic peptides and inhibits by hyperpolarization NPY
+CC       neurons inducing SOCS3 with a consequent reduction on release of
+CC       orexigenic peptides (By similarity). In addition to its known satiety
+CC       inducing effect, has a modulatory role in nutrient absorption. In the
+CC       intestine, reduces glucose absorption by enterocytes by activating PKC
+CC       and leading to a sequential activation of p38, PI3K and ERK signaling
+CC       pathways which exerts an inhibitory effect on glucose absorption (By
+CC       similarity). Acts as a growth factor on certain tissues, through the
+CC       activation of different signaling pathways increases expression of
+CC       genes involved in cell cycle regulation such as CCND1, via JAK2-STAT3
+CC       pathway, or VEGFA, via MAPK1/3 and PI3K-AKT1 pathways (By similarity).
+CC       May also play an apoptotic role via JAK2-STAT3 pathway and up-
+CC       regulation of BIRC5 expression. Pro-angiogenic, has mitogenic activity
+CC       on vascular endothelial cells and plays a role in matrix remodeling by
+CC       regulating the expression of matrix metalloproteinases (MMPs) and
+CC       tissue inhibitors of metalloproteinases (TIMPs). In innate immunity,
+CC       modulates the activity and function of neutrophils by increasing
+CC       chemotaxis and the secretion of oxygen radicals. Increases phagocytosis
+CC       by macrophages and enhances secretion of pro-inflammatory mediators.
+CC       Increases cytotoxic ability of NK cells. Plays a pro-inflammatory role,
+CC       in synergy with IL1B, by inducing NOS2 wich promotes the production of
+CC       IL6, IL8 and Prostaglandin E2, through a signaling pathway that
+CC       involves JAK2, PI3K, MAP2K1/MEK1 and MAPK14/p38 (By similarity). In
+CC       adaptive immunity, promotes the switch of memory T-cells towards T
+CC       helper-1 cell immune responses (By similarity). Increases CD4(+)CD25(-)
+CC       T-cell proliferation and reduces autophagy during TCR (T-cell receptor)
+CC       stimulation, through MTOR signaling pathway activation and BCL2 up-
+CC       regulation (By similarity). {ECO:0000250|UniProtKB:P41159,
+CC       ECO:0000250|UniProtKB:P41160, ECO:0000250|UniProtKB:P50596}.
+CC   -!- SUBCELLULAR LOCATION: Secreted {ECO:0000250|UniProtKB:P41159}.
+CC   -!- SIMILARITY: Belongs to the leptin family. {ECO:0000305}.
+CC   ---------------------------------------------------------------------------
+CC   Copyrighted by the UniProt Consortium, see https://www.uniprot.org/terms
+CC   Distributed under the Creative Commons Attribution (CC BY 4.0) License
+CC   ---------------------------------------------------------------------------
+DR   EMBL; AM114397; CAJ38273.1; -; Genomic_DNA.
+DR   AlphaFoldDB; Q257X2; -.
+DR   SMR; Q257X2; -.
+DR   STRING; 9925.ENSCHIP00000021235; -.
+DR   Ensembl; ENSCHIT00000029093; ENSCHIP00000021250; ENSCHIG00000019616.
+DR   GeneTree; ENSGT00390000011772; -.
+DR   OMA; MRCGPLC; -.
+DR   Proteomes; UP000291000; Chromosome 4.
+DR   Bgee; ENSCHIG00000019616; Expressed in skin of neck and 2 other tissues.
+DR   GO; GO:0005576; C:extracellular region; IEA:UniProtKB-SubCell.
+DR   GO; GO:0005179; F:hormone activity; IEA:InterPro.
+DR   GO; GO:1990051; P:activation of protein kinase C activity; ISS:UniProtKB.
+DR   GO; GO:0098868; P:bone growth; ISS:UniProtKB.
+DR   GO; GO:0044320; P:cellular response to leptin stimulus; ISS:UniProtKB.
+DR   GO; GO:0050892; P:intestinal absorption; ISS:UniProtKB.
+DR   GO; GO:0033210; P:leptin-mediated signaling pathway; ISS:UniProtKB.
+DR   GO; GO:0038108; P:negative regulation of appetite by leptin-mediated signaling pathway; ISS:UniProtKB.
+DR   GO; GO:0010507; P:negative regulation of autophagy; ISS:UniProtKB.
+DR   GO; GO:0046325; P:negative regulation of glucose import; ISS:UniProtKB.
+DR   GO; GO:0006909; P:phagocytosis; ISS:UniProtKB.
+DR   GO; GO:0032735; P:positive regulation of interleukin-12 production; ISS:UniProtKB.
+DR   GO; GO:0032755; P:positive regulation of interleukin-6 production; ISS:UniProtKB.
+DR   GO; GO:0032757; P:positive regulation of interleukin-8 production; ISS:UniProtKB.
+DR   GO; GO:0043410; P:positive regulation of MAPK cascade; ISS:UniProtKB.
+DR   GO; GO:1900745; P:positive regulation of p38MAPK cascade; ISS:UniProtKB.
+DR   GO; GO:0014068; P:positive regulation of phosphatidylinositol 3-kinase signaling; ISS:UniProtKB.
+DR   GO; GO:0051897; P:positive regulation of protein kinase B signaling; ISS:UniProtKB.
+DR   GO; GO:0046427; P:positive regulation of receptor signaling pathway via JAK-STAT; ISS:UniProtKB.
+DR   GO; GO:0042102; P:positive regulation of T cell proliferation; ISS:UniProtKB.
+DR   GO; GO:0032008; P:positive regulation of TOR signaling; ISS:UniProtKB.
+DR   GO; GO:0032760; P:positive regulation of tumor necrosis factor production; ISS:UniProtKB.
+DR   GO; GO:0032310; P:prostaglandin secretion; ISS:UniProtKB.
+DR   GO; GO:0045765; P:regulation of angiogenesis; ISS:UniProtKB.
+DR   GO; GO:0046850; P:regulation of bone remodeling; ISS:UniProtKB.
+DR   GO; GO:0090335; P:regulation of brown fat cell differentiation; ISS:UniProtKB.
+DR   GO; GO:0051726; P:regulation of cell cycle; ISS:UniProtKB.
+DR   GO; GO:1900015; P:regulation of cytokine production involved in inflammatory response; ISS:UniProtKB.
+DR   GO; GO:0001936; P:regulation of endothelial cell proliferation; ISS:UniProtKB.
+DR   GO; GO:0032814; P:regulation of natural killer cell activation; ISS:UniProtKB.
+DR   GO; GO:0042269; P:regulation of natural killer cell mediated cytotoxicity; ISS:UniProtKB.
+DR   GO; GO:0032817; P:regulation of natural killer cell proliferation; ISS:UniProtKB.
+DR   GO; GO:0050999; P:regulation of nitric-oxide synthase activity; ISS:UniProtKB.
+DR   GO; GO:0032868; P:response to insulin; ISS:AgBase.
+DR   GO; GO:0019953; P:sexual reproduction; ISS:UniProtKB.
+DR   GO; GO:0030217; P:T cell differentiation; ISS:UniProtKB.
+DR   Gene3D; 1.20.1250.10; -; 1.
+DR   InterPro; IPR009079; 4_helix_cytokine-like_core.
+DR   InterPro; IPR000065; Leptin.
+DR   PANTHER; PTHR11724; LEPTIN; 1.
+DR   PANTHER; PTHR11724:SF1; LEPTIN; 1.
+DR   Pfam; PF02024; Leptin; 1.
+DR   PIRSF; PIRSF001837; Leptin; 1.
+DR   PRINTS; PR00495; LEPTIN.
+DR   SUPFAM; SSF47266; 4-helical cytokines; 1.
+PE   3: Inferred from homology;
+KW   Disulfide bond; Obesity; Reference proteome; Secreted; Signal.
+FT   SIGNAL          1..21
+FT                   /evidence="ECO:0000255"
+FT   CHAIN           22..167
+FT                   /note="Leptin"
+FT                   /id="PRO_0000235190"
+FT   DISULFID        117..167
+FT                   /evidence="ECO:0000250"
+SQ   SEQUENCE   167 AA;  18700 MW;  97677400A78CE0B7 CRC64;
+     KPMRCGPLYR FLWLWPYLSY VEAVPIRKVQ DDTKTLIKTI VTRINDISHT QSVSSKQRVT
+     GLDFIPGLHP LLSLSKMDQT LAIYQQILAS LPSRNVIQIS NDLENLRDLL HLLAASKSCP
+     LPQVRALESL ESLGVVLEAS LYSTEVVALS RLQGSLQDML RQLDLSPGC
+//

@@ -73,7 +73,7 @@ pub fn create_peptides_entities_from_digest<T>(
             partition as i64,
             mass,
             sequence.to_string(),
-            *missed_cleavages as i8,
+            *missed_cleavages,
             if let Some(protein) = protein_opt { vec![protein.get_accession().clone()] } else { Vec::new() },
             if let Some(protein) = protein_opt { protein.get_is_reviewed() } else { false },
             if let Some(protein) = protein_opt { !protein.get_is_reviewed() } else { false },

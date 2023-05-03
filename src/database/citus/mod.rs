@@ -1,4 +1,5 @@
 /// Module for storing and retrieving data from the Citus database.
+pub mod database_build;
 pub mod peptide_table;
 pub mod protein_table;
 pub mod table;
@@ -23,7 +24,7 @@ mod tests {
     use table::Table; // import for trait methods
     use super::*;
 
-    const DATABASE_URL: &str = "postgresql://postgres:developer@localhost:5433/macpepdb_dev";
+    pub const DATABASE_URL: &str = "postgresql://postgres:developer@localhost:5433/macpepdb_dev";
 
     pub fn get_client() -> Client {
         return Client::connect(DATABASE_URL, NoTls).unwrap();
@@ -38,7 +39,7 @@ mod tests {
         let mut client = get_client();
         let mut transaction = client.transaction().unwrap();
         let row = transaction.query_one(
-            "SELECT EXISTS (SELECT FROM pg_tables WHERE  schemaname = 'public' AND tablename  = 'refinery_schema_history');", 
+            "SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename  = 'refinery_schema_history');", 
             &[]
         ).unwrap();
         if row.get::<_, bool>(0) {
