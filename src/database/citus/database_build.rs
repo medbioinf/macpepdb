@@ -34,11 +34,12 @@ use crate::biology::digestion_enzyme::{
         create_peptides_entities_from_digest
     }
 };
+use crate::database::configuration_table::{
+    ConfigurationTable as ConfigurationTableTrait,
+    ConfigurationIncompleteError
+};
 use crate::database::citus::{
-    configuration_table::{
-        ConfigurationTable,
-        ConfigurationIncompleteError
-    },
+    configuration_table::ConfigurationTable,
     peptide_table::PeptideTable,
     protein_table::ProteinTable,
     table::Table
