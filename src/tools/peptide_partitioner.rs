@@ -259,7 +259,7 @@ impl<'a> PeptidePartitioner<'a> {
         let equalized_partition_contents = self.equalized_partition_contents(
             &mut partition_contents, 
             &mut partition_limits,
-            &mut progress_bar,
+            progress_bar,
             verbose
         )?;
         Ok(equalized_partition_contents.iter().map(|(_, lim)| *lim).collect())
