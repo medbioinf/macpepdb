@@ -25,4 +25,3 @@ pub mod database;
 pub mod entities;
 /// Input and output functions
 pub mod io;
-

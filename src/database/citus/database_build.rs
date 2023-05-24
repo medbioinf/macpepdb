@@ -2,57 +2,34 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
-use std::sync::{
-    atomic::AtomicBool,
-    Arc,
-    Mutex
-};
-use std::thread::{
-    JoinHandle,
-    sleep,
-    spawn
-};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::thread::{sleep, spawn, JoinHandle};
 use std::time::Duration;
 
 // 3rd party imports
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use kdam::{tqdm, Bar, BarExt};
-use postgres::{
-    Client,
-    NoTls
-};
+use postgres::{Client, NoTls};
 use refinery::embed_migrations;
-
 
 // internal imports
 use crate::biology::digestion_enzyme::{
     enzyme::Enzyme,
     functions::{
-        get_enzyme_by_name,
-        remove_unknown_from_digest,
-        create_peptides_entities_from_digest
-    }
+        create_peptides_entities_from_digest, get_enzyme_by_name, remove_unknown_from_digest,
+    },
 };
 use crate::database::citus::{
-    configuration_table::{
-        ConfigurationTable,
-        ConfigurationIncompleteError
-    },
+    configuration_table::{ConfigurationIncompleteError, ConfigurationTable},
     peptide_table::PeptideTable,
     protein_table::ProteinTable,
-    table::Table
+    table::Table,
 };
 
-use crate::entities::{
-    configuration::Configuration,
-    peptide::Peptide,
-    protein::Protein
-};
+use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
-use crate::tools::{
-    peptide_partitioner::PeptidePartitioner
-};
+use crate::tools::peptide_partitioner::PeptidePartitioner;
 
 // add module migration to the current module
 embed_migrations!("src/database/citus/migrations");
@@ -68,19 +45,24 @@ lazy_static! {
 /// * Keeps metadata up to date
 /// * ...
 pub struct DatabaseBuild {
-    database_url: String
+    database_url: String,
 }
 
 impl DatabaseBuild {
     pub fn new(database_url: String) -> Self {
-        return Self {
-            database_url,
-        };
+        return Self { database_url };
     }
 
     pub fn build(
-        &self, protein_file_paths: &Vec<PathBuf>, num_threads: usize, num_partitions: u64, allowed_ram_usage: f64, partitioner_false_positive_probability: f64,
-        initial_configuration_opt: Option<Configuration>, show_progress: bool, verbose: bool
+        &self,
+        protein_file_paths: &Vec<PathBuf>,
+        num_threads: usize,
+        num_partitions: u64,
+        allowed_ram_usage: f64,
+        partitioner_false_positive_probability: f64,
+        initial_configuration_opt: Option<Configuration>,
+        show_progress: bool,
+        verbose: bool,
     ) -> Result<()> {
         let mut progress_bar = tqdm!(
             total = 0,
@@ -103,18 +85,18 @@ impl DatabaseBuild {
             &mut client,
             protein_file_paths,
             num_partitions,
-            partitioner_false_positive_probability, 
+            partitioner_false_positive_probability,
             allowed_ram_usage,
             initial_configuration_opt,
             &mut progress_bar,
-            verbose
+            verbose,
         )?;
 
         let digestion_enzyme = get_enzyme_by_name(
             configuration.get_enzyme_name(),
             configuration.get_max_number_of_missed_cleavages(),
-            configuration.get_min_peptide_length(), 
-            configuration.get_max_peptide_length()
+            configuration.get_min_peptide_length(),
+            configuration.get_max_peptide_length(),
         )?;
 
         // read, digest and insert proteins and peptides
@@ -126,7 +108,7 @@ impl DatabaseBuild {
             configuration.get_remove_peptides_containing_unknown(),
             configuration.get_partition_limits().to_vec(),
             &mut progress_bar,
-            verbose
+            verbose,
         )?;
         // collect metadata
         // count peptides per partition
@@ -134,11 +116,10 @@ impl DatabaseBuild {
         Ok(())
     }
 
-
     /// Reads the saved configuration from the database or sets a new configuration if no configuration is saved.
     /// If no initial configuration is given and no configuration is saved in the database an error is thrown.  
     /// If the initial configuration is used and has no partition limits, the partition limits are calculated.
-    /// 
+    ///
     /// # Arguments
     /// * `client` - The postgres client
     /// * `protein_file_paths` - The paths to the protein files
@@ -148,16 +129,25 @@ impl DatabaseBuild {
     /// * `initial_configuration_opt` - The initial configuration
     /// * `progress_bar` - Progress bar
     /// * `verbose` - Verbose output
-    /// 
+    ///
     fn get_or_set_configuration(
-        client: &mut Client, protein_file_paths: &Vec<PathBuf>,
-        num_partitions: u64, allowed_ram_usage: f64, 
+        client: &mut Client,
+        protein_file_paths: &Vec<PathBuf>,
+        num_partitions: u64,
+        allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
-        initial_configuration_opt: Option<Configuration>, progress_bar: &mut Bar, verbose: bool
+        initial_configuration_opt: Option<Configuration>,
+        progress_bar: &mut Bar,
+        verbose: bool,
     ) -> Result<Configuration> {
         let config_res = ConfigurationTable::select(client);
         // return if configuration is ok or if it is not a ConfigurationIncompleteError
-        if config_res.as_ref().is_ok() || !config_res.as_ref().unwrap_err().is::<ConfigurationIncompleteError>() {
+        if config_res.as_ref().is_ok()
+            || !config_res
+                .as_ref()
+                .unwrap_err()
+                .is::<ConfigurationIncompleteError>()
+        {
             if verbose && config_res.as_ref().is_ok() {
                 progress_bar.write("found previous config ...");
             }
@@ -172,14 +162,15 @@ impl DatabaseBuild {
 
         let new_configuration = if initial_configuration.get_partition_limits().len() == 0 {
             if verbose {
-                progress_bar.write("initial configuration has no partition limits list, creating one ...");
+                progress_bar
+                    .write("initial configuration has no partition limits list, creating one ...");
             }
             // create digestion enzyme
             let digestion_enzyme = get_enzyme_by_name(
                 initial_configuration.get_enzyme_name(),
                 initial_configuration.get_max_number_of_missed_cleavages(),
                 initial_configuration.get_min_peptide_length(),
-                initial_configuration.get_max_peptide_length()
+                initial_configuration.get_max_peptide_length(),
             )?;
             // create partitioner
             let partitioner = PeptidePartitioner::new(
@@ -190,12 +181,8 @@ impl DatabaseBuild {
                 allowed_ram_usage,
             )?;
             // create partition limits
-            let partition_limits = partitioner.partition(
-                num_partitions,
-                None,
-                progress_bar,
-                verbose
-            )?;
+            let partition_limits =
+                partitioner.partition(num_partitions, None, progress_bar, verbose)?;
             // create new configuration with partition limits
             Configuration::new(
                 initial_configuration.get_enzyme_name().to_owned(),
@@ -203,7 +190,7 @@ impl DatabaseBuild {
                 initial_configuration.get_min_peptide_length() as i16,
                 initial_configuration.get_max_peptide_length() as i16,
                 initial_configuration.get_remove_peptides_containing_unknown(),
-                partition_limits
+                partition_limits,
             )
         } else {
             // if partition limits were given just clone the initial configuration
@@ -218,9 +205,9 @@ impl DatabaseBuild {
         Ok(new_configuration)
     }
 
-    /// Digests the proteins in the given files and inserts/updates the 
+    /// Digests the proteins in the given files and inserts/updates the
     /// proteins and peptides in the database.
-    /// 
+    ///
     /// # Arguments
     /// * `database_url` - The database url
     /// * `num_threads` - The number of threads
@@ -230,19 +217,23 @@ impl DatabaseBuild {
     /// * `partition_limits` - The partition limits
     /// * `progress_bar` - Progress bar
     /// * `verbose` - Verbose output
-    /// 
+    ///
     fn protein_digestion(
         database_url: &str,
         num_threads: usize,
-        protein_file_paths: &Vec<PathBuf>, digestion_enzyme: &dyn Enzyme,
+        protein_file_paths: &Vec<PathBuf>,
+        digestion_enzyme: &dyn Enzyme,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
         progress_bar: &mut Bar,
-        verbose: bool
+        verbose: bool,
     ) -> Result<()> {
         progress_bar.set_disable(true);
         if verbose {
-            progress_bar.write(format!("processing proteins using {} threads ...", num_threads));
+            progress_bar.write(format!(
+                "processing proteins using {} threads ...",
+                num_threads
+            ));
         }
 
         let protein_queue_size = num_threads * 5;
@@ -250,7 +241,7 @@ impl DatabaseBuild {
         let partition_limits_arc = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
 
-        let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new(); 
+        let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
         // Start digestion threads
         for thread_id in 0..num_threads {
@@ -264,7 +255,7 @@ impl DatabaseBuild {
                 digestion_enzyme.get_name(),
                 digestion_enzyme.get_max_number_of_missed_cleavages(),
                 digestion_enzyme.get_min_peptide_length(),
-                digestion_enzyme.get_max_peptide_length()
+                digestion_enzyme.get_max_peptide_length(),
             )?;
             // TODO: Add logging thread
             // Start digestion thread
@@ -276,7 +267,7 @@ impl DatabaseBuild {
                     partition_limits_arc_clone,
                     stop_flag_clone,
                     digestion_enzyme_box,
-                    remove_peptides_containing_unknown
+                    remove_peptides_containing_unknown,
                 )?;
                 Ok(())
             }));
@@ -293,7 +284,7 @@ impl DatabaseBuild {
                     // Acquire lock on protein queue
                     let mut protein_queue = match protein_queue_arc.lock() {
                         Ok(protein_queue) => protein_queue,
-                        Err(err) => bail!(format!("Could not lock protein queue: {}", err))
+                        Err(err) => bail!(format!("Could not lock protein queue: {}", err)),
                     };
                     // If protein queue is already full, set wait and try again
                     if protein_queue.len() >= protein_queue_size {
@@ -305,18 +296,18 @@ impl DatabaseBuild {
                 }
             }
         }
-        
+
         // Set stop flag
         stop_flag.store(true, Ordering::Relaxed);
 
         if verbose {
             progress_bar.write("last proteins queued, waiting for digestion threads to finish ...")
         }
-        
+
         for handle in digestion_thread_handles {
             match handle.join() {
                 Ok(result) => result?,
-                Err(err) => bail!(format!("Digestion thread failed: {:?}", err))
+                Err(err) => bail!(format!("Digestion thread failed: {:?}", err)),
             }
         }
 
@@ -325,7 +316,7 @@ impl DatabaseBuild {
 
     /// Function to which digests protein, provided by a queue
     /// and inserts it along with the peptides into the database.
-    /// 
+    ///
     /// # Arguments
     /// * `database_url` - The url of the database
     /// * `protein_queue_arc` - The queue from which the proteins are taken
@@ -333,7 +324,7 @@ impl DatabaseBuild {
     /// * `stop_flag` - The flag which indicates if the digestion should stop
     /// * `digestion_enzyme` - The enzyme which is used for digestion
     /// * `remove_peptides_containing_unknown` - If true, peptides containing unknown amino acids are removed
-    /// 
+    ///
     fn digestion_thread(
         thread_id: usize,
         database_url: String,
@@ -341,7 +332,7 @@ impl DatabaseBuild {
         partition_limits_arc: Arc<Vec<i64>>,
         stop_flag: Arc<AtomicBool>,
         digestion_enzyme: Box<dyn Enzyme>,
-        remove_peptides_containing_unknown: bool
+        remove_peptides_containing_unknown: bool,
     ) -> Result<()> {
         let mut client = Client::connect(&database_url, NoTls)?;
         let mut wait_for_queue = true;
@@ -352,11 +343,11 @@ impl DatabaseBuild {
                 wait_for_queue = false;
             }
             // Get next protein from queue
-            // if queue is empty and stop_flag is set, break 
+            // if queue is empty and stop_flag is set, break
             let protein = {
                 let mut protein_queue = match protein_queue_arc.lock() {
                     Ok(protein_queue) => protein_queue,
-                    Err(err) => bail!(format!("Could not lock protein queue: {}", err))
+                    Err(err) => bail!(format!("Could not lock protein queue: {}", err)),
                 };
                 if protein_queue.is_empty() {
                     if stop_flag.load(Ordering::Relaxed) {
@@ -370,10 +361,10 @@ impl DatabaseBuild {
             let existing_protein: Option<Protein> = ProteinTable::select(
                 &mut client,
                 "WHERE accession = $1 OR accession = ANY($2)",
-                &[protein.get_accession(), protein.get_secondary_accessions()]
+                &[protein.get_accession(), protein.get_secondary_accessions()],
             )?;
             // or contained in secondary accessions
-            if let Some(existing_protein) = existing_protein  {
+            if let Some(existing_protein) = existing_protein {
                 if existing_protein.get_updated_at() == protein.get_updated_at() {
                     continue;
                 }
@@ -383,7 +374,7 @@ impl DatabaseBuild {
                     &existing_protein,
                     &digestion_enzyme,
                     remove_peptides_containing_unknown,
-                    &partition_limits_arc
+                    &partition_limits_arc,
                 )?;
             } else {
                 Self::insert_protein(
@@ -391,17 +382,16 @@ impl DatabaseBuild {
                     &protein,
                     &digestion_enzyme,
                     remove_peptides_containing_unknown,
-                    &partition_limits_arc
+                    &partition_limits_arc,
                 )?;
             }
-            
         }
         client.close()?;
         Ok(())
     }
 
     /// Handles the update of a protein, in case it was merged with another entry or has various changes.
-    /// 
+    ///
     /// # Arguments
     /// * `client` - The database client
     /// * `protein` - The new protein
@@ -409,38 +399,46 @@ impl DatabaseBuild {
     /// * `digestion_enzyme` - The enzyme which is used for digestion
     /// * `remove_peptides_containing_unknown` - If true, peptides containing unknown amino acids are removed
     /// * `partition_limits` - The partition limits
-    /// 
+    ///
     fn update_protein(
-        client: &mut Client, protein: &Protein, existing_protein: &Protein, digestion_enzyme: &Box<dyn Enzyme>,
-        remove_peptides_containing_unknown: bool, partition_limits: &Vec<i64>
+        client: &mut Client,
+        protein: &Protein,
+        existing_protein: &Protein,
+        digestion_enzyme: &Box<dyn Enzyme>,
+        remove_peptides_containing_unknown: bool,
+        partition_limits: &Vec<i64>,
     ) -> Result<()> {
-        let mut existing_peptide_sequences = digestion_enzyme.digest(&existing_protein.get_sequence());
+        let mut existing_peptide_sequences =
+            digestion_enzyme.digest(&existing_protein.get_sequence());
         let mut peptide_sequences = digestion_enzyme.digest(&protein.get_sequence());
         if remove_peptides_containing_unknown {
             remove_unknown_from_digest(&mut existing_peptide_sequences);
             remove_unknown_from_digest(&mut peptide_sequences);
         }
         let existing_peptides: HashSet<Peptide> = create_peptides_entities_from_digest(
-            &existing_peptide_sequences, 
+            &existing_peptide_sequences,
             partition_limits,
-            Some(&existing_protein)
+            Some(&existing_protein),
         )?;
         let peptides: HashSet<Peptide> = create_peptides_entities_from_digest(
-            &peptide_sequences, 
+            &peptide_sequences,
             partition_limits,
-            Some(&protein)
+            Some(&protein),
         )?;
         let mut transaction = client.transaction()?;
-        let flag_for_metadata_update = protein.get_taxonomy_id() != existing_protein.get_taxonomy_id() 
+        let flag_for_metadata_update = protein.get_taxonomy_id()
+            != existing_protein.get_taxonomy_id()
             || protein.get_proteome_id() != existing_protein.get_proteome_id();
         // If protein got a new accession (e.g. when entries were merged) and a new sequence
-        if protein.get_accession() != existing_protein.get_accession() && protein.get_sequence() != existing_protein.get_sequence() {
+        if protein.get_accession() != existing_protein.get_accession()
+            && protein.get_sequence() != existing_protein.get_sequence()
+        {
             // Associate all new peptides
             PeptideTable::update_protein_accession(
-                &mut transaction, 
+                &mut transaction,
                 &mut peptides.iter(),
-                existing_protein.get_accession(), 
-                Some(protein.get_accession())
+                existing_protein.get_accession(),
+                Some(protein.get_accession()),
             )?;
             // Disassociate all peptides from existing peptides which are not in new peptides
             let peptides_to_deassociate = existing_peptides
@@ -449,10 +447,10 @@ impl DatabaseBuild {
 
             if peptides_to_deassociate.len() > 0 {
                 PeptideTable::update_protein_accession(
-                    &mut transaction, 
+                    &mut transaction,
                     &mut peptides_to_deassociate.into_iter(),
-                    existing_protein.get_accession(), 
-                    None
+                    existing_protein.get_accession(),
+                    None,
                 )?;
             }
         } else if protein.get_accession() != existing_protein.get_accession() {
@@ -460,15 +458,12 @@ impl DatabaseBuild {
                 &mut transaction,
                 &mut peptides.iter(),
                 existing_protein.get_accession().as_ref(),
-                Some(protein.get_accession().as_ref())
+                Some(protein.get_accession().as_ref()),
             )?;
         }
 
         if flag_for_metadata_update {
-            PeptideTable::unset_is_metadata_updated(
-                &mut transaction, 
-                &mut peptides.iter()
-            )?;
+            PeptideTable::unset_is_metadata_updated(&mut transaction, &mut peptides.iter())?;
         }
 
         transaction.commit()?;
@@ -476,32 +471,38 @@ impl DatabaseBuild {
     }
 
     /// Handles the insertion of a new protein.
-    /// 
+    ///
     /// # Arguments
     /// * `client` - The database client
     /// * `protein` - The protein
     /// * `digestion_enzyme` - The enzyme which is used for digestion
     /// * `remove_peptides_containing_unknown` - If true, peptides containing unknown amino acids are removed
     /// * `partition_limits` - The partition limits
-    /// 
-    fn insert_protein(client: &mut Client, protein: &Protein, digestion_enzyme: &Box<dyn Enzyme>, remove_peptides_containing_unknown: bool, partition_limits: &Vec<i64>) -> Result<()> {
+    ///
+    fn insert_protein(
+        client: &mut Client,
+        protein: &Protein,
+        digestion_enzyme: &Box<dyn Enzyme>,
+        remove_peptides_containing_unknown: bool,
+        partition_limits: &Vec<i64>,
+    ) -> Result<()> {
         // Digest protein
         let mut peptide_sequences = digestion_enzyme.digest(&protein.get_sequence());
         if remove_peptides_containing_unknown {
             remove_unknown_from_digest(&mut peptide_sequences);
         }
         let peptides = create_peptides_entities_from_digest::<Vec<Peptide>>(
-            &peptide_sequences, 
+            &peptide_sequences,
             partition_limits,
-            Some(&protein)
+            Some(&protein),
         )?;
-        
+
         let mut transaction = client.transaction()?;
         ProteinTable::insert(&mut transaction, &protein)?;
         PeptideTable::bulk_insert(&mut transaction, &mut peptides.iter())?;
         transaction.commit()?;
 
-        return Ok(())
+        return Ok(());
     }
 }
 
@@ -514,33 +515,21 @@ mod test {
     use serial_test::serial;
 
     // internal imports
+    use super::*;
     use crate::biology::digestion_enzyme::functions::{
-        create_peptides_entities_from_digest,
-        get_enzyme_by_name
+        create_peptides_entities_from_digest, get_enzyme_by_name,
     };
     use crate::database::citus::{
-        protein_table::ProteinTable,
         peptide_table::PeptideTable,
-        tests::{
-            DATABASE_URL,
-            prepare_database_for_tests,
-            get_client
-        }
+        protein_table::ProteinTable,
+        tests::{get_client, prepare_database_for_tests, DATABASE_URL},
     };
     use crate::io::uniprot_text::reader::Reader;
-    use super::*;
 
     lazy_static! {
-        static ref CONFIGURATION: Configuration = Configuration::new(
-            "trypsin".to_owned(),
-            2,
-            6,
-            50,
-            true,
-            Vec::with_capacity(0)
-        );
+        static ref CONFIGURATION: Configuration =
+            Configuration::new("trypsin".to_owned(), 2, 6, 50, true, Vec::with_capacity(0));
     }
-
 
     // Test the database building
     #[test]
@@ -548,21 +537,11 @@ mod test {
     fn test_database_build_without_initial_config() {
         prepare_database_for_tests();
 
-        let protein_file_paths = vec![
-            Path::new("test_files/uniprot.txt").to_path_buf()
-        ];
-        
+        let protein_file_paths = vec![Path::new("test_files/uniprot.txt").to_path_buf()];
+
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
-        let build_res = database_builder.build(
-            &protein_file_paths,
-            2,
-            100,
-            0.5,
-            0.0002,
-            None,
-            false,
-            false
-        );
+        let build_res =
+            database_builder.build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, false, false);
         assert!(build_res.is_err());
     }
 
@@ -571,21 +550,21 @@ mod test {
     fn test_database_build() {
         prepare_database_for_tests();
 
-        let protein_file_paths = vec![
-            Path::new("test_files/uniprot.txt").to_path_buf()
-        ];
-        
+        let protein_file_paths = vec![Path::new("test_files/uniprot.txt").to_path_buf()];
+
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
-        database_builder.build(
-            &protein_file_paths,
-            2,
-            100,
-            0.5,
-            0.0002,
-            Some(CONFIGURATION.clone()),
-            true,
-            true
-        ).unwrap();
+        database_builder
+            .build(
+                &protein_file_paths,
+                2,
+                100,
+                0.5,
+                0.0002,
+                Some(CONFIGURATION.clone()),
+                true,
+                true,
+            )
+            .unwrap();
 
         let mut client = get_client();
 
@@ -595,31 +574,39 @@ mod test {
             configuration.get_enzyme_name(),
             configuration.get_max_number_of_missed_cleavages(),
             configuration.get_min_peptide_length(),
-            configuration.get_max_peptide_length()
-        ).unwrap();
+            configuration.get_max_peptide_length(),
+        )
+        .unwrap();
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(&protein_file_path, 4096).unwrap();
             while let Some(protein) = reader.next().unwrap() {
                 let proteins = ProteinTable::select_multiple(
-                    &mut client, 
+                    &mut client,
                     "WHERE accession = $1",
-                    &[&protein.get_accession()]
-                ).unwrap();
+                    &[&protein.get_accession()],
+                )
+                .unwrap();
                 assert_eq!(proteins.len(), 1);
 
                 let expected_peptides: Vec<Peptide> = create_peptides_entities_from_digest(
                     &enzyme.digest(&protein.get_sequence()),
                     configuration.get_partition_limits(),
-                    Some(&protein)
-                ).unwrap();
+                    Some(&protein),
+                )
+                .unwrap();
 
                 for peptide in expected_peptides {
                     let peptides = PeptideTable::select_multiple(
-                        &mut client, 
+                        &mut client,
                         "WHERE partition = $1 AND mass = $2 AND sequence = $3",
-                        &[&peptide.get_partition_as_ref(), &peptide.get_mass_as_ref(), &peptide.get_sequence()]
-                    ).unwrap();
+                        &[
+                            &peptide.get_partition_as_ref(),
+                            &peptide.get_mass_as_ref(),
+                            &peptide.get_sequence(),
+                        ],
+                    )
+                    .unwrap();
                     assert_eq!(peptides.len(), 1);
                 }
             }

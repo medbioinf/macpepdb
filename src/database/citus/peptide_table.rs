@@ -1,13 +1,10 @@
 // 3rd party imports
 use anyhow::Result;
-use postgres::{
-    GenericClient,
-    types::ToSql
-};
+use postgres::{types::ToSql, GenericClient};
 
 // internal imports
-use crate::entities::peptide::Peptide;
 use crate::database::citus::table::Table;
+use crate::entities::peptide::Peptide;
 
 const TABLE_NAME: &'static str = "peptides";
 
@@ -20,33 +17,37 @@ const UPDATE_COLS: &'static str = SELECT_COLS;
 const NUM_PRIMARY_KEY_COLS: usize = 3;
 
 lazy_static! {
-    pub static ref NUM_INSERT_COLS: usize = INSERT_COLS.split(", ", ).count();
-
-    static ref INSERT_PLACEHOLDERS: String = INSERT_COLS.split(", ", )
+    pub static ref NUM_INSERT_COLS: usize = INSERT_COLS.split(", ",).count();
+    static ref INSERT_PLACEHOLDERS: String = INSERT_COLS
+        .split(", ",)
         .enumerate()
         .map(|(i, _)| format!("${}", i + 1))
         .collect::<Vec<String>>()
         .join(", ");
-
-    static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS.split(", ", )
+    static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS
+        .split(", ",)
         .enumerate()
         .map(|(i, col)| format!("{} = ${}", col, i + 1))
         .collect::<Vec<String>>()
         .join(", ");
-
-    static ref UPDATE_COLS_WHERE_ACCESSION_NUM: usize = UPDATE_SET_PLACEHOLDER.matches("=").count() + 1; 
+    static ref UPDATE_COLS_WHERE_ACCESSION_NUM: usize =
+        UPDATE_SET_PLACEHOLDER.matches("=").count() + 1;
 }
-
 
 pub struct PeptideTable {}
 
 impl PeptideTable {
-    fn create_chunked_array_with_placeholders(num_placeholders: usize, placeholders_per_chunk: usize, start: usize) -> String {
+    fn create_chunked_array_with_placeholders(
+        num_placeholders: usize,
+        placeholders_per_chunk: usize,
+        start: usize,
+    ) -> String {
         let end = num_placeholders + start;
         // Generate vec of placeholders from `start` to `num_placeholders`
-        let placeholders = (start..end).into_iter()
-                .map(|i| format!("${}", i))
-                .collect::<Vec<String>>();
+        let placeholders = (start..end)
+            .into_iter()
+            .map(|i| format!("${}", i))
+            .collect::<Vec<String>>();
         // Group placeholders into chunks of `placeholders_per_chunk` and join them with ", "
         // Result ($1, ..., $placeholders_per_chunk), ($placeholders_per_chunk + 1, ..., $placeholders_per_chunk * 2), ...
         placeholders
@@ -57,17 +58,15 @@ impl PeptideTable {
             .join(", ")
     }
 
-    pub fn bulk_insert<'a, C, T>(client: &mut C, peptides: T) -> Result<()> where 
+    pub fn bulk_insert<'a, C, T>(client: &mut C, peptides: T) -> Result<()>
+    where
         C: GenericClient,
-        T: Iterator<Item=&'a Peptide> + ExactSizeIterator 
+        T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
         let num_placeholders = peptides.len() * *NUM_INSERT_COLS;
         // Generate vec of placeholders from $1 to $NUM_INSERT_COLS * num_placeholders
-        let placeholders = Self::create_chunked_array_with_placeholders(
-            num_placeholders, 
-            *NUM_INSERT_COLS,
-            1
-        ); 
+        let placeholders =
+            Self::create_chunked_array_with_placeholders(num_placeholders, *NUM_INSERT_COLS, 1);
 
         // Build insert statement
         let statement = format!(
@@ -97,21 +96,23 @@ impl PeptideTable {
 
     /// Updates the protein accessions of the given peptides.
     /// If new_protein_accession is given a metadata flaged as outdated.
-    /// 
+    ///
     /// # Arguments
     /// * `client` - Database client or open transaction
     /// * `peptides` - Iterator over peptides to update
     /// * `old_protein_accession` - Old protein accession to remove
     /// * `new_protein_accession` - New protein accession to add (optional)
-    /// 
+    ///
     pub fn update_protein_accession<'a, C, T>(
-        client: &mut C, peptides: &mut T,
-        old_protein_accession: &str, new_protein_accession: Option<&str>
-    ) -> Result<()> where 
+        client: &mut C,
+        peptides: &mut T,
+        old_protein_accession: &str,
+        new_protein_accession: Option<&str>,
+    ) -> Result<()>
+    where
         C: GenericClient,
-        T: Iterator<Item=&'a Peptide> + ExactSizeIterator 
+        T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
-
         let num_placeholders = peptides.len() * 3;
 
         let mut num_update_values = num_placeholders + 1;
@@ -119,13 +120,13 @@ impl PeptideTable {
 
         if new_protein_accession.is_some() {
             num_update_values += 1;
-            placeholder_offset += 1;    // need to start at 3 when a new protein accession is given
+            placeholder_offset += 1; // need to start at 3 when a new protein accession is given
         }
 
         let placeholders = Self::create_chunked_array_with_placeholders(
-            num_placeholders, 
+            num_placeholders,
             NUM_PRIMARY_KEY_COLS,
-            placeholder_offset
+            placeholder_offset,
         );
 
         // if a new protein accession is given add it, otherwise set is_metadata_updated to false
@@ -144,7 +145,7 @@ impl PeptideTable {
 
         let mut update_values: Vec<&(dyn ToSql + Sync)> = Vec::with_capacity(num_update_values);
         update_values.push(&old_protein_accession);
-        
+
         if new_protein_accession.is_some() {
             update_values.push(&new_protein_accession);
         }
@@ -158,21 +159,16 @@ impl PeptideTable {
         return Ok(());
     }
 
-    pub fn unset_is_metadata_updated<'a, C, T>(
-        client: &mut C, peptides: &mut T,
-    ) -> Result<()> where 
+    pub fn unset_is_metadata_updated<'a, C, T>(client: &mut C, peptides: &mut T) -> Result<()>
+    where
         C: GenericClient,
-        T: Iterator<Item=&'a Peptide> + ExactSizeIterator 
+        T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
         let num_placeholders = peptides.len() * 3;
 
         let num_update_values = num_placeholders + 1;
 
-        let placeholders = Self::create_chunked_array_with_placeholders(
-            num_placeholders, 
-            3,
-            1
-        );
+        let placeholders = Self::create_chunked_array_with_placeholders(num_placeholders, 3, 1);
 
         let statement = format!(
             "UPDATE {} SET is_metadata_updated = false WHERE (partition, mass, sequence) in ({})",
@@ -203,8 +199,6 @@ impl Table<Peptide> for PeptideTable {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     // std imports
@@ -217,18 +211,17 @@ mod tests {
     use serial_test::serial;
 
     use crate::biology::digestion_enzyme::functions::{
-        get_enzyme_by_name,
-        create_peptides_entities_from_digest
+        create_peptides_entities_from_digest, get_enzyme_by_name,
     };
     // internal imports
-    use crate::database::citus::table::Table;
-    use crate::database::citus::tests::{prepare_database_for_tests, get_client};
-    use crate::io::uniprot_text::reader::Reader;
     use super::*;
+    use crate::database::citus::table::Table;
+    use crate::database::citus::tests::{get_client, prepare_database_for_tests};
+    use crate::io::uniprot_text::reader::Reader;
 
-    const CONFLICTING_PEPTIDE_PROTEIN_ACCESSION : &'static str = "P41159";
+    const CONFLICTING_PEPTIDE_PROTEIN_ACCESSION: &'static str = "P41159";
 
-    lazy_static!{
+    lazy_static! {
         // Peptides for Leptin (UniProt accession Q257X2, with KP on first position) digested with 3 missed cleavages, length 6 - 50
         // Tested with https://web.expasy.org/peptide_mass/
         static ref EXPECTED_PEPTIDES: HashMap<String, i16> = collection! {
@@ -297,7 +290,7 @@ mod tests {
     }
 
     /// Test inserting
-    /// 
+    ///
     #[test]
     #[serial]
     fn test_insert() {
@@ -311,11 +304,12 @@ mod tests {
 
         let digest = digestion_enzyme.digest(leptin.get_sequence());
 
-        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>> (
+        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>>(
             &digest,
             &PEPTIDE_LIMITS,
-            Some(&leptin)
-        ).unwrap();
+            Some(&leptin),
+        )
+        .unwrap();
 
         assert_eq!(peptides.len(), EXPECTED_PEPTIDES.len());
 
@@ -331,18 +325,13 @@ mod tests {
             peptides[0].get_is_trembl(),
             vec![9925],
             vec![9925],
-            vec!["UP000291000".to_owned()]
-        ).unwrap()];
+            vec!["UP000291000".to_owned()],
+        )
+        .unwrap()];
 
-        PeptideTable::bulk_insert(
-            &mut client,
-            &mut conflicting_peptides.iter()
-        ).unwrap();
+        PeptideTable::bulk_insert(&mut client, &mut conflicting_peptides.iter()).unwrap();
 
-        PeptideTable::bulk_insert(
-            &mut client,
-            &mut peptides.iter()
-        ).unwrap();
+        PeptideTable::bulk_insert(&mut client, &mut peptides.iter()).unwrap();
 
         let count_statement = format!("SELECT count(*) FROM {}", PeptideTable::table_name());
         let row = client.query_one(&count_statement, &[]).unwrap();
@@ -352,13 +341,15 @@ mod tests {
         let row = PeptideTable::raw_select(
             &mut client,
             "proteins",
-            "WHERE partition = $1 AND mass = $2 and sequence = $3", 
+            "WHERE partition = $1 AND mass = $2 and sequence = $3",
             &[
                 conflicting_peptides[0].get_partition_as_ref(),
                 conflicting_peptides[0].get_mass_as_ref(),
-                &conflicting_peptides[0].get_sequence()
-            ]
-        ).unwrap().unwrap();
+                &conflicting_peptides[0].get_sequence(),
+            ],
+        )
+        .unwrap()
+        .unwrap();
 
         let associated_proteins: Vec<String> = row.get("proteins");
         assert_eq!(associated_proteins.len(), 2);
@@ -366,12 +357,8 @@ mod tests {
         assert!(associated_proteins.contains(&CONFLICTING_PEPTIDE_PROTEIN_ACCESSION.to_owned()));
 
         // Check if metadata is marked as not updated.
-        let rows = PeptideTable::raw_select_multiple(
-            &mut client,
-            "is_metadata_updated",
-            "",
-            &[]
-        ).unwrap();
+        let rows =
+            PeptideTable::raw_select_multiple(&mut client, "is_metadata_updated", "", &[]).unwrap();
 
         // Check if accession was updated and not appended for all peptides.
         for row in rows.iter() {
@@ -382,7 +369,7 @@ mod tests {
     }
 
     /// Tests protein accession update and disassociation (removal of protein accession from peptide)
-    /// 
+    ///
     #[test]
     #[serial]
     fn test_accession_update() {
@@ -396,33 +383,27 @@ mod tests {
 
         let digest = digestion_enzyme.digest(leptin.get_sequence());
 
-        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>> (
+        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>>(
             &digest,
             &PEPTIDE_LIMITS,
-            Some(&leptin)
-        ).unwrap();
+            Some(&leptin),
+        )
+        .unwrap();
 
         assert_eq!(peptides.len(), EXPECTED_PEPTIDES.len());
 
-        PeptideTable::bulk_insert(
-            &mut client,
-            &mut peptides.iter()
-        ).unwrap();
+        PeptideTable::bulk_insert(&mut client, &mut peptides.iter()).unwrap();
 
         PeptideTable::update_protein_accession(
-            &mut client, 
-            &mut peptides.iter(), 
-            leptin.get_accession(), 
-            Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION)
-        ).unwrap();
+            &mut client,
+            &mut peptides.iter(),
+            leptin.get_accession(),
+            Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION),
+        )
+        .unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(
-            &mut client,
-            "proteins",
-            "",
-            &[]
-        ).unwrap();
+        let rows = PeptideTable::raw_select_multiple(&mut client, "proteins", "", &[]).unwrap();
 
         // Check if accession was updated and not appended for all peptides.
         for row in rows.iter() {
@@ -432,19 +413,15 @@ mod tests {
         }
 
         PeptideTable::update_protein_accession(
-            &mut client, 
-            &mut peptides.iter(), 
-            leptin.get_accession(), 
-            None
-        ).unwrap();
+            &mut client,
+            &mut peptides.iter(),
+            leptin.get_accession(),
+            None,
+        )
+        .unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(
-            &mut client,
-            "proteins",
-            "",
-            &[]
-        ).unwrap();
+        let rows = PeptideTable::raw_select_multiple(&mut client, "proteins", "", &[]).unwrap();
 
         // Check if accession was updated and not appended for all peptides.
         for row in rows.iter() {
@@ -457,7 +434,7 @@ mod tests {
     }
 
     /// Test update flagging peptides for metadata update
-    /// 
+    ///
     #[test]
     #[serial]
     fn test_flagging_for_metadata_update() {
@@ -471,48 +448,41 @@ mod tests {
 
         let digest = digestion_enzyme.digest(leptin.get_sequence());
 
-        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>> (
+        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>>(
             &digest,
             &PEPTIDE_LIMITS,
-            Some(&leptin)
-        ).unwrap();
+            Some(&leptin),
+        )
+        .unwrap();
 
         PeptideTable::update_protein_accession(
-            &mut client, 
-            &mut peptides.iter(), 
-            leptin.get_accession(), 
-            Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION)
-        ).unwrap();
+            &mut client,
+            &mut peptides.iter(),
+            leptin.get_accession(),
+            Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION),
+        )
+        .unwrap();
 
-        let statement = format!("UPDATE {} SET is_metadata_updated = true", PeptideTable::table_name());
+        let statement = format!(
+            "UPDATE {} SET is_metadata_updated = true",
+            PeptideTable::table_name()
+        );
 
         client.execute(&statement, &[]).unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(
-            &mut client,
-            "is_metadata_updated",
-            "",
-            &[]
-        ).unwrap();
+        let rows =
+            PeptideTable::raw_select_multiple(&mut client, "is_metadata_updated", "", &[]).unwrap();
 
         for row in rows.iter() {
             assert!(row.get::<_, bool>("is_metadata_updated"));
         }
 
-        PeptideTable::unset_is_metadata_updated(
-            &mut client,
-            &mut peptides.iter()
-        ).unwrap();
-
+        PeptideTable::unset_is_metadata_updated(&mut client, &mut peptides.iter()).unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(
-            &mut client,
-            "is_metadata_updated",
-            "",
-            &[]
-        ).unwrap();
+        let rows =
+            PeptideTable::raw_select_multiple(&mut client, "is_metadata_updated", "", &[]).unwrap();
 
         for row in rows.iter() {
             assert!(!row.get::<_, bool>("is_metadata_updated"));

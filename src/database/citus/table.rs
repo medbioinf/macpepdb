@@ -1,20 +1,22 @@
-
 // 3rd party imports
 use anyhow::Result;
 use fallible_iterator::FallibleIterator;
-use postgres::{Row, RowIter, ToStatement, GenericClient};
 use postgres::types::{BorrowToSql, ToSql};
+use postgres::{GenericClient, Row, RowIter, ToStatement};
 
 /// Iterator over a stream of records
-/// 
-pub struct RecordStream<'a, R: From<Row>>{
+///
+pub struct RecordStream<'a, R: From<Row>> {
     inner_iter: RowIter<'a>,
     record_type: std::marker::PhantomData<R>,
 }
 
 /// Fallible iterator implementation for Record Stream
-/// 
-impl<R> FallibleIterator for RecordStream<'_, R> where R: From<Row> {
+///
+impl<R> FallibleIterator for RecordStream<'_, R>
+where
+    R: From<Row>,
+{
     type Item = R;
     type Error = anyhow::Error;
 
@@ -27,24 +29,29 @@ impl<R> FallibleIterator for RecordStream<'_, R> where R: From<Row> {
 }
 
 /// Defines read-only operations for a database table
-/// 
+///
 pub trait Table<R: From<Row>> {
     /// Returns the name of the table
-    /// 
+    ///
     fn table_name() -> &'static str;
 
     /// Returns select columns
-    /// 
+    ///
     fn select_cols() -> &'static str;
 
     /// Selects proteins and returns them as rows.
-    /// 
+    ///
     /// # Arguments
     /// * `cols` - The columns to select
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
-    /// 
-    fn raw_select_multiple<'a, C: GenericClient>(client: &mut C, cols: &str, additional: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>> {
+    ///
+    fn raw_select_multiple<'a, C: GenericClient>(
+        client: &mut C,
+        cols: &str,
+        additional: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>> {
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
@@ -54,13 +61,18 @@ pub trait Table<R: From<Row>> {
     }
 
     /// Selects a protein and returns it as row. If no protein is found, None is returned.
-    /// 
+    ///
     /// # Arguments
     /// * `cols` - The columns to select
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
-    /// 
-    fn raw_select<'a, C: GenericClient>(client: &mut C, cols: &str, additional: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>> {
+    ///
+    fn raw_select<'a, C: GenericClient>(
+        client: &mut C,
+        cols: &str,
+        additional: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Option<Row>> {
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
@@ -70,13 +82,17 @@ pub trait Table<R: From<Row>> {
     }
 
     /// Selects proteins and returns them.
-    /// 
+    ///
     /// # Arguments
     /// * `cols` - The columns to select
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
-    /// 
-    fn select_multiple<'a, C: GenericClient>(client: &mut C, additional: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<R>> {
+    ///
+    fn select_multiple<'a, C: GenericClient>(
+        client: &mut C,
+        additional: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<R>> {
         let rows = Self::raw_select_multiple(client, Self::select_cols(), additional, params)?;
         let mut records = Vec::new();
         for row in rows {
@@ -86,13 +102,17 @@ pub trait Table<R: From<Row>> {
     }
 
     /// Selects a protein and returns it. If no protein is found, None is returned.
-    /// 
+    ///
     /// # Arguments
     /// * `cols` - The columns to select
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
-    /// 
-    fn select<'a, C: GenericClient>(client: &mut C, additional: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<R>> {
+    ///
+    fn select<'a, C: GenericClient>(
+        client: &mut C,
+        additional: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Option<R>> {
         let row = Self::raw_select(client, Self::select_cols(), additional, params)?;
         if row.is_none() {
             return Ok(None);
@@ -101,14 +121,24 @@ pub trait Table<R: From<Row>> {
     }
 
     /// Selects proteins and returns it them row iterator.
-    /// 
+    ///
     /// # Arguments
     /// * `cols` - The columns to select
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
-    /// 
-    fn raw_stream<'a, C: GenericClient, T, P, I>(client: &'a mut C, cols: &str, additional: &str, params: I) -> Result<RowIter<'a>>
-        where T: ?Sized + ToStatement, P: BorrowToSql, I : IntoIterator<Item = P>, I::IntoIter: ExactSizeIterator {
+    ///
+    fn raw_stream<'a, C: GenericClient, T, P, I>(
+        client: &'a mut C,
+        cols: &str,
+        additional: &str,
+        params: I,
+    ) -> Result<RowIter<'a>>
+    where
+        T: ?Sized + ToStatement,
+        P: BorrowToSql,
+        I: IntoIterator<Item = P>,
+        I::IntoIter: ExactSizeIterator,
+    {
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
@@ -118,16 +148,30 @@ pub trait Table<R: From<Row>> {
     }
 
     /// Selects proteins and returns them as iterator.
-    /// 
+    ///
     /// # Arguments
     /// * `cols` - The columns to select
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
-    /// 
-    fn stream<'a, C: GenericClient, T, P, I>(client: &'a mut C, additional: &str, params: I) -> Result<RecordStream<'a, R>>
-        where T: ?Sized + ToStatement, P: BorrowToSql, I : IntoIterator<Item = P>, I::IntoIter: ExactSizeIterator {
+    ///
+    fn stream<'a, C: GenericClient, T, P, I>(
+        client: &'a mut C,
+        additional: &str,
+        params: I,
+    ) -> Result<RecordStream<'a, R>>
+    where
+        T: ?Sized + ToStatement,
+        P: BorrowToSql,
+        I: IntoIterator<Item = P>,
+        I::IntoIter: ExactSizeIterator,
+    {
         return Ok(RecordStream {
-            inner_iter: Self::raw_stream::<C, T, P, I>(client, Self::select_cols(), additional, params)?,
+            inner_iter: Self::raw_stream::<C, T, P, I>(
+                client,
+                Self::select_cols(),
+                additional,
+                params,
+            )?,
             record_type: std::marker::PhantomData::<R>,
         });
     }

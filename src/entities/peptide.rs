@@ -22,7 +22,7 @@ pub struct Peptide {
 
 impl Peptide {
     /// Creates a new peptide
-    /// 
+    ///
     /// # Arguments
     /// * `partition` - The mass partition
     /// * `mass` - The mass
@@ -34,7 +34,7 @@ impl Peptide {
     /// * `taxonomy_ids` - The taxonomy IDs
     /// * `unique_taxonomy_ids` - Taxonomy IDs where the peptide is only contained in one protein
     /// * `proteome_ids` - The proteome IDs
-    /// 
+    ///
     pub fn new(
         partition: i64,
         mass: i64,
@@ -63,18 +63,18 @@ impl Peptide {
             is_trembl,
             taxonomy_ids,
             unique_taxonomy_ids,
-            proteome_ids
+            proteome_ids,
         });
     }
 
     /// Returns the mass partition
-    /// 
+    ///
     pub fn get_partition(&self) -> i64 {
         return self.partition;
     }
 
     /// Returns the mass partition as ref
-    /// 
+    ///
     pub fn get_partition_as_ref(&self) -> &i64 {
         return &self.partition;
     }
@@ -105,7 +105,7 @@ impl Peptide {
     }
 
     /// Returns the amino acid counts
-    /// 
+    ///
     pub fn get_aa_counts(&self) -> &Vec<i16> {
         return &self.aa_counts;
     }
@@ -116,43 +116,43 @@ impl Peptide {
     }
 
     /// Returns true if the peptide is contained in a Swiss-Prot protein
-    /// 
+    ///
     pub fn get_is_swiss_prot(&self) -> bool {
         return self.is_swiss_prot;
     }
 
     /// Returns true if the peptide is contained in a Swiss-Prot protein as ref
-    /// 
+    ///
     pub fn get_is_swiss_prot_as_ref(&self) -> &bool {
         return &self.is_swiss_prot;
     }
 
     /// Returns true if the peptide is contained in a TrEMBL protein
-    /// 
+    ///
     pub fn get_is_trembl(&self) -> bool {
         return self.is_trembl;
     }
 
     /// Returns true if the peptide is contained in a TrEMBL protein as ref
-    /// 
+    ///
     pub fn get_is_trembl_as_ref(&self) -> &bool {
         return &self.is_trembl;
     }
 
     /// Returns the taxonomy IDs
-    /// 
+    ///
     pub fn get_taxonomy_ids(&self) -> &Vec<i64> {
         return &self.taxonomy_ids;
     }
 
     /// Returns the unique taxonomy IDs
-    /// 
+    ///
     pub fn get_unique_taxonomy_ids(&self) -> &Vec<i64> {
         return &self.unique_taxonomy_ids;
     }
 
     /// Returns the proteome IDs
-    /// 
+    ///
     pub fn get_proteome_ids(&self) -> &Vec<String> {
         return &self.proteome_ids;
     }
@@ -174,7 +174,7 @@ impl Hash for Peptide {
 
 impl From<Row> for Peptide {
     fn from(row: Row) -> Self {
-        Self{
+        Self {
             partition: row.get("partition"),
             mass: row.get("mass"),
             sequence: row.get("sequence"),
@@ -185,7 +185,7 @@ impl From<Row> for Peptide {
             is_trembl: row.get("is_trembl"),
             taxonomy_ids: row.get("taxonomy_ids"),
             unique_taxonomy_ids: row.get("unique_taxonomy_ids"),
-            proteome_ids: row.get("proteome_ids")
+            proteome_ids: row.get("proteome_ids"),
         }
     }
 }
