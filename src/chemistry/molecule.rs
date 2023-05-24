@@ -1,8 +1,8 @@
 // 3rd party imports
-use anyhow::{Result, bail};
+use anyhow::{bail, Result};
 
 /// Keeps information about a molecule.
-/// 
+///
 pub struct Molecule {
     name: &'static str,
     mono_mass: i64,
@@ -14,64 +14,63 @@ impl Molecule {
     /// ’
     /// # Arguments
     /// * `name` - Name
-    /// 
+    ///
     pub fn get_by_name(name: &str) -> Result<&'static Self> {
         return match name.to_lowercase().as_str() {
             "water" => Ok(&WATER),
-            _ => bail!("Unknown name: {}", name)
+            _ => bail!("Unknown name: {}", name),
         };
     }
 
     /// Returns all molecules.
-    /// 
+    ///
     pub fn get_all() -> &'static [&'static Molecule; 1] {
         return &ALL;
     }
 
     /// Returns the name of the molecule.
-    /// 
+    ///
     pub fn get_name(&self) -> &'static str {
         return &self.name;
     }
 
     /// Returns the monoisotopic mass of the molecule.
-    /// 
+    ///
     pub fn get_mono_mass(&self) -> i64 {
         return self.mono_mass;
     }
 
     /// Returns the average mass of the molecule.
-    /// 
+    ///
     pub fn get_average_mass(&self) -> i64 {
         return self.average_mass;
     }
-
 }
 
-
-pub const WATER: Molecule = Molecule{name: "Water", mono_mass: mass_to_int!(18.010564700_f64), average_mass: mass_to_int!(18.015_f64)};
+pub const WATER: Molecule = Molecule {
+    name: "Water",
+    mono_mass: mass_to_int!(18.010564700_f64),
+    average_mass: mass_to_int!(18.015_f64),
+};
 
 /// List of all defined molecules.
-/// 
-const ALL: [&'static Molecule; 1] = [
-    &WATER,
-];
-
+///
+const ALL: [&'static Molecule; 1] = [&WATER];
 
 #[cfg(test)]
 mod test {
     // internal imports
-    use crate::mass::convert::to_int as mass_to_int;
     use super::*;
-    
+    use crate::mass::convert::to_int as mass_to_int;
 
     // Raw values of molecules without mass conversion.
-    const RAW_MOLECULE_VALUES: [(&'static str, f64, f64); 1] = [
-        ("Water", 18.010564700, 18.015),
-    ];
+    const RAW_MOLECULE_VALUES: [(&'static str, f64, f64); 1] = [("Water", 18.010564700, 18.015)];
 
     // Test if the molecules attributes are equal to to the tuple values. This ensures, that the tuple and the molecule is matching and if the mass is converted successfully with the macro.
-    fn test_equality_of_molecule_attributes_and_raw_value_tuple(molecule: &Molecule, raw_value_tuple: &(&'static str, f64, f64)) {
+    fn test_equality_of_molecule_attributes_and_raw_value_tuple(
+        molecule: &Molecule,
+        raw_value_tuple: &(&'static str, f64, f64),
+    ) {
         assert_eq!(molecule.name, raw_value_tuple.0);
         assert_eq!(molecule.mono_mass, mass_to_int(raw_value_tuple.1));
         assert_eq!(molecule.average_mass, mass_to_int(raw_value_tuple.2));
@@ -82,19 +81,21 @@ mod test {
         for raw_value_tuple in &RAW_MOLECULE_VALUES {
             let molecule: &Molecule = &Molecule::get_by_name(raw_value_tuple.0).unwrap();
             test_equality_of_molecule_attributes_and_raw_value_tuple(molecule, raw_value_tuple)
-        }  
+        }
     }
 
     #[test]
     fn test_all_array_and_value_correctness() {
         let molecules: &[&'static Molecule; 1] = Molecule::get_all();
 
-
         // Test if all raw value tuples are found in molecules
         'tuple_loop: for raw_value_tuple in &RAW_MOLECULE_VALUES {
             for molecule in molecules {
                 if raw_value_tuple.0 == molecule.name {
-                    test_equality_of_molecule_attributes_and_raw_value_tuple(molecule, raw_value_tuple);
+                    test_equality_of_molecule_attributes_and_raw_value_tuple(
+                        molecule,
+                        raw_value_tuple,
+                    );
                     // Start next iteration of outer loop, to omit the panic.
                     continue 'tuple_loop;
                 }
@@ -108,7 +109,10 @@ mod test {
         'molecule_loop: for molecule in molecules {
             for raw_value_tuple in &RAW_MOLECULE_VALUES {
                 if raw_value_tuple.0 == molecule.name {
-                    test_equality_of_molecule_attributes_and_raw_value_tuple(molecule, raw_value_tuple);
+                    test_equality_of_molecule_attributes_and_raw_value_tuple(
+                        molecule,
+                        raw_value_tuple,
+                    );
                     // Start next iteration of outer loop, to omit the panic.
                     continue 'molecule_loop;
                 }

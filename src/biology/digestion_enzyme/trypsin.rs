@@ -1,4 +1,3 @@
-
 // 3rd party imports
 use fancy_regex::Regex;
 
@@ -13,19 +12,23 @@ lazy_static! {
 }
 
 /// Digestion enzyme Trypsin, which cuts after K and R not followed by P.
-/// 
+///
 pub struct Trypsin {
     max_number_of_missed_cleavages: usize,
     min_peptide_length: usize,
-    max_peptide_length: usize
+    max_peptide_length: usize,
 }
 
 impl Enzyme for Trypsin {
-    fn new(max_number_of_missed_cleavages: usize, min_peptide_length: usize, max_peptide_length: usize) -> Self {
+    fn new(
+        max_number_of_missed_cleavages: usize,
+        min_peptide_length: usize,
+        max_peptide_length: usize,
+    ) -> Self {
         return Self {
             max_number_of_missed_cleavages,
             min_peptide_length,
-            max_peptide_length
+            max_peptide_length,
         };
     }
 
@@ -50,7 +53,6 @@ impl Enzyme for Trypsin {
     }
 }
 
-
 #[cfg(test)]
 mod test {
     // std imports
@@ -59,10 +61,10 @@ mod test {
     // internal imports
     use super::*;
 
-    lazy_static!{
+    lazy_static! {
         // Peptides for Leptin (UniProt accession Q257X2, with KP on first position) digested with 3 missed cleavages, length 0 - 60
         // Tested with https://web.expasy.org/peptide_mass/
-        // Leucine and Isoleucine are replaced with J already! 
+        // Leucine and Isoleucine are replaced with J already!
         static ref DESIRED_RESULTS: HashMap<String, i16> = collection! {
             "VTGLDFIPGLHPLLSLSKMDQTLAIYQQILASLPSRNVIQISNDLENLRDLLHLLAASK".to_string() => 3,
             "NVIQISNDLENLRDLLHLLAASKSCPLPQVRALESLESLGVVLEASLYSTEVVALSR".to_string() => 3,
@@ -129,18 +131,25 @@ mod test {
         };
     }
 
-
     #[test]
     fn test_digest() {
         // Using Leptin (UniProt  accession: Q257X2) with KP on first position to make sure Trypin-implementation skips it
         let leptin: &'static str = "KPMRCGPLYRFLWLWPYLSYVEAVPIRKVQDDTKTLIKTIVTRINDISHTQSVSSKQRVTGLDFIPGLHPLLSLSKMDQTLAIYQQILASLPSRNVIQISNDLENLRDLLHLLAASKSCPLPQVRALESLESLGVVLEASLYSTEVVALSRLQGSLQDMLRQLDLSPGC";
-        let trypsin: Trypsin = Trypsin{max_number_of_missed_cleavages: 3, min_peptide_length: 0, max_peptide_length: 60};
+        let trypsin: Trypsin = Trypsin {
+            max_number_of_missed_cleavages: 3,
+            min_peptide_length: 0,
+            max_peptide_length: 60,
+        };
         let peptides: HashMap<String, i16> = trypsin.digest(leptin);
 
         assert_eq!(DESIRED_RESULTS.len(), peptides.len());
 
         for (peptide, missed_cleavages) in &peptides {
-            assert!(DESIRED_RESULTS.contains_key(peptide), "Peptide {} not found", peptide);
+            assert!(
+                DESIRED_RESULTS.contains_key(peptide),
+                "Peptide {} not found",
+                peptide
+            );
             assert_eq!(DESIRED_RESULTS[peptide], *missed_cleavages);
         }
     }
