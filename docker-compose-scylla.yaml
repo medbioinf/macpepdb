@@ -1,0 +1,43 @@
+# Currently the best solution seems to be to create a network of Scylla nodes
+# and then connect to them with a docker container that is within the network
+# https://stackoverflow.com/questions/39216830/how-could-i-ping-my-docker-container-from-my-host
+
+version: "3"
+services:
+  node1:
+    image: scylladb/scylla
+    ports:
+      - "9042:9042"
+    restart: always
+    command: --seeds node2,node3,node4 --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
+    networks:
+      - scylla-net
+  node2:
+    image: scylladb/scylla
+    restart: always
+    command: --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
+    networks:
+      - scylla-net
+  node3:
+    image: scylladb/scylla
+    restart: always
+    command: --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
+    networks:
+      - scylla-net
+  node4:
+    image: scylladb/scylla
+    restart: always
+    command: --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
+    networks:
+      - scylla-net
+  # app:
+  #   build: .
+  #   command: tail -f /dev/null
+  #   networks:
+  #     - scylla-net
+  #   volumes:
+  #     - .:/app
+
+networks:
+  scylla-net:
+    driver: bridge
