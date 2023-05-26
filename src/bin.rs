@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 use log::info;
 use macpepdb::{
-    database::citus::database_build::DatabaseBuild, entities::configuration::Configuration,
+    database::citus::database_build::DatabaseBuild,
+    database::database_build::DatabaseBuild as DatabaseBuildTrait,
+    entities::configuration::Configuration,
 };
 
 #[derive(Debug, Subcommand)]
