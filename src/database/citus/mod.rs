@@ -4,7 +4,6 @@ pub mod configuration_table;
 pub mod database_build;
 pub mod peptide_table;
 pub mod protein_table;
-pub mod table;
 
 mod embedded {
     use refinery::embed_migrations;
@@ -21,7 +20,7 @@ mod tests {
 
     // internal imports
     use super::*;
-    use table::Table; // import for trait methods
+    use crate::database::table::Table;
 
     pub const DATABASE_URL: &str = "postgresql://postgres:developer@localhost:5433/macpepdb_dev";
 
