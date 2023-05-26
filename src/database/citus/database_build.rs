@@ -20,16 +20,14 @@ use crate::biology::digestion_enzyme::{
         create_peptides_entities_from_digest, get_enzyme_by_name, remove_unknown_from_digest,
     },
 };
-use crate::database::configuration_table::{
-    ConfigurationTable as ConfigurationTableTrait,
-    ConfigurationIncompleteError
-};
 use crate::database::citus::{
-    configuration_table::ConfigurationTable,
-    peptide_table::PeptideTable,
+    configuration_table::ConfigurationTable, peptide_table::PeptideTable,
     protein_table::ProteinTable,
-    table::Table,
 };
+use crate::database::configuration_table::{
+    ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait,
+};
+use crate::database::selectable_table::SelectableTable;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
@@ -588,7 +586,7 @@ mod test {
                 let proteins = ProteinTable::select_multiple(
                     &mut client,
                     "WHERE accession = $1",
-                    &[&protein.get_accession()],
+                    &[protein.get_accession()],
                 )
                 .unwrap();
                 assert_eq!(proteins.len(), 1);
@@ -605,9 +603,9 @@ mod test {
                         &mut client,
                         "WHERE partition = $1 AND mass = $2 AND sequence = $3",
                         &[
-                            &peptide.get_partition_as_ref(),
-                            &peptide.get_mass_as_ref(),
-                            &peptide.get_sequence(),
+                            peptide.get_partition_as_ref(),
+                            peptide.get_mass_as_ref(),
+                            peptide.get_sequence(),
                         ],
                     )
                     .unwrap();
