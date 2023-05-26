@@ -5,11 +5,11 @@
 pub const MASS_CONVERT_FACTOR: f64 = 1000000000.0;
 
 /// Converts a mass (Dalton) into the internal integer representation.
-/// 
+///
 /// # Arguments
 ///
 /// * `mass` - Mass in Dalton
-/// 
+///
 pub fn to_int(mass: f64) -> i64 {
     return (mass * MASS_CONVERT_FACTOR) as i64;
 }
@@ -18,23 +18,20 @@ pub fn to_int(mass: f64) -> i64 {
 /// Attention: It is not possible to limit the the macros argument to a specific type. Be careful to pass only  
 ///
 macro_rules! mass_to_int {
-    ($mass:expr) => {
-        {
-            ($mass as f64 * crate::mass::convert::MASS_CONVERT_FACTOR) as i64
-        }
-    }
+    ($mass:expr) => {{
+        ($mass as f64 * crate::mass::convert::MASS_CONVERT_FACTOR) as i64
+    }};
 }
 
 /// Converts a mass (Dalton) from the internal integer representation to float.
-/// 
+///
 /// # Arguments
 ///
 /// * `mass` - Mass in Dalton
-/// 
+///
 pub fn to_float(mass: i64) -> f64 {
     return mass as f64 / MASS_CONVERT_FACTOR;
 }
-
 
 #[cfg(test)]
 mod test {

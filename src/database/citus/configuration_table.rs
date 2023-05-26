@@ -1,18 +1,8 @@
 // 3rd party imports
-use anyhow::{
-    anyhow,
-    Result
-};
+use anyhow::{anyhow, Result};
 use postgres::GenericClient;
-use serde::{
-    ser::Serialize,
-    de::DeserializeOwned
-};
-use serde_json::{
-    json,
-    from_value as from_json_value,
-    Value as JsonValue
-};
+use serde::{de::DeserializeOwned, ser::Serialize};
+use serde_json::{from_value as from_json_value, json, Value as JsonValue};
 
 // internal imports
 use crate::entities::configuration::Configuration;
@@ -33,7 +23,7 @@ use crate::database::configuration_table::{
 /// Simple table for storing various types configuration values.
 /// Table constists of two columns, conf_key (VARCHAR(256)) and value (JSONB).
 /// Each value will be wrapped in a JSON object with a single key, "wrapper" and than stored.
-/// 
+///
 pub struct ConfigurationTable {}
 
 impl Table for ConfigurationTable {
@@ -55,13 +45,11 @@ where C: GenericClient {
                 let mut wrapper: JsonValue = row.get(0);
                 let value = match wrapper.get_mut(JSON_KEY) {
                     Some(value) => Some(from_json_value(value.take())?),
-                    None => None
+                    None => None,
                 };
                 Ok(value)
-            },
-            None => {
-                Ok(None)
             }
+            None => Ok(None),
         }
     }
 
@@ -129,39 +117,38 @@ where C: GenericClient {
         ConfigurationTable::set_setting::<String>(
             &mut transaction,
             ENZYME_NAME_KEY,
-            &configuration.get_enzyme_name().to_owned()
+            &configuration.get_enzyme_name().to_owned(),
         )?;
 
         ConfigurationTable::set_setting::<i16>(
             &mut transaction,
             MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY,
-            &(configuration.get_max_number_of_missed_cleavages() as i16)
+            &(configuration.get_max_number_of_missed_cleavages() as i16),
         )?;
 
 
         ConfigurationTable::set_setting::<i16>(
             &mut transaction,
             MIN_PEPTIDE_LENGTH_KEY,
-            &(configuration.get_min_peptide_length() as i16)
-            
+            &(configuration.get_min_peptide_length() as i16),
         )?;
 
         ConfigurationTable::set_setting::<i16>(
             &mut transaction,
             MAX_PEPTIDE_LENGTH_KEY,
-            &(configuration.get_max_peptide_length() as i16)
+            &(configuration.get_max_peptide_length() as i16),
         )?;
 
         ConfigurationTable::set_setting::<bool>(
             &mut transaction,
             REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY,
-            &configuration.get_remove_peptides_containing_unknown()
+            &configuration.get_remove_peptides_containing_unknown(),
         )?;
 
         ConfigurationTable::set_setting::<Vec<i64>>(
             &mut transaction,
             PARTITION_LIMITS_KEY,
-            configuration.get_partition_limits()
+            configuration.get_partition_limits(),
         )?;
 
         transaction.commit()?;
@@ -176,8 +163,8 @@ mod tests {
     use serial_test::serial;
 
     // internal imports
-    use crate::database::citus::tests::{prepare_database_for_tests, get_client};
     use super::*;
+    use crate::database::citus::tests::{get_client, prepare_database_for_tests};
 
     const EXPECTED_ENZYME_NAME: &'static str = "Trypsin";
     const EXPECTED_MAX_MISSED_CLEAVAGES: usize = 2;
@@ -186,12 +173,13 @@ mod tests {
     const EXPECTED_REMOVE_PEPTIDES_CONTAINING_UNKNOWN: bool = true;
 
     lazy_static! {
-        static ref EXPECTED_PARTITION_LIMITS: Vec<i64> = vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+        static ref EXPECTED_PARTITION_LIMITS: Vec<i64> =
+            vec![0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
     }
 
     /// Tests selecting without inserting first.
     /// Should result in an `ConfigurationIncompleteError`.
-    /// 
+    ///
     #[test]
     #[serial]
     fn test_select_without_insert() {
@@ -201,11 +189,13 @@ mod tests {
         let configuration_res = ConfigurationTable::select(&mut client);
 
         assert!(configuration_res.is_err());
-        assert!(configuration_res.unwrap_err().is::<ConfigurationIncompleteError>());
+        assert!(configuration_res
+            .unwrap_err()
+            .is::<ConfigurationIncompleteError>());
     }
 
     /// Tests inserting
-    /// 
+    ///
     #[test]
     #[serial]
     fn test_insert() {
@@ -218,14 +208,14 @@ mod tests {
             EXPECTED_MIN_PEPTIDE_LEN as i16,
             EXPECTED_MAX_PEPTIDE_LEN as i16,
             EXPECTED_REMOVE_PEPTIDES_CONTAINING_UNKNOWN,
-            EXPECTED_PARTITION_LIMITS.clone()
+            EXPECTED_PARTITION_LIMITS.clone(),
         );
 
-        ConfigurationTable::insert(&mut client, &configuration).unwrap();  
+        ConfigurationTable::insert(&mut client, &configuration).unwrap();
     }
 
     /// Tests selecting after inserting
-    /// 
+    ///
     #[test]
     #[serial]
     fn test_select() {
@@ -235,10 +225,25 @@ mod tests {
         let configuration = ConfigurationTable::select(&mut client).unwrap();
 
         assert_eq!(configuration.get_enzyme_name(), EXPECTED_ENZYME_NAME);
-        assert_eq!(configuration.get_max_number_of_missed_cleavages(), EXPECTED_MAX_MISSED_CLEAVAGES);
-        assert_eq!(configuration.get_min_peptide_length(), EXPECTED_MIN_PEPTIDE_LEN);
-        assert_eq!(configuration.get_max_peptide_length(), EXPECTED_MAX_PEPTIDE_LEN);
-        assert_eq!(configuration.get_remove_peptides_containing_unknown(), EXPECTED_REMOVE_PEPTIDES_CONTAINING_UNKNOWN);
-        assert_eq!(configuration.get_partition_limits(), EXPECTED_PARTITION_LIMITS.as_slice());
+        assert_eq!(
+            configuration.get_max_number_of_missed_cleavages(),
+            EXPECTED_MAX_MISSED_CLEAVAGES
+        );
+        assert_eq!(
+            configuration.get_min_peptide_length(),
+            EXPECTED_MIN_PEPTIDE_LEN
+        );
+        assert_eq!(
+            configuration.get_max_peptide_length(),
+            EXPECTED_MAX_PEPTIDE_LEN
+        );
+        assert_eq!(
+            configuration.get_remove_peptides_containing_unknown(),
+            EXPECTED_REMOVE_PEPTIDES_CONTAINING_UNKNOWN
+        );
+        assert_eq!(
+            configuration.get_partition_limits(),
+            EXPECTED_PARTITION_LIMITS.as_slice()
+        );
     }
 }

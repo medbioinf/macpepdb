@@ -6,19 +6,25 @@ use std::collections::{HashMap, HashSet};
 use fancy_regex::Regex;
 
 // internal imports
-use crate::chemistry::amino_acid::{UNKNOWN, REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOOKUP};
+use crate::chemistry::amino_acid::{REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOOKUP, UNKNOWN};
 use crate::tools::fancy_regex::split as fancy_regex_split_string;
 
 /// Trait defining the behavior for a digestion enzyme
 pub trait Enzyme: Send + Sync {
     /// Returns a new instance of the enzyme
-    /// 
+    ///
     /// # Arguments
     /// * `max_number_of_missed_cleavages` - Maximum number of missed cleavages
     /// * `min_peptide_length` - Minimum length of a peptide
     /// * `max_peptide_length` - Maximum length of a peptide
-    /// 
-    fn new(max_number_of_missed_cleavages: usize, min_peptide_length: usize, max_peptide_length: usize) -> Self where Self: Sized;
+    ///
+    fn new(
+        max_number_of_missed_cleavages: usize,
+        min_peptide_length: usize,
+        max_peptide_length: usize,
+    ) -> Self
+    where
+        Self: Sized;
     /// Returns the regex for finding the cleavage sites
     fn get_cleavages_site_regex(&self) -> &Regex;
     /// Returns the maximum number of missed cleavages
@@ -35,19 +41,26 @@ pub trait Enzyme: Send + Sync {
         let cleavages_site_regex: &Regex = self.get_cleavages_site_regex();
         let mut peptides: HashMap<String, i16> = HashMap::new();
         // Split protein sequence on every cleavage position
-        let protein_parts: Vec<&str> = fancy_regex_split_string(cleavages_site_regex, amino_acid_sequence);
+        let protein_parts: Vec<&str> =
+            fancy_regex_split_string(cleavages_site_regex, amino_acid_sequence);
         // Start with every part
         for part_index in 0..protein_parts.len() {
             // Check if end of protein_parts is reached before the last missed cleavage (prevent overflow)
             let last_part_to_add = cmp::min(
                 part_index + self.get_max_number_of_missed_cleavages() + 1,
-                protein_parts.len()
+                protein_parts.len(),
             );
             let mut peptide_sequence: String = String::new();
             for missed_cleavage in part_index..last_part_to_add {
                 peptide_sequence.push_str(protein_parts[missed_cleavage]);
-                if self.get_min_peptide_length() <= peptide_sequence.len() && peptide_sequence.len() <= self.get_max_peptide_length() && !peptide_sequence.contains(*UNKNOWN.get_one_letter_code()) {
-                    peptides.insert(peptide_sequence.to_string(), (missed_cleavage - part_index) as i16);
+                if self.get_min_peptide_length() <= peptide_sequence.len()
+                    && peptide_sequence.len() <= self.get_max_peptide_length()
+                    && !peptide_sequence.contains(*UNKNOWN.get_one_letter_code())
+                {
+                    peptides.insert(
+                        peptide_sequence.to_string(),
+                        (missed_cleavage - part_index) as i16,
+                    );
                     if is_sequence_containing_replaceable_ambiguous_amino_acids(&peptide_sequence) {
                         /*
                         If there is a replaceable ambiguous amino acid within the sequence, calculate each sequence combination of the actual amino acids
@@ -57,8 +70,9 @@ pub trait Enzyme: Send + Sync {
                         */
                         for sequence in differentiate_ambiguous_sequences(&peptide_sequence) {
                             peptides.insert(
-                                sequence.to_string(), 
-                                (missed_cleavage - part_index) as i16);
+                                sequence.to_string(),
+                                (missed_cleavage - part_index) as i16,
+                            );
                         }
                     }
                 }
@@ -69,52 +83,70 @@ pub trait Enzyme: Send + Sync {
 }
 
 /// Checks if the sequence contains a replaceable ambiguous amino acid
-/// 
+///
 /// # Arguments
 /// * `sequence` - Peptide sequence
-/// 
+///
 fn is_sequence_containing_replaceable_ambiguous_amino_acids(sequence: &str) -> bool {
     for one_letter_code in REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOOKUP.keys() {
         if sequence.contains(*one_letter_code) {
-            return true
+            return true;
         }
     }
     return false;
 }
 
-
 /// Calculates all possible combinations of an ambiguous sequence.
-/// 
+///
 /// # Arguments
 /// * `ambiguous_sequence`
-/// 
+///
 fn differentiate_ambiguous_sequences(ambiguous_sequence: &str) -> HashSet<String> {
     let mut differentiated_sequences: HashSet<String> = HashSet::new();
-    recursively_differentiate_ambiguous_sequences(ambiguous_sequence, &mut differentiated_sequences, 0);
+    recursively_differentiate_ambiguous_sequences(
+        ambiguous_sequence,
+        &mut differentiated_sequences,
+        0,
+    );
     return differentiated_sequences;
 }
 
 /// Recursively calculates all possible differentiate combinations of ambiguous sequence.
-/// 
+///
 /// # Arguments
 /// * `sequence` -  Current sequence
 /// * `differentiated_sequences` -  A HashMap to store the differentiated sequences
 /// * `position` -  Current position in the sequence
 ///
-fn recursively_differentiate_ambiguous_sequences(sequence: &str, differentiated_sequences: &mut HashSet<String>, position: usize) {
+fn recursively_differentiate_ambiguous_sequences(
+    sequence: &str,
+    differentiated_sequences: &mut HashSet<String>,
+    position: usize,
+) {
     if position < sequence.len() {
         let current_one_letter_code: char = sequence.chars().nth(position).unwrap();
         if !REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOOKUP.contains_key(&current_one_letter_code) {
             // If the amino acid on the current position is not a replaceable ambiguous amino acid, pass the unchanged sequence to to next recursion level
-            recursively_differentiate_ambiguous_sequences(sequence, differentiated_sequences, position + 1)
+            recursively_differentiate_ambiguous_sequences(
+                sequence,
+                differentiated_sequences,
+                position + 1,
+            )
         } else {
             // If the amino acid on the current position is a replaceable ambiguous amino acid create a new sequence where the current ambiguous amino acid is sequentially replaced by its actual amino acids.
             // Than pass the new sequence to the next recursion level.
-            for replacement_amino_acid in REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOOKUP.get(&current_one_letter_code).unwrap() {
+            for replacement_amino_acid in REPLACEABLE_AMBIGIOUS_AMINO_ACID_LOOKUP
+                .get(&current_one_letter_code)
+                .unwrap()
+            {
                 let mut new_sequence: String = String::from(&sequence[0..position]);
                 new_sequence.push(*replacement_amino_acid.get_one_letter_code());
                 new_sequence.push_str(&sequence[position + 1..]);
-                recursively_differentiate_ambiguous_sequences(new_sequence.as_str(), differentiated_sequences, position + 1);
+                recursively_differentiate_ambiguous_sequences(
+                    new_sequence.as_str(),
+                    differentiated_sequences,
+                    position + 1,
+                );
             }
         }
     } else {
@@ -144,7 +176,7 @@ mod test {
         "MDQQTLADNQQILASLEPSR",
         "MDQETLANNQQILASLEPSR",
         "MDQETLADDQQILASLEPSR",
-        "MDQETLADDQQILASLQPSR"
+        "MDQETLADDQQILASLQPSR",
     ];
     const AMBIGUOUS_SEQUENCE_WITH_B: &'static str = "MDQTLABBQQILASLPSR";
     const AMBIGUOUS_SEQUENCE_WITH_Z: &'static str = "MDQZTLAQQILASLZPSR";
@@ -161,18 +193,37 @@ mod test {
 
     #[test]
     fn test_differentiate_ambiguous_sequences() {
-        let differentiated_sequences: HashSet<String> = differentiate_ambiguous_sequences(AMBIGUOUS_SEQUENCE);
-        assert_eq!(differentiated_sequences.len(), EXPECTED_DIFFERENTIATED_SEQEUNCES.len());
+        let differentiated_sequences: HashSet<String> =
+            differentiate_ambiguous_sequences(AMBIGUOUS_SEQUENCE);
+        assert_eq!(
+            differentiated_sequences.len(),
+            EXPECTED_DIFFERENTIATED_SEQEUNCES.len()
+        );
         for sequence in differentiated_sequences {
-            assert_eq!(is_sequence_in_expected_differentiated_seqeunces(&sequence), true);
+            assert_eq!(
+                is_sequence_in_expected_differentiated_seqeunces(&sequence),
+                true
+            );
         }
     }
 
     #[test]
     fn test_is_sequence_containing_replaceable_ambiguous_amino_acids() {
-        assert_eq!(is_sequence_containing_replaceable_ambiguous_amino_acids(AMBIGUOUS_SEQUENCE_WITH_B), true);
-        assert_eq!(is_sequence_containing_replaceable_ambiguous_amino_acids(AMBIGUOUS_SEQUENCE_WITH_Z), true);
-        assert_eq!(is_sequence_containing_replaceable_ambiguous_amino_acids(AMBIGUOUS_SEQUENCE), true);
-        assert_eq!(is_sequence_containing_replaceable_ambiguous_amino_acids(UNAMBIGUOUS_SEQUENCE), false);
+        assert_eq!(
+            is_sequence_containing_replaceable_ambiguous_amino_acids(AMBIGUOUS_SEQUENCE_WITH_B),
+            true
+        );
+        assert_eq!(
+            is_sequence_containing_replaceable_ambiguous_amino_acids(AMBIGUOUS_SEQUENCE_WITH_Z),
+            true
+        );
+        assert_eq!(
+            is_sequence_containing_replaceable_ambiguous_amino_acids(AMBIGUOUS_SEQUENCE),
+            true
+        );
+        assert_eq!(
+            is_sequence_containing_replaceable_ambiguous_amino_acids(UNAMBIGUOUS_SEQUENCE),
+            false
+        );
     }
 }
