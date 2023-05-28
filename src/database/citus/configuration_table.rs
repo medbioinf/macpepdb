@@ -6,38 +6,19 @@ use serde_json::{from_value as from_json_value, json, Value as JsonValue};
 
 // internal imports
 use crate::entities::configuration::Configuration;
-
-const TABLE_NAME: &'static str = "config";
-const JSON_KEY: &'static str = "wrapper";
-
-const ENZYME_NAME_KEY: &'static str = "enzyme_name";
-
-const MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY: &'static str = "max_number_of_missed_cleavages";
-const MIN_PEPTIDE_LENGTH_KEY: &'static str = "min_peptide_length";
-const MAX_PEPTIDE_LENGTH_KEY: &'static str = "max_peptide_length";
-const REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY: &'static str = "remove_peptides_containing_unknown";
-const PARTITION_LIMITS_KEY: &'static str = "partition_limits";
-
-/// Error for incomplete configurations.
-///
-#[derive(Debug)]
-pub struct ConfigurationIncompleteError {
-    configuration_key: String,
-}
-
-impl ConfigurationIncompleteError {
-    pub fn new(key: &str) -> Self {
-        Self {
-            configuration_key: format!("{} not found", key),
-        }
-    }
-}
-
-impl std::fmt::Display for ConfigurationIncompleteError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "key '{}' is missing", self.configuration_key)
-    }
-}
+use crate::database::table::Table;
+use crate::database::configuration_table::{
+    ConfigurationTable as ConfigurationTableTrait,
+    ConfigurationIncompleteError,
+    TABLE_NAME,
+    JSON_KEY,
+    ENZYME_NAME_KEY,
+    MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY,
+    MIN_PEPTIDE_LENGTH_KEY,
+    MAX_PEPTIDE_LENGTH_KEY,
+    REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY,
+    PARTITION_LIMITS_KEY,
+};
 
 /// Simple table for storing various types configuration values.
 /// Table constists of two columns, conf_key (VARCHAR(256)) and value (JSONB).
@@ -45,24 +26,19 @@ impl std::fmt::Display for ConfigurationIncompleteError {
 ///
 pub struct ConfigurationTable {}
 
-impl ConfigurationTable {
+impl Table for ConfigurationTable {
     /// Returns table name
-    ///
-    pub fn table_name() -> &'static str {
+    /// 
+    fn table_name() -> &'static str {
         TABLE_NAME
     }
+}
 
-    /// Returns the value for the saved for the given key.
-    ///
-    /// # Arguments
-    /// * `client` - A database client
-    /// * `key` - The key to look up
-    ///
-    pub fn get_setting<C, T>(client: &mut C, key: &str) -> Result<Option<T>>
-    where
-        C: GenericClient,
-        T: DeserializeOwned,
-    {
+impl<C> ConfigurationTableTrait<C> for ConfigurationTable
+where C: GenericClient {
+    fn get_setting<T>(
+        client: &mut C, key: &str
+    ) -> Result<Option<T>> where T: DeserializeOwned {
         let statement = format!("SELECT value FROM {} WHERE conf_key = $1;", TABLE_NAME);
         match client.query_opt(&statement, &[&key])? {
             Some(row) => {
@@ -77,66 +53,53 @@ impl ConfigurationTable {
         }
     }
 
-    /// Sets the value for the given key.
-    ///
-    /// # Arguments
-    /// * `client` - A database client
-    /// * `key` - The key to look up
-    /// * `value` - The value to save
-    ///
-    pub fn set_setting<C, T>(client: &mut C, key: &str, value: &T) -> Result<()>
-    where
-        C: GenericClient,
-        T: Serialize,
-    {
-        let statement = format!(
-            "INSERT INTO {} (conf_key, value) VALUES ($1, $2);",
-            TABLE_NAME
-        );
-        let wrapper = json!({ JSON_KEY: value });
-        client.execute(&statement, &[&key, &wrapper])?;
+    fn set_setting<T>(
+        client: &mut C, key: &str, value: &T
+    ) -> Result<()> where T: Serialize {
+        let statement = format!("INSERT INTO {} (conf_key, value) VALUES ($1, $2);", TABLE_NAME);
+        let wrapper = json!({
+            JSON_KEY: value
+        });
+        client.execute(
+            &statement, 
+            &[&key, &wrapper]
+        )?;
         Ok(())
     }
 
-    /// Selects the configuration from the database.
-    ///
-    /// # Arguments
-    /// * `client` - A database client
-    ///
-    pub fn select<C>(client: &mut C) -> Result<Configuration>
-    where
-        C: GenericClient,
-    {
-        let enzyme_name = Self::get_setting::<C, String>(client, ENZYME_NAME_KEY)?
-            .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(ENZYME_NAME_KEY)))?;
+    fn select(client: &mut C) -> Result<Configuration>
+    where C: GenericClient {
+        let enzyme_name = Self::get_setting::<String>(
+            client,
+            ENZYME_NAME_KEY
+        )?.ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(ENZYME_NAME_KEY)))?;
 
-        let max_number_of_missed_cleavages =
-            Self::get_setting::<C, i16>(client, MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY)?.ok_or_else(
-                || {
-                    anyhow!(ConfigurationIncompleteError::new(
-                        MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY
-                    ))
-                },
-            )?;
+        let max_number_of_missed_cleavages = Self::get_setting::<i16>(
+            client,
+            MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY
+        )?.ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY)))?;
 
-        let min_peptide_length = Self::get_setting::<C, i16>(client, MIN_PEPTIDE_LENGTH_KEY)?
-            .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(MIN_PEPTIDE_LENGTH_KEY)))?;
+        let min_peptide_length = Self::get_setting::<i16>(
+            client,
+            MIN_PEPTIDE_LENGTH_KEY,
+        )?.ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(MIN_PEPTIDE_LENGTH_KEY)))?;
 
-        let max_peptide_length = Self::get_setting::<C, i16>(client, MAX_PEPTIDE_LENGTH_KEY)?
-            .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(MAX_PEPTIDE_LENGTH_KEY)))?;
+        let max_peptide_length = Self::get_setting::<i16>(
+            client,
+            MAX_PEPTIDE_LENGTH_KEY,
+        )?.ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(MAX_PEPTIDE_LENGTH_KEY)))?;
 
         // remove_peptides_containing_unknown
-        let remove_peptides_containing_unknown =
-            Self::get_setting::<C, bool>(client, REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY)?
-                .ok_or_else(|| {
-                    anyhow!(ConfigurationIncompleteError::new(
-                        REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY
-                    ))
-                })?;
+        let remove_peptides_containing_unknown = Self::get_setting::<bool>(
+            client,
+            REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY
+        )?.ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY)))?;
 
         // remove_peptides_containing_unknown
-        let partition_limits = Self::get_setting::<C, Vec<i64>>(client, PARTITION_LIMITS_KEY)?
-            .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(PARTITION_LIMITS_KEY)))?;
+        let partition_limits = Self::get_setting::<Vec<i64>>(
+            client,
+            PARTITION_LIMITS_KEY
+        )?.ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(PARTITION_LIMITS_KEY)))?;
 
         Ok(Configuration::new(
             enzyme_name,
@@ -148,49 +111,41 @@ impl ConfigurationTable {
         ))
     }
 
-    /// Inserts the configuration into the database.
-    ///
-    /// # Arguments
-    /// * `client` - A database client
-    /// * `configuration` - The configuration to insert
-    ///
-    pub fn insert<C>(client: &mut C, configuration: &Configuration) -> Result<()>
-    where
-        C: GenericClient,
-    {
+    fn insert(client: &mut C, configuration: &Configuration) -> Result<()> {
         let mut transaction = client.transaction()?;
 
-        Self::set_setting::<_, String>(
+        ConfigurationTable::set_setting::<String>(
             &mut transaction,
             ENZYME_NAME_KEY,
             &configuration.get_enzyme_name().to_owned(),
         )?;
 
-        Self::set_setting::<_, i16>(
+        ConfigurationTable::set_setting::<i16>(
             &mut transaction,
             MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY,
             &(configuration.get_max_number_of_missed_cleavages() as i16),
         )?;
 
-        Self::set_setting::<_, i16>(
+
+        ConfigurationTable::set_setting::<i16>(
             &mut transaction,
             MIN_PEPTIDE_LENGTH_KEY,
             &(configuration.get_min_peptide_length() as i16),
         )?;
 
-        Self::set_setting::<_, i16>(
+        ConfigurationTable::set_setting::<i16>(
             &mut transaction,
             MAX_PEPTIDE_LENGTH_KEY,
             &(configuration.get_max_peptide_length() as i16),
         )?;
 
-        Self::set_setting::<_, bool>(
+        ConfigurationTable::set_setting::<bool>(
             &mut transaction,
             REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY,
             &configuration.get_remove_peptides_containing_unknown(),
         )?;
 
-        Self::set_setting::<_, Vec<i64>>(
+        ConfigurationTable::set_setting::<Vec<i64>>(
             &mut transaction,
             PARTITION_LIMITS_KEY,
             configuration.get_partition_limits(),

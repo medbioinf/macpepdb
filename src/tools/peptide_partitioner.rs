@@ -5,7 +5,7 @@ use std::path::PathBuf;
 // 3rd party imports
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
-use kdam::{tqdm, Bar, BarExt};
+use kdam::{Bar, BarExt};
 use sysinfo::{System, SystemExt};
 
 // internal imports
@@ -293,6 +293,9 @@ mod test {
     // std imports
     use std::collections::HashSet;
     use std::path::PathBuf;
+
+    // 3rd party imports
+    use kdam::tqdm;
 
     // internal imports
     use super::*;

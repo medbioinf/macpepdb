@@ -21,11 +21,14 @@ use crate::biology::digestion_enzyme::{
     },
 };
 use crate::database::citus::{
-    configuration_table::{ConfigurationIncompleteError, ConfigurationTable},
-    peptide_table::PeptideTable,
+    configuration_table::ConfigurationTable, peptide_table::PeptideTable,
     protein_table::ProteinTable,
-    table::Table,
 };
+use crate::database::configuration_table::{
+    ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait,
+};
+use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
+use crate::database::selectable_table::SelectableTable;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
@@ -49,73 +52,6 @@ pub struct DatabaseBuild {
 }
 
 impl DatabaseBuild {
-    pub fn new(database_url: String) -> Self {
-        return Self { database_url };
-    }
-
-    pub fn build(
-        &self,
-        protein_file_paths: &Vec<PathBuf>,
-        num_threads: usize,
-        num_partitions: u64,
-        allowed_ram_usage: f64,
-        partitioner_false_positive_probability: f64,
-        initial_configuration_opt: Option<Configuration>,
-        show_progress: bool,
-        verbose: bool,
-    ) -> Result<()> {
-        let mut progress_bar = tqdm!(
-            total = 0,
-            desc = "partitioning",
-            animation = "ascii",
-            disable = !show_progress
-        );
-
-        let mut client = Client::connect(&self.database_url, NoTls)?;
-
-        if verbose {
-            progress_bar.write("applying database migrations...");
-        }
-
-        // Run migrations
-        migrations::runner().run(&mut client)?;
-
-        // get or set configuration
-        let configuration = Self::get_or_set_configuration(
-            &mut client,
-            protein_file_paths,
-            num_partitions,
-            partitioner_false_positive_probability,
-            allowed_ram_usage,
-            initial_configuration_opt,
-            &mut progress_bar,
-            verbose,
-        )?;
-
-        let digestion_enzyme = get_enzyme_by_name(
-            configuration.get_enzyme_name(),
-            configuration.get_max_number_of_missed_cleavages(),
-            configuration.get_min_peptide_length(),
-            configuration.get_max_peptide_length(),
-        )?;
-
-        // read, digest and insert proteins and peptides
-        Self::protein_digestion(
-            &self.database_url,
-            num_threads,
-            protein_file_paths,
-            digestion_enzyme.as_ref(),
-            configuration.get_remove_peptides_containing_unknown(),
-            configuration.get_partition_limits().to_vec(),
-            &mut progress_bar,
-            verbose,
-        )?;
-        // collect metadata
-        // count peptides per partition
-
-        Ok(())
-    }
-
     /// Reads the saved configuration from the database or sets a new configuration if no configuration is saved.
     /// If no initial configuration is given and no configuration is saved in the database an error is thrown.  
     /// If the initial configuration is used and has no partition limits, the partition limits are calculated.
@@ -506,6 +442,75 @@ impl DatabaseBuild {
     }
 }
 
+impl DatabaseBuildTrait for DatabaseBuild {
+    fn new(database_url: String) -> Self {
+        return Self { database_url };
+    }
+
+    fn build(
+        &self,
+        protein_file_paths: &Vec<PathBuf>,
+        num_threads: usize,
+        num_partitions: u64,
+        allowed_ram_usage: f64,
+        partitioner_false_positive_probability: f64,
+        initial_configuration_opt: Option<Configuration>,
+        show_progress: bool,
+        verbose: bool,
+    ) -> Result<()> {
+        let mut progress_bar = tqdm!(
+            total = 0,
+            desc = "partitioning",
+            animation = "ascii",
+            disable = !show_progress
+        );
+
+        let mut client = Client::connect(&self.database_url, NoTls)?;
+
+        if verbose {
+            progress_bar.write("applying database migrations...");
+        }
+
+        // Run migrations
+        migrations::runner().run(&mut client)?;
+
+        // get or set configuration
+        let configuration = Self::get_or_set_configuration(
+            &mut client,
+            protein_file_paths,
+            num_partitions,
+            partitioner_false_positive_probability,
+            allowed_ram_usage,
+            initial_configuration_opt,
+            &mut progress_bar,
+            verbose,
+        )?;
+
+        let digestion_enzyme = get_enzyme_by_name(
+            configuration.get_enzyme_name(),
+            configuration.get_max_number_of_missed_cleavages(),
+            configuration.get_min_peptide_length(),
+            configuration.get_max_peptide_length(),
+        )?;
+
+        // read, digest and insert proteins and peptides
+        Self::protein_digestion(
+            &self.database_url,
+            num_threads,
+            protein_file_paths,
+            digestion_enzyme.as_ref(),
+            configuration.get_remove_peptides_containing_unknown(),
+            configuration.get_partition_limits().to_vec(),
+            &mut progress_bar,
+            verbose,
+        )?;
+        // collect metadata
+        // count peptides per partition
+
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod test {
     // std imports
@@ -584,7 +589,7 @@ mod test {
                 let proteins = ProteinTable::select_multiple(
                     &mut client,
                     "WHERE accession = $1",
-                    &[&protein.get_accession()],
+                    &[protein.get_accession()],
                 )
                 .unwrap();
                 assert_eq!(proteins.len(), 1);
@@ -601,9 +606,9 @@ mod test {
                         &mut client,
                         "WHERE partition = $1 AND mass = $2 AND sequence = $3",
                         &[
-                            &peptide.get_partition_as_ref(),
-                            &peptide.get_mass_as_ref(),
-                            &peptide.get_sequence(),
+                            peptide.get_partition_as_ref(),
+                            peptide.get_mass_as_ref(),
+                            peptide.get_sequence(),
                         ],
                     )
                     .unwrap();

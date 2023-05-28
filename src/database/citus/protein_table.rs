@@ -1,9 +1,13 @@
 // 3rd party imports
 use anyhow::Result;
-use postgres::GenericClient;
+use postgres::{
+    types::{BorrowToSql, ToSql},
+    GenericClient, Row, RowIter,
+};
 
 // internal imports
-use crate::database::citus::table::Table;
+use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
+use crate::database::table::Table;
 use crate::entities::protein::Protein;
 
 const TABLE_NAME: &'static str = "proteins";
@@ -99,13 +103,100 @@ impl ProteinTable {
     }
 }
 
-impl Table<Protein> for ProteinTable {
+impl Table for ProteinTable {
     fn table_name() -> &'static str {
-        return TABLE_NAME;
+        TABLE_NAME
     }
+}
+
+impl<'a, C> SelectableTableTrait<'a, C> for ProteinTable
+where
+    C: GenericClient,
+{
+    type Parameter = (dyn ToSql + Sync);
+    type Record = Row;
+    type RecordIter = RowIter<'a>;
+    type Entity = Protein;
 
     fn select_cols() -> &'static str {
-        return SELECT_COLS;
+        SELECT_COLS
+    }
+
+    fn raw_select_multiple<'b>(
+        client: &mut C,
+        cols: &str,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Vec<Self::Record>> {
+        let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
+        if additional.len() > 0 {
+            statement += " ";
+            statement += additional;
+        }
+        return Ok(client.query(&statement, params)?);
+    }
+
+    fn raw_select<'b>(
+        client: &mut C,
+        cols: &str,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Option<Self::Record>> {
+        let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
+        if additional.len() > 0 {
+            statement += " ";
+            statement += additional;
+        }
+        return Ok(client.query_opt(&statement, params)?);
+    }
+
+    fn select_multiple<'b>(
+        client: &mut C,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Vec<Self::Entity>> {
+        let rows = Self::raw_select_multiple(
+            client,
+            <Self as SelectableTableTrait<C>>::select_cols(),
+            additional,
+            params,
+        )?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(Self::Entity::from(row));
+        }
+        return Ok(records);
+    }
+
+    fn select<'b>(
+        client: &mut C,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Option<Self::Entity>> {
+        let row = Self::raw_select(
+            client,
+            <Self as SelectableTableTrait<C>>::select_cols(),
+            additional,
+            params,
+        )?;
+        if row.is_none() {
+            return Ok(None);
+        }
+        return Ok(Some(Self::Entity::from(row.unwrap())));
+    }
+
+    fn raw_stream<'b>(
+        client: &'a mut C,
+        cols: &str,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Self::RecordIter> {
+        let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
+        if additional.len() > 0 {
+            statement += " ";
+            statement += additional;
+        }
+        return Ok(client.query_raw(&statement, params.iter().map(|param| param.borrow_to_sql()))?);
     }
 }
 
