@@ -1,3 +1,17 @@
+pub const UP: [&str; 4] = [
+    CREATE_KEYSPACE,
+    CREATE_CONFIG_TABLE,
+    CREATE_PROTEINS_TABLE,
+    CREATE_PEPTIDES_TABLE,
+];
+
+pub const DOWN: [&str; 4] = [
+    "DROP TABLE IF EXISTS macpep.peptides;",
+    "DROP TABLE IF EXISTS macpep.proteins;",
+    "DROP TABLE IF EXISTS macpep.config;",
+    "DROP KEYSPACE IF EXISTS macpep;",
+];
+
 const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS macpep
     WITH replication = { 
             'class': 'NetworkTopologyStrategy',
@@ -22,10 +36,10 @@ const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.proteins 
         updated_at bigint
     );";
 
-const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides (                                                                                                     [15/63]
-        partition smallint,                                                                                                                   
-        mass bigint,                                                                                                                          
-        sequence text,                                                                                                                        
+const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides (
+        partition smallint,
+        mass bigint,
+        sequence text,
         missed_cleavages smallint,
         aa_counts list<smallint>,
         proteins set<text>,
@@ -38,10 +52,3 @@ const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides 
         is_metadata_updated boolean,
         PRIMARY KEY (partition, mass, sequence)
     );";
-
-pub const MIGRATIONS: [&str; 4] = [
-    CREATE_KEYSPACE,
-    CREATE_CONFIG_TABLE,
-    CREATE_PROTEINS_TABLE,
-    CREATE_PEPTIDES_TABLE,
-];

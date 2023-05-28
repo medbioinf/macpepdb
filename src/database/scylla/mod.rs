@@ -2,6 +2,7 @@ pub mod migrations;
 
 #[cfg(test)]
 mod tests {
+    use crate::database::scylla::migrations::{DOWN, UP};
     use scylla::{transport::session::Session, SessionBuilder};
 
     pub const DATABASE_URL: &str = "127.0.0.1:9042";
@@ -12,5 +13,18 @@ mod tests {
             .build()
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    pub async fn prepare_database_for_tests() {
+        let session = get_session().await;
+
+        for statement in DOWN {
+            session.query(statement, &[]).await.unwrap();
+        }
+
+        for statement in UP {
+            session.query(statement, &[]).await.unwrap();
+        }
     }
 }
