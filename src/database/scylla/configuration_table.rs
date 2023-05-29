@@ -1,8 +1,5 @@
 // 3rd party imports
-use anyhow::{anyhow, Context, Ok, Result};
-use log::info;
-use scylla::_macro_internal::CqlValue;
-use scylla::cql_to_rust::FromCqlVal;
+use anyhow::{anyhow, Ok, Result};
 use scylla::Session;
 use serde::{de::DeserializeOwned, ser::Serialize};
 use serde_json::{from_value as from_json_value, json, Value as JsonValue};
