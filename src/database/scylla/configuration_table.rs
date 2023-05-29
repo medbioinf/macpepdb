@@ -1,5 +1,5 @@
 // 3rd party imports
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Ok, Result};
 use log::info;
 use scylla::_macro_internal::CqlValue;
 use scylla::cql_to_rust::FromCqlVal;
@@ -35,7 +35,8 @@ impl ConfigurationTable {
     {
         let statement = format!(
             "SELECT conf_key, value FROM {}.{} WHERE conf_key = ?;",
-            SCYLLA_KEYSPACE_NAME, TABLE_NAME
+            SCYLLA_KEYSPACE_NAME,
+            ConfigurationTable::table_name()
         );
         let row = session.query(statement, (key,)).await?.first_row()?;
         let (conf_key, value) = row.into_typed::<(String, String)>()?;
@@ -49,11 +50,20 @@ impl ConfigurationTable {
         Ok(config_value)
     }
 
-    fn set_setting<T>(client: &mut Session, key: &str, value: &T) -> Result<()>
+    async fn set_setting<T>(session: &Session, key: &str, value: &T) -> Result<()>
     where
         T: Serialize,
     {
-        todo!()
+        let statement = format!(
+            "INSERT INTO {}.{} (conf_key, value) VALUES (?,?);",
+            SCYLLA_KEYSPACE_NAME,
+            ConfigurationTable::table_name()
+        );
+
+        let wrapper = json!({ JSON_KEY: value });
+
+        session.query(statement, (key, wrapper.to_string())).await?;
+        Ok(())
     }
 
     fn select(client: &mut Session) -> Result<Configuration> {
@@ -94,5 +104,17 @@ mod tests {
 
         print!("a: {:?}\n", a);
         print_type_of(&a);
+    }
+
+    #[tokio::test]
+    pub async fn test_serialization() {
+        let session = get_session().await;
+        prepare_database_for_tests(&session).await;
+
+        let val: Vec<i32> = vec![1, 2, 3];
+
+        ConfigurationTable::set_setting(&session, "yoyo", &val)
+            .await
+            .unwrap();
     }
 }
