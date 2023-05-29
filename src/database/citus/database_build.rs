@@ -29,6 +29,7 @@ use crate::database::configuration_table::{
 };
 use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
 use crate::database::selectable_table::SelectableTable;
+use crate::database::table::Table;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
@@ -440,6 +441,111 @@ impl DatabaseBuild {
 
         return Ok(());
     }
+
+    fn collect_peptide_metadata(
+        num_threads: usize,
+        database_url: &str,
+        configuration: &Configuration,
+        progress_bar: &mut Bar,
+        verbose: bool,
+    ) -> Result<()> {
+        if verbose {
+            println!("Collecting peptide metadata...");
+            println!("Chunking partitions for {} threads...", num_threads);
+        }
+        let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
+            .ceil() as usize;
+        let chunked_partitions: Vec<Vec<i64>> = (0..configuration.get_partition_limits().len()
+            as i64)
+            .collect::<Vec<i64>>()
+            .chunks(chunk_size)
+            .map(|chunk| chunk.to_vec())
+            .collect();
+
+        let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
+
+        if verbose {
+            println!("Starting {} threads...", num_threads);
+        }
+        // Start digestion threads
+        for thread_id in 0..num_threads {
+            // Clone necessary variables
+            let partitions = chunked_partitions[thread_id].clone();
+            let database_url_clone = database_url.to_string();
+            // TODO: Add logging thread
+            // Start digestion thread
+            metadata_collector_thread_handles.push(spawn(move || {
+                Self::collect_peptide_metadata_thread(thread_id, database_url_clone, partitions)?;
+                Ok(())
+            }));
+        }
+        if verbose {
+            println!("Waiting threads to stop ...");
+        }
+        for handle in metadata_collector_thread_handles {
+            match handle.join() {
+                Ok(result) => result?,
+                Err(err) => bail!(format!("Digestion thread failed: {:?}", err)),
+            }
+        }
+        Ok(())
+    }
+
+    fn collect_peptide_metadata_thread(
+        thread_id: usize,
+        database_url: String,
+        partitions: Vec<i64>,
+    ) -> Result<()> {
+        for partition in partitions.iter() {
+            let mut client = Client::connect(&database_url, NoTls)?;
+            let mut partition_transaction = client.transaction()?;
+            let cursor_statement = format!(
+                "DECLARE peptide_cursor_{} CURSOR FOR SELECT * FROM {} WHERE partition = $1 AND is_metadata_updated = false;",
+                thread_id,
+                PeptideTable::table_name()
+            );
+            let fetch_statement = format!("FETCH 1000 FROM peptide_cursor_{};", thread_id);
+            let cursor_close_statement = format!("CLOSE peptide_cursor_{};", thread_id);
+            partition_transaction.execute(&cursor_statement, &[partition])?;
+            loop {
+                let rows = partition_transaction.query(&fetch_statement, &[])?;
+                if rows.len() == 0 {
+                    break;
+                }
+                let mut peptide_transaction = partition_transaction.transaction()?;
+                for row in rows {
+                    let associated_proteins = ProteinTable::select_multiple(
+                        &mut peptide_transaction,
+                        "WHERE accession = ANY($1)",
+                        &[&row.get::<_, Vec<String>>("proteins")],
+                    )?;
+                    let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
+                        Peptide::get_metadata_from_proteins(&associated_proteins);
+                    let update_query = format!(
+                        "UPDATE {} SET is_metadata_updated = true, is_swiss_prot = $1, is_trembl = $2, taxonomy_ids = $3, unique_taxonomy_ids = $4, proteome_ids = $5 WHERE partition = $6 AND mass = $7 and sequence = $8;",
+                        PeptideTable::table_name()
+                    );
+                    peptide_transaction.query(
+                        &update_query,
+                        &[
+                            &is_swiss_prot,
+                            &is_trembl,
+                            &taxonomy_ids,
+                            &unique_taxonomy_ids,
+                            &proteome_ids,
+                            &row.get::<_, i64>("partition"),
+                            &row.get::<_, i64>("mass"),
+                            &row.get::<_, &str>("sequence"),
+                        ],
+                    )?;
+                }
+                peptide_transaction.commit()?;
+            }
+            partition_transaction.execute(&cursor_close_statement, &[])?;
+            partition_transaction.commit()?
+        }
+        Ok(())
+    }
 }
 
 impl DatabaseBuildTrait for DatabaseBuild {
@@ -505,6 +611,13 @@ impl DatabaseBuildTrait for DatabaseBuild {
             verbose,
         )?;
         // collect metadata
+        Self::collect_peptide_metadata(
+            num_threads,
+            &self.database_url,
+            &configuration,
+            &mut progress_bar,
+            verbose,
+        )?;
         // count peptides per partition
 
         Ok(())
@@ -529,12 +642,19 @@ mod test {
         protein_table::ProteinTable,
         tests::{get_client, prepare_database_for_tests, DATABASE_URL},
     };
+    use crate::database::selectable_table::SelectableTable;
     use crate::io::uniprot_text::reader::Reader;
 
     lazy_static! {
         static ref CONFIGURATION: Configuration =
             Configuration::new("trypsin".to_owned(), 2, 6, 50, true, Vec::with_capacity(0));
     }
+
+    const EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN: [&'static str; 2] =
+        ["P07477", "DUPLIC"];
+    const EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN: [i64; 2] = [9922, 9606];
+    const EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN: [&'static str; 2] =
+        ["UP000005640", "UP000291000"];
 
     // Test the database building
     #[test]
@@ -555,7 +675,10 @@ mod test {
     fn test_database_build() {
         prepare_database_for_tests();
 
-        let protein_file_paths = vec![Path::new("test_files/uniprot.txt").to_path_buf()];
+        let protein_file_paths = vec![
+            Path::new("test_files/uniprot.txt").to_path_buf(),
+            Path::new("test_files/trypsin_duplicate.txt").to_path_buf(),
+        ];
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         database_builder
@@ -583,6 +706,7 @@ mod test {
         )
         .unwrap();
 
+        // Check if every peptide is in the database
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(&protein_file_path, 4096).unwrap();
             while let Some(protein) = reader.next().unwrap() {
@@ -614,6 +738,57 @@ mod test {
                     .unwrap();
                     assert_eq!(peptides.len(), 1);
                 }
+            }
+
+            // Select the duplicated trpsin protein
+            // Digest it again, and check the metadata fit to the original trypsin and the duplicated trypsin
+            let trypsin_duplicate =
+                ProteinTable::select(&mut client, "WHERE accession = $1", &[&"DUPLIC"])
+                    .unwrap()
+                    .unwrap();
+
+            let trypsin_duplicate_peptides: Vec<Peptide> = create_peptides_entities_from_digest(
+                &enzyme.digest(&trypsin_duplicate.get_sequence()),
+                configuration.get_partition_limits(),
+                Some(&trypsin_duplicate),
+            )
+            .unwrap();
+
+            for peptide in trypsin_duplicate_peptides {
+                let peptide = PeptideTable::select(
+                    &mut client,
+                    "WHERE partition = $1 AND mass = $2 AND sequence = $3",
+                    &[
+                        peptide.get_partition_as_ref(),
+                        peptide.get_mass_as_ref(),
+                        peptide.get_sequence(),
+                    ],
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(peptide.get_proteins().len(), 2);
+                for protein_accession in peptide.get_proteins() {
+                    assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
+                        .contains(&protein_accession.as_str()));
+                }
+                for protein_accession in peptide.get_proteins() {
+                    assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
+                        .contains(&protein_accession.as_str()));
+                }
+                for taxonomy_id in peptide.get_taxonomy_ids() {
+                    assert!(EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN
+                        .contains(&taxonomy_id));
+                }
+                for taxonomy_id in peptide.get_unique_taxonomy_ids() {
+                    assert!(EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN
+                        .contains(&taxonomy_id));
+                }
+                for proteome_id in peptide.get_proteome_ids() {
+                    assert!(EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN
+                        .contains(&proteome_id.as_str()));
+                }
+                assert!(peptide.get_is_swiss_prot());
+                assert!(peptide.get_is_trembl());
             }
         }
     }
