@@ -1,3 +1,4 @@
+pub mod configuration_table;
 pub mod migrations;
 
 #[cfg(test)]
@@ -15,10 +16,7 @@ mod tests {
             .unwrap();
     }
 
-    #[tokio::test]
-    pub async fn prepare_database_for_tests() {
-        let session = get_session().await;
-
+    pub async fn prepare_database_for_tests(session: &Session) {
         for statement in DOWN {
             session.query(statement, &[]).await.unwrap();
         }
