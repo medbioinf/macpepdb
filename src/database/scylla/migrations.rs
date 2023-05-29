@@ -5,12 +5,7 @@ pub const UP: [&str; 4] = [
     CREATE_PEPTIDES_TABLE,
 ];
 
-pub const DOWN: [&str; 4] = [
-    "DROP TABLE IF EXISTS macpep.peptides;",
-    "DROP TABLE IF EXISTS macpep.proteins;",
-    "DROP TABLE IF EXISTS macpep.config;",
-    "DROP KEYSPACE IF EXISTS macpep;",
-];
+pub const DROP_KEYSPACE: &str = "DROP KEYSPACE IF EXISTS macpep;";
 
 const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS macpep
     WITH replication = { 

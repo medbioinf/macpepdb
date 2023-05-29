@@ -1,5 +1,5 @@
 /// Keeps the configuration parameters for MaCPepDB, e.g. digestion parameters, distribution ...
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Configuration {
     enzyme_name: String,
     max_number_of_missed_cleavages: usize,
