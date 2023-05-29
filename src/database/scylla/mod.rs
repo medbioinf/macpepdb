@@ -3,7 +3,7 @@ pub mod migrations;
 
 #[cfg(test)]
 mod tests {
-    use crate::database::scylla::migrations::{DOWN, UP};
+    use crate::database::scylla::migrations::{DROP_KEYSPACE, UP};
     use scylla::{transport::session::Session, SessionBuilder};
 
     pub const DATABASE_URL: &str = "127.0.0.1:9042";
@@ -17,9 +17,8 @@ mod tests {
     }
 
     pub async fn prepare_database_for_tests(session: &Session) {
-        for statement in DOWN {
-            session.query(statement, &[]).await.unwrap();
-        }
+        // Dropping a keyspace automatically drops all contained tables
+        session.query(DROP_KEYSPACE, &[]).await.unwrap();
 
         for statement in UP {
             session.query(statement, &[]).await.unwrap();
