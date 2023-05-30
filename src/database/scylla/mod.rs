@@ -1,3 +1,5 @@
+/// Trait definition for generic client to use with database API and a client struct keeping the session.
+pub mod client;
 pub mod configuration_table;
 pub mod migrations;
 
