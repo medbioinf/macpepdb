@@ -36,7 +36,7 @@ impl ConfigurationTable {
             Self::table_name()
         );
         let row = session.query(statement, (key,)).await?.first_row()?;
-        let (conf_key, value) = row.into_typed::<(String, String)>()?;
+        let (_, value) = row.into_typed::<(String, String)>()?;
 
         let mut wrapper: JsonValue = serde_json::from_str(value.as_str())?;
         let config_value = match wrapper.get_mut(JSON_KEY) {
