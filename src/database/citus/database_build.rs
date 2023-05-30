@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use kdam::{tqdm, Bar, BarExt};
-use postgres::{Client, NoTls};
+use postgres::{Client, GenericClient, NoTls};
 use refinery::embed_migrations;
 
 // internal imports
@@ -328,82 +328,176 @@ impl DatabaseBuild {
     }
 
     /// Handles the update of a protein, in case it was merged with another entry or has various changes.
+    /// 1. Digests the existing_protein
+    /// 2. Digests the new protein
+    /// 3. Remove peptide containing unknown amino acids if remove_peptides_containing_unknown is true
+    /// 4. Handle 3 different cases
+    ///     1. Accession and sequence changed -> Change accession in peptides and deassociate peptides which are not contained in the new protein
+    ///     2. Only accession changed -> Change accession in associated peptides
+    ///     3. Only sequence changed -> Deassociate peptides which are not contained in the new protein and create new ones.
+    /// 5. Update protein itself
+    ///
     ///
     /// # Arguments
     /// * `client` - The database client
-    /// * `protein` - The new protein
-    /// * `existing_protein` - The existing protein
+    /// * `updated_protein` - The updated protein
+    /// * `stored_protein` - The existing protein to update stored in the database
     /// * `digestion_enzyme` - The enzyme which is used for digestion
     /// * `remove_peptides_containing_unknown` - If true, peptides containing unknown amino acids are removed
     /// * `partition_limits` - The partition limits
     ///
     fn update_protein(
         client: &mut Client,
-        protein: &Protein,
-        existing_protein: &Protein,
+        updated_protein: &Protein,
+        stored_protein: &Protein,
         digestion_enzyme: &Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
         partition_limits: &Vec<i64>,
     ) -> Result<()> {
-        let mut existing_peptide_sequences =
-            digestion_enzyme.digest(&existing_protein.get_sequence());
-        let mut peptide_sequences = digestion_enzyme.digest(&protein.get_sequence());
+        let mut peptides_digest_of_stored_protein =
+            digestion_enzyme.digest(&stored_protein.get_sequence());
+        let mut peptide_digest_of_updated_protein =
+            digestion_enzyme.digest(&updated_protein.get_sequence());
         if remove_peptides_containing_unknown {
-            remove_unknown_from_digest(&mut existing_peptide_sequences);
-            remove_unknown_from_digest(&mut peptide_sequences);
+            remove_unknown_from_digest(&mut peptides_digest_of_stored_protein);
+            remove_unknown_from_digest(&mut peptide_digest_of_updated_protein);
         }
-        let existing_peptides: HashSet<Peptide> = create_peptides_entities_from_digest(
-            &existing_peptide_sequences,
+        let peptides_of_stored_protein: HashSet<Peptide> = create_peptides_entities_from_digest(
+            &peptides_digest_of_stored_protein,
             partition_limits,
-            Some(&existing_protein),
+            Some(&stored_protein),
         )?;
-        let peptides: HashSet<Peptide> = create_peptides_entities_from_digest(
-            &peptide_sequences,
+        let peptides_of_updated_protein: HashSet<Peptide> = create_peptides_entities_from_digest(
+            &peptide_digest_of_updated_protein,
             partition_limits,
-            Some(&protein),
+            Some(&updated_protein),
         )?;
         let mut transaction = client.transaction()?;
-        let flag_for_metadata_update = protein.get_taxonomy_id()
-            != existing_protein.get_taxonomy_id()
-            || protein.get_proteome_id() != existing_protein.get_proteome_id();
+        // Update peptide metadata if:
+        // 1. taxonomy id changed
+        // 2. proteome id changed
+        // 3. Review status changed
+        let flag_for_metadata_update =
+            Protein::is_peptide_metadata_changed(stored_protein, updated_protein);
         // If protein got a new accession (e.g. when entries were merged) and a new sequence
-        if protein.get_accession() != existing_protein.get_accession()
-            && protein.get_sequence() != existing_protein.get_sequence()
+        if updated_protein.get_accession() != stored_protein.get_accession()
+            && updated_protein.get_sequence() != stored_protein.get_sequence()
         {
-            // Associate all new peptides
-            PeptideTable::update_protein_accession(
+            // Deassociate the peptides which are not contained in the new protein
+            Self::deassociate_protein_peptides_difference(
                 &mut transaction,
-                &mut peptides.iter(),
-                existing_protein.get_accession(),
-                Some(protein.get_accession()),
+                stored_protein,
+                &peptides_of_stored_protein,
+                &peptides_of_updated_protein,
             )?;
-            // Disassociate all peptides from existing peptides which are not in new peptides
-            let peptides_to_deassociate = existing_peptides
-                .difference(&peptides)
-                .collect::<Vec<&Peptide>>();
 
-            if peptides_to_deassociate.len() > 0 {
-                PeptideTable::update_protein_accession(
-                    &mut transaction,
-                    &mut peptides_to_deassociate.into_iter(),
-                    existing_protein.get_accession(),
-                    None,
-                )?;
-            }
-        } else if protein.get_accession() != existing_protein.get_accession() {
+            // Update the old accession in the peptides to the new accession
             PeptideTable::update_protein_accession(
                 &mut transaction,
-                &mut peptides.iter(),
-                existing_protein.get_accession().as_ref(),
-                Some(protein.get_accession().as_ref()),
+                &mut peptides_of_updated_protein.iter(),
+                stored_protein.get_accession(),
+                Some(updated_protein.get_accession()),
+            )?;
+
+            // Create and associate the peptides which are not contained in the existing protein
+            Self::create_protein_peptide_difference(
+                &mut transaction,
+                &peptides_of_stored_protein,
+                &peptides_of_updated_protein,
+            )?;
+        } else if updated_protein.get_accession() != stored_protein.get_accession() {
+            PeptideTable::update_protein_accession(
+                &mut transaction,
+                &mut peptides_of_updated_protein.iter(),
+                stored_protein.get_accession().as_ref(),
+                Some(updated_protein.get_accession().as_ref()),
+            )?;
+        } else if updated_protein.get_sequence() != stored_protein.get_sequence() {
+            // Deassociatte the peptides which are not contained in the new protein
+            Self::deassociate_protein_peptides_difference(
+                &mut transaction,
+                stored_protein,
+                &peptides_of_stored_protein,
+                &peptides_of_updated_protein,
+            )?;
+            // Create and associate the peptides which are not contained in the existing protein
+            Self::create_protein_peptide_difference(
+                &mut transaction,
+                &peptides_of_stored_protein,
+                &peptides_of_updated_protein,
             )?;
         }
 
         if flag_for_metadata_update {
-            PeptideTable::unset_is_metadata_updated(&mut transaction, &mut peptides.iter())?;
+            PeptideTable::unset_is_metadata_updated(
+                &mut transaction,
+                &mut peptides_of_updated_protein.iter(),
+            )?;
         }
 
+        // Update protein itself
+        ProteinTable::update(&mut transaction, &stored_protein, &updated_protein)?;
+
         transaction.commit()?;
+        Ok(())
+    }
+
+    /// Determines peptides which are contained in the existing protein but not in the updated protein are deassociated them.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `stored_protein` - The existing protein
+    /// * `peptides_from_stored_protein` - The peptides from the existing protein
+    /// * `peptides_from_updated_protein` - The peptides from the updated protein
+    ///
+    fn deassociate_protein_peptides_difference<C>(
+        client: &mut C,
+        stored_protein: &Protein,
+        peptides_from_stored_protein: &HashSet<Peptide>,
+        peptides_from_updated_protein: &HashSet<Peptide>,
+    ) -> Result<()>
+    where
+        C: GenericClient,
+    {
+        // Disassociate all peptides from existing protein which are not contained by the new protein
+        let peptides_to_deassociate = peptides_from_stored_protein
+            .difference(&peptides_from_updated_protein)
+            .collect::<Vec<&Peptide>>();
+
+        if peptides_to_deassociate.len() > 0 {
+            PeptideTable::update_protein_accession(
+                client,
+                &mut peptides_to_deassociate.into_iter(),
+                stored_protein.get_accession(),
+                None,
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Creates the peptides from the updated protein, which are not already stored in the database.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `peptides_from_stored_protein` - The peptides from the existing protein
+    /// * `peptides_from_updated_protein` - The peptides from the updated protein
+    ///
+    fn create_protein_peptide_difference<C>(
+        client: &mut C,
+        peptides_from_stored_protein: &HashSet<Peptide>,
+        peptides_from_updated_protein: &HashSet<Peptide>,
+    ) -> Result<()>
+    where
+        C: GenericClient,
+    {
+        // Disassociate all peptides from existing protein which are not contained by the new protein
+        let peptides_to_create: Vec<&Peptide> = peptides_from_updated_protein
+            .difference(peptides_from_stored_protein)
+            .collect::<Vec<&Peptide>>();
+
+        if peptides_to_create.len() > 0 {
+            PeptideTable::bulk_insert(client, peptides_to_create.into_iter())?
+        }
         Ok(())
     }
 
