@@ -117,6 +117,14 @@ impl Protein {
     pub fn get_updated_at(&self) -> i64 {
         self.updated_at
     }
+
+    /// Checks if data has changed which results in a metadata update for for proteins
+    ///
+    pub fn is_peptide_metadata_changed(stored_protein: &Self, updated_protein: &Self) -> bool {
+        updated_protein.get_taxonomy_id() != stored_protein.get_taxonomy_id()
+            || updated_protein.get_proteome_id() != stored_protein.get_proteome_id()
+            || updated_protein.get_is_reviewed() != stored_protein.get_is_reviewed()
+    }
 }
 
 impl From<Row> for Protein {

@@ -62,6 +62,13 @@ impl PeptideTable {
             .join(", ")
     }
 
+    /// Inserts multiple peptides into the database.
+    /// On conflict the proteins array is updated with the new protein accessions and the metadata flag is set to false.
+    ///
+    /// # Arguments
+    /// * `client` - Database client or open transaction
+    /// * `peptides` - Iterator over peptides to insert
+    ///
     pub fn bulk_insert<'a, C, T>(client: &mut C, peptides: T) -> Result<()>
     where
         C: GenericClient,
@@ -74,7 +81,9 @@ impl PeptideTable {
 
         // Build insert statement
         let statement = format!(
-            "INSERT INTO {table_name} ({}) VALUES {} ON CONFLICT (partition, mass, sequence) DO UPDATE SET proteins = array_cat({table_name}.proteins, EXCLUDED.proteins)", 
+            "INSERT INTO {table_name} ({}) VALUES {} \
+                ON CONFLICT (partition, mass, sequence) \
+                DO UPDATE SET proteins = array_cat({table_name}.proteins, EXCLUDED.proteins), is_metadata_updated = false", 
             INSERT_COLS,
             placeholders.as_str(),
             table_name = TABLE_NAME
