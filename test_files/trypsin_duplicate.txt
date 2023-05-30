@@ -1,0 +1,730 @@
+ID   TRY1_DUBL              Unreviewed;         247 AA.
+AC   DUPLIC;
+DT   29-MAY-2023, duplicate for testing peptide metadata is collected correctly
+DE   RecName: Full=Serine protease 1 {ECO:0000312|HGNC:HGNC:9475};
+DE            EC=3.4.21.4;
+DE   AltName: Full=Anionic trypsin Duplicate I {ECO:0000250|UniProtKB:P00762};
+DE   AltName: Full=Anionic trypsin-duplicate-I {ECO:0000250|UniProtKB:P00762};
+DE   AltName: Full=Beta-trypsin;
+DE   AltName: Full=Cationic trypsinogen;
+DE   AltName: Full=Pretrypsinogen Duplictate I {ECO:0000250|UniProtKB:P00762};
+DE   AltName: Full=Trypsin Duplicate I {ECO:0000312|HGNC:HGNC:9475};
+DE   AltName: Full=Trypsin-Duplicate-1;
+DE   Contains:F
+DE     RecName: Full=Alpha-trypsin chain 1;
+DE   Contains:
+DE     RecName: Full=Alpha-trypsin chain 2;
+DE   Flags: Precursor;
+GN   Name=PRSS1 {ECO:0000312|HGNC:HGNC:9475};
+GN   Synonyms=TRP1, TRY1 {ECO:0000312|HGNC:HGNC:9475}, TRYP1;
+OS   Homo sapiens (Human).
+OC   Eukaryota; Metazoa; Chordata; Craniata; Vertebrata; Euteleostomi; Mammalia;
+OC   Eutheria; Euarchontoglires; Primates; Haplorrhini; Catarrhini; Hominidae;
+OC   Homo.
+OX   NCBI_TaxID=9922;
+RN   [1]
+RP   NUCLEOTIDE SEQUENCE [MRNA].
+RX   PubMed=3011602; DOI=10.1016/0378-1119(86)90111-3;
+RA   Emi M., Nakamura Y., Ogawa M., Yamamoto T., Nishide T., Mori T.,
+RA   Matsubara K.;
+RT   "Cloning, characterization and nucleotide sequences of two cDNAs encoding
+RT   human pancreatic trypsinogens.";
+RL   Gene 41:305-310(1986).
+RN   [2]
+RP   NUCLEOTIDE SEQUENCE [GENOMIC DNA].
+RX   PubMed=8650574; DOI=10.1126/science.272.5269.1755;
+RA   Rowen L., Koop B.F., Hood L.;
+RT   "The complete 685-kilobase DNA sequence of the human beta T cell receptor
+RT   locus.";
+RL   Science 272:1755-1762(1996).
+RN   [3]
+RP   NUCLEOTIDE SEQUENCE [LARGE SCALE MRNA].
+RC   TISSUE=Prostate;
+RX   PubMed=14702039; DOI=10.1038/ng1285;
+RA   Ota T., Suzuki Y., Nishikawa T., Otsuki T., Sugiyama T., Irie R.,
+RA   Wakamatsu A., Hayashi K., Sato H., Nagai K., Kimura K., Makita H.,
+RA   Sekine M., Obayashi M., Nishi T., Shibahara T., Tanaka T., Ishii S.,
+RA   Yamamoto J., Saito K., Kawai Y., Isono Y., Nakamura Y., Nagahari K.,
+RA   Murakami K., Yasuda T., Iwayanagi T., Wagatsuma M., Shiratori A., Sudo H.,
+RA   Hosoiri T., Kaku Y., Kodaira H., Kondo H., Sugawara M., Takahashi M.,
+RA   Kanda K., Yokoi T., Furuya T., Kikkawa E., Omura Y., Abe K., Kamihara K.,
+RA   Katsuta N., Sato K., Tanikawa M., Yamazaki M., Ninomiya K., Ishibashi T.,
+RA   Yamashita H., Murakawa K., Fujimori K., Tanai H., Kimata M., Watanabe M.,
+RA   Hiraoka S., Chiba Y., Ishida S., Ono Y., Takiguchi S., Watanabe S.,
+RA   Yosida M., Hotuta T., Kusano J., Kanehori K., Takahashi-Fujii A., Hara H.,
+RA   Tanase T.-O., Nomura Y., Togiya S., Komai F., Hara R., Takeuchi K.,
+RA   Arita M., Imose N., Musashino K., Yuuki H., Oshima A., Sasaki N.,
+RA   Aotsuka S., Yoshikawa Y., Matsunawa H., Ichihara T., Shiohata N., Sano S.,
+RA   Moriya S., Momiyama H., Satoh N., Takami S., Terashima Y., Suzuki O.,
+RA   Nakagawa S., Senoh A., Mizoguchi H., Goto Y., Shimizu F., Wakebe H.,
+RA   Hishigaki H., Watanabe T., Sugiyama A., Takemoto M., Kawakami B.,
+RA   Yamazaki M., Watanabe K., Kumagai A., Itakura S., Fukuzumi Y., Fujimori Y.,
+RA   Komiyama M., Tashiro H., Tanigami A., Fujiwara T., Ono T., Yamada K.,
+RA   Fujii Y., Ozaki K., Hirao M., Ohmori Y., Kawabata A., Hikiji T.,
+RA   Kobatake N., Inagaki H., Ikema Y., Okamoto S., Okitani R., Kawakami T.,
+RA   Noguchi S., Itoh T., Shigeta K., Senba T., Matsumura K., Nakajima Y.,
+RA   Mizuno T., Morinaga M., Sasaki M., Togashi T., Oyama M., Hata H.,
+RA   Watanabe M., Komatsu T., Mizushima-Sugano J., Satoh T., Shirai Y.,
+RA   Takahashi Y., Nakagawa K., Okumura K., Nagase T., Nomura N., Kikuchi H.,
+RA   Masuho Y., Yamashita R., Nakai K., Yada T., Nakamura Y., Ohara O.,
+RA   Isogai T., Sugano S.;
+RT   "Complete sequencing and characterization of 21,243 full-length human
+RT   cDNAs.";
+RL   Nat. Genet. 36:40-45(2004).
+RN   [4]
+RP   NUCLEOTIDE SEQUENCE [LARGE SCALE GENOMIC DNA].
+RX   PubMed=12853948; DOI=10.1038/nature01782;
+RA   Hillier L.W., Fulton R.S., Fulton L.A., Graves T.A., Pepin K.H.,
+RA   Wagner-McPherson C., Layman D., Maas J., Jaeger S., Walker R., Wylie K.,
+RA   Sekhon M., Becker M.C., O'Laughlin M.D., Schaller M.E., Fewell G.A.,
+RA   Delehaunty K.D., Miner T.L., Nash W.E., Cordes M., Du H., Sun H.,
+RA   Edwards J., Bradshaw-Cordum H., Ali J., Andrews S., Isak A., Vanbrunt A.,
+RA   Nguyen C., Du F., Lamar B., Courtney L., Kalicki J., Ozersky P.,
+RA   Bielicki L., Scott K., Holmes A., Harkins R., Harris A., Strong C.M.,
+RA   Hou S., Tomlinson C., Dauphin-Kohlberg S., Kozlowicz-Reilly A., Leonard S.,
+RA   Rohlfing T., Rock S.M., Tin-Wollam A.-M., Abbott A., Minx P., Maupin R.,
+RA   Strowmatt C., Latreille P., Miller N., Johnson D., Murray J.,
+RA   Woessner J.P., Wendl M.C., Yang S.-P., Schultz B.R., Wallis J.W.,
+RA   Spieth J., Bieri T.A., Nelson J.O., Berkowicz N., Wohldmann P.E.,
+RA   Cook L.L., Hickenbotham M.T., Eldred J., Williams D., Bedell J.A.,
+RA   Mardis E.R., Clifton S.W., Chissoe S.L., Marra M.A., Raymond C., Haugen E.,
+RA   Gillett W., Zhou Y., James R., Phelps K., Iadanoto S., Bubb K., Simms E.,
+RA   Levy R., Clendenning J., Kaul R., Kent W.J., Furey T.S., Baertsch R.A.,
+RA   Brent M.R., Keibler E., Flicek P., Bork P., Suyama M., Bailey J.A.,
+RA   Portnoy M.E., Torrents D., Chinwalla A.T., Gish W.R., Eddy S.R.,
+RA   McPherson J.D., Olson M.V., Eichler E.E., Green E.D., Waterston R.H.,
+RA   Wilson R.K.;
+RT   "The DNA sequence of human chromosome 7.";
+RL   Nature 424:157-164(2003).
+RN   [5]
+RP   NUCLEOTIDE SEQUENCE [LARGE SCALE GENOMIC DNA].
+RX   PubMed=12690205; DOI=10.1126/science.1083423;
+RA   Scherer S.W., Cheung J., MacDonald J.R., Osborne L.R., Nakabayashi K.,
+RA   Herbrick J.-A., Carson A.R., Parker-Katiraee L., Skaug J., Khaja R.,
+RA   Zhang J., Hudek A.K., Li M., Haddad M., Duggan G.E., Fernandez B.A.,
+RA   Kanematsu E., Gentles S., Christopoulos C.C., Choufani S., Kwasnicka D.,
+RA   Zheng X.H., Lai Z., Nusskern D.R., Zhang Q., Gu Z., Lu F., Zeesman S.,
+RA   Nowaczyk M.J., Teshima I., Chitayat D., Shuman C., Weksberg R.,
+RA   Zackai E.H., Grebe T.A., Cox S.R., Kirkpatrick S.J., Rahman N.,
+RA   Friedman J.M., Heng H.H.Q., Pelicci P.G., Lo-Coco F., Belloni E.,
+RA   Shaffer L.G., Pober B., Morton C.C., Gusella J.F., Bruns G.A.P., Korf B.R.,
+RA   Quade B.J., Ligon A.H., Ferguson H., Higgins A.W., Leach N.T.,
+RA   Herrick S.R., Lemyre E., Farra C.G., Kim H.-G., Summers A.M., Gripp K.W.,
+RA   Roberts W., Szatmari P., Winsor E.J.T., Grzeschik K.-H., Teebi A.,
+RA   Minassian B.A., Kere J., Armengol L., Pujana M.A., Estivill X.,
+RA   Wilson M.D., Koop B.F., Tosi S., Moore G.E., Boright A.P., Zlotorynski E.,
+RA   Kerem B., Kroisel P.M., Petek E., Oscier D.G., Mould S.J., Doehner H.,
+RA   Doehner K., Rommens J.M., Vincent J.B., Venter J.C., Li P.W., Mural R.J.,
+RA   Adams M.D., Tsui L.-C.;
+RT   "Human chromosome 7: DNA sequence and biology.";
+RL   Science 300:767-772(2003).
+RN   [6]
+RP   NUCLEOTIDE SEQUENCE [LARGE SCALE GENOMIC DNA].
+RA   Mural R.J., Istrail S., Sutton G.G., Florea L., Halpern A.L., Mobarry C.M.,
+RA   Lippert R., Walenz B., Shatkay H., Dew I., Miller J.R., Flanigan M.J.,
+RA   Edwards N.J., Bolanos R., Fasulo D., Halldorsson B.V., Hannenhalli S.,
+RA   Turner R., Yooseph S., Lu F., Nusskern D.R., Shue B.C., Zheng X.H.,
+RA   Zhong F., Delcher A.L., Huson D.H., Kravitz S.A., Mouchard L., Reinert K.,
+RA   Remington K.A., Clark A.G., Waterman M.S., Eichler E.E., Adams M.D.,
+RA   Hunkapiller M.W., Myers E.W., Venter J.C.;
+RL   Submitted (JUL-2005) to the EMBL/GenBank/DDBJ databases.
+RN   [7]
+RP   NUCLEOTIDE SEQUENCE [LARGE SCALE MRNA].
+RX   PubMed=15489334; DOI=10.1101/gr.2596504;
+RG   The MGC Project Team;
+RT   "The status, quality, and expansion of the NIH full-length cDNA project:
+RT   the Mammalian Gene Collection (MGC).";
+RL   Genome Res. 14:2121-2127(2004).
+RN   [8]
+RP   NUCLEOTIDE SEQUENCE [GENOMIC DNA] OF 15-67, AND VARIANT PCTT GLY-22.
+RX   PubMed=10930381; DOI=10.1053/gast.2000.9312;
+RA   Teich N., Ockenga J., Hoffmeister A., Manns M., Mossner J., Keim V.;
+RT   "Chronic pancreatitis associated with an activation peptide mutation that
+RT   facilitates trypsin activation.";
+RL   Gastroenterology 119:461-465(2000).
+RN   [9]
+RP   PROTEIN SEQUENCE OF 16-43 AND 123-142, FUNCTION, AND POST-TRANSLATIONAL
+RP   PROCESSING.
+RC   TISSUE=Gastric adenocarcinoma;
+RX   PubMed=7945238; DOI=10.1042/bj3030187;
+RA   Koshikawa N., Yasumitsu H., Nagashima Y., Umeda M., Miyazaki K.;
+RT   "Identification of one- and two-chain forms of trypsinogen 1 produced by a
+RT   human gastric adenocarcinoma cell line.";
+RL   Biochem. J. 303:187-190(1994).
+RN   [10]
+RP   PROTEIN SEQUENCE OF 16-43.
+RX   PubMed=2598466; DOI=10.1016/0009-8981(89)90254-4;
+RA   Kimland M., Russick C., Marks W.H., Borgstroem A.;
+RT   "Immunoreactive anionic and cationic trypsin in human serum.";
+RL   Clin. Chim. Acta 184:31-46(1989).
+RN   [11]
+RP   NUCLEOTIDE SEQUENCE [GENOMIC DNA] OF 68-151, AND VARIANT PCTT HIS-122.
+RX   PubMed=8841182; DOI=10.1038/ng1096-141;
+RA   Whitcomb D.C., Gorry M.C., Preston R.A., Furey W., Sossenheimer M.J.,
+RA   Ulrich C.D., Martin S.P., Gates L.K. Jr., Amann S.T., Toskes P.P.,
+RA   Liddle R., McGrath K., Uomo G., Post J.C., Ehrlich G.D.;
+RT   "Hereditary pancreatitis is caused by a mutation in the cationic
+RT   trypsinogen gene.";
+RL   Nat. Genet. 14:141-145(1996).
+RN   [12]
+RP   NUCLEOTIDE SEQUENCE [GENOMIC DNA] OF 68-151, AND VARIANTS PCTT ILE-29;
+RP   PRO-104; CYS-116; HIS-122 AND PHE-139.
+RX   PubMed=11866271; DOI=10.1111/j.1572-0241.2002.05467.x;
+RA   Teich N., Bauer N., Mossner J., Keim V.;
+RT   "Mutational screening of patients with nonalcoholic chronic pancreatitis:
+RT   identification of further trypsinogen variants.";
+RL   Am. J. Gastroenterol. 97:341-346(2002).
+RN   [13]
+RP   PROTEIN SEQUENCE OF 73-92, AND IDENTIFICATION BY MASS SPECTROMETRY.
+RC   TISSUE=Brain, and Cajal-Retzius cell;
+RA   Lubec G., Afjehi-Sadat L.;
+RL   Submitted (MAR-2007) to UniProtKB.
+RN   [14]
+RP   SULFATION AT TYR-154, AND MUTAGENESIS OF TYR-154.
+RX   PubMed=17087724; DOI=10.1111/j.1742-4658.2006.05501.x;
+RA   Sahin-Toth M., Kukor Z., Nemoda Z.;
+RT   "Human cationic trypsinogen is sulfated on Tyr154.";
+RL   FEBS J. 273:5044-5050(2006).
+RN   [15]
+RP   SULFATION AT TYR-154.
+RX   PubMed=25010489; DOI=10.1371/journal.pone.0102063;
+RA   Szabo A., Salameh M.A., Ludwig M., Radisky E.S., Sahin-Toth M.;
+RT   "Tyrosine sulfation of human trypsin steers S2' subsite selectivity towards
+RT   basic amino acids.";
+RL   PLoS ONE 9:E102063-E102063(2014).
+RN   [16]
+RP   INTERACTION WITH SERPINA1.
+RX   PubMed=11057674; DOI=10.1038/35038119;
+RA   Huntington J.A., Read R.J., Carrell R.W.;
+RT   "Structure of a serpin-protease complex shows inhibition by deformation.";
+RL   Nature 407:923-926(2000).
+RN   [17]
+RP   X-RAY CRYSTALLOGRAPHY (2.2 ANGSTROMS), AND MASS SPECTROMETRY.
+RX   PubMed=8683601; DOI=10.1006/jmbi.1996.0376;
+RA   Gaboriaud C., Serre L., Guy-Crotte O., Forest E., Fontecilla-Camps J.-C.;
+RT   "Crystal structure of human trypsin 1: unexpected phosphorylation of
+RT   Tyr151.";
+RL   J. Mol. Biol. 259:995-1010(1996).
+RN   [18]
+RP   VARIANTS PCTT ILE-29 AND HIS-122.
+RX   PubMed=9322498; DOI=10.1053/gast.1997.v113.pm9322498;
+RA   Gorry M.C., Gabbaizedeh D., Furey W., Gates L.K. Jr., Preston R.A.,
+RA   Aston C.E., Zhang Y., Ulrich C., Ehrlich G.D., Whitcomb D.C.;
+RT   "Mutations in the cationic trypsinogen gene are associated with recurrent
+RT   acute and chronic pancreatitis.";
+RL   Gastroenterology 113:1063-1068(1997).
+RN   [19]
+RP   VARIANT PCTT ILE-29.
+RX   PubMed=9633818;
+RX   DOI=10.1002/(sici)1098-1004(1998)12:1<39::aid-humu6>3.0.co;2-p;
+RA   Teich N., Mossner J., Keim V.;
+RT   "Mutations of the cationic trypsinogen in hereditary pancreatitis.";
+RL   Hum. Mutat. 12:39-43(1998).
+RN   [20]
+RP   VARIANTS PCTT VAL-16 AND HIS-122.
+RX   PubMed=10381903; DOI=10.1016/s0016-5085(99)70543-3;
+RA   Witt H., Luck W., Becker M.;
+RT   "A signal peptide cleavage site mutation in the cationic trypsinogen gene
+RT   is strongly associated with chronic pancreatitis.";
+RL   Gastroenterology 117:7-10(1999).
+RN   [21]
+RP   VARIANT PCTT ARG-23.
+RX   PubMed=10204851;
+RA   Ferec C., Raguenes O., Salomon R., Roche C., Bernard J.P., Guillot M.,
+RA   Quere I., Faure C., Mercier B., Audrezet M.-P., Guillausseau P.J.,
+RA   Dupont C., Munnich A., Bignon J.D., Le Bodic L.;
+RT   "Mutations in the cationic trypsinogen gene and evidence for genetic
+RT   heterogeneity in hereditary pancreatitis.";
+RL   J. Med. Genet. 36:228-232(1999).
+RN   [22]
+RP   VARIANT PCTT HIS-122.
+RX   PubMed=11073545; DOI=10.1136/jmg.37.11.e36;
+RA   Chen J.-M., Raguenes O., Ferec C., Deprez P.H., Verellen-Dumoulin C.;
+RT   "A CGC>CAT gene conversion-like event resulting in the R122H mutation in
+RT   the cationic trypsinogen gene and its implication in the genotyping of
+RT   pancreatitis.";
+RL   J. Med. Genet. 37:E36-E36(2000).
+RN   [23]
+RP   VARIANTS PCTT THR-29 AND CYS-122.
+RX   PubMed=11788572; DOI=10.1136/gut.50.2.271;
+RA   Pfutzer R., Myers E., Applebaum-Shapiro S., Finch R., Ellis I.,
+RA   Neoptolemos J., Kant J.A., Whitcomb D.C.;
+RT   "Novel cationic trypsinogen (PRSS1) N29T and R122C mutations cause
+RT   autosomal dominant hereditary pancreatitis.";
+RL   Gut 50:271-272(2002).
+RN   [24]
+RP   VARIANT PCTT LYS-79, AND CHARACTERIZATION OF VARIANT PCTT LYS-79.
+RX   PubMed=14695529; DOI=10.1002/humu.10285;
+RA   Teich N., Le Marechal C., Kukor Z., Caca K., Witzigmann H., Chen J.-M.,
+RA   Toth M., Moessner J., Keim V., Ferec C., Sahin-Toth M.;
+RT   "Interaction between trypsinogen isoforms in genetically determined
+RT   pancreatitis: mutation E79K in cationic trypsin (PRSS1) causes increased
+RT   transactivation of anionic trypsinogen (PRSS2).";
+RL   Hum. Mutat. 23:22-31(2004).
+RN   [25]
+RP   VARIANTS PCTT ILE-29 AND SER-54, AND CHARACTERIZATION OF VARIANTS PCTT
+RP   ILE-29 AND SER-54.
+RX   PubMed=15776435; DOI=10.1002/humu.20148;
+RA   Teich N., Nemoda Z., Koehler H., Heinritz W., Moessner J., Keim V.,
+RA   Sahin-Toth M.;
+RT   "Gene conversion between functional trypsinogen genes PRSS1 and PRSS2
+RT   associated with chronic pancreatitis in a six-year-old girl.";
+RL   Hum. Mutat. 25:343-347(2005).
+RN   [26]
+RP   VARIANT [LARGE SCALE ANALYSIS] MET-137.
+RX   PubMed=16959974; DOI=10.1126/science.1133427;
+RA   Sjoeblom T., Jones S., Wood L.D., Parsons D.W., Lin J., Barber T.D.,
+RA   Mandelker D., Leary R.J., Ptak J., Silliman N., Szabo S., Buckhaults P.,
+RA   Farrell C., Meeh P., Markowitz S.D., Willis J., Dawson D., Willson J.K.V.,
+RA   Gazdar A.F., Hartigan J., Wu L., Liu C., Parmigiani G., Park B.H.,
+RA   Bachman K.E., Papadopoulos N., Vogelstein B., Kinzler K.W.,
+RA   Velculescu V.E.;
+RT   "The consensus coding sequences of human breast and colorectal cancers.";
+RL   Science 314:268-274(2006).
+CC   -!- FUNCTION: Has activity against the synthetic substrates Boc-Phe-Ser-
+CC       Arg-Mec, Boc-Leu-Thr-Arg-Mec, Boc-Gln-Ala-Arg-Mec and Boc-Val-Pro-Arg-
+CC       Mec. The single-chain form is more active than the two-chain form
+CC       against all of these substrates. {ECO:0000269|PubMed:7945238}.
+CC   -!- CATALYTIC ACTIVITY:
+CC       Reaction=Preferential cleavage: Arg-|-Xaa, Lys-|-Xaa.; EC=3.4.21.4;
+CC   -!- COFACTOR:
+CC       Name=Ca(2+); Xref=ChEBI:CHEBI:29108;
+CC       Note=Binds 1 Ca(2+) ion per subunit.;
+CC   -!- SUBUNIT: Interacts with SERPINA1. {ECO:0000269|PubMed:11057674}.
+CC   -!- SUBCELLULAR LOCATION: Secreted, extracellular space.
+CC   -!- PTM: Occurs in a single-chain form and a two-chain form, produced by
+CC       proteolytic cleavage after Arg-122.
+CC   -!- PTM: Sulfation at Tyr-154 increases selectivity towards basic versus
+CC       apolar residues at the P2' position of inhibitors that bind in a
+CC       substrate-like fashion. Although the increase in selectivity is
+CC       relatively small, it may facilitate digestion of a broader range of
+CC       dietary proteins. {ECO:0000269|PubMed:25010489}.
+CC   -!- MASS SPECTROMETRY: [Serine protease 1]: Mass=24348; Mass_error=2;
+CC       Method=Electrospray; Evidence={ECO:0000269|PubMed:8683601};
+CC   -!- DISEASE: Pancreatitis, hereditary (PCTT) [MIM:167800]: A disease
+CC       characterized by pancreas inflammation, permanent destruction of the
+CC       pancreatic parenchyma, maldigestion, and severe abdominal pain attacks.
+CC       {ECO:0000269|PubMed:10204851, ECO:0000269|PubMed:10381903,
+CC       ECO:0000269|PubMed:10930381, ECO:0000269|PubMed:11073545,
+CC       ECO:0000269|PubMed:11788572, ECO:0000269|PubMed:11866271,
+CC       ECO:0000269|PubMed:14695529, ECO:0000269|PubMed:15776435,
+CC       ECO:0000269|PubMed:8841182, ECO:0000269|PubMed:9322498,
+CC       ECO:0000269|PubMed:9633818}. Note=Disease susceptibility is associated
+CC       with variants affecting the gene represented in this entry.
+CC   -!- SIMILARITY: Belongs to the peptidase S1 family. {ECO:0000255|PROSITE-
+CC       ProRule:PRU00274}.
+CC   -!- CAUTION: Tyr-154 was proposed to be phosphorylated (PubMed:8683601) but
+CC       it has been shown (PubMed:17087724) to be sulfated instead. Phosphate
+CC       and sulfate groups are similar in mass and size, and this can lead to
+CC       erroneous interpretation of the results. {ECO:0000305|PubMed:17087724,
+CC       ECO:0000305|PubMed:8683601}.
+CC   ---------------------------------------------------------------------------
+CC   Copyrighted by the UniProt Consortium, see https://www.uniprot.org/terms
+CC   Distributed under the Creative Commons Attribution (CC BY 4.0) License
+CC   ---------------------------------------------------------------------------
+DR   EMBL; M22612; AAA61231.1; -; mRNA.
+DR   EMBL; L36092; AAC80207.1; -; Genomic_DNA.
+DR   EMBL; AK312199; BAG35132.1; -; mRNA.
+DR   EMBL; AC231380; -; NOT_ANNOTATED_CDS; Genomic_DNA.
+DR   EMBL; CH236959; EAL23773.1; -; Genomic_DNA.
+DR   EMBL; CH471198; EAW51925.1; -; Genomic_DNA.
+DR   EMBL; BC128226; AAI28227.1; -; mRNA.
+DR   EMBL; AF314534; AAG30943.1; -; Genomic_DNA.
+DR   EMBL; U70137; AAC50728.1; -; Genomic_DNA.
+DR   EMBL; AF315309; AAG30947.1; -; Genomic_DNA.
+DR   EMBL; AF315310; AAG30948.1; -; Genomic_DNA.
+DR   EMBL; AF315311; AAG30949.1; -; Genomic_DNA.
+DR   CCDS; CCDS5872.1; -.
+DR   PIR; A25852; A25852.
+DR   PIR; S50020; S50020.
+DR   PIR; S50021; S50021.
+DR   RefSeq; NP_002760.1; NM_002769.4.
+DR   PDB; 1FXY; X-ray; 2.15 A; A=127-247.
+DR   PDB; 1TRN; X-ray; 2.20 A; A/B=24-247.
+DR   PDB; 2RA3; X-ray; 1.46 A; A/B=24-247.
+DR   PDB; 4WWY; X-ray; 1.70 A; A/B=24-247.
+DR   PDB; 4WXV; X-ray; 2.10 A; A/B=24-247.
+DR   PDB; 7QE8; X-ray; 2.90 A; A/B=24-247.
+DR   PDB; 7QE9; X-ray; 2.10 A; A/B=24-247.
+DR   PDBsum; 1FXY; -.
+DR   PDBsum; 1TRN; -.
+DR   PDBsum; 2RA3; -.
+DR   PDBsum; 4WWY; -.
+DR   PDBsum; 4WXV; -.
+DR   PDBsum; 7QE8; -.
+DR   PDBsum; 7QE9; -.
+DR   AlphaFoldDB; P07477; -.
+DR   SMR; P07477; -.
+DR   BioGRID; 111626; 67.
+DR   IntAct; P07477; 19.
+DR   MINT; P07477; -.
+DR   STRING; 9606.ENSP00000308720; -.
+DR   BindingDB; P07477; -.
+DR   ChEMBL; CHEMBL209; -.
+DR   DrugBank; DB02665; (1R,2S)-2-Phenylcyclopropanaminium.
+DR   DrugBank; DB03417; (2S,3R)-2-[[4-(Tert-butylcarbamoyl)piperazine-1-carbonyl]amino]-6-(diaminomethylideneamino)-3-formylhexanoic acid.
+DR   DrugBank; DB06850; (S)-N-(4-carbamimidoylbenzyl)-1-(2-(cyclohexylamino)ethanoyl)pyrrolidine-2-carboxamide.
+DR   DrugBank; DB07091; (S)-N-(4-carbamimidoylbenzyl)-1-(2-(cyclohexyloxy)ethanoyl)pyrrolidine-2-carboxamide.
+DR   DrugBank; DB06845; (S)-N-(4-carbamimidoylbenzyl)-1-(2-(cyclopentylamino)ethanoyl)pyrrolidine-2-carboxamide.
+DR   DrugBank; DB07088; (S)-N-(4-carbamimidoylbenzyl)-1-(2-(cyclopentyloxy)ethanoyl)pyrrolidine-2-carboxamide.
+DR   DrugBank; DB07131; (S)-N-(4-carbamimidoylbenzyl)-1-(3-cyclohexylpropanoyl)pyrrolidine-2-carboxamide.
+DR   DrugBank; DB07095; (S)-N-(4-carbamimidoylbenzyl)-1-(3-cyclopentylpropanoyl)pyrrolidine-2-carboxamide.
+DR   DrugBank; DB04793; 1,4:3,6-Dianhydro-2-O-(3-carbamimidoylphenyl)-5-O-(4-carbamimidoylphenyl)-D-glucitol.
+DR   DrugBank; DB03337; 1-(2-Amidinophenyl)-3-(Phenoxyphenyl)Urea.
+DR   DrugBank; DB04336; 1-(4-Amidinophenyl)-3-(4-Chlorophenyl)Urea.
+DR   DrugBank; DB08420; 1-{[1-(2-AMINO-3-PHENYL-PROPIONYL)-PYRROLIDINE-2-CARBONYL]-AMINO}-2-(3-CYANO-PHENYL)-ETHANEBORONIC ACID.
+DR   DrugBank; DB04790; 2,5-bis-O-{3-[amino(imino)methyl]phenyl}-1,4:3,6-dianhydro-D-glucitol.
+DR   DrugBank; DB04792; 2,5-O,O-BIS-{4',4''-AMIDINOPHENYL}-1,4:3,6-DIANHYDRO-D-SORBITOL.
+DR   DrugBank; DB01905; 2-(2-Hydroxy-5-Methoxy-Phenyl)-1h-Benzoimidazole-5-Carboxamidine.
+DR   DrugBank; DB02463; 2-(2-Hydroxy-Phenyl)-1h-Indole-5-Carboxamidine.
+DR   DrugBank; DB02287; 2-(2-hydroxy-phenyl)-3H-benzoimidazole-5-carboxamidine.
+DR   DrugBank; DB08184; 2-(2-METHYLPHENYL)-1H-INDOLE-5-CARBOXIMIDAMIDE.
+DR   DrugBank; DB06918; 2-(2-METHYLPHENYL)-1H-INDOLE-6-CARBOXIMIDAMIDE.
+DR   DrugBank; DB06923; 2-(3-METHYLPHENYL)-1H-INDOLE-5-CARBOXIMIDAMIDE.
+DR   DrugBank; DB08254; 2-Naphthalenesulfonic acid.
+DR   DrugBank; DB04791; 2-O-(4'-AMIDINOPHENYL)-5-O-(3''-AMIDINOPHENYL)-1,4:3,6-DIANHYDRO-D-SORBITOL.
+DR   DrugBank; DB01725; 2-{2-hydroxy-[1,1'-biphenyl]-3-yl}-1H-1,3-benzodiazole-5-carboximidamide.
+DR   DrugBank; DB01665; 2H-Benzimidazol-2-amine.
+DR   DrugBank; DB03374; 3,5-Diiodotyrosine.
+DR   DrugBank; DB04410; 3-Phenylpropylamine.
+DR   DrugBank; DB07229; 3-{5-[AMINO(IMINIO)METHYL]-1H-INDOL-2-YL}-5-METHOXY-1,1'-BIPHENYL-2-OLATE.
+DR   DrugBank; DB07368; 4-(METHYLSULFONYL)BENZENECARBOXIMIDAMIDE.
+DR   DrugBank; DB03243; 4-Fluorobenzylamine.
+DR   DrugBank; DB03136; 4-Iodobenzo[B]Thiophene-2-Carboxamidine.
+DR   DrugBank; DB04311; 4-Phenylbutylamine.
+DR   DrugBank; DB04654; 4-PIPERIDIN-4-YLBUTANAL.
+DR   DrugBank; DB02354; 4-{[1-Methyl-5-(2-Methyl-Benzoimidazol-1-Ylmethyl)-1h-Benzoimidazol-2-Ylmethyl]-Amino}-Benzamidine.
+DR   DrugBank; DB01939; 5-Amidino-Benzimidazole.
+DR   DrugBank; DB07491; 5-amino-2,4,6-tribromobenzene-1,3-dicarboxylic acid.
+DR   DrugBank; DB03865; 6-Chloro-2-(2-Hydroxy-Biphenyl-3-Yl)-1h-Indole-5-Carboxamidine.
+DR   DrugBank; DB06855; 6-fluoro-2-(2-hydroxy-3-isobutoxy-phenyl)-1H-benzoimidazole-5-carboxamidine.
+DR   DrugBank; DB04107; [(1-{2[(4-Carbamimidoyl-Phenylamino)-Methyl]-1-Methyl-1h-Benzoimidazol-5-Yl}-Cyclopropyl)-Pyridin-2-Yl-Methyleneaminooxy]-Acetic Acid Ethyl Ester.
+DR   DrugBank; DB01836; [4-(6-Chloro-Naphthalene-2-Sulfonyl)-Piperazin-1-Yl]-(3,4,5,6-Tetrahydro-2h-[1,4']Bipyridinyl-4-Yl)-Methanone.
+DR   DrugBank; DB02269; [4-({[5-Benzyloxy-1-(3-Carbamimidoyl-Benzyl)-1h-Indole-2-Carbonyl]-Amino}-Methyl)-Phenyl]-Trimethyl-Ammonium.
+DR   DrugBank; DB08763; [N-(BENZYLOXYCARBONYL)AMINO](4-AMIDINOPHENYL)METHANE-PHOSPHONATE.
+DR   DrugBank; DB03081; [N-[N-(4-Methoxy-2,3,6-trimethylphenylsulfonyl)-L-aspartyl]-D-(4-amidino-phenylalanyl)]-piperidine.
+DR   DrugBank; DB04391; Aeruginosin 98-B.
+DR   DrugBank; DB02435; Aminomethylcyclohexane.
+DR   DrugBank; DB02045; Amylamine.
+DR   DrugBank; DB06692; Aprotinin.
+DR   DrugBank; DB03127; Benzamidine.
+DR   DrugBank; DB04446; Benzo[B]Thiophene-2-Carboxamidine.
+DR   DrugBank; DB02464; Benzylamine.
+DR   DrugBank; DB03213; Bis(5-Amidino-2-Benzimidazolyl)Methane Ketone.
+DR   DrugBank; DB04301; Bis(5-Amidino-2-Benzimidazolyl)Methane Ketone Hydrate.
+DR   DrugBank; DB01876; Bis(5-Amidino-2-Benzimidazolyl)Methanone.
+DR   DrugBank; DB01705; Bis(5-Amidino-Benzimidazolyl)Methane.
+DR   DrugBank; DB03443; bis(5-amidino-benzimidazolyl)methanone zinc.
+DR   DrugBank; DB02081; Bis-Benzamidine.
+DR   DrugBank; DB13729; Camostat.
+DR   DrugBank; DB02288; CRA-9334.
+DR   DrugBank; DB03173; CRA_10433.
+DR   DrugBank; DB02526; CRA_10655.
+DR   DrugBank; DB04470; CRA_10656.
+DR   DrugBank; DB02366; CRA_10762.
+DR   DrugBank; DB02989; CRA_10972.
+DR   DrugBank; DB01771; CRA_10991.
+DR   DrugBank; DB03555; CRA_11092.
+DR   DrugBank; DB03643; CRA_1144.
+DR   DrugBank; DB02063; CRA_16847.
+DR   DrugBank; DB02084; CRA_17312.
+DR   DrugBank; DB01741; CRA_17693.
+DR   DrugBank; DB03016; CRA_1801.
+DR   DrugBank; DB02875; CRA_1802.
+DR   DrugBank; DB04246; CRA_23653.
+DR   DrugBank; DB03159; CRA_8696.
+DR   DrugBank; DB04215; CRA_9076.
+DR   DrugBank; DB04563; CRA_9678.
+DR   DrugBank; DB03595; CRA_9785.
+DR   DrugBank; DB04269; Cyclotheonamide A.
+DR   DrugBank; DB06840; diethyl [(1R)-1,5-diaminopentyl]boronate.
+DR   DrugBank; DB03608; Diminazene.
+DR   DrugBank; DB12831; Gabexate.
+DR   DrugBank; DB01767; Hemi-Babim.
+DR   DrugBank; DB04442; Imino[2-(2-oxo-1,2-dihydro-3-pyridinyl)-1H-benzimidazol-5-yl]methanaminium.
+DR   DrugBank; DB07985; METHYL 4-(AMINOIMINOMETHYL)-BETA-[3- INH (AMINOIMINO)PHENYL]BENZENE PENTANOATE.
+DR   DrugBank; DB01805; Monoisopropylphosphorylserine.
+DR   DrugBank; DB04125; N-Alpha-(2-Naphthylsulfonyl)-N(3-Amidino-L-Phenylalaninyl)-4-Acetyl-Piperazine.
+DR   DrugBank; DB01745; N-Alpha-(2-Naphthylsulfonyl)-N(3-Amidino-L-Phenylalaninyl)Isopipecolinic Acid Methyl Ester.
+DR   DrugBank; DB04238; N-Alpha-(2-Naphthylsulfonyl)-N-(3-Amidino-L-Phenylalaninyl)-D-Pipecolinic Acid.
+DR   DrugBank; DB06853; N-cycloheptylglycyl-N-(4-carbamimidoylbenzyl)-L-prolinamide.
+DR   DrugBank; DB06858; N-cyclooctylglycyl-N-(4-carbamimidoylbenzyl)-L-prolinamide.
+DR   DrugBank; DB12598; Nafamostat.
+DR   DrugBank; DB01737; Nalpha-(2-Naphthylsulfonylglycyl)-3-Amidino-D,L-Phenylalanine-Isopropylester.
+DR   DrugBank; DB04325; Phenethylamine.
+DR   DrugBank; DB03976; Phosphorylisopropane.
+DR   DrugBank; DB04424; RPR128515.
+DR   DrugBank; DB02744; RPR131247.
+DR   DrugBank; DB03251; RWJ-51084.
+DR   DrugBank; DB02812; RWJ-56423.
+DR   DrugBank; DB03876; Thieno[2,3-B]Pyridine-2-Carboxamidine.
+DR   DrugBank; DB04008; Zinc;[amino-[2-[[5-[amino(azaniumylidene)methyl]benzimidazol-1-id-2-yl]methyl]benzimidazol-1-id-5-yl]methylidene]azanium.
+DR   DrugBank; DB04432; ZK-805623.
+DR   DrugBank; DB02112; Zk-806450.
+DR   DrugBank; DB03373; ZK-806711.
+DR   DrugCentral; P07477; -.
+DR   GuidetoPHARMACOLOGY; 2397; -.
+DR   MEROPS; S01.127; -.
+DR   iPTMnet; P07477; -.
+DR   PhosphoSitePlus; P07477; -.
+DR   BioMuta; PRSS1; -.
+DR   DMDM; 136408; -.
+DR   EPD; P07477; -.
+DR   jPOST; P07477; -.
+DR   MassIVE; P07477; -.
+DR   PaxDb; P07477; -.
+DR   PeptideAtlas; P07477; -.
+DR   ProteomicsDB; 52006; -.
+DR   Antibodypedia; 18375; 544 antibodies from 37 providers.
+DR   DNASU; 5644; -.
+DR   Ensembl; ENST00000311737.12; ENSP00000308720.7; ENSG00000204983.15.
+DR   Ensembl; ENST00000616256.4; ENSP00000479217.1; ENSG00000274247.4.
+DR   GeneID; 5644; -.
+DR   KEGG; hsa:5644; -.
+DR   MANE-Select; ENST00000311737.12; ENSP00000308720.7; NM_002769.5; NP_002760.1.
+DR   UCSC; uc003wak.3; human.
+DR   AGR; HGNC:9475; -.
+DR   CTD; 5644; -.
+DR   DisGeNET; 5644; -.
+DR   GeneCards; PRSS1; -.
+DR   GeneReviews; PRSS1; -.
+DR   HGNC; HGNC:9475; PRSS1.
+DR   HPA; ENSG00000204983; Tissue enriched (pancreas).
+DR   MalaCards; PRSS1; -.
+DR   MIM; 167800; phenotype.
+DR   MIM; 276000; gene.
+DR   neXtProt; NX_P07477; -.
+DR   OpenTargets; ENSG00000204983; -.
+DR   Orphanet; 676; Hereditary chronic pancreatitis.
+DR   Orphanet; 64740; NON RARE IN EUROPE: Recurrent acute pancreatitis.
+DR   PharmGKB; PA33828; -.
+DR   VEuPathDB; HostDB:ENSG00000204983; -.
+DR   eggNOG; KOG3627; Eukaryota.
+DR   GeneTree; ENSGT01050000244883; -.
+DR   InParanoid; P07477; -.
+DR   OrthoDB; 4629979at2759; -.
+DR   PhylomeDB; P07477; -.
+DR   TreeFam; TF331065; -.
+DR   PathwayCommons; P07477; -.
+DR   Reactome; R-HSA-1592389; Activation of Matrix Metalloproteinases.
+DR   Reactome; R-HSA-9758881; Uptake of dietary cobalamins into enterocytes.
+DR   SignaLink; P07477; -.
+DR   SIGNOR; P07477; -.
+DR   BioGRID-ORCS; 5644; 12 hits in 1126 CRISPR screens.
+DR   ChiTaRS; PRSS1; human.
+DR   EvolutionaryTrace; P07477; -.
+DR   GeneWiki; Trypsin_1; -.
+DR   GenomeRNAi; 5644; -.
+DR   Pharos; P07477; Tclin.
+DR   PRO; PR:P07477; -.
+DR   Proteomes; UP000291000; Chromosome 7.
+DR   RNAct; P07477; protein.
+DR   Bgee; ENSG00000204983; Expressed in body of pancreas and 91 other tissues.
+DR   ExpressionAtlas; P07477; baseline and differential.
+DR   Genevisible; P07477; HS.
+DR   GO; GO:0072562; C:blood microparticle; HDA:UniProtKB.
+DR   GO; GO:0062023; C:collagen-containing extracellular matrix; HDA:BHF-UCL.
+DR   GO; GO:0005576; C:extracellular region; TAS:Reactome.
+DR   GO; GO:0005615; C:extracellular space; IBA:GO_Central.
+DR   GO; GO:0046872; F:metal ion binding; IEA:UniProtKB-KW.
+DR   GO; GO:0004252; F:serine-type endopeptidase activity; IBA:GO_Central.
+DR   GO; GO:0007586; P:digestion; IEA:UniProtKB-KW.
+DR   GO; GO:0022617; P:extracellular matrix disassembly; TAS:Reactome.
+DR   GO; GO:0006508; P:proteolysis; IBA:GO_Central.
+DR   CDD; cd00190; Tryp_SPc; 1.
+DR   Gene3D; 2.40.10.10; Trypsin-like serine proteases; 2.
+DR   InterPro; IPR009003; Peptidase_S1_PA.
+DR   InterPro; IPR043504; Peptidase_S1_PA_chymotrypsin.
+DR   InterPro; IPR001314; Peptidase_S1A.
+DR   InterPro; IPR001254; Trypsin_dom.
+DR   InterPro; IPR018114; TRYPSIN_HIS.
+DR   InterPro; IPR033116; TRYPSIN_SER.
+DR   PANTHER; PTHR24264:SF57; TRYPSIN-1; 1.
+DR   PANTHER; PTHR24264; TRYPSIN-RELATED; 1.
+DR   Pfam; PF00089; Trypsin; 1.
+DR   PRINTS; PR00722; CHYMOTRYPSIN.
+DR   SMART; SM00020; Tryp_SPc; 1.
+DR   SUPFAM; SSF50494; Trypsin-like serine proteases; 1.
+DR   PROSITE; PS50240; TRYPSIN_DOM; 1.
+DR   PROSITE; PS00134; TRYPSIN_HIS; 1.
+DR   PROSITE; PS00135; TRYPSIN_SER; 1.
+PE   1: Evidence at protein level;
+KW   3D-structure; Calcium; Digestion; Direct protein sequencing;
+KW   Disease variant; Disulfide bond; Hydrolase; Metal-binding; Protease;
+KW   Reference proteome; Secreted; Serine protease; Signal; Sulfation; Zymogen.
+FT   SIGNAL          1..15
+FT                   /evidence="ECO:0000269|PubMed:2598466,
+FT                   ECO:0000269|PubMed:7945238"
+FT   PROPEP          16..23
+FT                   /note="Activation peptide"
+FT                   /id="PRO_0000028197"
+FT   CHAIN           24..247
+FT                   /note="Serine protease 1"
+FT                   /id="PRO_0000028198"
+FT   CHAIN           24..122
+FT                   /note="Alpha-trypsin chain 1"
+FT                   /id="PRO_0000313570"
+FT   CHAIN           123..247
+FT                   /note="Alpha-trypsin chain 2"
+FT                   /id="PRO_0000313571"
+FT   DOMAIN          24..244
+FT                   /note="Peptidase S1"
+FT                   /evidence="ECO:0000255|PROSITE-ProRule:PRU00274"
+FT   ACT_SITE        63
+FT                   /note="Charge relay system"
+FT   ACT_SITE        107
+FT                   /note="Charge relay system"
+FT   ACT_SITE        200
+FT                   /note="Charge relay system"
+FT   BINDING         75
+FT                   /ligand="Ca(2+)"
+FT                   /ligand_id="ChEBI:CHEBI:29108"
+FT   BINDING         77
+FT                   /ligand="Ca(2+)"
+FT                   /ligand_id="ChEBI:CHEBI:29108"
+FT   BINDING         80
+FT                   /ligand="Ca(2+)"
+FT                   /ligand_id="ChEBI:CHEBI:29108"
+FT   BINDING         85
+FT                   /ligand="Ca(2+)"
+FT                   /ligand_id="ChEBI:CHEBI:29108"
+FT   SITE            194
+FT                   /note="Required for specificity"
+FT                   /evidence="ECO:0000250"
+FT   MOD_RES         154
+FT                   /note="Sulfotyrosine"
+FT                   /evidence="ECO:0000305|PubMed:17087724,
+FT                   ECO:0000305|PubMed:25010489"
+FT   DISULFID        30..160
+FT   DISULFID        48..64
+FT   DISULFID        139..206
+FT   DISULFID        171..185
+FT   DISULFID        196..220
+FT   VARIANT         16
+FT                   /note="A -> V (in PCTT; disrupts signal sequence cleavage
+FT                   site; dbSNP:rs202003805)"
+FT                   /evidence="ECO:0000269|PubMed:10381903"
+FT                   /id="VAR_011693"
+FT   VARIANT         22
+FT                   /note="D -> G (in PCTT; increased rate of activation;
+FT                   dbSNP:rs397507442)"
+FT                   /evidence="ECO:0000269|PubMed:10930381"
+FT                   /id="VAR_011652"
+FT   VARIANT         23
+FT                   /note="K -> R (in PCTT; increased rate of activation;
+FT                   dbSNP:rs111033567)"
+FT                   /evidence="ECO:0000269|PubMed:10204851"
+FT                   /id="VAR_011653"
+FT   VARIANT         29
+FT                   /note="N -> I (in PCTT; dbSNP:rs111033566)"
+FT                   /evidence="ECO:0000269|PubMed:11866271,
+FT                   ECO:0000269|PubMed:15776435, ECO:0000269|PubMed:9322498,
+FT                   ECO:0000269|PubMed:9633818"
+FT                   /id="VAR_006720"
+FT   VARIANT         29
+FT                   /note="N -> T (in PCTT; dbSNP:rs111033566)"
+FT                   /evidence="ECO:0000269|PubMed:11788572"
+FT                   /id="VAR_012712"
+FT   VARIANT         54
+FT                   /note="N -> S (in PCTT; associated with Ile-29; the double
+FT                   mutant shows increased autocatalytic activation which is
+FT                   solely due to the Ile-29 mutation; dbSNP:rs144422014)"
+FT                   /evidence="ECO:0000269|PubMed:15776435"
+FT                   /id="VAR_037908"
+FT   VARIANT         79
+FT                   /note="E -> K (in PCTT; Lys-79 trypsin activates anionic
+FT                   trypsinogen PRSS2 2-fold while the common
+FT                   pancreatitis-associated mutants His-122 or Ile-29 have no
+FT                   such effect; dbSNP:rs111033564)"
+FT                   /evidence="ECO:0000269|PubMed:14695529"
+FT                   /id="VAR_037909"
+FT   VARIANT         104
+FT                   /note="L -> P (in PCTT; dbSNP:rs1554499091)"
+FT                   /evidence="ECO:0000269|PubMed:11866271"
+FT                   /id="VAR_011654"
+FT   VARIANT         116
+FT                   /note="R -> C (in PCTT; dbSNP:rs387906698)"
+FT                   /evidence="ECO:0000269|PubMed:11866271"
+FT                   /id="VAR_011655"
+FT   VARIANT         122
+FT                   /note="R -> C (in PCTT; suppresses an autocleavage site;
+FT                   dbSNP:rs111033568)"
+FT                   /evidence="ECO:0000269|PubMed:11788572"
+FT                   /id="VAR_012713"
+FT   VARIANT         122
+FT                   /note="R -> H (in PCTT; suppresses an autocleavage site
+FT                   which is probably part of a fail-safe mechanism by which
+FT                   trypsin, which is activated within the pancreas, may be
+FT                   inactivated; loss of this cleavage site would permit
+FT                   autodigestion resulting in pancreatitis;
+FT                   dbSNP:rs267606982)"
+FT                   /evidence="ECO:0000269|PubMed:10381903,
+FT                   ECO:0000269|PubMed:11073545, ECO:0000269|PubMed:11866271,
+FT                   ECO:0000269|PubMed:8841182, ECO:0000269|PubMed:9322498"
+FT                   /id="VAR_006721"
+FT   VARIANT         137
+FT                   /note="T -> M (in a colorectal cancer sample; somatic
+FT                   mutation; dbSNP:rs117497341)"
+FT                   /evidence="ECO:0000269|PubMed:16959974"
+FT                   /id="VAR_036299"
+FT   VARIANT         139
+FT                   /note="C -> F (in PCTT)"
+FT                   /evidence="ECO:0000269|PubMed:11866271"
+FT                   /id="VAR_011656"
+FT   MUTAGEN         154
+FT                   /note="Y->F: Lack of sulfation."
+FT                   /evidence="ECO:0000269|PubMed:17087724"
+FT   CONFLICT        4
+FT                   /note="L -> F (in Ref. 7; AAI28227)"
+FT                   /evidence="ECO:0000305"
+FT   STRAND          38..54
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          57..60
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   HELIX           62..64
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          70..74
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          76..80
+FT                   /evidence="ECO:0007829|PDB:7QE9"
+FT   STRAND          86..95
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   TURN            101..103
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          109..115
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          120..122
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          138..144
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          149..151
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          159..165
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   HELIX           168..174
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   TURN            176..178
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          183..187
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          192..194
+FT                   /evidence="ECO:0007829|PDB:1TRN"
+FT   STRAND          203..206
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          209..216
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          218..222
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   STRAND          227..231
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   HELIX           232..235
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+FT   HELIX           236..245
+FT                   /evidence="ECO:0007829|PDB:2RA3"
+SQ   SEQUENCE   247 AA;  26558 MW;  DD49A487B8062813 CRC64;
+     MNPLLILTFV AAALAAPFDD DDKIVGGYNC EENSVPYQVS LNSGYHFCGG SLINEQWVVS
+     AGHCYKSRIQ VRLGEHNIEV LEGNEQFINA AKIIRHPQYD RKTLNNDIML IKLSSRAVIN
+     ARVSTISLPT APPATGTKCL ISGWGNTASS GADYPDELQC LDAPVLSQAK CEASYPGKIT
+     SNMFCVGFLE GGKDSCQGDS GGPVVCNGQL QGVVSWGDGC AQKNKPGVYT KVYNYVKWIK
+     NTIAANS
+//

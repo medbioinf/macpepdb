@@ -1,9 +1,15 @@
 // std imports
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::HashMap,
+    hash::{Hash, Hasher},
+};
 
 // 3rd party imports
 use anyhow::Result;
 use postgres::Row;
+
+// internal imports
+use crate::entities::protein::Protein;
 
 #[derive(Clone)]
 pub struct Peptide {
@@ -155,6 +161,52 @@ impl Peptide {
     ///
     pub fn get_proteome_ids(&self) -> &Vec<String> {
         return &self.proteome_ids;
+    }
+
+    /// Returns the peptide metadata from the given proteins, format:
+    /// (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids)
+    ///
+    /// # Arguments
+    /// * `proteins` - The proteins
+    pub fn get_metadata_from_proteins(
+        proteins: &Vec<Protein>,
+    ) -> (bool, bool, Vec<i64>, Vec<i64>, Vec<String>) {
+        let is_swiss_prot = proteins.iter().any(|protein| protein.get_is_reviewed());
+        let is_trembl = proteins.iter().any(|protein| !protein.get_is_reviewed());
+
+        let mut taxonomy_ids: Vec<i64> = proteins
+            .iter()
+            .map(|protein| *protein.get_taxonomy_id())
+            .collect();
+
+        let mut taxonomy_counters: HashMap<i64, u64> = HashMap::new();
+        for taxonomy_id in taxonomy_ids.iter() {
+            taxonomy_counters
+                .entry(*taxonomy_id)
+                .and_modify(|counter| *counter += 1)
+                .or_insert(1);
+        }
+        let unique_taxonomy_ids: Vec<i64> = taxonomy_counters
+            .iter()
+            .filter(|(_, counter)| **counter == 1)
+            .map(|(taxonomy_id, _)| *taxonomy_id)
+            .collect();
+
+        let proteome_ids: Vec<String> = proteins
+            .iter()
+            .map(|protein| protein.get_proteome_id().to_owned())
+            .collect();
+
+        taxonomy_ids.sort();
+        taxonomy_ids.dedup();
+
+        return (
+            is_swiss_prot,
+            is_trembl,
+            taxonomy_ids,
+            unique_taxonomy_ids,
+            proteome_ids,
+        );
     }
 }
 
