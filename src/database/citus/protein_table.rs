@@ -1,8 +1,8 @@
 // 3rd party imports
 use anyhow::Result;
-use postgres::{
+use tokio_postgres::{
     types::{BorrowToSql, ToSql},
-    GenericClient, Row, RowIter,
+    GenericClient, Row, RowStream,
 };
 
 // internal imports
@@ -39,33 +39,35 @@ lazy_static! {
 pub struct ProteinTable {}
 
 impl ProteinTable {
-    pub fn insert<'a, C: GenericClient>(client: &mut C, protein: &Protein) -> Result<()> {
+    pub async fn insert<'a, C: GenericClient>(client: &C, protein: &Protein) -> Result<()> {
         let statement = format!(
             "INSERT INTO {} ({}) VALUES ({})",
             TABLE_NAME,
             INSERT_COLS,
             INSERT_PLACEHOLDERS.as_str()
         );
-        client.execute(
-            &statement,
-            &[
-                protein.get_accession(),
-                protein.get_secondary_accessions(),
-                protein.get_entry_name(),
-                protein.get_name(),
-                protein.get_genes(),
-                protein.get_taxonomy_id(),
-                protein.get_proteome_id(),
-                &protein.get_is_reviewed(),
-                protein.get_sequence(),
-                &protein.get_updated_at(),
-            ],
-        )?;
+        client
+            .execute(
+                &statement,
+                &[
+                    protein.get_accession(),
+                    protein.get_secondary_accessions(),
+                    protein.get_entry_name(),
+                    protein.get_name(),
+                    protein.get_genes(),
+                    protein.get_taxonomy_id(),
+                    protein.get_proteome_id(),
+                    &protein.get_is_reviewed(),
+                    protein.get_sequence(),
+                    &protein.get_updated_at(),
+                ],
+            )
+            .await?;
         return Ok(());
     }
 
-    pub fn update<'a, C: GenericClient>(
-        client: &mut C,
+    pub async fn update<'a, C: GenericClient>(
+        client: &C,
         old_prot: &Protein,
         updated_prot: &Protein,
     ) -> Result<()> {
@@ -76,29 +78,33 @@ impl ProteinTable {
             UPDATE_COLS_WHERE_ACCESSION_NUM.to_string()
         );
 
-        client.execute(
-            &statement,
-            &[
-                updated_prot.get_accession(),
-                updated_prot.get_secondary_accessions(),
-                updated_prot.get_entry_name(),
-                updated_prot.get_name(),
-                updated_prot.get_genes(),
-                updated_prot.get_taxonomy_id(),
-                updated_prot.get_proteome_id(),
-                &updated_prot.get_is_reviewed(),
-                updated_prot.get_sequence(),
-                &updated_prot.get_updated_at(),
-                old_prot.get_accession(),
-            ],
-        )?;
+        client
+            .execute(
+                &statement,
+                &[
+                    updated_prot.get_accession(),
+                    updated_prot.get_secondary_accessions(),
+                    updated_prot.get_entry_name(),
+                    updated_prot.get_name(),
+                    updated_prot.get_genes(),
+                    updated_prot.get_taxonomy_id(),
+                    updated_prot.get_proteome_id(),
+                    &updated_prot.get_is_reviewed(),
+                    updated_prot.get_sequence(),
+                    &updated_prot.get_updated_at(),
+                    old_prot.get_accession(),
+                ],
+            )
+            .await?;
         return Ok(());
     }
 
-    pub fn delete<'a, C: GenericClient>(client: &mut C, protein: &Protein) -> Result<()> {
+    pub async fn delete<'a, C: GenericClient>(client: &C, protein: &Protein) -> Result<()> {
         let statement = format!("DELETE FROM {} WHERE accession = $1", TABLE_NAME);
 
-        client.execute(&statement, &[protein.get_accession()])?;
+        client
+            .execute(&statement, &[protein.get_accession()])
+            .await?;
         return Ok(());
     }
 }
@@ -111,19 +117,20 @@ impl Table for ProteinTable {
 
 impl<'a, C> SelectableTableTrait<'a, C> for ProteinTable
 where
-    C: GenericClient,
+    C: GenericClient + Send + Sync,
 {
     type Parameter = (dyn ToSql + Sync);
     type Record = Row;
-    type RecordIter = RowIter<'a>;
+    type RecordIterErr = tokio_postgres::Error;
+    type RecordIter = RowStream;
     type Entity = Protein;
 
     fn select_cols() -> &'static str {
         SELECT_COLS
     }
 
-    fn raw_select_multiple<'b>(
-        client: &mut C,
+    async fn raw_select_multiple<'b>(
+        client: &C,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
@@ -133,11 +140,11 @@ where
             statement += " ";
             statement += additional;
         }
-        return Ok(client.query(&statement, params)?);
+        return Ok(client.query(&statement, params).await?);
     }
 
-    fn raw_select<'b>(
-        client: &mut C,
+    async fn raw_select<'b>(
+        client: &C,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
@@ -147,11 +154,11 @@ where
             statement += " ";
             statement += additional;
         }
-        return Ok(client.query_opt(&statement, params)?);
+        return Ok(client.query_opt(&statement, params).await?);
     }
 
-    fn select_multiple<'b>(
-        client: &mut C,
+    async fn select_multiple<'b>(
+        client: &C,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Vec<Self::Entity>> {
@@ -160,7 +167,8 @@ where
             <Self as SelectableTableTrait<C>>::select_cols(),
             additional,
             params,
-        )?;
+        )
+        .await?;
         let mut records = Vec::new();
         for row in rows {
             records.push(Self::Entity::from(row));
@@ -168,8 +176,8 @@ where
         return Ok(records);
     }
 
-    fn select<'b>(
-        client: &mut C,
+    async fn select<'b>(
+        client: &C,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Option<Self::Entity>> {
@@ -178,15 +186,16 @@ where
             <Self as SelectableTableTrait<C>>::select_cols(),
             additional,
             params,
-        )?;
+        )
+        .await?;
         if row.is_none() {
             return Ok(None);
         }
         return Ok(Some(Self::Entity::from(row.unwrap())));
     }
 
-    fn raw_stream<'b>(
-        client: &'a mut C,
+    async fn raw_stream<'b>(
+        client: &'a C,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
@@ -196,7 +205,9 @@ where
             statement += " ";
             statement += additional;
         }
-        return Ok(client.query_raw(&statement, params.iter().map(|param| param.borrow_to_sql()))?);
+        return Ok(client
+            .query_raw(&statement, params.iter().map(|param| param.borrow_to_sql()))
+            .await?);
     }
 }
 
@@ -280,38 +291,64 @@ mod tests {
         );
     }
 
-    #[test]
-    #[serial]
     /// Prepares database for testing and inserts proteins from test file.
+    /// Unfortunately you cannot call an async test from another async test. So we need outsource the implementation,
+    /// as other tests depends on it
     ///
-    fn test_insert() {
-        prepare_database_for_tests();
-        let mut client = get_client();
+    async fn test_insert_internal() {
+        let (mut client, connection) = get_client().await;
+
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        let connection_handle = tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+        prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
-            ProteinTable::insert(&mut client, &protein).unwrap();
+            ProteinTable::insert(&client, &protein).await.unwrap();
         }
         let count_statement = format!("SELECT count(*) FROM {}", TABLE_NAME);
-        let row = client.query_one(&count_statement, &[]).unwrap();
+        let row = client.query_one(&count_statement, &[]).await.unwrap();
         assert_eq!(row.get::<usize, i64>(0), EXPECTED_PROTEINS);
-        client.close().unwrap();
+        connection_handle.abort();
+        let _ = connection_handle.await;
     }
 
-    #[test]
+    #[tokio::test]
+    #[serial]
+    /// Prepares database for testing and inserts proteins from test file.
+    ///
+    async fn test_insert() {
+        test_insert_internal().await;
+    }
+
+    #[tokio::test]
     #[serial]
     /// Tests selects from database.
     ///
-    fn test_select() {
-        test_insert();
-        let mut client = get_client();
+    async fn test_select() {
+        test_insert_internal().await;
+        let (client, connection) = get_client().await;
+
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        let connection_handle = tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
 
         let row = ProteinTable::raw_select(
-            &mut client,
+            &client,
             SELECT_COLS,
             "WHERE accession = $1 ",
             &[TRYPSIN.get_accession()],
         )
+        .await
         .unwrap()
         .unwrap();
 
@@ -334,22 +371,36 @@ mod tests {
         assert_eq!(row.get::<_, bool>("is_reviewed"), TRYPSIN.get_is_reviewed());
         assert_eq!(&row.get::<_, String>("sequence"), TRYPSIN.get_sequence());
         assert_eq!(row.get::<_, i64>("updated_at"), TRYPSIN.get_updated_at());
-        client.close().unwrap();
+
+        connection_handle.abort();
+        let _ = connection_handle.await;
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_update() {
-        test_insert();
-        let mut client = get_client();
-        ProteinTable::update(&mut client, &TRYPSIN, &UPDATED_TRYPSIN).unwrap();
+    async fn test_update() {
+        test_insert_internal().await;
+        let (client, connection) = get_client().await;
+
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        let connection_handle = tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+
+        ProteinTable::update(&client, &TRYPSIN, &UPDATED_TRYPSIN)
+            .await
+            .unwrap();
 
         let row = ProteinTable::raw_select(
-            &mut client,
+            &client,
             SELECT_COLS,
             "WHERE accession = $1 ",
             &[UPDATED_TRYPSIN.get_accession()],
         )
+        .await
         .unwrap()
         .unwrap();
 
@@ -390,26 +441,38 @@ mod tests {
             row.get::<_, i64>("updated_at"),
             UPDATED_TRYPSIN.get_updated_at()
         );
-        client.close().unwrap();
+
+        connection_handle.abort();
+        let _ = connection_handle.await;
     }
 
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_delete() {
-        test_insert();
-        let mut client = get_client();
-        ProteinTable::delete(&mut client, &TRYPSIN).unwrap();
+    async fn test_delete() {
+        test_insert_internal().await;
+        let (client, connection) = get_client().await;
+
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        let connection_handle = tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+
+        ProteinTable::delete(&client, &TRYPSIN).await.unwrap();
 
         let row_opt = ProteinTable::raw_select(
-            &mut client,
+            &client,
             SELECT_COLS,
             "WHERE accession = $1 ",
             &[TRYPSIN.get_accession()],
         )
+        .await
         .unwrap();
 
         assert!(row_opt.is_none());
-
-        client.close().unwrap();
+        connection_handle.abort();
+        let _ = connection_handle.await;
     }
 }

@@ -1,6 +1,5 @@
 // 3rd party imports
 use anyhow::{anyhow, Ok, Result};
-use scylla::Session;
 use serde::{de::DeserializeOwned, ser::Serialize};
 use serde_json::{from_value as from_json_value, json, Value as JsonValue};
 
@@ -10,6 +9,7 @@ use crate::database::configuration_table::{
     JSON_KEY, MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY, MAX_PEPTIDE_LENGTH_KEY, MIN_PEPTIDE_LENGTH_KEY,
     PARTITION_LIMITS_KEY, REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY, TABLE_NAME,
 };
+use crate::database::scylla::client::GenericClient;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
 
@@ -25,8 +25,11 @@ impl Table for ConfigurationTable {
     }
 }
 
-impl ConfigurationTable {
-    async fn get_setting<T>(session: &Session, key: &str) -> Result<Option<T>>
+impl<C> ConfigurationTableTrait<C> for ConfigurationTable
+where
+    C: GenericClient + Send,
+{
+    async fn get_setting<T>(client: &C, key: &str) -> Result<Option<T>>
     where
         T: DeserializeOwned,
     {
@@ -35,7 +38,11 @@ impl ConfigurationTable {
             SCYLLA_KEYSPACE_NAME,
             Self::table_name()
         );
-        let row = session.query(statement, (key,)).await?.first_row()?;
+        let row = client
+            .get_session()
+            .query(statement, (key,))
+            .await?
+            .first_row()?;
         let (_, value) = row.into_typed::<(String, String)>()?;
 
         let mut wrapper: JsonValue = serde_json::from_str(value.as_str())?;
@@ -47,7 +54,7 @@ impl ConfigurationTable {
         Ok(config_value)
     }
 
-    async fn set_setting<T>(session: &Session, key: &str, value: &T) -> Result<()>
+    async fn set_setting<T>(client: &C, key: &str, value: &T) -> Result<()>
     where
         T: Serialize,
     {
@@ -59,12 +66,15 @@ impl ConfigurationTable {
 
         let wrapper = json!({ JSON_KEY: value });
 
-        session.query(statement, (key, wrapper.to_string())).await?;
+        client
+            .get_session()
+            .query(statement, (key, wrapper.to_string()))
+            .await?;
         Ok(())
     }
 
-    async fn select(session: &Session) -> Result<Configuration> {
-        let enzyme_name = Self::get_setting::<String>(session, ENZYME_NAME_KEY)
+    async fn select(client: &C) -> Result<Configuration> {
+        let enzyme_name = Self::get_setting::<String>(client, ENZYME_NAME_KEY)
             .await
             .map_err(|error| {
                 anyhow!(ConfigurationIncompleteError::new(ENZYME_NAME_KEY)).context(error)
@@ -72,7 +82,7 @@ impl ConfigurationTable {
             .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(ENZYME_NAME_KEY)))?;
 
         let max_number_of_missed_cleavages =
-            Self::get_setting::<i16>(session, MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY)
+            Self::get_setting::<i16>(client, MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY)
                 .await
                 .map_err(|error| {
                     anyhow!(ConfigurationIncompleteError::new(
@@ -86,14 +96,14 @@ impl ConfigurationTable {
                     ))
                 })?;
 
-        let min_peptide_length = Self::get_setting::<i16>(session, MIN_PEPTIDE_LENGTH_KEY)
+        let min_peptide_length = Self::get_setting::<i16>(client, MIN_PEPTIDE_LENGTH_KEY)
             .await
             .map_err(|error| {
                 anyhow!(ConfigurationIncompleteError::new(MIN_PEPTIDE_LENGTH_KEY)).context(error)
             })?
             .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(MIN_PEPTIDE_LENGTH_KEY)))?;
 
-        let max_peptide_length = Self::get_setting::<i16>(session, MAX_PEPTIDE_LENGTH_KEY)
+        let max_peptide_length = Self::get_setting::<i16>(client, MAX_PEPTIDE_LENGTH_KEY)
             .await
             .map_err(|error| {
                 anyhow!(ConfigurationIncompleteError::new(MAX_PEPTIDE_LENGTH_KEY)).context(error)
@@ -101,7 +111,7 @@ impl ConfigurationTable {
             .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(MAX_PEPTIDE_LENGTH_KEY)))?;
 
         let remove_peptides_containing_unknown =
-            Self::get_setting::<bool>(session, REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY)
+            Self::get_setting::<bool>(client, REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY)
                 .await
                 .map_err(|error| {
                     anyhow!(ConfigurationIncompleteError::new(
@@ -115,7 +125,7 @@ impl ConfigurationTable {
                     ))
                 })?;
 
-        let partition_limits = Self::get_setting::<Vec<i64>>(session, PARTITION_LIMITS_KEY)
+        let partition_limits = Self::get_setting::<Vec<i64>>(client, PARTITION_LIMITS_KEY)
             .await
             .map_err(|error| {
                 anyhow!(ConfigurationIncompleteError::new(PARTITION_LIMITS_KEY)).context(error)
@@ -132,44 +142,44 @@ impl ConfigurationTable {
         ))
     }
 
-    async fn insert(session: &Session, configuration: &Configuration) -> Result<()> {
+    async fn insert(client: &mut C, configuration: &Configuration) -> Result<()> {
         ConfigurationTable::set_setting::<String>(
-            &session,
+            client,
             ENZYME_NAME_KEY,
             &configuration.get_enzyme_name().to_owned(),
         )
         .await?;
 
         ConfigurationTable::set_setting::<i16>(
-            &session,
+            client,
             MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY,
             &(configuration.get_max_number_of_missed_cleavages() as i16),
         )
         .await?;
 
         ConfigurationTable::set_setting::<i16>(
-            &session,
+            client,
             MIN_PEPTIDE_LENGTH_KEY,
             &(configuration.get_min_peptide_length() as i16),
         )
         .await?;
 
         ConfigurationTable::set_setting::<i16>(
-            &session,
+            client,
             MAX_PEPTIDE_LENGTH_KEY,
             &(configuration.get_max_peptide_length() as i16),
         )
         .await?;
 
         ConfigurationTable::set_setting::<bool>(
-            &session,
+            client,
             REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY,
             &configuration.get_remove_peptides_containing_unknown(),
         )
         .await?;
 
         ConfigurationTable::set_setting::<Vec<i64>>(
-            &session,
+            client,
             PARTITION_LIMITS_KEY,
             configuration.get_partition_limits(),
         )
@@ -186,7 +196,7 @@ mod tests {
 
     // internal imports
     use super::*;
-    use crate::database::scylla::tests::{get_session, prepare_database_for_tests};
+    use crate::database::scylla::tests::{get_client, prepare_database_for_tests};
 
     const EXPECTED_ENZYME_NAME: &'static str = "Trypsin";
     const EXPECTED_MAX_MISSED_CLEAVAGES: usize = 2;
@@ -205,10 +215,11 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select_without_insert() {
-        let session = get_session().await;
-        prepare_database_for_tests(&session).await;
+        let mut client = get_client().await.unwrap();
+        prepare_database_for_tests(&client).await;
 
-        let configuration_res = ConfigurationTable::select(&session).await;
+        let configuration_res = ConfigurationTable::select(&mut client).await;
+        println!("got config res");
 
         assert!(configuration_res.is_err());
         println!("{:?}", configuration_res);
@@ -222,8 +233,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let session = get_session().await;
-        prepare_database_for_tests(&session).await;
+        let mut client = get_client().await.unwrap();
+        prepare_database_for_tests(&client).await;
 
         let configuration = Configuration::new(
             EXPECTED_ENZYME_NAME.to_owned(),
@@ -234,7 +245,7 @@ mod tests {
             EXPECTED_PARTITION_LIMITS.clone(),
         );
 
-        ConfigurationTable::insert(&session, &configuration)
+        ConfigurationTable::insert(&mut client, &configuration)
             .await
             .unwrap();
     }
@@ -244,8 +255,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select() {
-        let session = get_session().await;
-        prepare_database_for_tests(&session).await;
+        let mut client = get_client().await.unwrap();
+        prepare_database_for_tests(&client).await;
 
         let expected_configuration = Configuration::new(
             EXPECTED_ENZYME_NAME.to_owned(),
@@ -256,11 +267,11 @@ mod tests {
             EXPECTED_PARTITION_LIMITS.clone(),
         );
 
-        ConfigurationTable::insert(&session, &expected_configuration)
+        ConfigurationTable::insert(&mut client, &expected_configuration)
             .await
             .unwrap();
 
-        let actual_configuration = ConfigurationTable::select(&session).await.unwrap();
+        let actual_configuration = ConfigurationTable::select(&mut client).await.unwrap();
 
         assert_eq!(expected_configuration, actual_configuration);
     }

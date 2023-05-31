@@ -32,7 +32,7 @@ pub trait DatabaseBuild {
     /// * `show_progress` - Whether to show progress.
     /// * `verbose` - Whether to show verbose output.
     ///
-    fn build(
+    async fn build(
         &self,
         protein_file_paths: &Vec<PathBuf>,
         num_threads: usize,

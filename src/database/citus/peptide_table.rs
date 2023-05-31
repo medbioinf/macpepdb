@@ -1,8 +1,8 @@
 // 3rd party imports
 use anyhow::Result;
-use postgres::{
+use tokio_postgres::{
     types::{BorrowToSql, ToSql},
-    GenericClient, Row, RowIter,
+    GenericClient, Row, RowStream,
 };
 
 // internal imports
@@ -69,7 +69,7 @@ impl PeptideTable {
     /// * `client` - Database client or open transaction
     /// * `peptides` - Iterator over peptides to insert
     ///
-    pub fn bulk_insert<'a, C, T>(client: &mut C, peptides: T) -> Result<()>
+    pub async fn bulk_insert<'a, C, T>(client: &C, peptides: T) -> Result<()>
     where
         C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
@@ -103,7 +103,7 @@ impl PeptideTable {
             insert_values.push(peptide.get_unique_taxonomy_ids());
             insert_values.push(peptide.get_proteome_ids());
         }
-        client.execute(&statement, insert_values.as_slice())?;
+        client.execute(&statement, insert_values.as_slice()).await?;
         return Ok(());
     }
 
@@ -116,8 +116,8 @@ impl PeptideTable {
     /// * `old_protein_accession` - Old protein accession to remove
     /// * `new_protein_accession` - New protein accession to add (optional)
     ///
-    pub fn update_protein_accession<'a, C, T>(
-        client: &mut C,
+    pub async fn update_protein_accession<'a, C, T>(
+        client: &C,
         peptides: &mut T,
         old_protein_accession: &str,
         new_protein_accession: Option<&str>,
@@ -168,11 +168,11 @@ impl PeptideTable {
             update_values.push(peptide.get_mass_as_ref());
             update_values.push(peptide.get_sequence());
         }
-        client.execute(&statement, update_values.as_slice())?;
+        client.execute(&statement, update_values.as_slice()).await?;
         return Ok(());
     }
 
-    pub fn unset_is_metadata_updated<'a, C, T>(client: &mut C, peptides: &mut T) -> Result<()>
+    pub async fn unset_is_metadata_updated<'a, C, T>(client: &C, peptides: &mut T) -> Result<()>
     where
         C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
@@ -196,7 +196,7 @@ impl PeptideTable {
             update_values.push(peptide.get_sequence());
         }
 
-        client.execute(&statement, update_values.as_slice())?;
+        client.execute(&statement, update_values.as_slice()).await?;
 
         return Ok(());
     }
@@ -210,19 +210,20 @@ impl Table for PeptideTable {
 
 impl<'a, C> SelectableTableTrait<'a, C> for PeptideTable
 where
-    C: GenericClient,
+    C: GenericClient + Send + Sync,
 {
     type Parameter = (dyn ToSql + Sync);
     type Record = Row;
-    type RecordIter = RowIter<'a>;
+    type RecordIterErr = tokio_postgres::Error;
+    type RecordIter = RowStream;
     type Entity = Peptide;
 
     fn select_cols() -> &'static str {
         SELECT_COLS
     }
 
-    fn raw_select_multiple<'b>(
-        client: &mut C,
+    async fn raw_select_multiple<'b>(
+        client: &C,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
@@ -232,11 +233,11 @@ where
             statement += " ";
             statement += additional;
         }
-        return Ok(client.query(&statement, params)?);
+        return Ok(client.query(&statement, params).await?);
     }
 
-    fn raw_select<'b>(
-        client: &mut C,
+    async fn raw_select<'b>(
+        client: &C,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
@@ -246,11 +247,11 @@ where
             statement += " ";
             statement += additional;
         }
-        return Ok(client.query_opt(&statement, params)?);
+        return Ok(client.query_opt(&statement, params).await?);
     }
 
-    fn select_multiple<'b>(
-        client: &mut C,
+    async fn select_multiple<'b>(
+        client: &C,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Vec<Self::Entity>> {
@@ -259,7 +260,8 @@ where
             <Self as SelectableTableTrait<C>>::select_cols(),
             additional,
             params,
-        )?;
+        )
+        .await?;
         let mut records = Vec::new();
         for row in rows {
             records.push(Self::Entity::from(row));
@@ -267,8 +269,8 @@ where
         return Ok(records);
     }
 
-    fn select<'b>(
-        client: &mut C,
+    async fn select<'b>(
+        client: &C,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Option<Self::Entity>> {
@@ -277,15 +279,16 @@ where
             <Self as SelectableTableTrait<C>>::select_cols(),
             additional,
             params,
-        )?;
+        )
+        .await?;
         if row.is_none() {
             return Ok(None);
         }
         return Ok(Some(Self::Entity::from(row.unwrap())));
     }
 
-    fn raw_stream<'b>(
-        client: &'a mut C,
+    async fn raw_stream<'b>(
+        client: &'a C,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
@@ -295,7 +298,9 @@ where
             statement += " ";
             statement += additional;
         }
-        return Ok(client.query_raw(&statement, params.iter().map(|param| param.borrow_to_sql()))?);
+        return Ok(client
+            .query_raw(&statement, params.iter().map(|param| param.borrow_to_sql()))
+            .await?);
     }
 }
 
@@ -391,11 +396,19 @@ mod tests {
 
     /// Test inserting
     ///
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_insert() {
-        prepare_database_for_tests();
-        let mut client = get_client();
+    async fn test_insert() {
+        let (mut client, connection) = get_client().await;
+
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        let connection_handle = tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+        prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();
@@ -429,12 +442,16 @@ mod tests {
         )
         .unwrap()];
 
-        PeptideTable::bulk_insert(&mut client, &mut conflicting_peptides.iter()).unwrap();
+        PeptideTable::bulk_insert(&client, &mut conflicting_peptides.iter())
+            .await
+            .unwrap();
 
-        PeptideTable::bulk_insert(&mut client, &mut peptides.iter()).unwrap();
+        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+            .await
+            .unwrap();
 
         let count_statement = format!("SELECT count(*) FROM {}", PeptideTable::table_name());
-        let row = client.query_one(&count_statement, &[]).unwrap();
+        let row = client.query_one(&count_statement, &[]).await.unwrap();
         assert_eq!(row.get::<usize, i64>(0) as usize, EXPECTED_PEPTIDES.len());
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
@@ -448,6 +465,7 @@ mod tests {
                 conflicting_peptides[0].get_sequence(),
             ],
         )
+        .await
         .unwrap()
         .unwrap();
 
@@ -457,24 +475,33 @@ mod tests {
         assert!(associated_proteins.contains(&CONFLICTING_PEPTIDE_PROTEIN_ACCESSION.to_owned()));
 
         // Check if metadata is marked as not updated.
-        let rows =
-            PeptideTable::raw_select_multiple(&mut client, "is_metadata_updated", "", &[]).unwrap();
+        let rows = PeptideTable::raw_select_multiple(&mut client, "is_metadata_updated", "", &[])
+            .await
+            .unwrap();
 
         // Check if accession was updated and not appended for all peptides.
         for row in rows.iter() {
             assert!(!row.get::<_, bool>("is_metadata_updated"));
         }
-
-        client.close().unwrap();
+        connection_handle.abort();
+        let _ = connection_handle.await;
     }
 
     /// Tests protein accession update and disassociation (removal of protein accession from peptide)
     ///
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_accession_update() {
-        prepare_database_for_tests();
-        let mut client = get_client();
+    async fn test_accession_update() {
+        let (mut client, connection) = get_client().await;
+
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        let connection_handle = tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+        prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();
@@ -492,18 +519,23 @@ mod tests {
 
         assert_eq!(peptides.len(), EXPECTED_PEPTIDES.len());
 
-        PeptideTable::bulk_insert(&mut client, &mut peptides.iter()).unwrap();
+        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+            .await
+            .unwrap();
 
         PeptideTable::update_protein_accession(
-            &mut client,
+            &client,
             &mut peptides.iter(),
             leptin.get_accession(),
             Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION),
         )
+        .await
         .unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(&mut client, "proteins", "", &[]).unwrap();
+        let rows = PeptideTable::raw_select_multiple(&client, "proteins", "", &[])
+            .await
+            .unwrap();
 
         // Check if accession was updated and not appended for all peptides.
         for row in rows.iter() {
@@ -513,15 +545,18 @@ mod tests {
         }
 
         PeptideTable::update_protein_accession(
-            &mut client,
+            &client,
             &mut peptides.iter(),
             leptin.get_accession(),
             None,
         )
+        .await
         .unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(&mut client, "proteins", "", &[]).unwrap();
+        let rows = PeptideTable::raw_select_multiple(&client, "proteins", "", &[])
+            .await
+            .unwrap();
 
         // Check if accession was updated and not appended for all peptides.
         for row in rows.iter() {
@@ -529,17 +564,25 @@ mod tests {
             assert_eq!(protein_accessions.len(), 1);
             assert_eq!(protein_accessions[0], CONFLICTING_PEPTIDE_PROTEIN_ACCESSION);
         }
-
-        client.close().unwrap();
+        connection_handle.abort();
+        let _ = connection_handle.await;
     }
 
     /// Test update flagging peptides for metadata update
     ///
-    #[test]
+    #[tokio::test]
     #[serial]
-    fn test_flagging_for_metadata_update() {
-        prepare_database_for_tests();
-        let mut client = get_client();
+    async fn test_flagging_for_metadata_update() {
+        let (mut client, connection) = get_client().await;
+
+        // The connection object performs the actual communication with the database,
+        // so spawn it off to run on its own.
+        let connection_handle = tokio::spawn(async move {
+            if let Err(e) = connection.await {
+                eprintln!("connection error: {}", e);
+            }
+        });
+        prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();
@@ -556,11 +599,12 @@ mod tests {
         .unwrap();
 
         PeptideTable::update_protein_accession(
-            &mut client,
+            &client,
             &mut peptides.iter(),
             leptin.get_accession(),
             Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION),
         )
+        .await
         .unwrap();
 
         let statement = format!(
@@ -568,24 +612,30 @@ mod tests {
             PeptideTable::table_name()
         );
 
-        client.execute(&statement, &[]).unwrap();
+        client.execute(&statement, &[]).await.unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows =
-            PeptideTable::raw_select_multiple(&mut client, "is_metadata_updated", "", &[]).unwrap();
+        let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
+            .await
+            .unwrap();
 
         for row in rows.iter() {
             assert!(row.get::<_, bool>("is_metadata_updated"));
         }
 
-        PeptideTable::unset_is_metadata_updated(&mut client, &mut peptides.iter()).unwrap();
+        PeptideTable::unset_is_metadata_updated(&client, &mut peptides.iter())
+            .await
+            .unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows =
-            PeptideTable::raw_select_multiple(&mut client, "is_metadata_updated", "", &[]).unwrap();
+        let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
+            .await
+            .unwrap();
 
         for row in rows.iter() {
             assert!(!row.get::<_, bool>("is_metadata_updated"));
         }
+        connection_handle.abort();
+        let _ = connection_handle.await;
     }
 }
