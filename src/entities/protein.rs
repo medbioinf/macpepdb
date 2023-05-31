@@ -1,5 +1,6 @@
 // 3rd party imports
 use postgres::Row;
+use scylla::frame::response::result::Row as ScyllaRow;
 
 #[derive(Clone)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
@@ -140,6 +141,35 @@ impl From<Row> for Protein {
             is_reviewed: row.get("is_reviewed"),
             sequence: row.get("sequence"),
             updated_at: row.get("updated_at"),
+        }
+    }
+}
+
+impl From<ScyllaRow> for Protein {
+    fn from(row: ScyllaRow) -> Self {
+        Protein {
+            accession: row.columns[0].unwrap().into_string().unwrap(),
+            secondary_accessions: row.columns[1]
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.into_string().unwrap())
+                .collect(),
+            entry_name: row.columns[2].unwrap().into_string().unwrap(),
+            name: row.columns[3].unwrap().into_string().unwrap(),
+            genes: row.columns[4]
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.into_string().unwrap())
+                .collect(),
+            taxonomy_id: row.columns[5].unwrap().as_bigint().unwrap(),
+            proteome_id: row.columns[6].unwrap().into_string().unwrap(),
+            is_reviewed: row.columns[7].unwrap().as_boolean().unwrap(),
+            sequence: row.columns[8].unwrap().into_string().unwrap(),
+            updated_at: row.columns[9].unwrap().as_bigint().unwrap(),
         }
     }
 }
