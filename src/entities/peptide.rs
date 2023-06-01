@@ -6,6 +6,7 @@ use std::{
 
 // 3rd party imports
 use anyhow::Result;
+use scylla::frame::response::result::Row as ScyllaRow;
 use tokio_postgres::Row;
 
 // internal imports
@@ -238,6 +239,116 @@ impl From<Row> for Peptide {
             taxonomy_ids: row.get("taxonomy_ids"),
             unique_taxonomy_ids: row.get("unique_taxonomy_ids"),
             proteome_ids: row.get("proteome_ids"),
+        }
+    }
+}
+
+impl From<ScyllaRow> for Peptide {
+    fn from(row: ScyllaRow) -> Self {
+        Self {
+            partition: row
+                .columns
+                .get(0)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_bigint()
+                .unwrap(),
+            mass: row
+                .columns
+                .get(1)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_bigint()
+                .unwrap(),
+            sequence: row
+                .columns
+                .get(2)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            missed_cleavages: row
+                .columns
+                .get(3)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_smallint()
+                .unwrap(),
+            aa_counts: row
+                .columns
+                .get(4)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.as_smallint().unwrap().to_owned())
+                .collect(),
+            proteins: row
+                .columns
+                .get(5)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
+                .collect(),
+            is_swiss_prot: row
+                .columns
+                .get(6)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_boolean()
+                .unwrap(),
+            is_trembl: row
+                .columns
+                .get(7)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_boolean()
+                .unwrap(),
+            taxonomy_ids: row
+                .columns
+                .get(8)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
+                .collect(),
+            unique_taxonomy_ids: row
+                .columns
+                .get(9)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
+                .collect(),
+            proteome_ids: row
+                .columns
+                .get(10)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
+                .collect(),
         }
     }
 }
