@@ -58,7 +58,7 @@ impl PeptideTable {
         C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
-        // ToDo: Check that this upsert actually adds to the proteins set
+        // Update has upsert functionality in Scylla. protein accessions are added to the set (see UPDATE_SET_PLACEHOLDERS)
         let statement = format!(
             "UPDATE {}.{} SET {} WHERE partition = ? and mass = ? and sequence = ?",
             SCYLLA_KEYSPACE_NAME,
