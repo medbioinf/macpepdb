@@ -41,8 +41,8 @@ const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides 
         length smallint,
         is_swiss_prot boolean,
         is_trembl boolean,
-        taxonomy_ids set<int>,
-        unique_taxonomy_ids set<int>,
+        taxonomy_ids set<bigint>,
+        unique_taxonomy_ids set<bigint>,
         proteome_ids set<text>,
         is_metadata_updated boolean,
         PRIMARY KEY (partition, mass, sequence)
