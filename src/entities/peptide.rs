@@ -6,7 +6,7 @@ use std::{
 
 // 3rd party imports
 use anyhow::Result;
-use postgres::Row;
+use tokio_postgres::Row;
 
 // internal imports
 use crate::entities::protein::Protein;

@@ -8,25 +8,30 @@ pub const SCYLLA_KEYSPACE_NAME: &str = "macpep";
 
 #[cfg(test)]
 mod tests {
+
+    // 3rd party imports
+    use anyhow::Result;
+
+    // internal imports
+    use crate::database::scylla::client::{Client, GenericClient};
     use crate::database::scylla::migrations::{DROP_KEYSPACE, UP};
-    use scylla::{transport::session::Session, SessionBuilder};
 
     pub const DATABASE_URL: &str = "127.0.0.1:9042";
     // let uri = env::var("SCYLLA_URI").unwrap_or_else(|_| DATABASE_URL.to_string());
-    pub async fn get_session() -> Session {
-        return SessionBuilder::new()
-            .known_node(DATABASE_URL)
-            .build()
-            .await
-            .unwrap();
+    pub async fn get_client() -> Result<Client> {
+        Client::new(DATABASE_URL).await
     }
 
-    pub async fn prepare_database_for_tests(session: &Session) {
+    pub async fn prepare_database_for_tests(client: &Client) {
         // Dropping a keyspace automatically drops all contained tables
-        session.query(DROP_KEYSPACE, &[]).await.unwrap();
+        client
+            .get_session()
+            .query(DROP_KEYSPACE, &[])
+            .await
+            .unwrap();
 
         for statement in UP {
-            session.query(statement, &[]).await.unwrap();
+            client.get_session().query(statement, &[]).await.unwrap();
         }
     }
 }
