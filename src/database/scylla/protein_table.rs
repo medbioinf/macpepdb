@@ -6,6 +6,7 @@ use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::protein::Protein;
 
+use super::client::GenericClient;
 use super::SCYLLA_KEYSPACE_NAME;
 
 const TABLE_NAME: &'static str = "proteins";
@@ -35,7 +36,7 @@ lazy_static! {
 pub struct ProteinTable {}
 
 impl ProteinTable {
-    pub async fn insert<'a>(client: &Session, protein: &Protein) -> Result<()> {
+    pub async fn insert<'a, C: GenericClient>(client: &C, protein: &Protein) -> Result<()> {
         let statement = format!(
             "INSERT INTO {}.{} ({}) VALUES ({})",
             SCYLLA_KEYSPACE_NAME,
@@ -44,6 +45,7 @@ impl ProteinTable {
             INSERT_PLACEHOLDERS.as_str()
         );
         client
+            .get_session()
             .query(
                 statement,
                 (
@@ -63,8 +65,8 @@ impl ProteinTable {
         return Ok(());
     }
 
-    pub async fn update<'a>(
-        client: &Session,
+    pub async fn update<'a, C: GenericClient>(
+        client: &C,
         old_prot: &Protein,
         updated_prot: &Protein,
     ) -> Result<()> {
@@ -76,6 +78,7 @@ impl ProteinTable {
         );
 
         client
+            .get_session()
             .query(
                 statement,
                 (
@@ -96,13 +99,16 @@ impl ProteinTable {
         return Ok(());
     }
 
-    pub async fn delete<'a>(client: &Session, protein: &Protein) -> Result<()> {
+    pub async fn delete<'a, C: GenericClient>(client: &C, protein: &Protein) -> Result<()> {
         let statement = format!(
             "DELETE FROM {}.{} WHERE accession = ?",
             SCYLLA_KEYSPACE_NAME, TABLE_NAME
         );
 
-        client.query(statement, (protein.get_accession(),)).await?;
+        client
+            .get_session()
+            .query(statement, (protein.get_accession(),))
+            .await?;
         return Ok(());
     }
 }
@@ -215,7 +221,8 @@ mod tests {
 
     // internal imports
     use super::*;
-    use crate::database::scylla::tests::{get_session, prepare_database_for_tests};
+    use crate::database::scylla::client::{Client, GenericClient};
+    use crate::database::scylla::tests::{prepare_database_for_tests, DATABASE_URL};
     use crate::io::uniprot_text::reader::Reader;
 
     const EXPECTED_PROTEINS: i64 = 3;
@@ -289,18 +296,19 @@ mod tests {
     /// Prepares database for testing and inserts proteins from test file.
     ///
     async fn test_insert() {
-        let session = get_session().await;
-        prepare_database_for_tests(&session).await;
+        let client = Client::new(DATABASE_URL).await.unwrap();
+        prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
-            ProteinTable::insert(&session, &protein).await.unwrap();
+            ProteinTable::insert(&client, &protein).await.unwrap();
         }
         let count_statement = format!(
             "SELECT count(*) FROM {}.{}",
             SCYLLA_KEYSPACE_NAME, TABLE_NAME
         );
-        let row = session
+        let row = client
+            .get_session()
             .query(count_statement, &[])
             .await
             .unwrap()
