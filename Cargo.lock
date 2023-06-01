@@ -879,12 +879,12 @@ dependencies = [
  "env_logger",
  "fallible-iterator",
  "fancy-regex",
+ "futures",
  "hdf5",
  "kdam",
  "lazy_static",
  "log",
  "murmur3",
- "postgres",
  "refinery",
  "scylla",
  "serde",
@@ -892,6 +892,7 @@ dependencies = [
  "serial_test",
  "sysinfo",
  "tokio",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -1140,20 +1141,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ac9a59f73473f1b8d852421e59e64809f025994837ef743615c6d0c5b305160"
 
 [[package]]
-name = "postgres"
-version = "0.19.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0bed5017bc2ff49649c0075d0d7a9d676933c1292480c1d137776fb205b5cd18"
-dependencies = [
- "bytes",
- "fallible-iterator",
- "futures-util",
- "log",
- "tokio",
- "tokio-postgres",
-]
-
-[[package]]
 name = "postgres-protocol"
 version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1343,12 +1330,13 @@ dependencies = [
  "cfg-if",
  "lazy_static",
  "log",
- "postgres",
  "regex",
  "serde",
  "siphasher",
  "thiserror",
  "time 0.3.20",
+ "tokio",
+ "tokio-postgres",
  "toml",
  "url",
  "walkdir",
@@ -1561,6 +1549,15 @@ dependencies = [
  "cfg-if",
  "cpufeatures",
  "digest",
+]
+
+[[package]]
+name = "signal-hook-registry"
+version = "1.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8229b473baa5980ac72ef434c4415e70c4b5e71b423043adb4ba059f89c99a1"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -1802,7 +1799,10 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
+ "num_cpus",
+ "parking_lot 0.12.1",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2 0.4.9",
  "tokio-macros",
  "windows-sys 0.48.0",

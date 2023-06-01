@@ -1,7 +1,11 @@
-use scylla::transport::session::Session;
+// 3rd party imports
+use anyhow::Result;
+use scylla::{transport::session::Session, SessionBuilder};
 
 pub trait GenericClient {
-    fn new(session: Session) -> Self;
+    async fn new(database_url: &str) -> Result<Self>
+    where
+        Self: Sized;
     fn get_session(&self) -> &Session;
 }
 
@@ -10,8 +14,16 @@ pub struct Client {
 }
 
 impl GenericClient for Client {
-    fn new(session: Session) -> Self {
-        Self { session }
+    async fn new(database_url: &str) -> Result<Self>
+    where
+        Self: Sized,
+    {
+        Ok(Self {
+            session: SessionBuilder::new()
+                .known_node(database_url)
+                .build()
+                .await?,
+        })
     }
 
     fn get_session(&self) -> &Session {

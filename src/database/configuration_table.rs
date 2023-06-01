@@ -48,7 +48,7 @@ pub trait ConfigurationTable<C>: Table {
     /// * `client` - A database client
     /// * `key` - The key to look up
     ///
-    fn get_setting<T>(client: &mut C, key: &str) -> Result<Option<T>>
+    async fn get_setting<T>(client: &C, key: &str) -> Result<Option<T>>
     where
         T: DeserializeOwned;
 
@@ -59,16 +59,16 @@ pub trait ConfigurationTable<C>: Table {
     /// * `key` - The key to look up
     /// * `value` - The value to save
     ///
-    fn set_setting<T>(client: &mut C, key: &str, value: &T) -> Result<()>
+    async fn set_setting<T>(client: &C, key: &str, value: &T) -> Result<()>
     where
-        T: Serialize;
+        T: Serialize + Sync;
 
     /// Selects the configuration from the database.
     ///
     /// # Arguments
     /// * `client` - A database client
     ///
-    fn select(client: &mut C) -> Result<Configuration>;
+    async fn select(client: &C) -> Result<Configuration>;
 
     /// Inserts the configuration into the database.
     ///
@@ -76,5 +76,5 @@ pub trait ConfigurationTable<C>: Table {
     /// * `client` - A database client
     /// * `configuration` - The configuration to insert
     ///
-    fn insert(client: &mut C, configuration: &Configuration) -> Result<()>;
+    async fn insert(client: &mut C, configuration: &Configuration) -> Result<()>;
 }

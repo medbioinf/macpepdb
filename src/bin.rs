@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+// 3rd party imports
 use clap::{Parser, Subcommand};
 use log::info;
 use macpepdb::{
@@ -32,7 +33,8 @@ struct Cli {
     command: Commands,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     env_logger::init();
     info!("Welcome to MaCPepDB!");
 
@@ -53,7 +55,7 @@ fn main() {
             verbose,
         } => {
             let builder = DatabaseBuild::new(database_url);
-            builder
+            match builder
                 .build(
                     &protein_file_paths,
                     num_threads,
@@ -64,7 +66,11 @@ fn main() {
                     show_progress,
                     verbose,
                 )
-                .unwrap();
+                .await
+            {
+                Ok(_) => info!("Database build completed successfully!"),
+                Err(e) => info!("Database build failed: {}", e),
+            }
         }
     }
 }

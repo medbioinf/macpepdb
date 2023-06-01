@@ -16,7 +16,8 @@ mod tests {
     use std::thread::sleep;
 
     // 3rd party imports
-    use postgres::{Client, NoTls};
+    use tokio_postgres::tls::NoTlsStream;
+    use tokio_postgres::{Client, Connection, NoTls, Socket};
 
     // internal imports
     use super::*;
@@ -24,8 +25,8 @@ mod tests {
 
     pub const DATABASE_URL: &str = "postgresql://postgres:developer@localhost:5433/macpepdb_dev";
 
-    pub fn get_client() -> Client {
-        return Client::connect(DATABASE_URL, NoTls).unwrap();
+    pub async fn get_client() -> (Client, Connection<Socket, NoTlsStream>) {
+        tokio_postgres::connect(DATABASE_URL, NoTls).await.unwrap()
     }
 
     /// Clear the database of all tables. Use it before each test.
@@ -33,16 +34,16 @@ mod tests {
     /// # Arguments
     /// `client` - The client to use to connect to the database.
     ///
-    pub fn prepare_database_for_tests() {
-        let mut client = get_client();
-        let mut transaction = client.transaction().unwrap();
+    pub async fn prepare_database_for_tests(client: &mut Client) {
+        let transaction = client.transaction().await.unwrap();
         let row = transaction.query_one(
             "SELECT EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename  = 'refinery_schema_history');", 
             &[]
-        ).unwrap();
+        ).await.unwrap();
         if row.get::<_, bool>(0) {
             transaction
                 .execute("DELETE FROM refinery_schema_history", &[])
+                .await
                 .unwrap();
         }
         for table in [
@@ -52,8 +53,9 @@ mod tests {
         ]
         .iter()
         {
-            let drop_table_res =
-                transaction.execute(&format!("DROP TABLE IF EXISTS {}", table), &[]);
+            let drop_table_res = transaction
+                .execute(&format!("DROP TABLE IF EXISTS {}", table), &[])
+                .await;
             assert!(
                 drop_table_res.is_ok(),
                 "Failed to drop table: {:?}",
@@ -61,14 +63,13 @@ mod tests {
             );
         }
 
-        transaction.commit().unwrap();
+        transaction.commit().await.unwrap();
         sleep(std::time::Duration::from_secs(5)); // Wait for the database to finish dropping the tables.
-        let migration_result = embedded::migrations::runner().run(&mut client);
+        let migration_result = embedded::migrations::runner().run_async(client).await;
         assert!(
             migration_result.is_ok(),
             "Failed to run migrations: {:?}",
             migration_result
         );
-        client.close().unwrap();
     }
 }

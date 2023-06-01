@@ -1,5 +1,5 @@
 // 3rd party imports
-use postgres::Row;
+use tokio_postgres::Row;
 
 #[derive(Clone)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
