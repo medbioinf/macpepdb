@@ -24,7 +24,7 @@ const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.proteins 
         entry_name text,
         name text,
         genes list<text>,
-        taxonomy_id int,
+        taxonomy_id bigint,
         proteome_id text,
         is_reviewed boolean,
         sequence text,

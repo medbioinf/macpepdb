@@ -1,7 +1,8 @@
 // 3rd party imports
+use scylla::frame::response::result::Row as ScyllaRow;
 use tokio_postgres::Row;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
 ///
 pub struct Protein {
@@ -140,6 +141,99 @@ impl From<Row> for Protein {
             is_reviewed: row.get("is_reviewed"),
             sequence: row.get("sequence"),
             updated_at: row.get("updated_at"),
+        }
+    }
+}
+
+impl From<ScyllaRow> for Protein {
+    fn from(row: ScyllaRow) -> Self {
+        Protein {
+            accession: row
+                .columns
+                .get(0)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            secondary_accessions: row
+                .columns
+                .get(1)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
+                .collect(),
+            entry_name: row
+                .columns
+                .get(2)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            name: row
+                .columns
+                .get(3)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            genes: row
+                .columns
+                .get(4)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_list()
+                .unwrap()
+                .into_iter()
+                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
+                .collect(),
+            taxonomy_id: row
+                .columns
+                .get(5)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_bigint()
+                .unwrap(),
+            proteome_id: row
+                .columns
+                .get(6)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            is_reviewed: row
+                .columns
+                .get(7)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_boolean()
+                .unwrap(),
+            sequence: row
+                .columns
+                .get(8)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            updated_at: row
+                .columns
+                .get(9)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_bigint()
+                .unwrap(),
         }
     }
 }

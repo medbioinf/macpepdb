@@ -13,7 +13,7 @@ use crate::database::scylla::client::GenericClient;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
 
-pub const SCYLLA_KEYSPACE_NAME: &str = "macpep";
+use super::SCYLLA_KEYSPACE_NAME;
 
 pub struct ConfigurationTable {}
 

@@ -2,6 +2,9 @@
 pub mod client;
 pub mod configuration_table;
 pub mod migrations;
+pub mod protein_table;
+
+pub const SCYLLA_KEYSPACE_NAME: &str = "macpep";
 
 #[cfg(test)]
 mod tests {
