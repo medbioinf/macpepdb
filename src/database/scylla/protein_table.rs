@@ -1,5 +1,9 @@
 use anyhow::Result;
-use scylla::Session;
+use scylla::batch::{Batch, BatchStatement};
+use scylla::frame::response::result::{CqlValue, Row};
+use scylla::transport::errors::QueryError;
+use scylla::transport::iterator::RowIterator;
+use scylla::transport::query_result::FirstRowError::RowsEmpty;
 
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
@@ -16,19 +20,20 @@ const SELECT_COLS: &'static str = "accession, secondary_accessions, entry_name, 
 
 const INSERT_COLS: &'static str = SELECT_COLS;
 
-const UPDATE_COLS: &'static str = SELECT_COLS;
+const UPDATE_COLS: &'static str = "secondary_accessions, entry_name, name, \
+    genes, taxonomy_id, proteome_id, is_reviewed, sequence, updated_at";
 
 lazy_static! {
     static ref INSERT_PLACEHOLDERS: String = INSERT_COLS
         .split(", ",)
         .enumerate()
-        .map(|(i, _)| "?")
+        .map(|(_, _)| "?")
         .collect::<Vec<&str>>()
         .join(", ");
     static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS
         .split(", ",)
         .enumerate()
-        .map(|(i, col)| format!("{} = ?", col))
+        .map(|(_, col)| format!("{} = ?", col))
         .collect::<Vec<String>>()
         .join(", ");
 }
@@ -70,32 +75,45 @@ impl ProteinTable {
         old_prot: &Protein,
         updated_prot: &Protein,
     ) -> Result<()> {
-        let statement = format!(
-            "UPDATE {}.{} SET {} WHERE accession = ?",
+        let mut batch: Batch = Batch::default();
+
+        let delete_statement = format!(
+            "DELETE FROM {}.{} WHERE accession = ?",
+            SCYLLA_KEYSPACE_NAME, TABLE_NAME
+        );
+        let insert_statement = format!(
+            "INSERT INTO {}.{} ({}) VALUES ({})",
             SCYLLA_KEYSPACE_NAME,
             TABLE_NAME,
-            UPDATE_SET_PLACEHOLDER.as_str(),
+            INSERT_COLS,
+            INSERT_PLACEHOLDERS.as_str()
         );
+
+        batch.append_statement(delete_statement.as_str());
+        batch.append_statement(insert_statement.as_str());
 
         client
             .get_session()
-            .query(
-                statement,
+            .batch(
+                &batch,
                 (
-                    updated_prot.get_accession(),
-                    updated_prot.get_secondary_accessions(),
-                    updated_prot.get_entry_name(),
-                    updated_prot.get_name(),
-                    updated_prot.get_genes(),
-                    updated_prot.get_taxonomy_id(),
-                    updated_prot.get_proteome_id(),
-                    &updated_prot.get_is_reviewed(),
-                    updated_prot.get_sequence(),
-                    &updated_prot.get_updated_at(),
-                    old_prot.get_accession(),
+                    (old_prot.get_accession(),),
+                    (
+                        updated_prot.get_accession(),
+                        updated_prot.get_secondary_accessions(),
+                        updated_prot.get_entry_name(),
+                        updated_prot.get_name(),
+                        updated_prot.get_genes(),
+                        updated_prot.get_taxonomy_id(),
+                        updated_prot.get_proteome_id(),
+                        &updated_prot.get_is_reviewed(),
+                        updated_prot.get_sequence(),
+                        &updated_prot.get_updated_at(),
+                    ),
                 ),
             )
             .await?;
+
         return Ok(());
     }
 
@@ -109,6 +127,7 @@ impl ProteinTable {
             .get_session()
             .query(statement, (protein.get_accession(),))
             .await?;
+
         return Ok(());
     }
 }
@@ -119,110 +138,136 @@ impl Table for ProteinTable {
     }
 }
 
-// impl<'a, C> SelectableTableTrait<'a, C> for ProteinTable
-// where
-//     C: GenericClient,
-// {
-//     type Parameter = (dyn ToSql + Sync);
-//     type Record = Row;
-//     type RecordIter = RowIter<'a>;
-//     type Entity = Protein;
+impl<'a, C> SelectableTableTrait<'a, C> for ProteinTable
+where
+    C: GenericClient + Send + Sync,
+{
+    type Parameter = CqlValue;
+    type Record = Row;
+    type RecordIter = RowIterator;
+    type RecordIterErr = QueryError;
+    type Entity = Protein;
 
-//     fn select_cols() -> &'static str {
-//         SELECT_COLS
-//     }
+    fn select_cols() -> &'static str {
+        SELECT_COLS
+    }
 
-//     fn raw_select_multiple<'b>(
-//         client: &mut C,
-//         cols: &str,
-//         additional: &str,
-//         params: &[&'b Self::Parameter],
-//     ) -> Result<Vec<Self::Record>> {
-//         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
-//         if additional.len() > 0 {
-//             statement += " ";
-//             statement += additional;
-//         }
-//         return Ok(client.query(&statement, params)?);
-//     }
+    async fn raw_select_multiple<'b>(
+        client: &C,
+        cols: &str,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Vec<Self::Record>> {
+        let session = client.get_session();
+        let mut statement = format!(
+            "SELECT {} FROM {}.{}",
+            cols,
+            SCYLLA_KEYSPACE_NAME,
+            Self::table_name(),
+        );
+        if additional.len() > 0 {
+            statement += " ";
+            statement += additional;
+        }
+        return Ok(session.query(statement, params).await?.rows()?);
+    }
 
-//     fn raw_select<'b>(
-//         client: &mut C,
-//         cols: &str,
-//         additional: &str,
-//         params: &[&'b Self::Parameter],
-//     ) -> Result<Option<Self::Record>> {
-//         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
-//         if additional.len() > 0 {
-//             statement += " ";
-//             statement += additional;
-//         }
-//         return Ok(client.query_opt(&statement, params)?);
-//     }
+    async fn raw_select<'b>(
+        client: &C,
+        cols: &str,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Option<Self::Record>> {
+        let session = client.get_session();
+        let mut statement = format!(
+            "SELECT {} FROM {}.{}",
+            cols,
+            SCYLLA_KEYSPACE_NAME,
+            Self::table_name(),
+        );
+        if additional.len() > 0 {
+            statement += " ";
+            statement += additional;
+        }
+        return Ok(Some(session.query(statement, params).await?.first_row()?));
+    }
 
-//     fn select_multiple<'b>(
-//         client: &mut C,
-//         additional: &str,
-//         params: &[&'b Self::Parameter],
-//     ) -> Result<Vec<Self::Entity>> {
-//         let rows = Self::raw_select_multiple(
-//             client,
-//             <Self as SelectableTableTrait<C>>::select_cols(),
-//             additional,
-//             params,
-//         )?;
-//         let mut records = Vec::new();
-//         for row in rows {
-//             records.push(Self::Entity::from(row));
-//         }
-//         return Ok(records);
-//     }
+    async fn select_multiple<'b>(
+        client: &C,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Vec<Self::Entity>> {
+        let rows: Vec<Row> = Self::raw_select_multiple(
+            client,
+            <Self as SelectableTableTrait<C>>::select_cols(),
+            additional,
+            params,
+        )
+        .await?;
+        let mut records = Vec::new();
+        for row in rows {
+            records.push(Self::Entity::from(row));
+        }
+        return Ok(records);
+    }
 
-//     fn select<'b>(
-//         client: &mut C,
-//         additional: &str,
-//         params: &[&'b Self::Parameter],
-//     ) -> Result<Option<Self::Entity>> {
-//         let row = Self::raw_select(
-//             client,
-//             <Self as SelectableTableTrait<C>>::select_cols(),
-//             additional,
-//             params,
-//         )?;
-//         if row.is_none() {
-//             return Ok(None);
-//         }
-//         return Ok(Some(Self::Entity::from(row.unwrap())));
-//     }
+    async fn select<'b>(
+        client: &C,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Option<Self::Entity>> {
+        let row = Self::raw_select(
+            client,
+            <Self as SelectableTableTrait<C>>::select_cols(),
+            additional,
+            params,
+        )
+        .await?;
+        if row.is_none() {
+            return Ok(None);
+        }
+        return Ok(Some(Self::Entity::from(row.unwrap())));
+    }
 
-//     fn raw_stream<'b>(
-//         client: &'a mut C,
-//         cols: &str,
-//         additional: &str,
-//         params: &[&'b Self::Parameter],
-//     ) -> Result<Self::RecordIter> {
-//         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
-//         if additional.len() > 0 {
-//             statement += " ";
-//             statement += additional;
-//         }
-//         return Ok(client.query_raw(&statement, params.iter().map(|param| param.borrow_to_sql()))?);
-//     }
-// }
+    async fn raw_stream<'b>(
+        client: &'a C,
+        cols: &str,
+        additional: &str,
+        params: &[&'b Self::Parameter],
+    ) -> Result<Self::RecordIter> {
+        let session = client.get_session();
+        let mut statement = format!(
+            "SELECT {} FROM {}.{}",
+            cols,
+            SCYLLA_KEYSPACE_NAME,
+            Self::table_name()
+        );
+        if additional.len() > 0 {
+            statement += " ";
+            statement += additional;
+        }
+
+        return Ok(session.query_iter(statement, params).await?);
+    }
+}
 
 #[cfg(test)]
 mod tests {
     // std imports
     use std::path::Path;
 
+    use anyhow::__private::kind::TraitKind;
     // external imports
     use fallible_iterator::FallibleIterator;
+    use scylla::frame::request::Query;
+    use scylla::transport::errors::DbError;
+    use scylla::transport::query_result::FirstRowError;
     use serial_test::serial;
 
     // internal imports
     use super::*;
     use crate::database::scylla::client::{Client, GenericClient};
-    use crate::database::scylla::tests::{prepare_database_for_tests, DATABASE_URL};
+    use crate::database::scylla::tests::{get_client, prepare_database_for_tests, DATABASE_URL};
     use crate::io::uniprot_text::reader::Reader;
 
     const EXPECTED_PROTEINS: i64 = 3;
@@ -296,7 +341,7 @@ mod tests {
     /// Prepares database for testing and inserts proteins from test file.
     ///
     async fn test_insert() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = get_client().await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -327,118 +372,76 @@ mod tests {
         assert_eq!(count, EXPECTED_PROTEINS);
     }
 
-    // #[test]
-    // #[serial]
-    // /// Tests selects from database.
-    // ///
-    // fn test_select() {
-    //     test_insert();
-    //     let mut client = get_client();
+    #[tokio::test]
+    #[serial]
+    /// Tests selects from database.
+    ///
+    async fn test_select() {
+        let mut client = get_client().await.unwrap();
+        prepare_database_for_tests(&client).await;
 
-    //     let row = ProteinTable::raw_select(
-    //         &mut client,
-    //         SELECT_COLS,
-    //         "WHERE accession = $1 ",
-    //         &[TRYPSIN.get_accession()],
-    //     )
-    //     .unwrap()
-    //     .unwrap();
+        let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
+        while let Some(protein) = reader.next().unwrap() {
+            ProteinTable::insert(&client, &protein).await.unwrap();
+        }
 
-    //     assert_eq!(&row.get::<_, String>("accession"), TRYPSIN.get_accession());
-    //     assert_eq!(
-    //         &row.get::<_, Vec<String>>("secondary_accessions"),
-    //         TRYPSIN.get_secondary_accessions()
-    //     );
-    //     assert_eq!(
-    //         &row.get::<_, String>("entry_name"),
-    //         TRYPSIN.get_entry_name()
-    //     );
-    //     assert_eq!(&row.get::<_, String>("name"), TRYPSIN.get_name());
-    //     assert_eq!(&row.get::<_, Vec<String>>("genes"), TRYPSIN.get_genes());
-    //     assert_eq!(&row.get::<_, i64>("taxonomy_id"), TRYPSIN.get_taxonomy_id());
-    //     assert_eq!(
-    //         &row.get::<_, String>("proteome_id"),
-    //         TRYPSIN.get_proteome_id()
-    //     );
-    //     assert_eq!(row.get::<_, bool>("is_reviewed"), TRYPSIN.get_is_reviewed());
-    //     assert_eq!(&row.get::<_, String>("sequence"), TRYPSIN.get_sequence());
-    //     assert_eq!(row.get::<_, i64>("updated_at"), TRYPSIN.get_updated_at());
-    //     client.close().unwrap();
-    // }
+        let protein = ProteinTable::select(
+            &mut client,
+            "WHERE accession = ? ",
+            &[&CqlValue::Text(TRYPSIN.get_accession().to_owned())],
+        )
+        .await
+        .unwrap()
+        .unwrap();
 
-    // #[test]
-    // #[serial]
-    // fn test_update() {
-    //     test_insert();
-    //     let mut client = get_client();
-    //     ProteinTable::update(&mut client, &TRYPSIN, &UPDATED_TRYPSIN).unwrap();
+        assert_eq!(protein, TRYPSIN.to_owned());
+    }
 
-    //     let row = ProteinTable::raw_select(
-    //         &mut client,
-    //         SELECT_COLS,
-    //         "WHERE accession = $1 ",
-    //         &[UPDATED_TRYPSIN.get_accession()],
-    //     )
-    //     .unwrap()
-    //     .unwrap();
+    #[tokio::test]
+    #[serial]
+    async fn test_update() {
+        let mut client = get_client().await.unwrap();
 
-    //     assert_eq!(
-    //         &row.get::<_, String>("accession"),
-    //         UPDATED_TRYPSIN.get_accession()
-    //     );
-    //     assert_eq!(
-    //         &row.get::<_, Vec<String>>("secondary_accessions"),
-    //         UPDATED_TRYPSIN.get_secondary_accessions()
-    //     );
-    //     assert_eq!(
-    //         &row.get::<_, String>("entry_name"),
-    //         UPDATED_TRYPSIN.get_entry_name()
-    //     );
-    //     assert_eq!(&row.get::<_, String>("name"), UPDATED_TRYPSIN.get_name());
-    //     assert_eq!(
-    //         &row.get::<_, Vec<String>>("genes"),
-    //         UPDATED_TRYPSIN.get_genes()
-    //     );
-    //     assert_eq!(
-    //         &row.get::<_, i64>("taxonomy_id"),
-    //         UPDATED_TRYPSIN.get_taxonomy_id()
-    //     );
-    //     assert_eq!(
-    //         &row.get::<_, String>("proteome_id"),
-    //         UPDATED_TRYPSIN.get_proteome_id()
-    //     );
-    //     assert_eq!(
-    //         row.get::<_, bool>("is_reviewed"),
-    //         UPDATED_TRYPSIN.get_is_reviewed()
-    //     );
-    //     assert_eq!(
-    //         &row.get::<_, String>("sequence"),
-    //         UPDATED_TRYPSIN.get_sequence()
-    //     );
-    //     assert_eq!(
-    //         row.get::<_, i64>("updated_at"),
-    //         UPDATED_TRYPSIN.get_updated_at()
-    //     );
-    //     client.close().unwrap();
-    // }
+        let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
+        while let Some(protein) = reader.next().unwrap() {
+            ProteinTable::insert(&client, &protein).await.unwrap();
+        }
 
-    // #[test]
-    // #[serial]
-    // fn test_delete() {
-    //     test_insert();
-    //     let mut client = get_client();
-    //     ProteinTable::delete(&mut client, &TRYPSIN).unwrap();
+        ProteinTable::update(&mut client, &TRYPSIN, &UPDATED_TRYPSIN)
+            .await
+            .unwrap();
 
-    //     let row_opt = ProteinTable::raw_select(
-    //         &mut client,
-    //         SELECT_COLS,
-    //         "WHERE accession = $1 ",
-    //         &[TRYPSIN.get_accession()],
-    //     )
-    //     .unwrap();
+        let actual = ProteinTable::select(
+            &mut client,
+            "WHERE accession = ? ",
+            &[&CqlValue::Text(UPDATED_TRYPSIN.get_accession().to_owned())],
+        )
+        .await
+        .unwrap()
+        .unwrap();
 
-    //     assert!(row_opt.is_none());
+        assert_eq!(actual, UPDATED_TRYPSIN.to_owned());
+    }
 
-    //     client.close().unwrap();
-    // }
+    #[tokio::test]
+    #[serial]
+    async fn test_delete() {
+        let mut client = get_client().await.unwrap();
+
+        let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
+        while let Some(protein) = reader.next().unwrap() {
+            ProteinTable::insert(&client, &protein).await.unwrap();
+        }
+
+        ProteinTable::delete(&mut client, &TRYPSIN).await.unwrap();
+
+        let err = ProteinTable::raw_select(
+            &mut client,
+            SELECT_COLS,
+            "WHERE accession = ? ",
+            &[&CqlValue::Text(TRYPSIN.get_accession().to_owned())],
+        )
+        .await
+        .unwrap_err();
+    }
 }

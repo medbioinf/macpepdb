@@ -2,7 +2,7 @@
 use scylla::frame::response::result::Row as ScyllaRow;
 use tokio_postgres::Row;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, PartialEq)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
 ///
 pub struct Protein {
@@ -147,15 +147,6 @@ impl From<Row> for Protein {
 
 impl From<ScyllaRow> for Protein {
     fn from(row: ScyllaRow) -> Self {
-        let a = row
-            .columns
-            .get(0)
-            .unwrap()
-            .to_owned()
-            .unwrap()
-            .into_string()
-            .unwrap();
-
         Protein {
             accession: row
                 .columns
