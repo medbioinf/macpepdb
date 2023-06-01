@@ -32,7 +32,7 @@ const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.proteins 
     );";
 
 const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides (
-        partition smallint,
+        partition bigint,
         mass bigint,
         sequence text,
         missed_cleavages smallint,
