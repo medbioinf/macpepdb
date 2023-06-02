@@ -38,7 +38,6 @@ const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides 
         missed_cleavages smallint,
         aa_counts list<smallint>,
         proteins set<text>,
-        length smallint,
         is_swiss_prot boolean,
         is_trembl boolean,
         taxonomy_ids set<bigint>,
