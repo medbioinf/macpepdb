@@ -595,6 +595,7 @@ mod tests {
     }
 
     /// Test update flagging peptides for metadata update
+    /// ToDo: Split into three tests: update_protein_accession with new, update_protein_accession without new, unset_metadata
     ///
     #[tokio::test]
     #[serial]
@@ -619,14 +620,6 @@ mod tests {
         PeptideTable::bulk_insert(&client, &mut peptides.iter())
             .await
             .unwrap();
-        // PeptideTable::update_protein_accession(
-        //     &client,
-        //     &mut peptides.iter(),
-        //     leptin.get_accession(),
-        //     Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION),
-        // )
-        // .await
-        // .unwrap();
 
         let statement = format!(
             "UPDATE {}.{} SET is_metadata_updated = true WHERE partition = ? and mass = ? and sequence = ?",
@@ -648,6 +641,14 @@ mod tests {
                 .await
                 .unwrap();
         }
+        PeptideTable::update_protein_accession(
+            &client,
+            &mut peptides.iter(),
+            leptin.get_accession(),
+            Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION),
+        )
+        .await
+        .unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
         let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
@@ -663,6 +664,45 @@ mod tests {
                 .unwrap()
                 .as_boolean()
                 .unwrap());
+        }
+
+        PeptideTable::update_protein_accession(
+            &client,
+            &mut peptides.iter(),
+            CONFLICTING_PEPTIDE_PROTEIN_ACCESSION,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
+            .await
+            .unwrap();
+
+        for row in rows.iter() {
+            assert!(!row
+                .columns
+                .get(0)
+                .unwrap()
+                .to_owned()
+                .unwrap()
+                .as_boolean()
+                .unwrap());
+        }
+
+        for peptide in &peptides {
+            client
+                .get_session()
+                .query(
+                    statement.to_owned(),
+                    (
+                        peptide.get_partition(),
+                        peptide.get_mass(),
+                        peptide.get_sequence(),
+                    ),
+                )
+                .await
+                .unwrap();
         }
 
         PeptideTable::unset_is_metadata_updated(&client, &mut peptides.iter())

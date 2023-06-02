@@ -568,6 +568,7 @@ mod tests {
     }
 
     /// Test update flagging peptides for metadata update
+    /// ToDo: Split into three tests: update_protein_accession with new, update_protein_accession without new, unset_metadata
     ///
     #[tokio::test]
     #[serial]
@@ -597,6 +598,17 @@ mod tests {
         )
         .unwrap();
 
+        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+            .await
+            .unwrap();
+
+        let statement = format!(
+            "UPDATE {} SET is_metadata_updated = true",
+            PeptideTable::table_name()
+        );
+
+        client.execute(&statement, &[]).await.unwrap();
+
         PeptideTable::update_protein_accession(
             &client,
             &mut peptides.iter(),
@@ -606,13 +618,6 @@ mod tests {
         .await
         .unwrap();
 
-        let statement = format!(
-            "UPDATE {} SET is_metadata_updated = true",
-            PeptideTable::table_name()
-        );
-
-        client.execute(&statement, &[]).await.unwrap();
-
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
         let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
             .await
@@ -621,6 +626,25 @@ mod tests {
         for row in rows.iter() {
             assert!(row.get::<_, bool>("is_metadata_updated"));
         }
+
+        PeptideTable::update_protein_accession(
+            &client,
+            &mut peptides.iter(),
+            CONFLICTING_PEPTIDE_PROTEIN_ACCESSION,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
+            .await
+            .unwrap();
+
+        for row in rows.iter() {
+            assert!(!row.get::<_, bool>("is_metadata_updated"));
+        }
+
+        client.execute(&statement, &[]).await.unwrap();
 
         PeptideTable::unset_is_metadata_updated(&client, &mut peptides.iter())
             .await
