@@ -547,7 +547,7 @@ mod tests {
         PeptideTable::update_protein_accession(
             &client,
             &mut peptides.iter(),
-            leptin.get_accession(),
+            CONFLICTING_PEPTIDE_PROTEIN_ACCESSION,
             None,
         )
         .await
@@ -561,8 +561,7 @@ mod tests {
         // Check if accession was updated and not appended for all peptides.
         for row in rows.iter() {
             let protein_accessions = row.get::<_, Vec<String>>("proteins");
-            assert_eq!(protein_accessions.len(), 1);
-            assert_eq!(protein_accessions[0], CONFLICTING_PEPTIDE_PROTEIN_ACCESSION);
+            assert_eq!(protein_accessions.len(), 0);
         }
         connection_handle.abort();
         let _ = connection_handle.await;

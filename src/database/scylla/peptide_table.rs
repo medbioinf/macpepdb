@@ -59,8 +59,11 @@ impl PeptideTable {
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
         // Update has upsert functionality in Scylla. protein accessions are added to the set (see UPDATE_SET_PLACEHOLDERS)
+        // Alternative: always execute two lightweight transactions update ... if exists, update ... if not exists
+        // Alternative: select then check in application code then upsert
+
         let statement = format!(
-            "UPDATE {}.{} SET {} WHERE partition = ? and mass = ? and sequence = ?",
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
             SCYLLA_KEYSPACE_NAME,
             TABLE_NAME,
             UPDATE_SET_PLACEHOLDER.as_str()
@@ -317,6 +320,7 @@ mod tests {
     use crate::biology::digestion_enzyme::functions::{
         create_peptides_entities_from_digest, get_enzyme_by_name,
     };
+    use crate::entities::protein;
     // internal imports
     use super::*;
 
@@ -572,7 +576,7 @@ mod tests {
         PeptideTable::update_protein_accession(
             &client,
             &mut peptides.iter(),
-            leptin.get_accession(),
+            CONFLICTING_PEPTIDE_PROTEIN_ACCESSION,
             None,
         )
         .await
@@ -585,19 +589,8 @@ mod tests {
 
         // Check if accession was updated and not appended for all peptides.
         for row in rows.iter() {
-            let protein_accessions: Vec<String> = row
-                .columns
-                .get(0)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .into_vec()
-                .unwrap()
-                .into_iter()
-                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-                .collect();
-            assert_eq!(protein_accessions.len(), 1);
-            assert_eq!(protein_accessions[0], CONFLICTING_PEPTIDE_PROTEIN_ACCESSION);
+            let protein_accessions_opt = row.columns.get(0).unwrap();
+            assert!(protein_accessions_opt.is_none());
         }
     }
 

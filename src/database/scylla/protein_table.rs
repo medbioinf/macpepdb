@@ -442,6 +442,7 @@ mod tests {
             &[&CqlValue::Text(TRYPSIN.get_accession().to_owned())],
         )
         .await
-        .unwrap_err();
+        .unwrap_err()
+        .is::<FirstRowError>();
     }
 }
