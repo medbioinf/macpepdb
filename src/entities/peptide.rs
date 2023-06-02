@@ -10,7 +10,7 @@ use scylla::frame::response::result::Row as ScyllaRow;
 use tokio_postgres::Row;
 
 // internal imports
-use crate::entities::protein::Protein;
+use crate::{entities::protein::Protein, tools::cql::get_cql_value};
 
 #[derive(Clone)]
 pub struct Peptide {
@@ -246,104 +246,37 @@ impl From<Row> for Peptide {
 impl From<ScyllaRow> for Peptide {
     fn from(row: ScyllaRow) -> Self {
         Self {
-            partition: row
-                .columns
-                .get(0)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_bigint()
-                .unwrap(),
-            mass: row
-                .columns
-                .get(1)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_bigint()
-                .unwrap(),
-            sequence: row
-                .columns
-                .get(2)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            missed_cleavages: row
-                .columns
-                .get(3)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_smallint()
-                .unwrap(),
-            aa_counts: row
-                .columns
-                .get(4)
-                .unwrap()
-                .to_owned()
-                .unwrap()
+            partition: get_cql_value(&row.columns, 0).as_bigint().unwrap(),
+            mass: get_cql_value(&row.columns, 1).as_bigint().unwrap(),
+            sequence: get_cql_value(&row.columns, 2).into_string().unwrap(),
+            missed_cleavages: get_cql_value(&row.columns, 3).as_smallint().unwrap(),
+            aa_counts: get_cql_value(&row.columns, 4)
                 .as_list()
                 .unwrap()
                 .into_iter()
                 .map(|cql_val| cql_val.as_smallint().unwrap().to_owned())
                 .collect(),
-            proteins: row
-                .columns
-                .get(5)
-                .unwrap()
-                .to_owned()
-                .unwrap()
+            proteins: get_cql_value(&row.columns, 5)
                 .as_list()
                 .unwrap()
                 .into_iter()
                 .map(|cql_val| cql_val.as_text().unwrap().to_owned())
                 .collect(),
-            is_swiss_prot: row
-                .columns
-                .get(6)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_boolean()
-                .unwrap(),
-            is_trembl: row
-                .columns
-                .get(7)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_boolean()
-                .unwrap(),
-            taxonomy_ids: row
-                .columns
-                .get(8)
-                .unwrap()
-                .to_owned()
-                .unwrap()
+            is_swiss_prot: get_cql_value(&row.columns, 6).as_boolean().unwrap(),
+            is_trembl: get_cql_value(&row.columns, 7).as_boolean().unwrap(),
+            taxonomy_ids: get_cql_value(&row.columns, 8)
                 .as_list()
                 .unwrap()
                 .into_iter()
                 .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
                 .collect(),
-            unique_taxonomy_ids: row
-                .columns
-                .get(9)
-                .unwrap()
-                .to_owned()
-                .unwrap()
+            unique_taxonomy_ids: get_cql_value(&row.columns, 9)
                 .as_list()
                 .unwrap()
                 .into_iter()
                 .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
                 .collect(),
-            proteome_ids: row
-                .columns
-                .get(10)
-                .unwrap()
-                .to_owned()
-                .unwrap()
+            proteome_ids: get_cql_value(&row.columns, 10)
                 .as_list()
                 .unwrap()
                 .into_iter()

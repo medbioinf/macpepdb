@@ -3,6 +3,8 @@ use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
 use tokio_postgres::Row;
 
+use crate::tools::cql::get_cql_value;
+
 #[derive(Clone, Debug, PartialEq)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
 ///
@@ -144,10 +146,6 @@ impl From<Row> for Protein {
             updated_at: row.get("updated_at"),
         }
     }
-}
-
-fn get_cql_value(columns: &Vec<Option<CqlValue>>, index: usize) -> CqlValue {
-    columns.get(index).unwrap().to_owned().unwrap()
 }
 
 impl From<ScyllaRow> for Protein {

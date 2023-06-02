@@ -9,3 +9,5 @@ pub mod fancy_regex;
 pub mod macros;
 /// Functions to create a peptide partition for the database based on the protein files
 pub mod peptide_partitioner;
+
+pub mod cql;
