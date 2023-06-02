@@ -1,4 +1,5 @@
 // 3rd party imports
+use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
 use tokio_postgres::Row;
 
@@ -145,95 +146,33 @@ impl From<Row> for Protein {
     }
 }
 
+fn get_cql_value(columns: &Vec<Option<CqlValue>>, index: usize) -> CqlValue {
+    columns.get(index).unwrap().to_owned().unwrap()
+}
+
 impl From<ScyllaRow> for Protein {
     fn from(row: ScyllaRow) -> Self {
         Protein {
-            accession: row
-                .columns
-                .get(0)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            secondary_accessions: row
-                .columns
-                .get(1)
-                .unwrap()
-                .to_owned()
-                .unwrap()
+            accession: get_cql_value(&row.columns, 0).into_string().unwrap(),
+            secondary_accessions: get_cql_value(&row.columns, 1)
                 .as_list()
                 .unwrap()
                 .into_iter()
                 .map(|cql_val| cql_val.as_text().unwrap().to_owned())
                 .collect(),
-            entry_name: row
-                .columns
-                .get(2)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            name: row
-                .columns
-                .get(3)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            genes: row
-                .columns
-                .get(4)
-                .unwrap()
-                .to_owned()
-                .unwrap()
+            entry_name: get_cql_value(&row.columns, 2).into_string().unwrap(),
+            name: get_cql_value(&row.columns, 3).into_string().unwrap(),
+            genes: get_cql_value(&row.columns, 4)
                 .as_list()
                 .unwrap()
                 .into_iter()
                 .map(|cql_val| cql_val.as_text().unwrap().to_owned())
                 .collect(),
-            taxonomy_id: row
-                .columns
-                .get(5)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_bigint()
-                .unwrap(),
-            proteome_id: row
-                .columns
-                .get(6)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            is_reviewed: row
-                .columns
-                .get(7)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_boolean()
-                .unwrap(),
-            sequence: row
-                .columns
-                .get(8)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            updated_at: row
-                .columns
-                .get(9)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_bigint()
-                .unwrap(),
+            taxonomy_id: get_cql_value(&row.columns, 5).as_bigint().unwrap(),
+            proteome_id: get_cql_value(&row.columns, 6).into_string().unwrap(),
+            is_reviewed: get_cql_value(&row.columns, 7).as_boolean().unwrap(),
+            sequence: get_cql_value(&row.columns, 8).into_string().unwrap(),
+            updated_at: get_cql_value(&row.columns, 9).as_bigint().unwrap(),
         }
     }
 }
