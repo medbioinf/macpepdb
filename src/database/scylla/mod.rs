@@ -1,8 +1,9 @@
 /// Trait definition for generic client to use with database API and a client struct keeping the session.
 pub mod client;
 pub mod configuration_table;
-pub mod migrations;
+pub mod peptide_table;
 pub mod protein_table;
+pub mod schema;
 
 pub const SCYLLA_KEYSPACE_NAME: &str = "macpep";
 
@@ -14,7 +15,7 @@ mod tests {
 
     // internal imports
     use crate::database::scylla::client::{Client, GenericClient};
-    use crate::database::scylla::migrations::{DROP_KEYSPACE, UP};
+    use crate::database::scylla::schema::{DROP_KEYSPACE, UP};
 
     pub const DATABASE_URL: &str = "127.0.0.1:9042";
     // let uri = env::var("SCYLLA_URI").unwrap_or_else(|_| DATABASE_URL.to_string());
