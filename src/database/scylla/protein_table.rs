@@ -267,7 +267,7 @@ mod tests {
     // internal imports
     use super::*;
     use crate::database::scylla::client::{Client, GenericClient};
-    use crate::database::scylla::tests::{get_client, prepare_database_for_tests, DATABASE_URL};
+    use crate::database::scylla::{get_client, prepare_database_for_tests, DATABASE_URL};
     use crate::io::uniprot_text::reader::Reader;
 
     const EXPECTED_PROTEINS: i64 = 3;

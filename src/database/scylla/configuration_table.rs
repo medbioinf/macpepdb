@@ -196,7 +196,7 @@ mod tests {
 
     // internal imports
     use super::*;
-    use crate::database::scylla::tests::{get_client, prepare_database_for_tests};
+    use crate::database::scylla::{get_client, prepare_database_for_tests};
 
     const EXPECTED_ENZYME_NAME: &'static str = "Trypsin";
     const EXPECTED_MAX_MISSED_CLEAVAGES: usize = 2;

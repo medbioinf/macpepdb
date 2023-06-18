@@ -29,8 +29,8 @@ use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
 use crate::database::scylla::client::Client;
 use crate::database::scylla::client::GenericClient;
 use crate::database::scylla::{
-    configuration_table::ConfigurationTable, peptide_table::PeptideTable,
-    protein_table::ProteinTable, tests::get_client,
+    configuration_table::ConfigurationTable, get_client, peptide_table::PeptideTable,
+    protein_table::ProteinTable,
 };
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
@@ -40,8 +40,7 @@ use crate::entities::{configuration::Configuration, peptide::Peptide, protein::P
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
 
-use super::tests::prepare_database_for_tests;
-use super::SCYLLA_KEYSPACE_NAME;
+use super::{prepare_database_for_tests, SCYLLA_KEYSPACE_NAME};
 
 lazy_static! {
     static ref PROTEIN_QUEUE_WRITE_SLEEP_TIME: Duration = Duration::from_millis(100);
@@ -760,7 +759,7 @@ mod test {
     use crate::database::scylla::{
         peptide_table::PeptideTable,
         protein_table::ProteinTable,
-        tests::{get_client, prepare_database_for_tests, DATABASE_URL},
+        {get_client, prepare_database_for_tests, DATABASE_URL},
     };
     use crate::database::selectable_table::SelectableTable;
     use crate::io::uniprot_text::reader::Reader;
@@ -780,15 +779,9 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_database_build_without_initial_config() {
-        let (mut client, connection) = get_client().await;
+        let mut client = get_client().await.unwrap();
+        let mut session = client.get_session();
 
-        // The connection object performs the actual communication with the database,
-        // so spawn it off to run on its own.
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
         prepare_database_for_tests(&mut client).await;
 
         let protein_file_paths = vec![Path::new("test_files/uniprot.txt").to_path_buf()];
@@ -798,26 +791,15 @@ mod test {
             .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, false, false)
             .await;
         assert!(build_res.is_err());
-        connection_handle.abort();
-        let _ = connection_handle.await;
     }
 
     #[tokio::test]
     #[serial]
     async fn test_database_build() {
-        let (mut client, connection) = get_client().await;
-
-        // The connection object performs the actual communication with the database,
-        // so spawn it off to run on its own.
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
+        let mut client = get_client().await.unwrap();
+        let mut session = client.get_session();
 
         prepare_database_for_tests(&mut client).await;
-        connection_handle.abort();
-        let _ = connection_handle.await;
 
         let protein_file_paths = vec![
             Path::new("test_files/uniprot.txt").to_path_buf(),
@@ -839,14 +821,6 @@ mod test {
             .await
             .unwrap();
 
-        let (client, connection) = get_client().await;
-
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
-
         let configuration = ConfigurationTable::select(&client).await.unwrap();
 
         let enzyme = get_enzyme_by_name(
@@ -863,8 +837,8 @@ mod test {
             while let Some(protein) = reader.next().unwrap() {
                 let proteins = ProteinTable::select_multiple(
                     &client,
-                    "WHERE accession = $1",
-                    &[protein.get_accession()],
+                    "WHERE accession = ?",
+                    &[&CqlValue::Text(protein.get_accession().to_owned())],
                 )
                 .await
                 .unwrap();
@@ -880,11 +854,11 @@ mod test {
                 for peptide in expected_peptides {
                     let peptides = PeptideTable::select_multiple(
                         &client,
-                        "WHERE partition = $1 AND mass = $2 AND sequence = $3",
+                        "WHERE partition = ? AND mass = ? AND sequence = ?",
                         &[
-                            peptide.get_partition_as_ref(),
-                            peptide.get_mass_as_ref(),
-                            peptide.get_sequence(),
+                            &CqlValue::BigInt(peptide.get_partition().to_owned()),
+                            &CqlValue::BigInt(peptide.get_mass_as_ref().to_owned()),
+                            &CqlValue::Text(peptide.get_sequence().to_owned()),
                         ],
                     )
                     .await
@@ -896,10 +870,14 @@ mod test {
 
         // Select the duplicated trpsin protein
         // Digest it again, and check the metadata fit to the original trypsin and the duplicated trypsin
-        let trypsin_duplicate = ProteinTable::select(&client, "WHERE accession = $1", &[&"DUPLIC"])
-            .await
-            .unwrap()
-            .unwrap();
+        let trypsin_duplicate = ProteinTable::select(
+            &client,
+            "WHERE accession = ?",
+            &[&CqlValue::Text("DUPLIC".to_string())],
+        )
+        .await
+        .unwrap()
+        .unwrap();
 
         let trypsin_duplicate_peptides: Vec<Peptide> = create_peptides_entities_from_digest(
             &enzyme.digest(&trypsin_duplicate.get_sequence()),
@@ -911,11 +889,11 @@ mod test {
         for peptide in trypsin_duplicate_peptides {
             let peptide = PeptideTable::select(
                 &client,
-                "WHERE partition = $1 AND mass = $2 AND sequence = $3",
+                "WHERE partition = ? AND mass = ? AND sequence = ?",
                 &[
-                    peptide.get_partition_as_ref(),
-                    peptide.get_mass_as_ref(),
-                    peptide.get_sequence(),
+                    &CqlValue::BigInt(peptide.get_partition().to_owned()),
+                    &CqlValue::BigInt(peptide.get_mass_as_ref().to_owned()),
+                    &CqlValue::Text(peptide.get_sequence().to_owned()),
                 ],
             )
             .await
@@ -948,8 +926,6 @@ mod test {
             assert!(peptide.get_is_swiss_prot());
             assert!(peptide.get_is_trembl());
         }
-        connection_handle.abort();
-        let _ = connection_handle.await;
     }
 
     // TODO: Test update
