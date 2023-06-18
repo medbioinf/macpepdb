@@ -913,59 +913,61 @@ mod test {
                     assert_eq!(peptides.len(), 1);
                 }
             }
+        }
 
-            // Select the duplicated trpsin protein
-            // Digest it again, and check the metadata fit to the original trypsin and the duplicated trypsin
-            let trypsin_duplicate =
-                ProteinTable::select(&client, "WHERE accession = $1", &[&"DUPLIC"])
-                    .await
-                    .unwrap()
-                    .unwrap();
-
-            let trypsin_duplicate_peptides: Vec<Peptide> = create_peptides_entities_from_digest(
-                &enzyme.digest(&trypsin_duplicate.get_sequence()),
-                configuration.get_partition_limits(),
-                Some(&trypsin_duplicate),
-            )
+        // Select the duplicated trpsin protein
+        // Digest it again, and check the metadata fit to the original trypsin and the duplicated trypsin
+        let trypsin_duplicate = ProteinTable::select(&client, "WHERE accession = $1", &[&"DUPLIC"])
+            .await
+            .unwrap()
             .unwrap();
 
-            for peptide in trypsin_duplicate_peptides {
-                let peptide = PeptideTable::select(
-                    &client,
-                    "WHERE partition = $1 AND mass = $2 AND sequence = $3",
-                    &[
-                        peptide.get_partition_as_ref(),
-                        peptide.get_mass_as_ref(),
-                        peptide.get_sequence(),
-                    ],
-                )
-                .await
-                .unwrap()
-                .unwrap();
-                assert_eq!(peptide.get_proteins().len(), 2);
-                for protein_accession in peptide.get_proteins() {
-                    assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
-                        .contains(&protein_accession.as_str()));
-                }
-                for protein_accession in peptide.get_proteins() {
-                    assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
-                        .contains(&protein_accession.as_str()));
-                }
-                for taxonomy_id in peptide.get_taxonomy_ids() {
-                    assert!(EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN
-                        .contains(&taxonomy_id));
-                }
-                for taxonomy_id in peptide.get_unique_taxonomy_ids() {
-                    assert!(EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN
-                        .contains(&taxonomy_id));
-                }
-                for proteome_id in peptide.get_proteome_ids() {
-                    assert!(EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN
-                        .contains(&proteome_id.as_str()));
-                }
-                assert!(peptide.get_is_swiss_prot());
-                assert!(peptide.get_is_trembl());
+        let trypsin_duplicate_peptides: Vec<Peptide> = create_peptides_entities_from_digest(
+            &enzyme.digest(&trypsin_duplicate.get_sequence()),
+            configuration.get_partition_limits(),
+            Some(&trypsin_duplicate),
+        )
+        .unwrap();
+
+        for peptide in trypsin_duplicate_peptides {
+            let peptide = PeptideTable::select(
+                &client,
+                "WHERE partition = $1 AND mass = $2 AND sequence = $3",
+                &[
+                    peptide.get_partition_as_ref(),
+                    peptide.get_mass_as_ref(),
+                    peptide.get_sequence(),
+                ],
+            )
+            .await
+            .unwrap()
+            .unwrap();
+            assert_eq!(peptide.get_proteins().len(), 2);
+            for protein_accession in peptide.get_proteins() {
+                assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
+                    .contains(&protein_accession.as_str()));
             }
+            for protein_accession in peptide.get_proteins() {
+                assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
+                    .contains(&protein_accession.as_str()));
+            }
+            for taxonomy_id in peptide.get_taxonomy_ids() {
+                assert!(
+                    EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN.contains(&taxonomy_id)
+                );
+            }
+            for taxonomy_id in peptide.get_unique_taxonomy_ids() {
+                assert!(
+                    EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN.contains(&taxonomy_id)
+                );
+            }
+            for proteome_id in peptide.get_proteome_ids() {
+                assert!(
+                    EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN.contains(&proteome_id.as_str())
+                );
+            }
+            assert!(peptide.get_is_swiss_prot());
+            assert!(peptide.get_is_trembl());
         }
         connection_handle.abort();
         let _ = connection_handle.await;
