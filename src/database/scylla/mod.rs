@@ -1,6 +1,7 @@
 /// Trait definition for generic client to use with database API and a client struct keeping the session.
 pub mod client;
 pub mod configuration_table;
+pub mod database_build;
 pub mod peptide_table;
 pub mod protein_table;
 pub mod schema;
@@ -8,7 +9,7 @@ pub mod schema;
 pub const SCYLLA_KEYSPACE_NAME: &str = "macpep";
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
 
     // 3rd party imports
     use anyhow::Result;
