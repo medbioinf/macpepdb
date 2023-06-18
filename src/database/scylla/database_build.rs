@@ -10,7 +10,9 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
+use futures::StreamExt;
 use kdam::{tqdm, Bar, BarExt};
+use scylla::transport::iterator::RowIterator;
 use tokio::task::{spawn, JoinHandle};
 
 // internal imports
@@ -37,6 +39,9 @@ use scylla::frame::response::result::{CqlValue, Row};
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
+
+use super::tests::prepare_database_for_tests;
+use super::SCYLLA_KEYSPACE_NAME;
 
 lazy_static! {
     static ref PROTEIN_QUEUE_WRITE_SLEEP_TIME: Duration = Duration::from_millis(100);
@@ -294,7 +299,7 @@ impl DatabaseBuild {
                 protein_queue.pop().unwrap() // unwrap is safe because we checked if queue is empty
             };
             let existing_protein: Option<Protein> = ProteinTable::select(
-                &mut client,
+                &client,
                 "WHERE accession = ? OR accession IN ?",
                 &[
                     &CqlValue::Text(protein.get_accession().to_owned()),
@@ -309,7 +314,7 @@ impl DatabaseBuild {
             )
             .await?;
             // or contained in secondary accessions
-            if let Some(existing_protein) = protein {
+            if let Some(existing_protein) = existing_protein {
                 if existing_protein.get_updated_at() == protein.get_updated_at() {
                     continue;
                 }
@@ -601,62 +606,58 @@ impl DatabaseBuild {
         database_url: String,
         partitions: Vec<i64>,
     ) -> Result<()> {
-        for partition in partitions.iter() {
-            let mut client = get_client().await?.get_session();
-
-            let cursor_statement = format!(
-                "DECLARE peptide_cursor_{} CURSOR FOR SELECT * FROM {} WHERE partition = $1 AND is_metadata_updated = false;",
-                thread_id,
-                PeptideTable::table_name()
-            );
-            let fetch_statement = format!("FETCH 1000 FROM peptide_cursor_{};", thread_id);
-            let cursor_close_statement = format!("CLOSE peptide_cursor_{};", thread_id);
-            partition_transaction
-                .execute(&cursor_statement, &[partition])
-                .await?;
-            loop {
-                let rows = partition_transaction.query(&fetch_statement, &[]).await?;
-                if rows.len() == 0 {
-                    break;
-                }
-                let mut peptide_transaction = partition_transaction.transaction().await?;
-                for row in rows {
-                    let associated_proteins = ProteinTable::select_multiple(
-                        &mut peptide_transaction,
-                        "WHERE accession = ANY($1)",
-                        &[&row.get::<_, Vec<String>>("proteins")],
-                    )
-                    .await?;
-                    let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
-                        Peptide::get_metadata_from_proteins(&associated_proteins);
-                    let update_query = format!(
-                        "UPDATE {} SET is_metadata_updated = true, is_swiss_prot = $1, is_trembl = $2, taxonomy_ids = $3, unique_taxonomy_ids = $4, proteome_ids = $5 WHERE partition = $6 AND mass = $7 and sequence = $8;",
+        let mut client = get_client().await?;
+        let mut session = client.get_session();
+        let update_query = format!(
+                        "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ? WHERE partition = ? AND mass = ? and sequence = ?",
+                        SCYLLA_KEYSPACE_NAME,
                         PeptideTable::table_name()
                     );
-                    peptide_transaction
-                        .query(
-                            &update_query,
-                            &[
-                                &is_swiss_prot,
-                                &is_trembl,
-                                &taxonomy_ids,
-                                &unique_taxonomy_ids,
-                                &proteome_ids,
-                                &row.get::<_, i64>("partition"),
-                                &row.get::<_, i64>("mass"),
-                                &row.get::<_, &str>("sequence"),
-                            ],
-                        )
-                        .await?;
-                }
-                peptide_transaction.commit().await?;
-            }
-            partition_transaction
-                .execute(&cursor_close_statement, &[])
+        let update_query_prepared_statement = session.prepare(update_query).await?;
+
+        for partition in partitions.iter() {
+            let query_statement = format!(
+                "SELECT * FROM {}.{} WHERE partition = ? AND is_metadata_updated = false;",
+                SCYLLA_KEYSPACE_NAME,
+                PeptideTable::table_name()
+            );
+            let mut rows_stream = session.query_iter(query_statement, (partition,)).await?;
+
+            while let Some(row_opt) = rows_stream.next().await {
+                let row = row_opt?;
+                // ToDo: This might be bad performance wise
+                let peptide = Peptide::from(row);
+                let associated_proteins = ProteinTable::select_multiple(
+                    &client,
+                    "WHERE accession IN ?",
+                    &[&CqlValue::List(
+                        peptide
+                            .get_proteins()
+                            .into_iter()
+                            .map(|x| CqlValue::Text(x.to_owned()))
+                            .collect(),
+                    )],
+                )
                 .await?;
-            partition_transaction.commit().await?;
-            connection_handle.abort();
-            let _ = connection_handle.await;
+
+                let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
+                    Peptide::get_metadata_from_proteins(&associated_proteins);
+                session
+                    .execute(
+                        &update_query_prepared_statement,
+                        (
+                            &is_swiss_prot,
+                            &is_trembl,
+                            &taxonomy_ids,
+                            &unique_taxonomy_ids,
+                            &proteome_ids,
+                            peptide.get_partition(),
+                            peptide.get_mass(),
+                            peptide.get_sequence(),
+                        ),
+                    )
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -685,22 +686,16 @@ impl DatabaseBuildTrait for DatabaseBuild {
             disable = !show_progress
         );
 
-        let (mut client, connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
-
-        // The connection object performs the actual communication with the database,
-        // so spawn it off to run on its own.
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
+        let mut client = get_client().await?;
+        let mut sessioN = client.get_session();
 
         if verbose {
             progress_bar.write("applying database migrations...");
         }
 
         // Run migrations
-        migrations::runner().run_async(&mut client).await?;
+        prepare_database_for_tests(&client);
+        // migrations::runner().run_async(&mut client).await?;
 
         // get or set configuration
         let configuration = Self::get_or_set_configuration(
@@ -714,9 +709,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
             verbose,
         )
         .await?;
-
-        connection_handle.abort();
-        let _ = connection_handle.await;
 
         let digestion_enzyme = get_enzyme_by_name(
             configuration.get_enzyme_name(),
