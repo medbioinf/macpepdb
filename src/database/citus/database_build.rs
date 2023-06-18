@@ -309,7 +309,7 @@ impl DatabaseBuild {
             )
             .await?;
             // or contained in secondary accessions
-            if let Some(existing_protein) = existing_protein {
+            if let Some(existing_protein) = protein {
                 if existing_protein.get_updated_at() == protein.get_updated_at() {
                     continue;
                 }
