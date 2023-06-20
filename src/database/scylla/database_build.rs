@@ -12,7 +12,6 @@ use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::StreamExt;
 use kdam::{tqdm, Bar, BarExt};
-use scylla::transport::iterator::RowIterator;
 use tokio::task::{spawn, JoinHandle};
 
 // internal imports
@@ -28,6 +27,7 @@ use crate::database::configuration_table::{
 use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
 use crate::database::scylla::client::Client;
 use crate::database::scylla::client::GenericClient;
+use crate::database::scylla::peptide_table::SELECT_COLS;
 use crate::database::scylla::{
     configuration_table::ConfigurationTable, get_client, peptide_table::PeptideTable,
     protein_table::ProteinTable,
@@ -297,23 +297,20 @@ impl DatabaseBuild {
                 }
                 protein_queue.pop().unwrap() // unwrap is safe because we checked if queue is empty
             };
-            let existing_protein: Option<Protein> = ProteinTable::select(
+
+            let mut accession_list = protein.get_secondary_accessions().clone();
+            accession_list.push(protein.get_accession().to_owned());
+
+            let existing_protein_result: Result<Option<Protein>> = ProteinTable::select(
                 &client,
-                "WHERE accession = ? OR accession IN ?",
-                &[
-                    &CqlValue::Text(protein.get_accession().to_owned()),
-                    &CqlValue::List(
-                        protein
-                            .get_secondary_accessions()
-                            .into_iter()
-                            .map(|x| CqlValue::Text(x.to_owned()))
-                            .collect(),
-                    ),
-                ],
+                "WHERE accession IN (?)",
+                &[&CqlValue::Text(accession_list.join(","))],
             )
-            .await?;
+            .await;
+
             // or contained in secondary accessions
-            if let Some(existing_protein) = existing_protein {
+            if existing_protein_result.as_ref().is_ok_and(|x| x.is_some()) {
+                let existing_protein = existing_protein_result?.unwrap();
                 if existing_protein.get_updated_at() == protein.get_updated_at() {
                     continue;
                 }
@@ -616,11 +613,15 @@ impl DatabaseBuild {
 
         for partition in partitions.iter() {
             let query_statement = format!(
-                "SELECT * FROM {}.{} WHERE partition = ? AND is_metadata_updated = false;",
+                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
+                SELECT_COLS,
                 SCYLLA_KEYSPACE_NAME,
                 PeptideTable::table_name()
             );
-            let mut rows_stream = session.query_iter(query_statement, (partition,)).await?;
+            let mut rows_stream = session
+                .query_iter(query_statement, (partition,))
+                .await
+                .unwrap();
 
             while let Some(row_opt) = rows_stream.next().await {
                 let row = row_opt?;
@@ -693,7 +694,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         }
 
         // Run migrations
-        prepare_database_for_tests(&client);
+        prepare_database_for_tests(&client).await;
         // migrations::runner().run_async(&mut client).await?;
 
         // get or set configuration
@@ -863,6 +864,7 @@ mod test {
                     )
                     .await
                     .unwrap();
+
                     assert_eq!(peptides.len(), 1);
                 }
             }
@@ -900,29 +902,44 @@ mod test {
             .unwrap()
             .unwrap();
             assert_eq!(peptide.get_proteins().len(), 2);
-            for protein_accession in peptide.get_proteins() {
-                assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
-                    .contains(&protein_accession.as_str()));
-            }
-            for protein_accession in peptide.get_proteins() {
-                assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
-                    .contains(&protein_accession.as_str()));
-            }
-            for taxonomy_id in peptide.get_taxonomy_ids() {
-                assert!(
-                    EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN.contains(&taxonomy_id)
-                );
-            }
-            for taxonomy_id in peptide.get_unique_taxonomy_ids() {
-                assert!(
-                    EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN.contains(&taxonomy_id)
-                );
-            }
-            for proteome_id in peptide.get_proteome_ids() {
-                assert!(
-                    EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN.contains(&proteome_id.as_str())
-                );
-            }
+
+            EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
+                .iter()
+                .for_each(|x| {
+                    assert!(
+                        peptide.get_proteins().contains(&x.to_string()),
+                        "{} not found in proteins",
+                        x
+                    )
+                });
+            EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN
+                .iter()
+                .for_each(|x| {
+                    assert!(
+                        peptide.get_taxonomy_ids().contains(&x),
+                        "{} not found in taxonomy_ids",
+                        x
+                    )
+                });
+            EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN
+                .iter()
+                .for_each(|x| {
+                    assert!(
+                        peptide.get_unique_taxonomy_ids().contains(&x),
+                        "{} not found in unique_taxonomy_ids",
+                        x
+                    )
+                });
+            EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN
+                .iter()
+                .for_each(|x| {
+                    assert!(
+                        peptide.get_proteome_ids().contains(&x.to_string()),
+                        "{} not found in proteome_ides",
+                        x
+                    )
+                });
+
             assert!(peptide.get_is_swiss_prot());
             assert!(peptide.get_is_trembl());
         }

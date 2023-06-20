@@ -943,29 +943,42 @@ mod test {
             .unwrap()
             .unwrap();
             assert_eq!(peptide.get_proteins().len(), 2);
-            for protein_accession in peptide.get_proteins() {
-                assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
-                    .contains(&protein_accession.as_str()));
-            }
-            for protein_accession in peptide.get_proteins() {
-                assert!(EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
-                    .contains(&protein_accession.as_str()));
-            }
-            for taxonomy_id in peptide.get_taxonomy_ids() {
-                assert!(
-                    EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN.contains(&taxonomy_id)
-                );
-            }
-            for taxonomy_id in peptide.get_unique_taxonomy_ids() {
-                assert!(
-                    EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN.contains(&taxonomy_id)
-                );
-            }
-            for proteome_id in peptide.get_proteome_ids() {
-                assert!(
-                    EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN.contains(&proteome_id.as_str())
-                );
-            }
+            EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
+                .iter()
+                .for_each(|x| {
+                    assert!(
+                        peptide.get_proteins().contains(&x.to_string()),
+                        "{} not found in proteins",
+                        x
+                    )
+                });
+            EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN
+                .iter()
+                .for_each(|x| {
+                    assert!(
+                        peptide.get_taxonomy_ids().contains(&x),
+                        "{} not found in taxonomy_ids",
+                        x
+                    )
+                });
+            EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN
+                .iter()
+                .for_each(|x| {
+                    assert!(
+                        peptide.get_unique_taxonomy_ids().contains(&x),
+                        "{} not found in unique_taxonomy_ids",
+                        x
+                    )
+                });
+            EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN
+                .iter()
+                .for_each(|x| {
+                    assert!(
+                        peptide.get_proteome_ids().contains(&x.to_string()),
+                        "{} not found in proteome_ides",
+                        x
+                    )
+                });
             assert!(peptide.get_is_swiss_prot());
             assert!(peptide.get_is_trembl());
         }

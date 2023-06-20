@@ -151,26 +151,46 @@ impl From<Row> for Protein {
 impl From<ScyllaRow> for Protein {
     fn from(row: ScyllaRow) -> Self {
         Protein {
-            accession: get_cql_value(&row.columns, 0).into_string().unwrap(),
+            accession: get_cql_value(&row.columns, 0)
+                .unwrap()
+                .into_string()
+                .unwrap(),
             secondary_accessions: get_cql_value(&row.columns, 1)
+                .unwrap_or(CqlValue::List(vec![]))
                 .as_list()
-                .unwrap()
+                .unwrap_or(&vec![])
                 .into_iter()
                 .map(|cql_val| cql_val.as_text().unwrap().to_owned())
                 .collect(),
-            entry_name: get_cql_value(&row.columns, 2).into_string().unwrap(),
-            name: get_cql_value(&row.columns, 3).into_string().unwrap(),
+            entry_name: get_cql_value(&row.columns, 2)
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            name: get_cql_value(&row.columns, 3)
+                .unwrap()
+                .into_string()
+                .unwrap(),
             genes: get_cql_value(&row.columns, 4)
+                .unwrap_or(CqlValue::List(vec![]))
                 .as_list()
-                .unwrap()
+                .unwrap_or(&vec![])
                 .into_iter()
                 .map(|cql_val| cql_val.as_text().unwrap().to_owned())
                 .collect(),
-            taxonomy_id: get_cql_value(&row.columns, 5).as_bigint().unwrap(),
-            proteome_id: get_cql_value(&row.columns, 6).into_string().unwrap(),
-            is_reviewed: get_cql_value(&row.columns, 7).as_boolean().unwrap(),
-            sequence: get_cql_value(&row.columns, 8).into_string().unwrap(),
-            updated_at: get_cql_value(&row.columns, 9).as_bigint().unwrap(),
+            taxonomy_id: get_cql_value(&row.columns, 5).unwrap().as_bigint().unwrap(),
+            proteome_id: get_cql_value(&row.columns, 6)
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            is_reviewed: get_cql_value(&row.columns, 7)
+                .unwrap()
+                .as_boolean()
+                .unwrap(),
+            sequence: get_cql_value(&row.columns, 8)
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            updated_at: get_cql_value(&row.columns, 9).unwrap().as_bigint().unwrap(),
         }
     }
 }

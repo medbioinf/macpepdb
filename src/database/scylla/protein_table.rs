@@ -179,6 +179,7 @@ where
         params: &[&'b Self::Parameter],
     ) -> Result<Option<Self::Record>> {
         let session = client.get_session();
+
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
@@ -189,6 +190,7 @@ where
             statement += " ";
             statement += additional;
         }
+
         return Ok(Some(session.query(statement, params).await?.first_row()?));
     }
 
@@ -223,6 +225,7 @@ where
             params,
         )
         .await?;
+
         if row.is_none() {
             return Ok(None);
         }
