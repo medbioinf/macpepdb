@@ -10,10 +10,9 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
+use futures::StreamExt;
 use kdam::{tqdm, Bar, BarExt};
-use refinery::embed_migrations;
 use tokio::task::{spawn, JoinHandle};
-use tokio_postgres::{Client, GenericClient, NoTls};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -22,23 +21,26 @@ use crate::biology::digestion_enzyme::{
         create_peptides_entities_from_digest, get_enzyme_by_name, remove_unknown_from_digest,
     },
 };
-use crate::database::citus::{
-    configuration_table::ConfigurationTable, peptide_table::PeptideTable,
-    protein_table::ProteinTable,
-};
 use crate::database::configuration_table::{
     ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait,
 };
 use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
+use crate::database::scylla::client::Client;
+use crate::database::scylla::client::GenericClient;
+use crate::database::scylla::peptide_table::SELECT_COLS;
+use crate::database::scylla::{
+    configuration_table::ConfigurationTable, get_client, peptide_table::PeptideTable,
+    protein_table::ProteinTable,
+};
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
+use scylla::frame::response::result::{CqlValue, Row};
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
 
-// add module migration to the current module
-embed_migrations!("src/database/citus/migrations");
+use super::{prepare_database_for_tests, SCYLLA_KEYSPACE_NAME};
 
 lazy_static! {
     static ref PROTEIN_QUEUE_WRITE_SLEEP_TIME: Duration = Duration::from_millis(100);
@@ -270,14 +272,7 @@ impl DatabaseBuild {
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
     ) -> Result<()> {
-        let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls).await?;
-        // The connection object performs the actual communication with the database,
-        // so spawn it off to run on its own.
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
+        let mut client = get_client().await.unwrap();
 
         let mut wait_for_queue = true;
         loop {
@@ -302,14 +297,20 @@ impl DatabaseBuild {
                 }
                 protein_queue.pop().unwrap() // unwrap is safe because we checked if queue is empty
             };
-            let existing_protein: Option<Protein> = ProteinTable::select(
-                &mut client,
-                "WHERE accession = $1 OR accession = ANY($2)",
-                &[protein.get_accession(), protein.get_secondary_accessions()],
+
+            let mut accession_list = protein.get_secondary_accessions().clone();
+            accession_list.push(protein.get_accession().to_owned());
+
+            let existing_protein_result: Result<Option<Protein>> = ProteinTable::select(
+                &client,
+                "WHERE accession IN (?)",
+                &[&CqlValue::Text(accession_list.join(","))],
             )
-            .await?;
+            .await;
+
             // or contained in secondary accessions
-            if let Some(existing_protein) = existing_protein {
+            if existing_protein_result.as_ref().is_ok_and(|x| x.is_some()) {
+                let existing_protein = existing_protein_result?.unwrap();
                 if existing_protein.get_updated_at() == protein.get_updated_at() {
                     continue;
                 }
@@ -333,8 +334,6 @@ impl DatabaseBuild {
                 .await?;
             }
         }
-        connection_handle.abort();
-        let _ = connection_handle.await;
         Ok(())
     }
 
@@ -383,7 +382,7 @@ impl DatabaseBuild {
             partition_limits,
             Some(&updated_protein),
         )?;
-        let mut transaction = client.transaction().await?;
+
         // Update peptide metadata if:
         // 1. taxonomy id changed
         // 2. proteome id changed
@@ -396,7 +395,7 @@ impl DatabaseBuild {
         {
             // Deassociate the peptides which are not contained in the new protein
             Self::deassociate_protein_peptides_difference(
-                &transaction,
+                client,
                 stored_protein,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
@@ -405,7 +404,7 @@ impl DatabaseBuild {
 
             // Update the old accession in the peptides to the new accession
             PeptideTable::update_protein_accession(
-                &transaction,
+                client,
                 &mut peptides_of_updated_protein.iter(),
                 stored_protein.get_accession(),
                 Some(updated_protein.get_accession()),
@@ -414,23 +413,23 @@ impl DatabaseBuild {
 
             // Create and associate the peptides which are not contained in the existing protein
             Self::create_protein_peptide_difference(
-                &transaction,
+                client,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
             )
             .await?;
         } else if updated_protein.get_accession() != stored_protein.get_accession() {
             PeptideTable::update_protein_accession(
-                &transaction,
+                client,
                 &mut peptides_of_updated_protein.iter(),
                 stored_protein.get_accession().as_ref(),
                 Some(updated_protein.get_accession().as_ref()),
             )
             .await?;
         } else if updated_protein.get_sequence() != stored_protein.get_sequence() {
-            // Deassociatte the peptides which are not contained in the new protein
+            // Deassociate the peptides which are not contained in the new protein
             Self::deassociate_protein_peptides_difference(
-                &transaction,
+                client,
                 stored_protein,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
@@ -438,7 +437,7 @@ impl DatabaseBuild {
             .await?;
             // Create and associate the peptides which are not contained in the existing protein
             Self::create_protein_peptide_difference(
-                &mut transaction,
+                client,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
             )
@@ -447,16 +446,15 @@ impl DatabaseBuild {
 
         if flag_for_metadata_update {
             PeptideTable::unset_is_metadata_updated(
-                &mut transaction,
+                client,
                 &mut peptides_of_updated_protein.iter(),
             )
             .await?;
         }
 
         // Update protein itself
-        ProteinTable::update(&mut transaction, &stored_protein, &updated_protein).await?;
+        ProteinTable::update(client, &stored_protein, &updated_protein).await?;
 
-        transaction.commit().await?;
         Ok(())
     }
 
@@ -547,10 +545,8 @@ impl DatabaseBuild {
             Some(&protein),
         )?;
 
-        let mut transaction = client.transaction().await?;
-        ProteinTable::insert(&mut transaction, &protein).await?;
-        PeptideTable::bulk_insert(&mut transaction, &mut peptides.iter()).await?;
-        transaction.commit().await?;
+        ProteinTable::insert(client, &protein).await?;
+        PeptideTable::bulk_insert(client, &mut peptides.iter()).await?;
 
         return Ok(());
     }
@@ -606,70 +602,62 @@ impl DatabaseBuild {
         database_url: String,
         partitions: Vec<i64>,
     ) -> Result<()> {
-        for partition in partitions.iter() {
-            let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls).await?;
-            // The connection object performs the actual communication with the database,
-            // so spawn it off to run on its own.
-            let connection_handle = tokio::spawn(async move {
-                if let Err(e) = connection.await {
-                    eprintln!("connection error: {}", e);
-                }
-            });
-
-            let mut partition_transaction = client.transaction().await?;
-            let cursor_statement = format!(
-                "DECLARE peptide_cursor_{} CURSOR FOR SELECT * FROM {} WHERE partition = $1 AND is_metadata_updated = false;",
-                thread_id,
-                PeptideTable::table_name()
-            );
-            let fetch_statement = format!("FETCH 1000 FROM peptide_cursor_{};", thread_id);
-            let cursor_close_statement = format!("CLOSE peptide_cursor_{};", thread_id);
-            partition_transaction
-                .execute(&cursor_statement, &[partition])
-                .await?;
-            loop {
-                let rows = partition_transaction.query(&fetch_statement, &[]).await?;
-                if rows.len() == 0 {
-                    break;
-                }
-                let mut peptide_transaction = partition_transaction.transaction().await?;
-                for row in rows {
-                    let associated_proteins = ProteinTable::select_multiple(
-                        &mut peptide_transaction,
-                        "WHERE accession = ANY($1)",
-                        &[&row.get::<_, Vec<String>>("proteins")],
-                    )
-                    .await?;
-                    let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
-                        Peptide::get_metadata_from_proteins(&associated_proteins);
-                    let update_query = format!(
-                        "UPDATE {} SET is_metadata_updated = true, is_swiss_prot = $1, is_trembl = $2, taxonomy_ids = $3, unique_taxonomy_ids = $4, proteome_ids = $5 WHERE partition = $6 AND mass = $7 and sequence = $8;",
+        let mut client = get_client().await?;
+        let mut session = client.get_session();
+        let update_query = format!(
+                        "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ? WHERE partition = ? AND mass = ? and sequence = ?",
+                        SCYLLA_KEYSPACE_NAME,
                         PeptideTable::table_name()
                     );
-                    peptide_transaction
-                        .query(
-                            &update_query,
-                            &[
-                                &is_swiss_prot,
-                                &is_trembl,
-                                &taxonomy_ids,
-                                &unique_taxonomy_ids,
-                                &proteome_ids,
-                                &row.get::<_, i64>("partition"),
-                                &row.get::<_, i64>("mass"),
-                                &row.get::<_, &str>("sequence"),
-                            ],
-                        )
-                        .await?;
-                }
-                peptide_transaction.commit().await?;
-            }
-            partition_transaction
-                .execute(&cursor_close_statement, &[])
+        let update_query_prepared_statement = session.prepare(update_query).await?;
+
+        for partition in partitions.iter() {
+            let query_statement = format!(
+                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
+                SELECT_COLS,
+                SCYLLA_KEYSPACE_NAME,
+                PeptideTable::table_name()
+            );
+            let mut rows_stream = session
+                .query_iter(query_statement, (partition,))
+                .await
+                .unwrap();
+
+            while let Some(row_opt) = rows_stream.next().await {
+                let row = row_opt?;
+                // ToDo: This might be bad performance wise
+                let peptide = Peptide::from(row);
+                let associated_proteins = ProteinTable::select_multiple(
+                    &client,
+                    "WHERE accession IN ?",
+                    &[&CqlValue::List(
+                        peptide
+                            .get_proteins()
+                            .into_iter()
+                            .map(|x| CqlValue::Text(x.to_owned()))
+                            .collect(),
+                    )],
+                )
                 .await?;
-            partition_transaction.commit().await?;
-            connection_handle.abort();
-            let _ = connection_handle.await;
+
+                let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
+                    Peptide::get_metadata_from_proteins(&associated_proteins);
+                session
+                    .execute(
+                        &update_query_prepared_statement,
+                        (
+                            &is_swiss_prot,
+                            &is_trembl,
+                            &taxonomy_ids,
+                            &unique_taxonomy_ids,
+                            &proteome_ids,
+                            peptide.get_partition(),
+                            peptide.get_mass(),
+                            peptide.get_sequence(),
+                        ),
+                    )
+                    .await?;
+            }
         }
         Ok(())
     }
@@ -698,22 +686,16 @@ impl DatabaseBuildTrait for DatabaseBuild {
             disable = !show_progress
         );
 
-        let (mut client, connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
-
-        // The connection object performs the actual communication with the database,
-        // so spawn it off to run on its own.
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
+        let mut client = get_client().await?;
+        let mut sessioN = client.get_session();
 
         if verbose {
             progress_bar.write("applying database migrations...");
         }
 
         // Run migrations
-        migrations::runner().run_async(&mut client).await?;
+        prepare_database_for_tests(&client).await;
+        // migrations::runner().run_async(&mut client).await?;
 
         // get or set configuration
         let configuration = Self::get_or_set_configuration(
@@ -727,9 +709,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
             verbose,
         )
         .await?;
-
-        connection_handle.abort();
-        let _ = connection_handle.await;
 
         let digestion_enzyme = get_enzyme_by_name(
             configuration.get_enzyme_name(),
@@ -778,10 +757,10 @@ mod test {
     use crate::biology::digestion_enzyme::functions::{
         create_peptides_entities_from_digest, get_enzyme_by_name,
     };
-    use crate::database::citus::{
+    use crate::database::scylla::{
         peptide_table::PeptideTable,
         protein_table::ProteinTable,
-        tests::{get_client, prepare_database_for_tests, DATABASE_URL},
+        {get_client, prepare_database_for_tests, DATABASE_URL},
     };
     use crate::database::selectable_table::SelectableTable;
     use crate::io::uniprot_text::reader::Reader;
@@ -801,15 +780,9 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_database_build_without_initial_config() {
-        let (mut client, connection) = get_client().await;
+        let mut client = get_client().await.unwrap();
+        let mut session = client.get_session();
 
-        // The connection object performs the actual communication with the database,
-        // so spawn it off to run on its own.
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
         prepare_database_for_tests(&mut client).await;
 
         let protein_file_paths = vec![Path::new("test_files/uniprot.txt").to_path_buf()];
@@ -819,26 +792,15 @@ mod test {
             .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, false, false)
             .await;
         assert!(build_res.is_err());
-        connection_handle.abort();
-        let _ = connection_handle.await;
     }
 
     #[tokio::test]
     #[serial]
     async fn test_database_build() {
-        let (mut client, connection) = get_client().await;
-
-        // The connection object performs the actual communication with the database,
-        // so spawn it off to run on its own.
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
+        let mut client = get_client().await.unwrap();
+        let mut session = client.get_session();
 
         prepare_database_for_tests(&mut client).await;
-        connection_handle.abort();
-        let _ = connection_handle.await;
 
         let protein_file_paths = vec![
             Path::new("test_files/uniprot.txt").to_path_buf(),
@@ -860,14 +822,6 @@ mod test {
             .await
             .unwrap();
 
-        let (client, connection) = get_client().await;
-
-        let connection_handle = tokio::spawn(async move {
-            if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
-            }
-        });
-
         let configuration = ConfigurationTable::select(&client).await.unwrap();
 
         let enzyme = get_enzyme_by_name(
@@ -884,8 +838,8 @@ mod test {
             while let Some(protein) = reader.next().unwrap() {
                 let proteins = ProteinTable::select_multiple(
                     &client,
-                    "WHERE accession = $1",
-                    &[protein.get_accession()],
+                    "WHERE accession = ?",
+                    &[&CqlValue::Text(protein.get_accession().to_owned())],
                 )
                 .await
                 .unwrap();
@@ -901,15 +855,16 @@ mod test {
                 for peptide in expected_peptides {
                     let peptides = PeptideTable::select_multiple(
                         &client,
-                        "WHERE partition = $1 AND mass = $2 AND sequence = $3",
+                        "WHERE partition = ? AND mass = ? AND sequence = ?",
                         &[
-                            peptide.get_partition_as_ref(),
-                            peptide.get_mass_as_ref(),
-                            peptide.get_sequence(),
+                            &CqlValue::BigInt(peptide.get_partition().to_owned()),
+                            &CqlValue::BigInt(peptide.get_mass_as_ref().to_owned()),
+                            &CqlValue::Text(peptide.get_sequence().to_owned()),
                         ],
                     )
                     .await
                     .unwrap();
+
                     assert_eq!(peptides.len(), 1);
                 }
             }
@@ -917,10 +872,14 @@ mod test {
 
         // Select the duplicated trpsin protein
         // Digest it again, and check the metadata fit to the original trypsin and the duplicated trypsin
-        let trypsin_duplicate = ProteinTable::select(&client, "WHERE accession = $1", &[&"DUPLIC"])
-            .await
-            .unwrap()
-            .unwrap();
+        let trypsin_duplicate = ProteinTable::select(
+            &client,
+            "WHERE accession = ?",
+            &[&CqlValue::Text("DUPLIC".to_string())],
+        )
+        .await
+        .unwrap()
+        .unwrap();
 
         let trypsin_duplicate_peptides: Vec<Peptide> = create_peptides_entities_from_digest(
             &enzyme.digest(&trypsin_duplicate.get_sequence()),
@@ -932,17 +891,18 @@ mod test {
         for peptide in trypsin_duplicate_peptides {
             let peptide = PeptideTable::select(
                 &client,
-                "WHERE partition = $1 AND mass = $2 AND sequence = $3",
+                "WHERE partition = ? AND mass = ? AND sequence = ?",
                 &[
-                    peptide.get_partition_as_ref(),
-                    peptide.get_mass_as_ref(),
-                    peptide.get_sequence(),
+                    &CqlValue::BigInt(peptide.get_partition().to_owned()),
+                    &CqlValue::BigInt(peptide.get_mass_as_ref().to_owned()),
+                    &CqlValue::Text(peptide.get_sequence().to_owned()),
                 ],
             )
             .await
             .unwrap()
             .unwrap();
             assert_eq!(peptide.get_proteins().len(), 2);
+
             EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN
                 .iter()
                 .for_each(|x| {
@@ -979,11 +939,10 @@ mod test {
                         x
                     )
                 });
+
             assert!(peptide.get_is_swiss_prot());
             assert!(peptide.get_is_trembl());
         }
-        connection_handle.abort();
-        let _ = connection_handle.await;
     }
 
     // TODO: Test update

@@ -22,6 +22,8 @@ jobs:
         run: docker-compose up -d --build
       - name: Install Custom C Dependencies
         run: sudo apt install -y libhdf5-serial-dev
+      - name: Toolchain fix
+        run: rustup toolchain install nightly
       - name: Build
         run: cargo build -r --verbose
       - name: Run tests

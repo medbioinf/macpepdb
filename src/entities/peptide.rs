@@ -6,6 +6,7 @@ use std::{
 
 // 3rd party imports
 use anyhow::Result;
+use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
 use tokio_postgres::Row;
 
@@ -246,39 +247,56 @@ impl From<Row> for Peptide {
 impl From<ScyllaRow> for Peptide {
     fn from(row: ScyllaRow) -> Self {
         Self {
-            partition: get_cql_value(&row.columns, 0).as_bigint().unwrap(),
-            mass: get_cql_value(&row.columns, 1).as_bigint().unwrap(),
-            sequence: get_cql_value(&row.columns, 2).into_string().unwrap(),
-            missed_cleavages: get_cql_value(&row.columns, 3).as_smallint().unwrap(),
+            partition: get_cql_value(&row.columns, 0).unwrap().as_bigint().unwrap(),
+            mass: get_cql_value(&row.columns, 1).unwrap().as_bigint().unwrap(),
+            sequence: get_cql_value(&row.columns, 2)
+                .unwrap()
+                .into_string()
+                .unwrap(),
+            missed_cleavages: get_cql_value(&row.columns, 3)
+                .unwrap()
+                .as_smallint()
+                .unwrap_or(0),
             aa_counts: get_cql_value(&row.columns, 4)
+                .unwrap()
                 .as_list()
                 .unwrap()
                 .into_iter()
                 .map(|cql_val| cql_val.as_smallint().unwrap().to_owned())
                 .collect(),
             proteins: get_cql_value(&row.columns, 5)
-                .as_list()
-                .unwrap()
+                .unwrap_or(CqlValue::Set(vec![]))
+                .as_set()
+                .unwrap_or(&vec![])
                 .into_iter()
                 .map(|cql_val| cql_val.as_text().unwrap().to_owned())
                 .collect(),
-            is_swiss_prot: get_cql_value(&row.columns, 6).as_boolean().unwrap(),
-            is_trembl: get_cql_value(&row.columns, 7).as_boolean().unwrap(),
-            taxonomy_ids: get_cql_value(&row.columns, 8)
-                .as_list()
+            is_swiss_prot: get_cql_value(&row.columns, 6)
                 .unwrap()
+                .as_boolean()
+                .unwrap(),
+            is_trembl: get_cql_value(&row.columns, 7)
+                .unwrap()
+                .as_boolean()
+                .unwrap(),
+            taxonomy_ids: get_cql_value(&row.columns, 8)
+                .unwrap_or(CqlValue::Set(vec![]))
+                .as_set()
+                .unwrap_or(&vec![])
                 .into_iter()
                 .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
                 .collect(),
             unique_taxonomy_ids: get_cql_value(&row.columns, 9)
-                .as_list()
-                .unwrap()
+                .unwrap_or(CqlValue::Set(vec![]))
+                .as_set()
+                .unwrap_or(&vec![])
                 .into_iter()
                 .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
                 .collect(),
             proteome_ids: get_cql_value(&row.columns, 10)
-                .as_list()
-                .unwrap()
+                .unwrap_or(CqlValue::Set(vec![]))
+                .as_set()
+                .unwrap_or(&vec![])
                 .into_iter()
                 .map(|cql_val| cql_val.as_text().unwrap().to_owned())
                 .collect(),

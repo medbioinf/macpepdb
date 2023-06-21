@@ -15,7 +15,7 @@ use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 
 const TABLE_NAME: &'static str = "peptides";
 
-const SELECT_COLS: &'static str = "partition, mass, sequence, missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids";
+pub const SELECT_COLS: &'static str = "partition, mass, sequence, missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids";
 
 const INSERT_COLS: &'static str = SELECT_COLS;
 
@@ -243,7 +243,6 @@ where
             statement += " ";
             statement += additional;
         }
-        println!("Query: {:?} Params: {:?}", statement, params);
         return Ok(Some(session.query(statement, params).await?.first_row()?));
     }
 
@@ -324,7 +323,7 @@ mod tests {
     // internal imports
     use super::*;
 
-    use crate::database::scylla::tests::{get_client, prepare_database_for_tests};
+    use crate::database::scylla::{get_client, prepare_database_for_tests};
     use crate::io::uniprot_text::reader::Reader;
 
     const CONFLICTING_PEPTIDE_PROTEIN_ACCESSION: &'static str = "P41159";

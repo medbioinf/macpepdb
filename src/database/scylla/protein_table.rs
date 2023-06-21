@@ -179,6 +179,7 @@ where
         params: &[&'b Self::Parameter],
     ) -> Result<Option<Self::Record>> {
         let session = client.get_session();
+
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
@@ -189,6 +190,7 @@ where
             statement += " ";
             statement += additional;
         }
+
         return Ok(Some(session.query(statement, params).await?.first_row()?));
     }
 
@@ -223,6 +225,7 @@ where
             params,
         )
         .await?;
+
         if row.is_none() {
             return Ok(None);
         }
@@ -267,7 +270,7 @@ mod tests {
     // internal imports
     use super::*;
     use crate::database::scylla::client::{Client, GenericClient};
-    use crate::database::scylla::tests::{get_client, prepare_database_for_tests, DATABASE_URL};
+    use crate::database::scylla::{get_client, prepare_database_for_tests, DATABASE_URL};
     use crate::io::uniprot_text::reader::Reader;
 
     const EXPECTED_PROTEINS: i64 = 3;
