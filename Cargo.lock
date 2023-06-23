@@ -885,6 +885,7 @@ dependencies = [
  "lazy_static",
  "log",
  "murmur3",
+ "rand",
  "refinery",
  "scylla",
  "serde",

@@ -11,9 +11,13 @@ use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use kdam::{tqdm, Bar, BarExt};
+use rand::{self, Rng};
 use refinery::embed_migrations;
 use tokio::task::{spawn, JoinHandle};
-use tokio_postgres::{Client, GenericClient, NoTls};
+use tokio_postgres::{
+    error::{Error as PSQLError, SqlState},
+    Client, GenericClient, NoTls,
+};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -39,6 +43,8 @@ use crate::tools::peptide_partitioner::PeptidePartitioner;
 
 // add module migration to the current module
 embed_migrations!("src/database/citus/migrations");
+
+const MAX_INSERT_TRIES: u64 = 3;
 
 lazy_static! {
     static ref PROTEIN_QUEUE_WRITE_SLEEP_TIME: Duration = Duration::from_millis(100);
@@ -308,29 +314,62 @@ impl DatabaseBuild {
                 &[protein.get_accession(), protein.get_secondary_accessions()],
             )
             .await?;
-            // or contained in secondary accessions
-            if let Some(existing_protein) = existing_protein {
-                if existing_protein.get_updated_at() == protein.get_updated_at() {
-                    continue;
+            let mut tries: u64 = 0;
+            loop {
+                tries += 1;
+                // After MAX_INSERT_TRIES is reached, we log the proteins as something may seem wrong
+                if tries > MAX_INSERT_TRIES {
+                    // TODO: Log protein as unprocessable
+                    break;
                 }
-                Self::update_protein(
-                    &mut client,
-                    &protein,
-                    &existing_protein,
-                    &digestion_enzyme,
-                    remove_peptides_containing_unknown,
-                    &partition_limits_arc,
-                )
-                .await?;
-            } else {
-                Self::insert_protein(
-                    &mut client,
-                    &protein,
-                    &digestion_enzyme,
-                    remove_peptides_containing_unknown,
-                    &partition_limits_arc,
-                )
-                .await?;
+                let db_result: Result<()> = async {
+                    if let Some(existing_protein) = &existing_protein {
+                        if existing_protein.get_updated_at() == protein.get_updated_at() {
+                            return Ok(()); // Protein already exists and is up to date
+                        }
+                        return Self::update_protein(
+                            &mut client,
+                            &protein,
+                            &existing_protein,
+                            &digestion_enzyme,
+                            remove_peptides_containing_unknown,
+                            &partition_limits_arc,
+                        )
+                        .await;
+                    } else {
+                        return Self::insert_protein(
+                            &mut client,
+                            &protein,
+                            &digestion_enzyme,
+                            remove_peptides_containing_unknown,
+                            &partition_limits_arc,
+                        )
+                        .await;
+                    };
+                }
+                .await;
+                // We can expect deadlocks and unique violations to happen
+                // when multiple threads try to insert the same peptides at the same time
+                // or a peptide is already inserted by another thread.
+                // Unique violations should be handled using the upsert mechanism, but lets catch it anyway.
+                // If we get some of the errors, we're waiting for a random time and retry.
+                if let Err(db_err) = db_result {
+                    if let Some(db_err) = db_err.downcast_ref::<PSQLError>() {
+                        match db_err.code() {
+                            Some(&SqlState::T_R_DEADLOCK_DETECTED)
+                            | Some(&SqlState::UNIQUE_VIOLATION) => {
+                                let mut rng = rand::thread_rng();
+                                let mut sleep_time = rng.gen_range(0..=3);
+                                sleep_time += tries;
+                                sleep(Duration::from_secs(sleep_time));
+                                // Deadlock detected, retry
+                                continue;
+                            }
+                            _ => {} // Propagate other errors
+                        }
+                    }
+                    return Err(db_err);
+                }
             }
         }
         connection_handle.abort();

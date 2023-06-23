@@ -30,6 +30,7 @@ kdam = "0.3.0"
 lazy_static = "1.4.0"
 log = "0.4.17"
 murmur3 = "0.5.2"
+rand = "0.8.5"
 refinery = { version = "0.8.7", features = ["tokio-postgres"] }
 scylla = "0.8.1"
 serde = "1.0.160"
