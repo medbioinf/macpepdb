@@ -1,6 +1,4 @@
-/// BloomFilter implementation
-pub mod bloom_filter;
-/// Functions for formatting outputs
+// Functions for formatting outputs
 pub mod display;
 /// Additional functions based on the crate `fancy_regex`
 pub mod fancy_regex;

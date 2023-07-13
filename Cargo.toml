@@ -15,7 +15,7 @@ name = "macpepdb"
 path = "src/bin.rs"
 
 [dependencies]
-anyhow = "1.0.69"
+anyhow = "~1.0.69"
 bitvec = "1.0.1"
 chrono = "0.4.23"
 clap = { version = "4.3.0", features = ["derive"] }
@@ -23,9 +23,6 @@ env_logger = "0.10.0"
 fallible-iterator = "0.2.0"
 fancy-regex = "0.11.0"
 futures = "0.3.28"
-# Support for hdf4 1.15. If PR https://github.com/aldanor/hdf5-rust/pull/227 is accepted, this can be removed
-hdf5 = { git = "https://github.com/mulimoen/hdf5-rust.git", branch = "feature/hdf5_1_14"}
-# hdf5 = "0.8.1"
 kdam = "0.3.0"
 lazy_static = "1.4.0"
 log = "0.4.17"
@@ -38,6 +35,7 @@ serde_json = "1.0.95"
 sysinfo = "0.28.2"
 tokio = { version = "1.28.2", features = ["full"] }
 tokio-postgres = { version = "0.7.8", features = ["with-serde_json-1"] }
+dihardts_cstools = "~1.0.0"
 
 [dev-dependencies]
 serial_test = "*"

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 // 3rd party imports
 use anyhow::{bail, Result};
+use dihardts_cstools::bloom_filter::BloomFilter;
 use fallible_iterator::FallibleIterator;
 use kdam::{Bar, BarExt};
 use sysinfo::{System, SystemExt};
@@ -12,7 +13,7 @@ use sysinfo::{System, SystemExt};
 use crate::biology::digestion_enzyme::enzyme::Enzyme;
 use crate::chemistry::amino_acid::{calc_sequence_mass, TRYPTOPHAN, UNKNOWN};
 use crate::io::uniprot_text::reader::Reader;
-use crate::tools::bloom_filter::BloomFilter;
+// use crate::tools::bloom_filter::BloomFilter;
 use crate::tools::display::bytes_to_human_readable;
 
 lazy_static! {
