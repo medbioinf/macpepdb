@@ -13,6 +13,7 @@ use futures::future::join_all;
 use futures::StreamExt;
 use kdam::{tqdm, Bar, BarExt};
 use tokio::task::{spawn, JoinHandle};
+use tracing::{info, span, Level};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -90,6 +91,7 @@ impl DatabaseBuild {
                 .is::<ConfigurationIncompleteError>()
         {
             if verbose && config_res.as_ref().is_ok() {
+                info!("Found previous config");
                 progress_bar.write("found previous config ...");
             }
             return config_res;
@@ -102,6 +104,7 @@ impl DatabaseBuild {
         let initial_configuration = initial_configuration_opt.unwrap();
 
         let new_configuration = if initial_configuration.get_partition_limits().len() == 0 {
+            info!("initial configuration has no partition limits list, creating one ...");
             if verbose {
                 progress_bar
                     .write("initial configuration has no partition limits list, creating one ...");
@@ -140,6 +143,8 @@ impl DatabaseBuild {
 
         // insert new_configuration
         ConfigurationTable::insert(client, &new_configuration).await?;
+        info!("new configuration saved ...");
+
         if verbose {
             progress_bar.write("new configuration saved ...");
         }
@@ -679,6 +684,8 @@ impl DatabaseBuildTrait for DatabaseBuild {
         show_progress: bool,
         verbose: bool,
     ) -> Result<()> {
+        info!("Starting database build");
+
         let mut progress_bar = tqdm!(
             total = 0,
             desc = "partitioning",
@@ -694,16 +701,18 @@ impl DatabaseBuildTrait for DatabaseBuild {
         }
 
         // Run migrations
+        info!("Applying database migrations");
         prepare_database_for_tests(&client).await;
         // migrations::runner().run_async(&mut client).await?;
 
+        info!("Getting / Setting configuration");
         // get or set configuration
         let configuration = Self::get_or_set_configuration(
             &mut client,
             protein_file_paths,
             num_partitions,
-            partitioner_false_positive_probability,
             allowed_ram_usage,
+            partitioner_false_positive_probability,
             initial_configuration_opt,
             &mut progress_bar,
             verbose,
@@ -718,6 +727,11 @@ impl DatabaseBuildTrait for DatabaseBuild {
         )?;
 
         // read, digest and insert proteins and peptides
+        let span = span!(Level::INFO, "protein_digestion");
+        let _guard = span.enter();
+
+        info!("Starting digest and insert");
+
         Self::protein_digestion(
             &self.database_url,
             num_threads,
@@ -729,7 +743,11 @@ impl DatabaseBuildTrait for DatabaseBuild {
             verbose,
         )
         .await?;
+
         // collect metadata
+        let span = span!(Level::INFO, "metadata_updates");
+        let _guard = span.enter();
+
         Self::collect_peptide_metadata(
             num_threads,
             &self.database_url,
