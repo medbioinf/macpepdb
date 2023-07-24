@@ -9,6 +9,7 @@ use tokio_postgres::{
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
+use crate::tools::psql::convert_placeholders;
 
 const TABLE_NAME: &'static str = "peptides";
 
@@ -234,7 +235,7 @@ where
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
-            statement += additional;
+            statement += convert_placeholders(additional)?.as_str();
         }
         return Ok(client.query(&statement, params).await?);
     }
@@ -248,7 +249,7 @@ where
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
-            statement += additional;
+            statement += convert_placeholders(additional)?.as_str();
         }
         return Ok(client.query_opt(&statement, params).await?);
     }
@@ -299,7 +300,7 @@ where
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
-            statement += additional;
+            statement += convert_placeholders(additional)?.as_str();
         }
         return Ok(client
             .query_raw(&statement, params.iter().map(|param| param.borrow_to_sql()))
