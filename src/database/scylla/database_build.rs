@@ -28,6 +28,7 @@ use crate::database::configuration_table::{
 use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
 use crate::database::scylla::client::Client;
 use crate::database::scylla::client::GenericClient;
+use crate::database::scylla::migrations::run_migrations;
 use crate::database::scylla::peptide_table::SELECT_COLS;
 use crate::database::scylla::{
     configuration_table::ConfigurationTable, get_client, peptide_table::PeptideTable,
@@ -701,8 +702,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         }
 
         // Run migrations
-        info!("Applying database migrations");
-        prepare_database_for_tests(&client).await;
+        run_migrations(&client).await;
         // migrations::runner().run_async(&mut client).await?;
 
         info!("Getting / Setting configuration");

@@ -9,11 +9,13 @@ use chrono::{Duration, DurationRound, Utc};
 use scylla::{_macro_internal::CqlValue, batch::Batch, query::Query};
 use tracing::{debug, info};
 
-use super::{client::GenericClient, SCYLLA_KEYSPACE_NAME};
+use super::{
+    client::{Client, GenericClient},
+    SCYLLA_KEYSPACE_NAME,
+};
 
-pub async fn run_migrations() -> Result<()> {
+pub async fn run_migrations(client: &Client) {
     info!("Running Scylla migrations");
-    let mut client = get_client().await.unwrap();
     let session = client.get_session();
 
     create_keyspace_if_not_exists(&client).await;
@@ -44,8 +46,6 @@ pub async fn run_migrations() -> Result<()> {
             .await
             .unwrap();
     }
-
-    Ok(())
 }
 
 pub async fn get_latest_migration_id() -> Result<i32> {
@@ -116,9 +116,9 @@ mod tests {
         let client = get_client().await.unwrap();
         drop_keyspace(&client).await;
 
-        run_migrations().await.unwrap();
+        run_migrations(&client).await;
         assert_eq!(get_latest_migration_id().await.unwrap(), UP.len() as i32);
-        run_migrations().await.unwrap();
+        run_migrations(&client).await;
         assert_eq!(get_latest_migration_id().await.unwrap(), UP.len() as i32);
     }
 }
