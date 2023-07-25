@@ -2,6 +2,7 @@
 pub mod client;
 pub mod configuration_table;
 pub mod database_build;
+pub mod migrations;
 pub mod peptide_table;
 pub mod protein_table;
 pub mod schema;
