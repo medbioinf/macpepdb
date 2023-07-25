@@ -42,6 +42,7 @@ tracing-indicatif = "0.3.4"
 indicatif = "0.17.6"
 dihardts_omicstools = { path = "../omicstools" }
 csv = "1.2.2"
+async-stream = "0.3.5"
 
 [dev-dependencies]
 serial_test = "*"

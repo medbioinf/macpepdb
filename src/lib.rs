@@ -9,6 +9,7 @@
 #![feature(trait_alias)]
 #![feature(type_alias_impl_trait)]
 #![feature(async_iterator)]
+#![feature(return_position_impl_trait_in_trait)]
 
 // 3rd party imports
 #[allow(unused_imports)]
