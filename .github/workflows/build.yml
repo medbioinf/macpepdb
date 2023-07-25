@@ -21,7 +21,7 @@ jobs:
       - name: Start containers
         run: docker-compose up -d --build
       - name: Install Custom C Dependencies
-        run: sudo apt install -y libhdf5-serial-dev --fix-missing
+        run: sudo apt update && sudo apt install -y libhdf5-serial-dev --fix-missing
       - name: Toolchain fix
         run: rustup toolchain install nightly
       - name: Build
