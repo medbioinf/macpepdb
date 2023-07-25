@@ -122,9 +122,16 @@ impl<'a> PeptidePartitioner<'a> {
                     partition_contents.remove(0);
                     partition_limits.remove(0);
                 } else {
-                    let moveable_fraction = capacity as f64 / partition_contents[0] as f64;
-                    let movable_peptides =
-                        (moveable_fraction * partition_contents[0] as f64) as u64;
+                    let mut moveable_fraction = capacity as f64 / partition_contents[0] as f64;
+                    let mut movable_peptides =
+                        (moveable_fraction * partition_contents[0] as f64).ceil() as u64;
+                    // Dealing with rounding. If movable fraction is too small and movable peptides is rounded down,
+                    // movables peptides might be 0 while there is still free capacity. Resulting in an infinite loop.
+                    // If it is rounded up it might come to an capacity overflow.
+                    if movable_peptides == 0 || movable_peptides > capacity {
+                        movable_peptides = capacity;
+                        moveable_fraction = movable_peptides as f64 / partition_contents[0] as f64;
+                    }
                     let mass_diff = partition_limits[0] - *limit;
                     let moveable_mass = (moveable_fraction * mass_diff as f64) as i64;
                     *content += movable_peptides;
