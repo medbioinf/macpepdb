@@ -113,7 +113,6 @@ impl<'a> PeptidePartitioner<'a> {
         let mut last_limit: i64 = -1;
         for (content, limit) in equalized_partition_contents.iter_mut() {
             let mut capacity = peptides_per_partition - *content;
-            info!("{} capacity", capacity);
             *limit = last_limit + 1;
             while capacity > 0 {
                 if capacity >= partition_contents[0] {
@@ -217,9 +216,9 @@ impl<'a> PeptidePartitioner<'a> {
             "System available memory {}",
             System::new_all().available_memory()
         );
-        // let usable_ram = 900000000;
-        let usable_ram =
-            (System::new_all().available_memory() as f64 * self.allowed_memory_usage) as u64;
+        let usable_ram = 900000000;
+        // let usable_ram =
+        //     (System::new_all().available_memory() as f64 * self.allowed_memory_usage) as u64;
         debug!("Using {} RAM for bloom_filters", &usable_ram);
 
         let mut bloom_filters: Vec<BloomFilter> = match peptide_protein_ratio {

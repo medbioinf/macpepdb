@@ -775,6 +775,7 @@ mod test {
     use crate::biology::digestion_enzyme::functions::{
         create_peptides_entities_from_digest, get_enzyme_by_name,
     };
+    use crate::database::scylla::drop_keyspace;
     use crate::database::scylla::{
         peptide_table::PeptideTable,
         protein_table::ProteinTable,
@@ -801,7 +802,7 @@ mod test {
         let mut client = get_client().await.unwrap();
         let mut session = client.get_session();
 
-        prepare_database_for_tests(&mut client).await;
+        drop_keyspace(&client).await;
 
         let protein_file_paths = vec![Path::new("test_files/uniprot.txt").to_path_buf()];
 
@@ -818,7 +819,7 @@ mod test {
         let mut client = get_client().await.unwrap();
         let mut session = client.get_session();
 
-        prepare_database_for_tests(&mut client).await;
+        drop_keyspace(&client).await;
 
         let protein_file_paths = vec![
             Path::new("test_files/uniprot.txt").to_path_buf(),
