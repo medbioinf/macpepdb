@@ -54,6 +54,6 @@ services:
     ports:
       - "9042:9042"
     restart: always
-    command: --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
+    command: --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0 --developer-mode 1
 volumes:
   healthcheck-volume:
