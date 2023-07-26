@@ -366,16 +366,10 @@ mod test {
         let mut reader = Reader::new(&protein_file_paths, 4096).unwrap();
         let mut peptides: HashSet<String> = HashSet::new();
 
-        let mut cnt = 0;
         while let Some(protein) = reader.next().unwrap() {
             let peptide_sequences = trypsin.digest(protein.get_sequence());
             for (sequence, _) in peptide_sequences {
                 peptides.insert(sequence);
-            }
-            cnt += 1;
-
-            if cnt % 100 == 0 {
-                println!("Processed {}", cnt);
             }
         }
 

@@ -615,13 +615,9 @@ impl DatabaseBuild {
         num_threads: usize,
         database_url: &str,
         configuration: &Configuration,
-        progress_bar: &mut Bar,
-        verbose: bool,
     ) -> Result<()> {
-        if verbose {
-            println!("Collecting peptide metadata...");
-            println!("Chunking partitions for {} threads...", num_threads);
-        }
+        debug!("Collecting peptide metadata...");
+        debug!("Chunking partitions for {} threads...", num_threads);
         let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
             .ceil() as usize;
         let chunked_partitions: Vec<Vec<i64>> = (0..configuration.get_partition_limits().len()
@@ -633,9 +629,7 @@ impl DatabaseBuild {
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
-        if verbose {
-            println!("Starting {} threads...", num_threads);
-        }
+        debug!("Starting {} threads...", num_threads);
         // Start digestion threads
         for thread_id in 0..num_threads {
             // Clone necessary variables
@@ -649,9 +643,7 @@ impl DatabaseBuild {
                 Ok(())
             }));
         }
-        if verbose {
-            println!("Waiting threads to stop ...");
-        }
+        debug!("Waiting threads to stop ...");
         // Wait for digestion threads to finish
         join_all(metadata_collector_thread_handles).await;
         Ok(())
@@ -811,14 +803,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         let span = span!(Level::INFO, "metadata_updates");
         let _guard = span.enter();
 
-        Self::collect_peptide_metadata(
-            num_threads,
-            &self.database_url,
-            &configuration,
-            &mut progress_bar,
-            verbose,
-        )
-        .await?;
+        Self::collect_peptide_metadata(num_threads, &self.database_url, &configuration).await?;
         // count peptides per partition
 
         Ok(())

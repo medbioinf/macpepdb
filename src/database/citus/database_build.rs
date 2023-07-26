@@ -18,6 +18,7 @@ use tokio_postgres::{
     error::{Error as PSQLError, SqlState},
     Client, GenericClient, NoTls,
 };
+use tracing::{debug, error};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -281,7 +282,7 @@ impl DatabaseBuild {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
@@ -598,13 +599,9 @@ impl DatabaseBuild {
         num_threads: usize,
         database_url: &str,
         configuration: &Configuration,
-        progress_bar: &mut Bar,
-        verbose: bool,
     ) -> Result<()> {
-        if verbose {
-            println!("Collecting peptide metadata...");
-            println!("Chunking partitions for {} threads...", num_threads);
-        }
+        debug!("Collecting peptide metadata...");
+        debug!("Chunking partitions for {} threads...", num_threads);
         let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
             .ceil() as usize;
         let chunked_partitions: Vec<Vec<i64>> = (0..configuration.get_partition_limits().len()
@@ -616,9 +613,7 @@ impl DatabaseBuild {
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
-        if verbose {
-            println!("Starting {} threads...", num_threads);
-        }
+        debug!("Starting {} threads...", num_threads);
         // Start digestion threads
         for thread_id in 0..num_threads {
             // Clone necessary variables
@@ -632,9 +627,7 @@ impl DatabaseBuild {
                 Ok(())
             }));
         }
-        if verbose {
-            println!("Waiting threads to stop ...");
-        }
+        debug!("Waiting threads to stop ...");
         // Wait for digestion threads to finish
         join_all(metadata_collector_thread_handles).await;
         Ok(())
@@ -651,7 +644,7 @@ impl DatabaseBuild {
             // so spawn it off to run on its own.
             let connection_handle = tokio::spawn(async move {
                 if let Err(e) = connection.await {
-                    eprintln!("connection error: {}", e);
+                    error!("connection error: {}", e);
                 }
             });
 
@@ -743,7 +736,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
@@ -790,14 +783,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         )
         .await?;
         // collect metadata
-        Self::collect_peptide_metadata(
-            num_threads,
-            &self.database_url,
-            &configuration,
-            &mut progress_bar,
-            verbose,
-        )
-        .await?;
+        Self::collect_peptide_metadata(num_threads, &self.database_url, &configuration).await?;
         // count peptides per partition
 
         Ok(())
@@ -846,7 +832,7 @@ mod test {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
         prepare_database_for_tests(&mut client).await;
@@ -871,7 +857,7 @@ mod test {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
@@ -903,7 +889,7 @@ mod test {
 
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 

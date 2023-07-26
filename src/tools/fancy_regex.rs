@@ -27,6 +27,8 @@ pub fn split<'a>(regex: &Regex, some_string: &'a str) -> Vec<&'a str> {
 
 #[cfg(test)]
 mod test {
+    use tracing::error;
+
     use super::*;
 
     #[test]
@@ -47,7 +49,7 @@ mod test {
                     continue 'sub_string_loop;
                 }
             }
-            println!(
+            error!(
                 "Did not find substring in '{}' in SPLITTED_TEST_STRING",
                 sub_sting
             );

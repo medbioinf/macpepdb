@@ -193,6 +193,7 @@ where
 mod tests {
     // 3rd party imports
     use serial_test::serial;
+    use tracing::info;
 
     // internal imports
     use super::*;
@@ -219,10 +220,10 @@ mod tests {
         prepare_database_for_tests(&client).await;
 
         let configuration_res = ConfigurationTable::select(&mut client).await;
-        println!("got config res");
+        info!("got config res");
 
         assert!(configuration_res.is_err());
-        println!("{:?}", configuration_res);
+        info!("{:?}", configuration_res);
         assert!(configuration_res
             .unwrap_err()
             .is::<ConfigurationIncompleteError>());
