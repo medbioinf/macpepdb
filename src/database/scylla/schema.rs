@@ -1,5 +1,5 @@
 pub const UP: [&str; 4] = [
-    CREATE_KEYSPACE,
+    CREATE_MIGRATIONS_TABLE,
     CREATE_CONFIG_TABLE,
     CREATE_PROTEINS_TABLE,
     CREATE_PEPTIDES_TABLE,
@@ -7,11 +7,13 @@ pub const UP: [&str; 4] = [
 
 pub const DROP_KEYSPACE: &str = "DROP KEYSPACE IF EXISTS macpep;";
 
-const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS macpep
+pub const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS macpep
     WITH replication = { 
             'class': 'NetworkTopologyStrategy',
             'datacenter1': '1'
         }  AND durable_writes = true;";
+
+const CREATE_MIGRATIONS_TABLE: &str = "CREATE TABLE macpep.migrations ( pk TEXT, id INT, created TEXT, description TEXT, PRIMARY KEY(pk, id));";
 
 const CREATE_CONFIG_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.config (
         conf_key text PRIMARY KEY,
