@@ -72,8 +72,6 @@ impl DatabaseBuild {
     /// * `allowed_ram_usage` - The allowed ram usage in GB
     /// * `partitioner_false_positive_probability` - The false positive probability of the partitioner
     /// * `initial_configuration_opt` - The initial configuration
-    /// * `progress_bar` - Progress bar
-    /// * `verbose` - Verbose output
     ///
     async fn get_or_set_configuration(
         client: &mut Client,
@@ -82,8 +80,6 @@ impl DatabaseBuild {
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
-        progress_bar: &mut Bar,
-        verbose: bool,
     ) -> Result<Configuration> {
         let config_res = ConfigurationTable::select(client).await;
         // return if configuration is ok or if it is not a ConfigurationIncompleteError
@@ -93,9 +89,8 @@ impl DatabaseBuild {
                 .unwrap_err()
                 .is::<ConfigurationIncompleteError>()
         {
-            if verbose && config_res.as_ref().is_ok() {
-                info!("Found previous config");
-                progress_bar.write("found previous config ...");
+            if config_res.as_ref().is_ok() {
+                debug!("Found previous config");
             }
             return config_res;
         }
@@ -108,10 +103,6 @@ impl DatabaseBuild {
 
         let new_configuration = if initial_configuration.get_partition_limits().len() == 0 {
             info!("initial configuration has no partition limits list, creating one ...");
-            if verbose {
-                progress_bar
-                    .write("initial configuration has no partition limits list, creating one ...");
-            }
             // create digestion enzyme
             let digestion_enzyme = get_enzyme_by_name(
                 initial_configuration.get_enzyme_name(),
@@ -128,8 +119,7 @@ impl DatabaseBuild {
                 allowed_ram_usage,
             )?;
             // create partition limits
-            let partition_limits =
-                partitioner.partition(num_partitions, None, progress_bar, verbose)?;
+            let partition_limits = partitioner.partition(num_partitions, None)?;
             // create new configuration with partition limits
             Configuration::new(
                 initial_configuration.get_enzyme_name().to_owned(),
@@ -148,9 +138,6 @@ impl DatabaseBuild {
         ConfigurationTable::insert(client, &new_configuration).await?;
         info!("new configuration saved ...");
 
-        if verbose {
-            progress_bar.write("new configuration saved ...");
-        }
         Ok(new_configuration)
     }
 
@@ -164,8 +151,6 @@ impl DatabaseBuild {
     /// * `digestion_enzyme` - The digestion enzyme
     /// * `remove_peptides_containing_unknown` - Remove peptides containing unknown amino acids
     /// * `partition_limits` - The partition limits
-    /// * `progress_bar` - Progress bar
-    /// * `verbose` - Verbose output
     ///
     async fn protein_digestion(
         database_url: &str,
@@ -174,17 +159,9 @@ impl DatabaseBuild {
         digestion_enzyme: &dyn Enzyme,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
-        progress_bar: &mut Bar,
-        verbose: bool,
         num_proteins: usize,
     ) -> Result<()> {
-        progress_bar.set_disable(true);
-        if verbose {
-            progress_bar.write(format!(
-                "processing proteins using {} threads ...",
-                num_threads
-            ));
-        }
+        debug!("processing proteins using {} threads ...", num_threads);
 
         let protein_queue_size = num_threads * 5;
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
@@ -265,9 +242,7 @@ impl DatabaseBuild {
         // Set stop flag
         stop_flag.store(true, Ordering::Relaxed);
 
-        if verbose {
-            progress_bar.write("last proteins queued, waiting for digestion threads to finish ...")
-        }
+        debug!("last proteins queued, waiting for digestion threads to finish ...");
 
         // Wait for digestion threads to finish
         join_all(digestion_thread_handles).await;
@@ -728,24 +703,13 @@ impl DatabaseBuildTrait for DatabaseBuild {
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
-        show_progress: bool,
-        verbose: bool,
     ) -> Result<()> {
         info!("Starting database build");
 
-        let mut progress_bar = tqdm!(
-            total = 0,
-            desc = "partitioning",
-            animation = "ascii",
-            disable = !show_progress
-        );
-
         let mut client = get_client().await?;
-        let mut sessioN = client.get_session();
+        let mut session = client.get_session();
 
-        if verbose {
-            progress_bar.write("applying database migrations...");
-        }
+        debug!("applying database migrations...");
 
         // Run migrations
         run_migrations(&client).await;
@@ -760,8 +724,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
             allowed_ram_usage,
             partitioner_false_positive_probability,
             initial_configuration_opt,
-            &mut progress_bar,
-            verbose,
         )
         .await?;
 
@@ -780,9 +742,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         debug!("Counting proteins");
 
         for path in protein_file_paths.iter() {
-            if verbose {
-                progress_bar.write(format!("... {}", path.display()));
-            }
+            debug!("... {}", path.display());
             protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
         }
 
@@ -793,9 +753,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             digestion_enzyme.as_ref(),
             configuration.get_remove_peptides_containing_unknown(),
             configuration.get_partition_limits().to_vec(),
-            &mut progress_bar,
-            verbose,
-            protein_ctr,
+            protein_ctr.clone(),
         )
         .await?;
 
@@ -856,7 +814,7 @@ mod test {
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         let build_res = database_builder
-            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, false, false)
+            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None)
             .await;
         assert!(build_res.is_err());
     }
@@ -883,8 +841,6 @@ mod test {
                 0.5,
                 0.0002,
                 Some(CONFIGURATION.clone()),
-                true,
-                true,
             )
             .await
             .unwrap();

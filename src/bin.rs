@@ -104,8 +104,6 @@ async fn main() {
                             true,
                             Vec::with_capacity(0),
                         )),
-                        show_progress,
-                        verbose,
                     )
                     .await
                 {
@@ -130,8 +128,6 @@ async fn main() {
                             true,
                             Vec::with_capacity(0),
                         )),
-                        show_progress,
-                        verbose,
                     )
                     .await
                 {
