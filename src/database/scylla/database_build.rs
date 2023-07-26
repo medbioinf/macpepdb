@@ -1,4 +1,3 @@
-// std import
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -11,9 +10,12 @@ use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::StreamExt;
+use indicatif::ProgressStyle;
 use kdam::{tqdm, Bar, BarExt};
 use tokio::task::{spawn, JoinHandle};
-use tracing::{info, span, Level};
+use tokio::time::{self, Instant};
+use tracing::{debug, info, info_span, span, Level, Span};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -174,6 +176,7 @@ impl DatabaseBuild {
         partition_limits: Vec<i64>,
         progress_bar: &mut Bar,
         verbose: bool,
+        num_proteins: usize,
     ) -> Result<()> {
         progress_bar.set_disable(true);
         if verbose {
@@ -185,8 +188,9 @@ impl DatabaseBuild {
 
         let protein_queue_size = num_threads * 5;
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
-        let partition_limits_arc = Arc::new(partition_limits);
+        let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let num_proteins_processed: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -194,6 +198,7 @@ impl DatabaseBuild {
         for thread_id in 0..num_threads {
             // Clone necessary variables
             let protein_queue_arc_clone = protein_queue_arc.clone();
+            let num_proteins_processed = Arc::clone(&num_proteins_processed);
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let database_url_clone = database_url.to_string();
@@ -215,11 +220,23 @@ impl DatabaseBuild {
                     stop_flag_clone,
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
+                    num_proteins_processed,
                 )
                 .await?;
                 Ok(())
             }));
         }
+
+        {
+            let num_proteins_processed = Arc::clone(&num_proteins_processed);
+            let stop_flag = Arc::clone(&stop_flag);
+            digestion_thread_handles.push(spawn(async move {
+                Self::performance_log_thread(&num_proteins, num_proteins_processed, stop_flag)
+                    .await;
+                Ok(())
+            }));
+        }
+
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
             let mut wait_for_queue = false;
@@ -277,6 +294,7 @@ impl DatabaseBuild {
         stop_flag: Arc<AtomicBool>,
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
+        num_proteins_processed: Arc<Mutex<i32>>,
     ) -> Result<()> {
         let mut client = get_client().await.unwrap();
 
@@ -339,8 +357,44 @@ impl DatabaseBuild {
                 )
                 .await?;
             }
+            let mut i = num_proteins_processed.lock().unwrap();
+            *i += 1;
         }
         Ok(())
+    }
+
+    async fn performance_log_thread(
+        num_proteins: &usize,
+        num_proteins_processed: Arc<Mutex<i32>>,
+        stop_flag: Arc<AtomicBool>,
+    ) {
+        let performance_span = info_span!("insertion_performance");
+        performance_span.pb_set_style(&ProgressStyle::default_bar());
+        performance_span.pb_set_length(*num_proteins as u64);
+        let performance_span_enter = performance_span.enter();
+
+        let mut prev_num_proteins_processed = 0;
+
+        let interval = Duration::from_secs(1);
+        let mut next_time = Instant::now() + interval;
+        // This loop runs exactly every second
+        loop {
+            if stop_flag.load(Ordering::Relaxed) {
+                break;
+            }
+
+            let num_proteins_processed = *num_proteins_processed.lock().unwrap();
+
+            let delta = num_proteins_processed - prev_num_proteins_processed;
+            Span::current().pb_inc(delta as u64);
+            prev_num_proteins_processed = num_proteins_processed;
+
+            sleep(next_time - Instant::now());
+            next_time += interval;
+        }
+
+        std::mem::drop(performance_span_enter);
+        std::mem::drop(performance_span);
     }
 
     /// Handles the update of a protein, in case it was merged with another entry or has various changes.
@@ -727,10 +781,18 @@ impl DatabaseBuildTrait for DatabaseBuild {
         )?;
 
         // read, digest and insert proteins and peptides
-        let span = span!(Level::INFO, "protein_digestion");
-        let _guard = span.enter();
-
         info!("Starting digest and insert");
+
+        let mut protein_ctr: usize = 0;
+
+        debug!("Counting proteins");
+
+        for path in protein_file_paths.iter() {
+            if verbose {
+                progress_bar.write(format!("... {}", path.display()));
+            }
+            protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
+        }
 
         Self::protein_digestion(
             &self.database_url,
@@ -741,6 +803,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             configuration.get_partition_limits().to_vec(),
             &mut progress_bar,
             verbose,
+            protein_ctr,
         )
         .await?;
 
