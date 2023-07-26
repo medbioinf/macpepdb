@@ -52,7 +52,8 @@ struct Cli {
 async fn main() {
     let mut filter = EnvFilter::from_default_env()
         .add_directive(Level::DEBUG.into())
-        .add_directive("scylla=info".parse().unwrap());
+        .add_directive("scylla=info".parse().unwrap())
+        .add_directive("tokio_postgres=info".parse().unwrap());
 
     let indicatif_layer = IndicatifLayer::new();
 

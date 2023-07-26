@@ -41,6 +41,7 @@ use crate::database::table::Table;
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
+use crate::tools::performance_logger::performance_log_thread;
 
 // add module migration to the current module
 embed_migrations!("src/database/citus/migrations");
@@ -159,6 +160,7 @@ impl DatabaseBuild {
         digestion_enzyme: &dyn Enzyme,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
+        num_proteins: usize,
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
 
@@ -166,6 +168,7 @@ impl DatabaseBuild {
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let num_proteins_processed: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -173,6 +176,7 @@ impl DatabaseBuild {
         for thread_id in 0..num_threads {
             // Clone necessary variables
             let protein_queue_arc_clone = protein_queue_arc.clone();
+            let num_proteins_processed = Arc::clone(&num_proteins_processed);
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let database_url_clone = database_url.to_string();
@@ -183,7 +187,6 @@ impl DatabaseBuild {
                 digestion_enzyme.get_min_peptide_length(),
                 digestion_enzyme.get_max_peptide_length(),
             )?;
-            // TODO: Add logging thread
             // Start digestion thread
             digestion_thread_handles.push(spawn(async move {
                 Self::digestion_thread(
@@ -194,11 +197,22 @@ impl DatabaseBuild {
                     stop_flag_clone,
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
+                    num_proteins_processed,
                 )
                 .await?;
                 Ok(())
             }));
         }
+
+        {
+            let num_proteins_processed = Arc::clone(&num_proteins_processed);
+            let stop_flag = Arc::clone(&stop_flag);
+            digestion_thread_handles.push(spawn(async move {
+                performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
+                Ok(())
+            }));
+        }
+
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
             let mut wait_for_queue = false;
@@ -254,6 +268,7 @@ impl DatabaseBuild {
         stop_flag: Arc<AtomicBool>,
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
+        num_proteins_processed: Arc<Mutex<i32>>,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls).await?;
         // The connection object performs the actual communication with the database,
@@ -350,6 +365,8 @@ impl DatabaseBuild {
                     return Err(db_err);
                 }
             }
+            let mut i = num_proteins_processed.lock().unwrap();
+            *i += 1;
         }
         connection_handle.abort();
         let _ = connection_handle.await;
@@ -736,6 +753,16 @@ impl DatabaseBuildTrait for DatabaseBuild {
         )?;
 
         // read, digest and insert proteins and peptides
+
+        let mut protein_ctr: usize = 0;
+
+        debug!("Counting proteins");
+
+        for path in protein_file_paths.iter() {
+            debug!("... {}", path.display());
+            protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
+        }
+
         Self::protein_digestion(
             &self.database_url,
             num_threads,
@@ -743,6 +770,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             digestion_enzyme.as_ref(),
             configuration.get_remove_peptides_containing_unknown(),
             configuration.get_partition_limits().to_vec(),
+            protein_ctr.clone(),
         )
         .await?;
         // collect metadata
