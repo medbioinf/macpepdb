@@ -11,7 +11,6 @@ use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::StreamExt;
 use indicatif::ProgressStyle;
-use kdam::{tqdm, Bar, BarExt};
 use tokio::task::{spawn, JoinHandle};
 use tokio::time::{self, Instant};
 use tracing::{debug, info, info_span, span, Level, Span};

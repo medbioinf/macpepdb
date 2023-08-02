@@ -10,7 +10,6 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
-use kdam::{tqdm, Bar, BarExt};
 use rand::{self, Rng};
 use refinery::embed_migrations;
 use tokio::task::{spawn, JoinHandle};
