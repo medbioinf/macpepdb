@@ -7,7 +7,6 @@ use anyhow::{bail, Result};
 use dihardts_cstools::bloom_filter::BloomFilter;
 use fallible_iterator::FallibleIterator;
 use indicatif::ProgressStyle;
-use kdam::{Bar, BarExt};
 use sysinfo::{System, SystemExt};
 use tracing::{debug, info, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
@@ -296,9 +295,6 @@ mod test {
     // std imports
     use std::collections::HashSet;
     use std::path::PathBuf;
-
-    // 3rd party imports
-    use kdam::tqdm;
 
     // internal imports
     use super::*;
