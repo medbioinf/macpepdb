@@ -167,6 +167,7 @@ where
 mod tests {
     // 3rd party imports
     use serial_test::serial;
+    use tracing::error;
 
     // internal imports
     use super::*;
@@ -195,7 +196,7 @@ mod tests {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
@@ -223,7 +224,7 @@ mod tests {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
@@ -266,7 +267,7 @@ mod tests {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 

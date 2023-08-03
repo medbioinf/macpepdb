@@ -314,6 +314,7 @@ mod tests {
     // external imports
     use fallible_iterator::FallibleIterator;
     use serial_test::serial;
+    use tracing::error;
 
     use crate::biology::digestion_enzyme::functions::{
         create_peptides_entities_from_digest, get_enzyme_by_name,
@@ -405,7 +406,7 @@ mod tests {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
         prepare_database_for_tests(&mut client).await;
@@ -498,7 +499,7 @@ mod tests {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
         prepare_database_for_tests(&mut client).await;
@@ -579,7 +580,7 @@ mod tests {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
         prepare_database_for_tests(&mut client).await;

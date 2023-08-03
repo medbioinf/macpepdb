@@ -69,6 +69,7 @@ pub async fn get_latest_migration_id() -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
+    use serial_test::serial;
     use tracing_test::traced_test;
 
     use crate::database::scylla::{
@@ -79,6 +80,7 @@ mod tests {
     use super::run_migrations;
 
     #[tokio::test]
+    #[serial]
     async fn test_get_latest_migration_id() {
         let mut client = get_client().await.unwrap();
         let session = client.get_session();
@@ -111,6 +113,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     #[traced_test]
     pub async fn test_run_migrations() {
         let client = get_client().await.unwrap();

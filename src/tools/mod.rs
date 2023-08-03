@@ -9,3 +9,5 @@ pub mod macros;
 pub mod peptide_partitioner;
 
 pub mod cql;
+
+pub mod performance_logger;

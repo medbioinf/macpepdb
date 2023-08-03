@@ -29,8 +29,6 @@ pub trait DatabaseBuild {
     /// * `allowed_ram_usage` - Allowed RAM usage in GB for the partitioner Bloom filter.
     /// * `partitioner_false_positive_probability` - False positive probability of the partitioners Bloom filters.
     /// * `initial_configuration_opt` - Optional initial configuration.
-    /// * `show_progress` - Whether to show progress.
-    /// * `verbose` - Whether to show verbose output.
     ///
     async fn build(
         &self,
@@ -40,7 +38,5 @@ pub trait DatabaseBuild {
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
-        show_progress: bool,
-        verbose: bool,
     ) -> Result<()>;
 }

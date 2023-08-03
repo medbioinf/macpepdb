@@ -7,7 +7,6 @@ use anyhow::{bail, Result};
 use dihardts_cstools::bloom_filter::BloomFilter;
 use fallible_iterator::FallibleIterator;
 use indicatif::ProgressStyle;
-use kdam::{Bar, BarExt};
 use sysinfo::{System, SystemExt};
 use tracing::{debug, info, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
@@ -73,15 +72,11 @@ impl<'a> PeptidePartitioner<'a> {
     /// # Arguments
     /// * `partition_contents` - Number of peptides in each partition
     /// * `partition_limits` - Mass limits of each partition
-    /// * `progress_bar` - Progress bar to show progress
-    /// * `verbose` - If true shows additional information during partitioning
     ///
     fn equalized_partition_contents(
         &self,
         partition_contents: &mut Vec<u64>,
         partition_limits: &mut Vec<i64>,
-        progress_bar: &mut Bar,
-        verbose: bool,
     ) -> Result<Vec<(u64, i64)>> {
         // Calculate the min and max peptides per partition
         let peptide_count: u64 = partition_contents.iter().sum();
@@ -90,17 +85,6 @@ impl<'a> PeptidePartitioner<'a> {
         debug!("equalizing partitions");
         debug!("peptide count: {}", peptide_count);
         debug!("peptides per partition: {}", peptides_per_partition);
-        if verbose {
-            progress_bar.set_description("equalizing partitions");
-            progress_bar.write(format!("peptide count: {}", peptide_count));
-            progress_bar.write(format!(
-                "peptides per partition: {}",
-                peptides_per_partition
-            ));
-        }
-
-        progress_bar.reset(Some(partition_contents.len()));
-        progress_bar.set_counter(0);
 
         let header_span = info_span!("equalizing_partitions");
         header_span.pb_set_style(&ProgressStyle::default_bar());
@@ -140,7 +124,6 @@ impl<'a> PeptidePartitioner<'a> {
                 last_limit = *limit;
                 capacity = peptides_per_partition - *content;
             }
-            progress_bar.update(1);
             Span::current().pb_inc(1);
         }
 
@@ -175,30 +158,21 @@ impl<'a> PeptidePartitioner<'a> {
     /// # Arguments
     /// * `num_partitions` - Number of partitions to create
     /// * `peptide_protein_ratio_opt` - Peptide to protein ration, if None the available memory distributed multiple bloom filters
-    /// * `show_progress_bar` - If true shows a progress bar
-    /// * `verbose` - If true shows additional information during partitioning
     ///
     pub fn partition(
         &self,
         num_partitions: u64,
         peptide_protein_ratio: Option<f64>,
-        progress_bar: &mut Bar,
-        verbose: bool,
     ) -> Result<Vec<i64>> {
         info!("Generating partition limits");
-        progress_bar.set_description("partitioning");
 
         let mut protein_ctr: usize = 0;
 
         debug!("Counting proteins");
         for path in self.protein_file_paths.iter() {
-            if verbose {
-                progress_bar.write(format!("... {}", path.display()));
-            }
+            debug!("... {}", path.display());
             protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
         }
-        progress_bar.reset(Some(protein_ctr));
-        progress_bar.set_counter(0);
 
         // Calculate the average partition windows (60 is the max number of amino acids per peptide ,
         // so 60 times tryptophan is the heaviest peptide possible)
@@ -216,9 +190,9 @@ impl<'a> PeptidePartitioner<'a> {
             "System available memory {}",
             System::new_all().available_memory()
         );
-        // let usable_ram = 900000000;
-        let usable_ram =
-            (System::new_all().available_memory() as f64 * self.allowed_memory_usage) as u64;
+        let usable_ram = 900000000;
+        // let usable_ram =
+        //     (System::new_all().available_memory() as f64 * self.allowed_memory_usage) as u64;
         debug!("Using {} RAM for bloom_filters", &usable_ram);
 
         let mut bloom_filters: Vec<BloomFilter> = match peptide_protein_ratio {
@@ -241,14 +215,6 @@ impl<'a> PeptidePartitioner<'a> {
                         num_partitions,
                         bytes_to_human_readable(size_per_bloom_filter)
                     );
-                if verbose {
-                    progress_bar.write(format!(
-                        "create bloom filter expecting ~ {} peptides per partition...\n... with {} x {}", 
-                        peptides_per_partition,
-                        num_partitions,
-                        bytes_to_human_readable(size_per_bloom_filter)
-                    ));
-                }
                 (0..num_partitions)
                     .into_iter()
                     .map(|_| {
@@ -267,14 +233,6 @@ impl<'a> PeptidePartitioner<'a> {
                     num_partitions,
                     bytes_to_human_readable(bloom_filter_size)
                 );
-                if verbose {
-                    progress_bar.write(format!(
-                        "create bloom filter using available memory {}...\n... with {} x {}",
-                        bytes_to_human_readable(usable_ram),
-                        num_partitions,
-                        bytes_to_human_readable(bloom_filter_size)
-                    ));
-                }
                 (0..num_partitions)
                     .into_iter()
                     .map(|_| {
@@ -288,9 +246,6 @@ impl<'a> PeptidePartitioner<'a> {
         };
 
         debug!("creating unequaled partitions...");
-        if verbose {
-            progress_bar.write("creating unequaled partitions...");
-        }
 
         let header_span = info_span!("creating_partitions");
         header_span.pb_set_style(&ProgressStyle::default_bar());
@@ -299,9 +254,7 @@ impl<'a> PeptidePartitioner<'a> {
 
         // Iterate over the proteins and digest them
         for protein_file_path in self.protein_file_paths {
-            if verbose {
-                progress_bar.write(format!("... {}", protein_file_path.display()));
-            }
+            debug!("... {}", protein_file_path.display());
             let mut reader = Reader::new(protein_file_path, 1024)?;
             while let Some(protein) = reader.next()? {
                 let mut peptide_sequences = self.enzyme.digest(protein.get_sequence());
@@ -317,7 +270,6 @@ impl<'a> PeptidePartitioner<'a> {
                         partition_contents[partition] += 1;
                     }
                 }
-                progress_bar.update(1);
                 Span::current().pb_inc(1);
             }
         }
@@ -329,12 +281,8 @@ impl<'a> PeptidePartitioner<'a> {
         debug!("Dropping bloom_filters");
         drop(bloom_filters);
 
-        let equalized_partition_contents = self.equalized_partition_contents(
-            &mut partition_contents,
-            &mut partition_limits,
-            progress_bar,
-            verbose,
-        )?;
+        let equalized_partition_contents =
+            self.equalized_partition_contents(&mut partition_contents, &mut partition_limits)?;
         Ok(equalized_partition_contents
             .iter()
             .map(|(_, lim)| *lim)
@@ -347,9 +295,6 @@ mod test {
     // std imports
     use std::collections::HashSet;
     use std::path::PathBuf;
-
-    // 3rd party imports
-    use kdam::tqdm;
 
     // internal imports
     use super::*;
@@ -366,32 +311,17 @@ mod test {
         let mut reader = Reader::new(&protein_file_paths, 4096).unwrap();
         let mut peptides: HashSet<String> = HashSet::new();
 
-        let mut cnt = 0;
         while let Some(protein) = reader.next().unwrap() {
             let peptide_sequences = trypsin.digest(protein.get_sequence());
             for (sequence, _) in peptide_sequences {
                 peptides.insert(sequence);
             }
-            cnt += 1;
-
-            if cnt % 100 == 0 {
-                println!("Processed {}", cnt);
-            }
         }
-
-        let mut progress_bar = tqdm!(
-            total = 0,
-            desc = "partitioning",
-            animation = "ascii",
-            disable = true
-        );
 
         let protein_file_paths = vec![protein_file_paths.clone()];
         let partitioner =
             PeptidePartitioner::new(&protein_file_paths, &trypsin, false, 0.0002, 0.8).unwrap();
-        let partition_limits = partitioner
-            .partition(NUM_PARTITIONS, None, &mut progress_bar, false)
-            .unwrap(); // this will fail if the partitioning is not correct
+        let partition_limits = partitioner.partition(NUM_PARTITIONS, None).unwrap(); // this will fail if the partitioning is not correct
 
         assert_eq!(partition_limits.len(), NUM_PARTITIONS as usize);
         assert_eq!(partition_limits[partition_limits.len() - 1], *MAX_MASS);

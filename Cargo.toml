@@ -23,8 +23,6 @@ env_logger = "0.10.0"
 fallible-iterator = "0.2.0"
 fancy-regex = "0.11.0"
 futures = "0.3.28"
-indicatif = "0.17.5"
-kdam = "0.3.0"
 lazy_static = "1.4.0"
 log = "0.4.17"
 murmur3 = "0.5.2"
@@ -37,10 +35,11 @@ sysinfo = "0.28.2"
 tokio = { version = "1.28.2", features = ["full"] }
 tokio-postgres = { version = "0.7.8", features = ["with-serde_json-1"] }
 tracing = "0.1.37"
-tracing-indicatif = "0.3.4"
 tracing-subscriber =  { version = "0.3.17", features = ["env-filter"]}
 tracing-test = "0.2.4"
 dihardts_cstools = "~1.0.0"
+tracing-indicatif = "0.3.4"
+indicatif = "0.17.6"
 
 [dev-dependencies]
 serial_test = "*"

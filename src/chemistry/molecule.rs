@@ -59,6 +59,8 @@ const ALL: [&'static Molecule; 1] = [&WATER];
 
 #[cfg(test)]
 mod test {
+    use tracing::{error, info};
+
     // internal imports
     use super::*;
     use crate::mass::convert::to_int as mass_to_int;
@@ -101,7 +103,7 @@ mod test {
                 }
             }
             // This panic can only be reached when the matching molecule was not found in molecules.
-            println!("Did not found {} in `molecules`.", raw_value_tuple.0);
+            error!("Did not found {} in `molecules`.", raw_value_tuple.0);
             panic!("See error above.");
         }
 
@@ -118,7 +120,7 @@ mod test {
                 }
             }
             // This panic can only be reached when the matching raw value tuple was not found in RAW_MOLECULE_VALUES.
-            println!("Did not found {} in `RAW_MOLECULE_VALUES`.", molecule.name);
+            error!("Did not found {} in `RAW_MOLECULE_VALUES`.", molecule.name);
             panic!("See error above.");
         }
     }

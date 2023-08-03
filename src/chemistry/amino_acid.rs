@@ -321,6 +321,8 @@ pub fn calc_sequence_mass(sequence: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod test {
+    use tracing::{error, info};
+
     // internal imports
     use super::*;
     use crate::mass::convert::to_int as mass_to_int;
@@ -420,7 +422,7 @@ mod test {
                 }
             }
             // This panic can only be reached when the matching amino acid was not found in known_amino_acids.
-            println!(
+            error!(
                 "Did not found {} in `known_amino_acids`.",
                 raw_value_tuple.0
             );
@@ -440,7 +442,7 @@ mod test {
                 }
             }
             // This panic can only be reached when the matching raw value tuple was not found in RAW_AMINO_ACID_VALUES.
-            println!(
+            error!(
                 "Did not found {} in `RAW_AMINO_ACID_VALUES`.",
                 amino_acid.name
             );

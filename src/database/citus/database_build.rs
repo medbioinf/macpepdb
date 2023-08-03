@@ -10,7 +10,6 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
-use kdam::{tqdm, Bar, BarExt};
 use rand::{self, Rng};
 use refinery::embed_migrations;
 use tokio::task::{spawn, JoinHandle};
@@ -18,6 +17,7 @@ use tokio_postgres::{
     error::{Error as PSQLError, SqlState},
     Client, GenericClient, NoTls,
 };
+use tracing::{debug, error};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -40,6 +40,7 @@ use crate::database::table::Table;
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
+use crate::tools::performance_logger::performance_log_thread;
 
 // add module migration to the current module
 embed_migrations!("src/database/citus/migrations");
@@ -72,8 +73,6 @@ impl DatabaseBuild {
     /// * `allowed_ram_usage` - The allowed ram usage in GB
     /// * `partitioner_false_positive_probability` - The false positive probability of the partitioner
     /// * `initial_configuration_opt` - The initial configuration
-    /// * `progress_bar` - Progress bar
-    /// * `verbose` - Verbose output
     ///
     async fn get_or_set_configuration(
         client: &mut Client,
@@ -82,8 +81,6 @@ impl DatabaseBuild {
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
-        progress_bar: &mut Bar,
-        verbose: bool,
     ) -> Result<Configuration> {
         let config_res = ConfigurationTable::select(client).await;
         // return if configuration is ok or if it is not a ConfigurationIncompleteError
@@ -93,8 +90,8 @@ impl DatabaseBuild {
                 .unwrap_err()
                 .is::<ConfigurationIncompleteError>()
         {
-            if verbose && config_res.as_ref().is_ok() {
-                progress_bar.write("found previous config ...");
+            if config_res.as_ref().is_ok() {
+                debug!("found previous config ...");
             }
             return config_res;
         }
@@ -106,10 +103,7 @@ impl DatabaseBuild {
         let initial_configuration = initial_configuration_opt.unwrap();
 
         let new_configuration = if initial_configuration.get_partition_limits().len() == 0 {
-            if verbose {
-                progress_bar
-                    .write("initial configuration has no partition limits list, creating one ...");
-            }
+            debug!("initial configuration has no partition limits list, creating one ...");
             // create digestion enzyme
             let digestion_enzyme = get_enzyme_by_name(
                 initial_configuration.get_enzyme_name(),
@@ -126,8 +120,7 @@ impl DatabaseBuild {
                 allowed_ram_usage,
             )?;
             // create partition limits
-            let partition_limits =
-                partitioner.partition(num_partitions, None, progress_bar, verbose)?;
+            let partition_limits = partitioner.partition(num_partitions, None)?;
             // create new configuration with partition limits
             Configuration::new(
                 initial_configuration.get_enzyme_name().to_owned(),
@@ -144,9 +137,7 @@ impl DatabaseBuild {
 
         // insert new_configuration
         ConfigurationTable::insert(client, &new_configuration).await?;
-        if verbose {
-            progress_bar.write("new configuration saved ...");
-        }
+        debug!("new configuration saved ...");
         Ok(new_configuration)
     }
 
@@ -160,8 +151,6 @@ impl DatabaseBuild {
     /// * `digestion_enzyme` - The digestion enzyme
     /// * `remove_peptides_containing_unknown` - Remove peptides containing unknown amino acids
     /// * `partition_limits` - The partition limits
-    /// * `progress_bar` - Progress bar
-    /// * `verbose` - Verbose output
     ///
     async fn protein_digestion(
         database_url: &str,
@@ -170,21 +159,15 @@ impl DatabaseBuild {
         digestion_enzyme: &dyn Enzyme,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
-        progress_bar: &mut Bar,
-        verbose: bool,
+        num_proteins: usize,
     ) -> Result<()> {
-        progress_bar.set_disable(true);
-        if verbose {
-            progress_bar.write(format!(
-                "processing proteins using {} threads ...",
-                num_threads
-            ));
-        }
+        debug!("processing proteins using {} threads ...", num_threads);
 
         let protein_queue_size = num_threads * 5;
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -192,6 +175,7 @@ impl DatabaseBuild {
         for thread_id in 0..num_threads {
             // Clone necessary variables
             let protein_queue_arc_clone = protein_queue_arc.clone();
+            let num_proteins_processed = Arc::clone(&num_proteins_processed);
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let database_url_clone = database_url.to_string();
@@ -202,7 +186,6 @@ impl DatabaseBuild {
                 digestion_enzyme.get_min_peptide_length(),
                 digestion_enzyme.get_max_peptide_length(),
             )?;
-            // TODO: Add logging thread
             // Start digestion thread
             digestion_thread_handles.push(spawn(async move {
                 Self::digestion_thread(
@@ -213,11 +196,22 @@ impl DatabaseBuild {
                     stop_flag_clone,
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
+                    num_proteins_processed,
                 )
                 .await?;
                 Ok(())
             }));
         }
+
+        {
+            let num_proteins_processed = Arc::clone(&num_proteins_processed);
+            let stop_flag = Arc::clone(&stop_flag);
+            digestion_thread_handles.push(spawn(async move {
+                performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
+                Ok(())
+            }));
+        }
+
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
             let mut wait_for_queue = false;
@@ -246,9 +240,7 @@ impl DatabaseBuild {
         // Set stop flag
         stop_flag.store(true, Ordering::Relaxed);
 
-        if verbose {
-            progress_bar.write("last proteins queued, waiting for digestion threads to finish ...")
-        }
+        debug!("last proteins queued, waiting for digestion threads to finish ...");
 
         // Wait for digestion threads to finish
         join_all(digestion_thread_handles).await;
@@ -275,13 +267,14 @@ impl DatabaseBuild {
         stop_flag: Arc<AtomicBool>,
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
+        num_proteins_processed: Arc<Mutex<u64>>,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls).await?;
         // The connection object performs the actual communication with the database,
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
@@ -371,6 +364,8 @@ impl DatabaseBuild {
                     return Err(db_err);
                 }
             }
+            let mut i = num_proteins_processed.lock().unwrap();
+            *i += 1;
         }
         connection_handle.abort();
         let _ = connection_handle.await;
@@ -598,13 +593,9 @@ impl DatabaseBuild {
         num_threads: usize,
         database_url: &str,
         configuration: &Configuration,
-        progress_bar: &mut Bar,
-        verbose: bool,
     ) -> Result<()> {
-        if verbose {
-            println!("Collecting peptide metadata...");
-            println!("Chunking partitions for {} threads...", num_threads);
-        }
+        debug!("Collecting peptide metadata...");
+        debug!("Chunking partitions for {} threads...", num_threads);
         let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
             .ceil() as usize;
         let chunked_partitions: Vec<Vec<i64>> = (0..configuration.get_partition_limits().len()
@@ -616,9 +607,7 @@ impl DatabaseBuild {
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
-        if verbose {
-            println!("Starting {} threads...", num_threads);
-        }
+        debug!("Starting {} threads...", num_threads);
         // Start digestion threads
         for thread_id in 0..num_threads {
             // Clone necessary variables
@@ -632,9 +621,7 @@ impl DatabaseBuild {
                 Ok(())
             }));
         }
-        if verbose {
-            println!("Waiting threads to stop ...");
-        }
+        debug!("Waiting threads to stop ...");
         // Wait for digestion threads to finish
         join_all(metadata_collector_thread_handles).await;
         Ok(())
@@ -651,7 +638,7 @@ impl DatabaseBuild {
             // so spawn it off to run on its own.
             let connection_handle = tokio::spawn(async move {
                 if let Err(e) = connection.await {
-                    eprintln!("connection error: {}", e);
+                    error!("connection error: {}", e);
                 }
             });
 
@@ -727,29 +714,18 @@ impl DatabaseBuildTrait for DatabaseBuild {
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
-        show_progress: bool,
-        verbose: bool,
     ) -> Result<()> {
-        let mut progress_bar = tqdm!(
-            total = 0,
-            desc = "partitioning",
-            animation = "ascii",
-            disable = !show_progress
-        );
-
         let (mut client, connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
 
         // The connection object performs the actual communication with the database,
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
-        if verbose {
-            progress_bar.write("applying database migrations...");
-        }
+        debug!("applying database migrations...");
 
         // Run migrations
         migrations::runner().run_async(&mut client).await?;
@@ -762,8 +738,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
             allowed_ram_usage,
             partitioner_false_positive_probability,
             initial_configuration_opt,
-            &mut progress_bar,
-            verbose,
         )
         .await?;
 
@@ -778,6 +752,16 @@ impl DatabaseBuildTrait for DatabaseBuild {
         )?;
 
         // read, digest and insert proteins and peptides
+
+        let mut protein_ctr: usize = 0;
+
+        debug!("Counting proteins");
+
+        for path in protein_file_paths.iter() {
+            debug!("... {}", path.display());
+            protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
+        }
+
         Self::protein_digestion(
             &self.database_url,
             num_threads,
@@ -785,19 +769,11 @@ impl DatabaseBuildTrait for DatabaseBuild {
             digestion_enzyme.as_ref(),
             configuration.get_remove_peptides_containing_unknown(),
             configuration.get_partition_limits().to_vec(),
-            &mut progress_bar,
-            verbose,
+            protein_ctr.clone(),
         )
         .await?;
         // collect metadata
-        Self::collect_peptide_metadata(
-            num_threads,
-            &self.database_url,
-            &configuration,
-            &mut progress_bar,
-            verbose,
-        )
-        .await?;
+        Self::collect_peptide_metadata(num_threads, &self.database_url, &configuration).await?;
         // count peptides per partition
 
         Ok(())
@@ -846,7 +822,7 @@ mod test {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
         prepare_database_for_tests(&mut client).await;
@@ -855,7 +831,7 @@ mod test {
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         let build_res = database_builder
-            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, false, false)
+            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None)
             .await;
         assert!(build_res.is_err());
         connection_handle.abort();
@@ -871,7 +847,7 @@ mod test {
         // so spawn it off to run on its own.
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
@@ -893,8 +869,6 @@ mod test {
                 0.5,
                 0.0002,
                 Some(CONFIGURATION.clone()),
-                true,
-                true,
             )
             .await
             .unwrap();
@@ -903,7 +877,7 @@ mod test {
 
         let connection_handle = tokio::spawn(async move {
             if let Err(e) = connection.await {
-                eprintln!("connection error: {}", e);
+                error!("connection error: {}", e);
             }
         });
 
