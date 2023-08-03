@@ -10,11 +10,9 @@ use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::StreamExt;
-use indicatif::ProgressStyle;
 use tokio::task::{spawn, JoinHandle};
 use tokio::time::{self, Instant};
 use tracing::{debug, info, info_span, span, Level, Span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -167,7 +165,7 @@ impl DatabaseBuild {
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let num_proteins_processed: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
+        let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -268,7 +266,7 @@ impl DatabaseBuild {
         stop_flag: Arc<AtomicBool>,
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
-        num_proteins_processed: Arc<Mutex<i32>>,
+        num_proteins_processed: Arc<Mutex<u64>>,
     ) -> Result<()> {
         let mut client = get_client().await.unwrap();
 
@@ -740,6 +738,7 @@ mod test {
 
     // 3rd party imports
     use serial_test::serial;
+    use tracing_test::traced_test;
 
     // internal imports
     use super::*;
@@ -785,6 +784,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     #[serial]
     async fn test_database_build() {
         let mut client = get_client().await.unwrap();

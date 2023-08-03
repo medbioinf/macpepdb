@@ -1,4 +1,5 @@
 use std::{
+    cmp,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -6,25 +7,23 @@ use std::{
     time::Duration,
 };
 
-use indicatif::ProgressStyle;
 use tokio::time::{sleep, Instant};
-use tracing::{info_span, Span};
+use tracing::{info, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 pub async fn performance_log_thread(
     num_proteins: &usize,
-    num_proteins_processed: Arc<Mutex<i32>>,
+    num_proteins_processed: Arc<Mutex<u64>>,
     stop_flag: Arc<AtomicBool>,
 ) {
     let performance_span = info_span!("insertion_performance");
-    performance_span.pb_set_style(&ProgressStyle::default_bar());
-    performance_span.pb_set_length(*num_proteins as u64);
     let performance_span_enter = performance_span.enter();
 
     let mut prev_num_proteins_processed = 0;
 
     let interval = Duration::from_secs(1);
     let mut next_time = Instant::now() + interval;
+    let start_time = Instant::now();
     // This loop runs exactly every second
     loop {
         if stop_flag.load(Ordering::Relaxed) {
@@ -34,10 +33,18 @@ pub async fn performance_log_thread(
         let num_proteins_processed = *num_proteins_processed.lock().unwrap();
 
         let delta = num_proteins_processed - prev_num_proteins_processed;
-        Span::current().pb_inc(delta as u64);
+        let seconds_expired = (Instant::now() - start_time).as_secs();
+        performance_span.pb_set_message(
+            format!(
+                "Processed {} new proteins\t{} P/sec",
+                delta,
+                num_proteins_processed / cmp::max(1, seconds_expired)
+            )
+            .as_str(),
+        );
         prev_num_proteins_processed = num_proteins_processed;
 
-        sleep(next_time - Instant::now());
+        sleep(next_time - Instant::now()).await;
         next_time += interval;
     }
 

@@ -1,5 +1,6 @@
 use std::{
     path::{Path, PathBuf},
+    thread::sleep,
     time::Duration,
 };
 
@@ -55,7 +56,12 @@ async fn main() {
         .add_directive("scylla=info".parse().unwrap())
         .add_directive("tokio_postgres=info".parse().unwrap());
 
-    let indicatif_layer = IndicatifLayer::new();
+    let indicatif_layer = IndicatifLayer::new().with_progress_style(
+        ProgressStyle::with_template(
+            "{spinner:.cyan} {span_child_prefix}{span_name}{{{span_fields}}} {wide_msg} {elapsed}",
+        )
+        .unwrap()
+    ).with_span_child_prefix_symbol("↳ ").with_span_child_prefix_indent(" ");
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
@@ -70,6 +76,22 @@ async fn main() {
     match args.command {
         Commands::LETSGO { name } => {
             info!("Hello, {}", name);
+            info!("Test");
+            let mut i = 0;
+
+            let loop_span = info_span!("looping");
+            let loop_span_enter = loop_span.enter();
+
+            let loop_span2 = info_span!("looping_inner");
+            let loop_span_enter2 = loop_span2.enter();
+
+            loop {
+                i += 1;
+
+                loop_span.pb_set_message(format!("i is {}", i).as_str());
+
+                sleep(Duration::from_secs(1));
+            }
         }
         Commands::Build {
             database_url,

@@ -167,7 +167,7 @@ impl DatabaseBuild {
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let num_proteins_processed: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
+        let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -267,7 +267,7 @@ impl DatabaseBuild {
         stop_flag: Arc<AtomicBool>,
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
-        num_proteins_processed: Arc<Mutex<i32>>,
+        num_proteins_processed: Arc<Mutex<u64>>,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls).await?;
         // The connection object performs the actual communication with the database,
