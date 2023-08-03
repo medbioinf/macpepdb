@@ -4,10 +4,11 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
+    thread::sleep,
     time::Duration,
 };
 
-use tokio::time::{sleep, Instant};
+use tokio::time::Instant;
 use tracing::{info, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
@@ -44,7 +45,7 @@ pub async fn performance_log_thread(
         );
         prev_num_proteins_processed = num_proteins_processed;
 
-        sleep(next_time - Instant::now()).await;
+        sleep(next_time - Instant::now());
         next_time += interval;
     }
 
