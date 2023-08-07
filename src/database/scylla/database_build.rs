@@ -3,14 +3,15 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc, Mutex};
 use std::thread::sleep;
-use std::thread::{spawn, JoinHandle};
 use std::time::Duration;
 
 // 3rd party imports
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::executor::block_on;
+use futures::future::join_all;
 use futures::StreamExt;
+use tokio::task::{spawn_blocking, JoinHandle};
 use tokio::time::{self, Instant};
 use tracing::{debug, info, info_span, span, Level, Span};
 
@@ -186,7 +187,7 @@ impl DatabaseBuild {
             )?;
             // TODO: Add logging thread
             // Start digestion thread
-            digestion_thread_handles.push(spawn(move || {
+            digestion_thread_handles.push(spawn_blocking(move || {
                 let future = Self::digestion_thread(
                     thread_id,
                     database_url_clone,
@@ -242,9 +243,7 @@ impl DatabaseBuild {
         debug!("last proteins queued, waiting for digestion threads to finish ...");
 
         // Wait for digestion threads to finish
-        for handle in digestion_thread_handles {
-            handle.join();
-        }
+        join_all(digestion_thread_handles).await;
 
         Ok(())
     }
@@ -577,7 +576,7 @@ impl DatabaseBuild {
             let database_url_clone = database_url.to_string();
             // TODO: Add logging thread
             // Start digestion thread
-            metadata_collector_thread_handles.push(spawn(move || {
+            metadata_collector_thread_handles.push(spawn_blocking(move || {
                 let future = Self::collect_peptide_metadata_thread(
                     thread_id,
                     database_url_clone,
@@ -589,9 +588,8 @@ impl DatabaseBuild {
         }
         debug!("Waiting threads to stop ...");
         // Wait for digestion threads to finish
-        for handle in metadata_collector_thread_handles {
-            handle.join().unwrap();
-        }
+        join_all(metadata_collector_thread_handles).await;
+
         Ok(())
     }
 
