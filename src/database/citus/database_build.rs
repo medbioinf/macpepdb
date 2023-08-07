@@ -199,8 +199,8 @@ impl DatabaseBuild {
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
                     num_proteins_processed,
-                );
-                block_on(future)?;
+                )
+                .await?;
                 Ok(())
             }));
         }
@@ -622,8 +622,8 @@ impl DatabaseBuild {
                     thread_id,
                     database_url_clone,
                     partitions,
-                );
-                block_on(future)?;
+                )
+                .await?;
                 Ok(())
             }));
         }
