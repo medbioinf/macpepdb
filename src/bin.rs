@@ -110,6 +110,7 @@ fn main() -> Result<()> {
                 .thread_name("my-custom-name")
                 .thread_stack_size(3 * 1024 * 1024)
                 .enable_time()
+                .enable_io()
                 .build()
                 .unwrap();
 
