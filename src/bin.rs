@@ -5,6 +5,7 @@ use std::{
 };
 
 // 3rd party imports
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::{stream, StreamExt};
 use indicatif::ProgressStyle;
@@ -50,7 +51,7 @@ struct Cli {
     command: Commands,
 }
 
-fn main() {
+fn main() -> Result<()> {
     let mut filter = EnvFilter::from_default_env()
         .add_directive(Level::DEBUG.into())
         .add_directive("scylla=info".parse().unwrap())
@@ -111,7 +112,7 @@ fn main() {
                 .build()
                 .unwrap();
 
-            rt.spawn(async move {
+            let thread = rt.spawn(async move {
                 let protein_file_paths = protein_file_paths
                     .into_iter()
                     .map(|x| Path::new(&x).to_path_buf())
@@ -167,6 +168,8 @@ fn main() {
                     }
                 }
             });
+            rt.block_on(thread)?;
+            Ok(())
         }
     }
 }
