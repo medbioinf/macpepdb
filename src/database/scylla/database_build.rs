@@ -202,14 +202,14 @@ impl DatabaseBuild {
             }));
         }
 
-        {
-            let num_proteins_processed = Arc::clone(&num_proteins_processed);
-            let stop_flag = Arc::clone(&stop_flag);
-            digestion_thread_handles.push(spawn(async move {
-                performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
-                Ok(())
-            }));
-        }
+        // {
+        //     let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        //     let stop_flag = Arc::clone(&stop_flag);
+        //     digestion_thread_handles.push(spawn(async move {
+        //         performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
+        //         Ok(())
+        //     }));
+        // }
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
@@ -329,8 +329,8 @@ impl DatabaseBuild {
                 )
                 .await?;
             }
-            let mut i = num_proteins_processed.lock().unwrap();
-            *i += 1;
+            // let mut i = num_proteins_processed.lock().unwrap();
+            // *i += 1;
         }
         Ok(())
     }
