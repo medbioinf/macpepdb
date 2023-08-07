@@ -9,10 +9,12 @@ use std::time::Duration;
 // 3rd party imports
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
+use futures::executor::block_on;
 use futures::future::join_all;
 use rand::{self, Rng};
 use refinery::embed_migrations;
-use tokio::task::{spawn, JoinHandle};
+use tokio::spawn;
+use tokio::task::JoinHandle;
 use tokio_postgres::{
     error::{Error as PSQLError, SqlState},
     Client, GenericClient, NoTls,
@@ -188,7 +190,7 @@ impl DatabaseBuild {
             )?;
             // Start digestion thread
             digestion_thread_handles.push(spawn(async move {
-                Self::digestion_thread(
+                let future = Self::digestion_thread(
                     thread_id,
                     database_url_clone,
                     protein_queue_arc_clone,
@@ -197,20 +199,20 @@ impl DatabaseBuild {
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
                     num_proteins_processed,
-                )
-                .await?;
+                );
+                block_on(future)?;
                 Ok(())
             }));
         }
 
-        {
-            let num_proteins_processed = Arc::clone(&num_proteins_processed);
-            let stop_flag = Arc::clone(&stop_flag);
-            digestion_thread_handles.push(spawn(async move {
-                performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
-                Ok(())
-            }));
-        }
+        // {
+        //     let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        //     let stop_flag = Arc::clone(&stop_flag);
+        //     digestion_thread_handles.push(spawn(async move {
+        //         performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
+        //         Ok(())
+        //     }));
+        // }
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
@@ -364,8 +366,8 @@ impl DatabaseBuild {
                     return Err(db_err);
                 }
             }
-            let mut i = num_proteins_processed.lock().unwrap();
-            *i += 1;
+            // let mut i = num_proteins_processed.lock().unwrap();
+            // *i += 1;
         }
         connection_handle.abort();
         let _ = connection_handle.await;
@@ -616,8 +618,12 @@ impl DatabaseBuild {
             // TODO: Add logging thread
             // Start digestion thread
             metadata_collector_thread_handles.push(spawn(async move {
-                Self::collect_peptide_metadata_thread(thread_id, database_url_clone, partitions)
-                    .await?;
+                let future = Self::collect_peptide_metadata_thread(
+                    thread_id,
+                    database_url_clone,
+                    partitions,
+                );
+                block_on(future)?;
                 Ok(())
             }));
         }
