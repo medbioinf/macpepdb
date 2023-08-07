@@ -11,7 +11,8 @@ use fallible_iterator::FallibleIterator;
 use futures::executor::block_on;
 use futures::future::join_all;
 use futures::StreamExt;
-use tokio::task::{spawn_blocking, JoinHandle};
+use tokio::spawn;
+use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
 use tracing::{debug, info, info_span, span, Level, Span};
 
@@ -187,7 +188,7 @@ impl DatabaseBuild {
             )?;
             // TODO: Add logging thread
             // Start digestion thread
-            digestion_thread_handles.push(spawn_blocking(move || {
+            digestion_thread_handles.push(spawn(async move {
                 let future = Self::digestion_thread(
                     thread_id,
                     database_url_clone,
@@ -197,8 +198,8 @@ impl DatabaseBuild {
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
                     num_proteins_processed,
-                );
-                block_on(future)?;
+                )
+                .await?;
                 Ok(())
             }));
         }
@@ -576,13 +577,13 @@ impl DatabaseBuild {
             let database_url_clone = database_url.to_string();
             // TODO: Add logging thread
             // Start digestion thread
-            metadata_collector_thread_handles.push(spawn_blocking(move || {
+            metadata_collector_thread_handles.push(spawn(async move {
                 let future = Self::collect_peptide_metadata_thread(
                     thread_id,
                     database_url_clone,
                     partitions,
-                );
-                block_on(future)?;
+                )
+                .await?;
                 Ok(())
             }));
         }
