@@ -289,7 +289,7 @@ impl DatabaseBuild {
         loop {
             if wait_for_queue {
                 // Wait before trying to get next protein from queue
-                debug!("Sleeping {}", thread_id);
+                debug!("Sleeping");
                 sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
                 wait_for_queue = false;
             }
@@ -307,6 +307,8 @@ impl DatabaseBuild {
                     wait_for_queue = true;
                     continue;
                 }
+                let mut i = num_proteins_processed.lock().unwrap();
+                *i += 1;
                 protein_queue.pop().unwrap() // unwrap is safe because we checked if queue is empty
             };
             let existing_protein: Option<Protein> = ProteinTable::select(
@@ -374,8 +376,6 @@ impl DatabaseBuild {
                     return Err(db_err);
                 }
             }
-            let mut i = num_proteins_processed.lock().unwrap();
-            *i += 1;
         }
 
         std::mem::drop(performance_span_enter);
