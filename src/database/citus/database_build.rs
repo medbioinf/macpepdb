@@ -307,9 +307,10 @@ impl DatabaseBuild {
                     wait_for_queue = true;
                     continue;
                 }
+                let protein = protein_queue.pop().unwrap(); // unwrap is safe because we checked if queue is empty
                 let mut i = num_proteins_processed.lock().unwrap();
                 *i += 1;
-                protein_queue.pop().unwrap() // unwrap is safe because we checked if queue is empty
+                protein
             };
             let existing_protein: Option<Protein> = ProteinTable::select(
                 &mut client,
