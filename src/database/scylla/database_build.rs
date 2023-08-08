@@ -571,14 +571,15 @@ impl DatabaseBuild {
     ) -> Result<()> {
         debug!("Collecting peptide metadata...");
         debug!("Chunking partitions for {} threads...", num_threads);
-        let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
+        let chunk_size = ((configuration.get_partition_limits().len() as f64 + 1.0)
+            / num_threads as f64)
             .ceil() as usize;
-        let chunked_partitions: Vec<Vec<i64>> = (0..configuration.get_partition_limits().len()
-            as i64)
-            .collect::<Vec<i64>>()
-            .chunks(chunk_size)
-            .map(|chunk| chunk.to_vec())
-            .collect();
+        let chunked_partitions: Vec<Vec<i64>> =
+            (0..(configuration.get_partition_limits().len() as i64 + 1))
+                .collect::<Vec<i64>>()
+                .chunks(chunk_size)
+                .map(|chunk| chunk.to_vec())
+                .collect();
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
