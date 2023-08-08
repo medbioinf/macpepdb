@@ -51,7 +51,8 @@ struct Cli {
     command: Commands,
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() {
     let mut filter = EnvFilter::from_default_env()
         .add_directive(Level::DEBUG.into())
         .add_directive("scylla=info".parse().unwrap())
@@ -105,73 +106,60 @@ fn main() -> Result<()> {
             show_progress,
             verbose,
         } => {
-            let rt = Builder::new_multi_thread()
-                .worker_threads(num_threads)
-                .thread_name("my-custom-name")
-                .thread_stack_size(3 * 1024 * 1024)
-                .enable_time()
-                .enable_io()
-                .build()
-                .unwrap();
+            let protein_file_paths = protein_file_paths
+                .into_iter()
+                .map(|x| Path::new(&x).to_path_buf())
+                .collect();
 
-            let thread = rt.spawn(async move {
-                let protein_file_paths = protein_file_paths
-                    .into_iter()
-                    .map(|x| Path::new(&x).to_path_buf())
-                    .collect();
+            if scylla {
+                let builder = ScyllaBuild::new(database_url);
 
-                if scylla {
-                    let builder = ScyllaBuild::new(database_url);
-
-                    match builder
-                        .build(
-                            &protein_file_paths,
-                            num_threads,
-                            num_partitions,
-                            allowed_ram_usage,
-                            partitioner_false_positive_probability,
-                            Some(Configuration::new(
-                                "trypsin".to_owned(),
-                                2,
-                                6,
-                                50,
-                                true,
-                                Vec::with_capacity(0),
-                            )),
-                        )
-                        .await
-                    {
-                        Ok(_) => info!("Database build completed successfully!"),
-                        Err(e) => info!("Database build failed: {}", e),
-                    }
-                } else {
-                    let builder = CitusBuild::new(database_url);
-
-                    match builder
-                        .build(
-                            &protein_file_paths,
-                            num_threads,
-                            num_partitions,
-                            allowed_ram_usage,
-                            partitioner_false_positive_probability,
-                            Some(Configuration::new(
-                                "trypsin".to_owned(),
-                                2,
-                                6,
-                                50,
-                                true,
-                                Vec::with_capacity(0),
-                            )),
-                        )
-                        .await
-                    {
-                        Ok(_) => info!("Database build completed successfully!"),
-                        Err(e) => info!("Database build failed: {}", e),
-                    }
+                match builder
+                    .build(
+                        &protein_file_paths,
+                        num_threads,
+                        num_partitions,
+                        allowed_ram_usage,
+                        partitioner_false_positive_probability,
+                        Some(Configuration::new(
+                            "trypsin".to_owned(),
+                            2,
+                            6,
+                            50,
+                            true,
+                            Vec::with_capacity(0),
+                        )),
+                    )
+                    .await
+                {
+                    Ok(_) => info!("Database build completed successfully!"),
+                    Err(e) => info!("Database build failed: {}", e),
                 }
-            });
-            rt.block_on(thread)?;
-            Ok(())
+            } else {
+                let builder = CitusBuild::new(database_url);
+
+                match builder
+                    .build(
+                        &protein_file_paths,
+                        num_threads,
+                        num_partitions,
+                        allowed_ram_usage,
+                        partitioner_false_positive_probability,
+                        Some(Configuration::new(
+                            "trypsin".to_owned(),
+                            2,
+                            6,
+                            50,
+                            true,
+                            Vec::with_capacity(0),
+                        )),
+                    )
+                    .await
+                {
+                    Ok(_) => info!("Database build completed successfully!"),
+                    Err(e) => info!("Database build failed: {}", e),
+                }
+            }
         }
     }
 }
