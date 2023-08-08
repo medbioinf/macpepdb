@@ -220,7 +220,6 @@ impl DatabaseBuild {
                 loop {
                     if wait_for_queue {
                         // Wait before pushing the protein into queue
-                        debug!("Protein producer waiting...");
                         sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
                         wait_for_queue = false;
                     }
@@ -231,7 +230,6 @@ impl DatabaseBuild {
                     };
                     // If protein queue is already full, set wait and try again
                     if protein_queue.len() >= protein_queue_size {
-                        debug!("Queue is full. Writer is waiting");
                         wait_for_queue = true;
                         continue;
                     }

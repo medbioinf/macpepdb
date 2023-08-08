@@ -51,6 +51,7 @@ pub async fn performance_log_thread(
 
     let num_proteins_processed = *num_proteins_processed.lock().unwrap();
     let total_seconds = (Instant::now() - start_time).as_secs();
+    info!("Processed {} proteins", num_proteins_processed);
     info!("Finished in {} seconds", total_seconds);
     info!("Overall {} P/sec", num_proteins_processed / total_seconds);
 
