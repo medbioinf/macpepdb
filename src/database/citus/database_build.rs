@@ -317,9 +317,6 @@ impl DatabaseBuild {
             .await?;
             let mut tries: u64 = 0;
 
-            let mut i = num_proteins_processed.lock().unwrap();
-            *i += 1;
-
             loop {
                 tries += 1;
                 // After MAX_INSERT_TRIES is reached, we log the proteins as something may seem wrong
@@ -353,6 +350,7 @@ impl DatabaseBuild {
                     };
                 }
                 .await;
+
                 // We can expect deadlocks and unique violations to happen
                 // when multiple threads try to insert the same peptides at the same time
                 // or a peptide is already inserted by another thread.
@@ -376,6 +374,8 @@ impl DatabaseBuild {
                     return Err(db_err);
                 }
             }
+            let mut i = num_proteins_processed.lock().unwrap();
+            *i += 1;
         }
 
         std::mem::drop(performance_span_enter);
