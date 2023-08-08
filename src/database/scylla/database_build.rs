@@ -321,8 +321,6 @@ impl DatabaseBuild {
             if existing_protein_result.as_ref().is_ok_and(|x| x.is_some()) {
                 let existing_protein = existing_protein_result?.unwrap();
                 if existing_protein.get_updated_at() == protein.get_updated_at() {
-                    let mut i = num_proteins_processed.lock().unwrap();
-                    *i += 1;
                     continue;
                 }
                 Self::update_protein(
