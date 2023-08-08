@@ -49,6 +49,11 @@ pub async fn performance_log_thread(
         next_time += interval;
     }
 
+    let num_proteins_processed = *num_proteins_processed.lock().unwrap();
+    let total_seconds = (Instant::now() - start_time).as_secs();
+    info!("Finished in {} seconds", total_seconds);
+    info!("Overall {} P/sec", num_proteins_processed / total_seconds);
+
     std::mem::drop(performance_span_enter);
     std::mem::drop(performance_span);
 }

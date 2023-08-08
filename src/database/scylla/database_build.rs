@@ -14,7 +14,7 @@ use futures::StreamExt;
 use tokio::spawn;
 use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
-use tracing::{debug, info, info_span, span, Level, Span};
+use tracing::{debug, debug_span, info, info_span, span, Level, Span};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -163,7 +163,8 @@ impl DatabaseBuild {
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
 
-        let protein_queue_size = num_threads * 5;
+        let protein_queue_size = num_threads * 300;
+
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -189,7 +190,7 @@ impl DatabaseBuild {
             // TODO: Add logging thread
             // Start digestion thread
             digestion_thread_handles.push(spawn(async move {
-                let future = Self::digestion_thread(
+                Self::digestion_thread(
                     thread_id,
                     database_url_clone,
                     protein_queue_arc_clone,
@@ -204,14 +205,13 @@ impl DatabaseBuild {
             }));
         }
 
-        // {
-        //     let num_proteins_processed = Arc::clone(&num_proteins_processed);
-        //     let stop_flag = Arc::clone(&stop_flag);
-        //     digestion_thread_handles.push(spawn(async move {
-        //         performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
-        //         Ok(())
-        //     }));
-        // }
+        let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        let performance_stop_flag = Arc::new(AtomicBool::new(false));
+        let stop_flag_clone = performance_stop_flag.clone();
+        let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            performance_log_thread(&num_proteins, num_proteins_processed, stop_flag_clone).await;
+            Ok(())
+        });
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
@@ -220,7 +220,9 @@ impl DatabaseBuild {
                 loop {
                     if wait_for_queue {
                         // Wait before pushing the protein into queue
+                        debug!("Protein producer waiting...");
                         sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
+                        wait_for_queue = false;
                     }
                     // Acquire lock on protein queue
                     let mut protein_queue = match protein_queue_arc.lock() {
@@ -229,6 +231,7 @@ impl DatabaseBuild {
                     };
                     // If protein queue is already full, set wait and try again
                     if protein_queue.len() >= protein_queue_size {
+                        debug!("Queue is full. Writer is waiting");
                         wait_for_queue = true;
                         continue;
                     }
@@ -245,6 +248,8 @@ impl DatabaseBuild {
 
         // Wait for digestion threads to finish
         join_all(digestion_thread_handles).await;
+        performance_stop_flag.store(true, Ordering::Relaxed);
+        performance_log_thread_handle.await??;
 
         Ok(())
     }
@@ -273,9 +278,14 @@ impl DatabaseBuild {
         let mut client = get_client().await.unwrap();
 
         let mut wait_for_queue = true;
+
+        let performance_span = debug_span!("performance", thread_id);
+        let performance_span_enter = performance_span.enter();
+
         loop {
             if wait_for_queue {
                 // Wait before trying to get next protein from queue
+                debug!("Sleeping {}", thread_id);
                 sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
                 wait_for_queue = false;
             }
@@ -331,9 +341,12 @@ impl DatabaseBuild {
                 )
                 .await?;
             }
-            // let mut i = num_proteins_processed.lock().unwrap();
-            // *i += 1;
+            let mut i = num_proteins_processed.lock().unwrap();
+            *i += 1;
         }
+        std::mem::drop(performance_span_enter);
+        std::mem::drop(performance_span);
+
         Ok(())
     }
 
