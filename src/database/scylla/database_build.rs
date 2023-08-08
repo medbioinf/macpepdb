@@ -314,6 +314,8 @@ impl DatabaseBuild {
             )
             .await;
 
+            let mut i = num_proteins_processed.lock().unwrap();
+            *i += 1;
             // or contained in secondary accessions
             if existing_protein_result.as_ref().is_ok_and(|x| x.is_some()) {
                 let existing_protein = existing_protein_result?.unwrap();
@@ -339,8 +341,6 @@ impl DatabaseBuild {
                 )
                 .await?;
             }
-            let mut i = num_proteins_processed.lock().unwrap();
-            *i += 1;
         }
         std::mem::drop(performance_span_enter);
         std::mem::drop(performance_span);

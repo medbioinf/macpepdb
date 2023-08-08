@@ -190,7 +190,7 @@ impl DatabaseBuild {
             )?;
             // Start digestion thread
             digestion_thread_handles.push(spawn(async move {
-                let future = Self::digestion_thread(
+                Self::digestion_thread(
                     thread_id,
                     database_url_clone,
                     protein_queue_arc_clone,
@@ -316,6 +316,10 @@ impl DatabaseBuild {
             )
             .await?;
             let mut tries: u64 = 0;
+
+            let mut i = num_proteins_processed.lock().unwrap();
+            *i += 1;
+
             loop {
                 tries += 1;
                 // After MAX_INSERT_TRIES is reached, we log the proteins as something may seem wrong
@@ -372,8 +376,6 @@ impl DatabaseBuild {
                     return Err(db_err);
                 }
             }
-            let mut i = num_proteins_processed.lock().unwrap();
-            *i += 1;
         }
 
         std::mem::drop(performance_span_enter);
