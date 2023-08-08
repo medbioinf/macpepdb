@@ -324,6 +324,7 @@ impl DatabaseBuild {
                 // After MAX_INSERT_TRIES is reached, we log the proteins as something may seem wrong
                 if tries > MAX_INSERT_TRIES {
                     // TODO: Log protein as unprocessable
+                    debug!("Failed to process {}", tries);
                     break;
                 }
                 let db_result: Result<()> = async {
