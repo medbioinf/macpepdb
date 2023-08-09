@@ -231,7 +231,10 @@ impl DatabaseBuild {
                         // Wait before pushing the protein into queue
                         sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
                         wait_for_queue = false;
-                        if last_wait_instant.is_some_and(|x| (Instant::now() - x).as_secs() > 120) {
+                        if last_wait_instant.is_none()
+                            || last_wait_instant
+                                .is_some_and(|x| (Instant::now() - x).as_secs() > 120)
+                        {
                             debug!("Producer sleeping");
                             last_wait_instant = Some(Instant::now());
                         }
