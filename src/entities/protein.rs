@@ -1,4 +1,9 @@
+// std imports
+use std::cmp::min;
+
 // 3rd party imports
+use anyhow::{anyhow, Result};
+use chrono::NaiveDateTime;
 use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
 use tokio_postgres::Row;
@@ -122,12 +127,108 @@ impl Protein {
         self.updated_at
     }
 
+    pub fn get_all_accessions(&self) -> Vec<&String> {
+        let mut accessions = vec![self.get_accession()];
+        accessions.extend(self.get_secondary_accessions().as_slice());
+        return accessions;
+    }
+
     /// Checks if data has changed which results in a metadata update for for proteins
     ///
     pub fn is_peptide_metadata_changed(stored_protein: &Self, updated_protein: &Self) -> bool {
         updated_protein.get_taxonomy_id() != stored_protein.get_taxonomy_id()
             || updated_protein.get_proteome_id() != stored_protein.get_proteome_id()
             || updated_protein.get_is_reviewed() != stored_protein.get_is_reviewed()
+    }
+
+    /// Creates UniProt-txt-file entry of this protein
+    ///
+    pub fn to_uniprot_txt_entry(&self) -> Result<String> {
+        let mut entry = String::new();
+
+        // ID
+        entry.push_str(&format!(
+            "ID   {}   {};   {}AA.\n",
+            self.get_entry_name(),
+            if self.get_is_reviewed() {
+                "Reviewed"
+            } else {
+                "Unreviewed"
+            },
+            self.get_sequence().len()
+        ));
+
+        // Accessions
+        let accessions = self.get_all_accessions();
+        for start in (0..accessions.len()).step_by(9) {
+            let end = min(start + 9, accessions.len());
+            entry.push_str(&format!(
+                "AC   {};\n",
+                accessions[start..end]
+                    .iter()
+                    .map(|acc| acc.as_str())
+                    .collect::<Vec<&str>>()
+                    .join("; ")
+            ));
+        }
+
+        // Date
+        let date = NaiveDateTime::from_timestamp_opt(self.get_updated_at(), 0)
+            .ok_or(anyhow!("timestamp could not be converted to NaiveDateTime"))?
+            .format("%d-%b-%Y");
+        entry.push_str(&format!("DT   {}, unprocessable.\n", date));
+
+        // Name
+        entry.push_str(&format!("DE   RecName: Full={};\n", self.get_name()));
+
+        // Proteome ID
+
+        entry.push_str(&format!(
+            "DR   Proteomes; {}; unprocessable.\n",
+            self.get_proteome_id()
+        ));
+
+        // Genes
+        let genes = self.get_genes();
+        if genes.len() > 0 {
+            entry.push_str(&format!("GN   Name={};\n", genes[0]));
+        }
+        if genes.len() > 1 {
+            for start in (1..genes.len()).step_by(9) {
+                let end = min(start + 9, genes.len());
+                entry.push_str(&format!(
+                    "GN   Synonyms={};\n",
+                    genes[start..end].join("; ")
+                ));
+            }
+        }
+
+        // Taxonomy
+        entry.push_str(&format!("OX   NCBI_TaxID={};\n", self.get_taxonomy_id()));
+
+        // Sequence
+        entry.push_str(&format!(
+            "SQ   SEQUENCE   {} AA;;\n",
+            self.get_sequence().len()
+        ));
+
+        // Chunk sequence into 10 amino acid blocks
+        let seq_blocks = self
+            .get_sequence()
+            .as_bytes()
+            .chunks(10)
+            .map(|chunk| String::from_utf8(chunk.to_vec()))
+            .collect::<Result<Vec<String>, _>>()?;
+
+        // Write 6 blocks per line
+        for start in (0..seq_blocks.len()).step_by(6) {
+            let stop = min(start + 6, seq_blocks.len());
+            entry.push_str(&format!("     {}\n", seq_blocks[start..stop].join(" ")));
+        }
+
+        entry.push_str("//\n");
+
+        Ok(entry)
     }
 }
 
@@ -192,5 +293,41 @@ impl From<ScyllaRow> for Protein {
                 .unwrap(),
             updated_at: get_cql_value(&row.columns, 9).unwrap().as_bigint().unwrap(),
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    // std imports
+    use std::env;
+    use std::fs::{remove_file, File};
+    use std::io::Write;
+    use std::path::Path;
+
+    // 3rd party imports
+    use fallible_iterator::FallibleIterator;
+
+    // internal imports
+    use crate::io::uniprot_text::reader::Reader;
+
+    #[test]
+    fn test_protein_to_uniprot_txt_entry() {
+        let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
+        let protein = reader.next().unwrap().unwrap();
+
+        let entry = protein.to_uniprot_txt_entry().unwrap();
+
+        let temp_dir = env::temp_dir();
+        let temp_file = temp_dir.join("test_protein_to_uniprot_txt_entry.txt");
+        let mut file = File::create(&temp_file).unwrap();
+        file.write_all(entry.as_bytes()).unwrap();
+        drop(file);
+
+        let mut reader = Reader::new(&temp_file, 1024).unwrap();
+        let reread_protein = reader.next().unwrap().unwrap();
+
+        assert_eq!(protein, reread_protein);
+
+        remove_file(&temp_file).unwrap();
     }
 }
