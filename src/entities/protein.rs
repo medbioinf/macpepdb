@@ -312,20 +312,25 @@ mod test {
 
     #[test]
     fn test_protein_to_uniprot_txt_entry() {
+        // Read test protein
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let protein = reader.next().unwrap().unwrap();
 
+        // Create entry
         let entry = protein.to_uniprot_txt_entry().unwrap();
 
+        // Wirte entry to temp file
         let temp_dir = env::temp_dir();
         let temp_file = temp_dir.join("test_protein_to_uniprot_txt_entry.txt");
         let mut file = File::create(&temp_file).unwrap();
         file.write_all(entry.as_bytes()).unwrap();
         drop(file);
 
+        // read temp file
         let mut reader = Reader::new(&temp_file, 1024).unwrap();
         let reread_protein = reader.next().unwrap().unwrap();
 
+        // Compare proteins
         assert_eq!(protein, reread_protein);
 
         remove_file(&temp_file).unwrap();
