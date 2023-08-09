@@ -8,13 +8,18 @@ use std::{
     time::Duration,
 };
 
+use anyhow::bail;
+use log::error;
 use tokio::time::Instant;
 use tracing::{info, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
+use crate::entities::protein::Protein;
+
 pub async fn performance_log_thread(
     num_proteins: &usize,
     num_proteins_processed: Arc<Mutex<u64>>,
+    protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
     stop_flag: Arc<AtomicBool>,
 ) {
     let performance_span = info_span!("insertion_performance");
@@ -35,11 +40,25 @@ pub async fn performance_log_thread(
 
         let delta = num_proteins_processed - prev_num_proteins_processed;
         let seconds_expired = (Instant::now() - start_time).as_secs();
+
+        let protein_queue_size = {
+            let protein_queue = match protein_queue_arc.lock() {
+                Ok(protein_queue) => protein_queue,
+                Err(err) => {
+                    error!("Could not lock protein queue {}", err);
+                    continue;
+                }
+            };
+
+            protein_queue.len()
+        };
+
         performance_span.pb_set_message(
             format!(
-                "Processed {} new proteins\t{} P/sec",
+                "Processed {} new proteins\t{} P/sec\t{} in queue",
                 delta,
-                num_proteins_processed / cmp::max(1, seconds_expired)
+                num_proteins_processed / cmp::max(1, seconds_expired),
+                protein_queue_size
             )
             .as_str(),
         );

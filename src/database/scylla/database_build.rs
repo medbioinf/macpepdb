@@ -207,11 +207,20 @@ impl DatabaseBuild {
 
         let num_proteins_processed = Arc::clone(&num_proteins_processed);
         let performance_stop_flag = Arc::new(AtomicBool::new(false));
+        let protein_queue_arc_clone = protein_queue_arc.clone();
         let stop_flag_clone = performance_stop_flag.clone();
         let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            performance_log_thread(&num_proteins, num_proteins_processed, stop_flag_clone).await;
+            performance_log_thread(
+                &num_proteins,
+                num_proteins_processed,
+                protein_queue_arc_clone,
+                stop_flag_clone,
+            )
+            .await;
             Ok(())
         });
+
+        let mut last_wait_instant: Option<Instant> = None;
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
@@ -222,6 +231,10 @@ impl DatabaseBuild {
                         // Wait before pushing the protein into queue
                         sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
                         wait_for_queue = false;
+                        if last_wait_instant.is_some_and(|x| (Instant::now() - x).as_secs() > 120) {
+                            debug!("Producer sleeping");
+                            last_wait_instant = Some(Instant::now());
+                        }
                     }
                     // Acquire lock on protein queue
                     let mut protein_queue = match protein_queue_arc.lock() {

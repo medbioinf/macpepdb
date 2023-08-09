@@ -207,9 +207,16 @@ impl DatabaseBuild {
 
         let num_proteins_processed = Arc::clone(&num_proteins_processed);
         let performance_stop_flag = Arc::new(AtomicBool::new(false));
+        let protein_queue_arc_clone = protein_queue_arc.clone();
         let stop_flag_clone = performance_stop_flag.clone();
         let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            performance_log_thread(&num_proteins, num_proteins_processed, stop_flag_clone).await;
+            performance_log_thread(
+                &num_proteins,
+                num_proteins_processed,
+                protein_queue_arc_clone,
+                stop_flag_clone,
+            )
+            .await;
             Ok(())
         });
 
