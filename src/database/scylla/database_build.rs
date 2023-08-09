@@ -231,13 +231,10 @@ impl DatabaseBuild {
                         // Wait before pushing the protein into queue
                         sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
                         wait_for_queue = false;
-                        if last_wait_instant.is_none()
-                            || last_wait_instant
-                                .is_some_and(|x| (Instant::now() - x).as_secs() > 120)
-                        {
-                            debug!("Producer sleeping");
-                            last_wait_instant = Some(Instant::now());
+                        if last_wait_instant.is_some_and(|x| (Instant::now() - x).as_secs() > 60) {
+                            debug!("Producer sleeping since 1 minute");
                         }
+                        last_wait_instant = Some(Instant::now());
                     }
                     // Acquire lock on protein queue
                     let mut protein_queue = match protein_queue_arc.lock() {
@@ -249,6 +246,7 @@ impl DatabaseBuild {
                         wait_for_queue = true;
                         continue;
                     }
+                    last_wait_instant = None;
                     protein_queue.push(protein);
                     break;
                 }

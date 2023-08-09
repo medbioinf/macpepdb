@@ -55,9 +55,10 @@ pub async fn performance_log_thread(
 
         performance_span.pb_set_message(
             format!(
-                "Processed {} new proteins\t{} P/sec\t{} in queue",
+                "Just processed: {}\tP/sec: {}\tTotal processed: {}\tQueue size: {}",
                 delta,
                 num_proteins_processed / cmp::max(1, seconds_expired),
+                num_proteins_processed,
                 protein_queue_size
             )
             .as_str(),
