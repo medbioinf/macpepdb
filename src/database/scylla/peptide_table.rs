@@ -2,6 +2,7 @@
 use anyhow::Result;
 use scylla::batch::Batch;
 use scylla::frame::response::result::{CqlValue, Row};
+use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 
@@ -13,7 +14,7 @@ use crate::entities::peptide::Peptide;
 use crate::database::scylla::client::GenericClient;
 use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 
-const TABLE_NAME: &'static str = "peptides";
+pub const TABLE_NAME: &'static str = "peptides";
 
 pub const SELECT_COLS: &'static str = "partition, mass, sequence, missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids";
 
@@ -30,7 +31,7 @@ lazy_static! {
         .map(|(_, _)| "?")
         .collect::<Vec<&str>>()
         .join(", ");
-    static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS
+    pub static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS
         .split(", ",)
         .enumerate()
         .map(|(_, col)| {
@@ -53,7 +54,11 @@ impl PeptideTable {
     /// * `client` - Database client or open transaction
     /// * `peptides` - Iterator over peptides to insert
     ///
-    pub async fn bulk_insert<'a, C, T>(client: &C, peptides: T) -> Result<()>
+    pub async fn bulk_insert<'a, C, T>(
+        client: &C,
+        peptides: T,
+        prepared: &PreparedStatement,
+    ) -> Result<()>
     where
         C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
@@ -61,15 +66,6 @@ impl PeptideTable {
         // Update has upsert functionality in Scylla. protein accessions are added to the set (see UPDATE_SET_PLACEHOLDERS)
         // Alternative: always execute two lightweight transactions update ... if exists, update ... if not exists
         // Alternative: select then check in application code then upsert
-
-        let statement = format!(
-            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            SCYLLA_KEYSPACE_NAME,
-            TABLE_NAME,
-            UPDATE_SET_PLACEHOLDER.as_str()
-        );
-
-        let prepared = client.get_session().prepare(statement).await?;
 
         for peptide in peptides {
             client
@@ -436,11 +432,20 @@ mod tests {
         )
         .unwrap()];
 
-        PeptideTable::bulk_insert(&client, &mut conflicting_peptides.iter())
+        let statement = format!(
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+            SCYLLA_KEYSPACE_NAME,
+            TABLE_NAME,
+            UPDATE_SET_PLACEHOLDER.as_str()
+        );
+
+        let prepared = client.get_session().prepare(statement).await.unwrap();
+
+        PeptideTable::bulk_insert(&client, &mut conflicting_peptides.iter(), &prepared)
             .await
             .unwrap();
 
-        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
             .await
             .unwrap();
 
@@ -537,7 +542,16 @@ mod tests {
 
         assert_eq!(peptides.len(), EXPECTED_PEPTIDES.len());
 
-        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+        let statement = format!(
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+            SCYLLA_KEYSPACE_NAME,
+            TABLE_NAME,
+            UPDATE_SET_PLACEHOLDER.as_str()
+        );
+
+        let prepared = client.get_session().prepare(statement).await.unwrap();
+
+        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
             .await
             .unwrap();
 
@@ -616,7 +630,16 @@ mod tests {
         )
         .unwrap();
 
-        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+        let statement = format!(
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+            SCYLLA_KEYSPACE_NAME,
+            TABLE_NAME,
+            UPDATE_SET_PLACEHOLDER.as_str()
+        );
+
+        let prepared = client.get_session().prepare(statement).await.unwrap();
+
+        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
             .await
             .unwrap();
 
