@@ -57,7 +57,7 @@ pub async fn performance_log_thread(
     let start_time = Instant::now();
 
     let mut i = 1;
-    const FILE_LOG_INTERVAL: u64 = 10;
+    const FILE_LOG_INTERVAL: u64 = 600;
     let mut num_proteins_processed_last_interval = 0;
     let mut file = File::create("performance.csv").await?;
     async_writeln!(file, "seconds,processed_proteins,proteins/sec")?;
