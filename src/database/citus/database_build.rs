@@ -390,6 +390,10 @@ impl DatabaseBuild {
                 }
                 .await;
 
+                if db_result.is_ok() {
+                    break;
+                }
+
                 // We can expect deadlocks and unique violations to happen
                 // when multiple threads try to insert the same peptides at the same time
                 // or a peptide is already inserted by another thread.
