@@ -3,7 +3,7 @@ use anyhow::Result;
 use scylla::{transport::session::Session, SessionBuilder};
 
 pub trait GenericClient {
-    async fn new(database_url: &str) -> Result<Self>
+    async fn new(hostnames: &Vec<&str>) -> Result<Self>
     where
         Self: Sized;
     fn get_session(&self) -> &Session;
@@ -14,15 +14,12 @@ pub struct Client {
 }
 
 impl GenericClient for Client {
-    async fn new(database_url: &str) -> Result<Self>
+    async fn new(hostnames: &Vec<&str>) -> Result<Self>
     where
         Self: Sized,
     {
         Ok(Self {
-            session: SessionBuilder::new()
-                .known_node(database_url)
-                .build()
-                .await?,
+            session: SessionBuilder::new().known_nodes(hostnames).build().await?,
         })
     }
 

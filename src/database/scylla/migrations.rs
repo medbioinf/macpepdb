@@ -108,7 +108,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(get_latest_migration_id().await.unwrap(), 3);
+        assert_eq!(get_latest_migration_id(&client).await.unwrap(), 3);
     }
 
     #[tokio::test]
@@ -119,8 +119,14 @@ mod tests {
         drop_keyspace(&client).await;
 
         run_migrations(&client).await;
-        assert_eq!(get_latest_migration_id().await.unwrap(), UP.len() as i32);
+        assert_eq!(
+            get_latest_migration_id(&client).await.unwrap(),
+            UP.len() as i32
+        );
         run_migrations(&client).await;
-        assert_eq!(get_latest_migration_id().await.unwrap(), UP.len() as i32);
+        assert_eq!(
+            get_latest_migration_id(&client).await.unwrap(),
+            UP.len() as i32
+        );
     }
 }

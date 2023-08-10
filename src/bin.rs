@@ -28,7 +28,7 @@ enum Commands {
         name: String,
     },
     Build {
-        database_url: String,
+        database_urls: String,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
@@ -96,7 +96,7 @@ async fn main() {
             }
         }
         Commands::Build {
-            database_url,
+            database_urls,
             protein_file_paths,
             num_threads,
             num_partitions,
@@ -112,7 +112,7 @@ async fn main() {
                 .collect();
 
             if scylla {
-                let builder = ScyllaBuild::new(database_url);
+                let builder = ScyllaBuild::new(database_urls);
 
                 match builder
                     .build(
@@ -136,7 +136,7 @@ async fn main() {
                     Err(e) => info!("Database build failed: {}", e),
                 }
             } else {
-                let builder = CitusBuild::new(database_url);
+                let builder = CitusBuild::new(database_urls);
 
                 match builder
                     .build(
