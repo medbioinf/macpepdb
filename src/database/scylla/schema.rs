@@ -7,7 +7,7 @@ pub const UP: [&str; 4] = [
 
 pub const DROP_KEYSPACE: &str = "DROP KEYSPACE IF EXISTS macpep;";
 
-pub const CREATE_KEYSPACE: &str = "CREATE KEYSPACE macpep
+pub const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS macpep
                 WITH REPLICATION = {'class': 'NetworkTopologyStrategy',
                 'replication_factor': 1};";
 
