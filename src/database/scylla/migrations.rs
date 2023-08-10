@@ -49,7 +49,7 @@ pub async fn run_migrations(client: &Client) {
 }
 
 pub async fn get_latest_migration_id() -> Result<i32> {
-    let mut client = get_client().await.unwrap();
+    let mut client = get_client(None).await.unwrap();
     let session = client.get_session();
 
     let latest_migration_id_query: String = format!(
@@ -82,7 +82,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_latest_migration_id() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         let session = client.get_session();
 
         prepare_database_for_tests(&client).await;
@@ -116,7 +116,7 @@ mod tests {
     #[serial]
     #[traced_test]
     pub async fn test_run_migrations() {
-        let client = get_client().await.unwrap();
+        let client = get_client(None).await.unwrap();
         drop_keyspace(&client).await;
 
         run_migrations(&client).await;

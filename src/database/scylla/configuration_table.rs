@@ -216,7 +216,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select_without_insert() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let configuration_res = ConfigurationTable::select(&mut client).await;
@@ -234,7 +234,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let configuration = Configuration::new(
@@ -256,7 +256,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let expected_configuration = Configuration::new(

@@ -19,8 +19,8 @@ use self::schema::CREATE_KEYSPACE;
 pub const SCYLLA_KEYSPACE_NAME: &str = "macpep";
 pub const DATABASE_URL: &str = "127.0.0.1:9042";
 
-pub async fn get_client() -> Result<Client> {
-    Client::new(DATABASE_URL).await
+pub async fn get_client(database_url: Option<&str>) -> Result<Client> {
+    Client::new(database_url.unwrap_or(DATABASE_URL)).await
 }
 
 pub async fn drop_keyspace(client: &Client) {

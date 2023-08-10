@@ -287,7 +287,7 @@ impl DatabaseBuild {
         remove_peptides_containing_unknown: bool,
         num_proteins_processed: Arc<Mutex<u64>>,
     ) -> Result<()> {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(Some(database_url.as_str())).await.unwrap();
 
         let mut wait_for_queue = true;
 
@@ -626,7 +626,7 @@ impl DatabaseBuild {
         database_url: String,
         partitions: Vec<i64>,
     ) -> Result<()> {
-        let mut client = get_client().await?;
+        let mut client = get_client(Some(database_url.as_str())).await?;
         let mut session = client.get_session();
         let update_query = format!(
                         "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ? WHERE partition = ? AND mass = ? and sequence = ?",
@@ -703,7 +703,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
     ) -> Result<()> {
         info!("Starting database build");
 
-        let mut client = get_client().await?;
+        let mut client = get_client(Some(&self.database_url)).await?;
         let mut session = client.get_session();
 
         debug!("applying database migrations...");
@@ -803,7 +803,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_database_build_without_initial_config() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         let mut session = client.get_session();
 
         drop_keyspace(&client).await;
@@ -821,7 +821,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         let mut session = client.get_session();
 
         drop_keyspace(&client).await;
