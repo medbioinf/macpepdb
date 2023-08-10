@@ -10,7 +10,7 @@ use macpepdb::{
     },
     entities::configuration::Configuration,
 };
-use tracing::{info, info_span, Level};
+use tracing::{error, info, info_span, Level};
 use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -21,15 +21,13 @@ enum Commands {
         name: String,
     },
     Build {
-        database_urls: String,
+        database_url: String,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         #[clap(value_delimiter = ',', num_args = 1..)]
         protein_file_paths: Vec<String>,
-        #[clap(long)]
-        scylla: bool,
         #[clap(long)]
         show_progress: bool,
         #[clap(long)]
@@ -90,13 +88,12 @@ async fn main() {
             }
         }
         Commands::Build {
-            database_urls,
+            database_url,
             protein_file_paths,
             num_threads,
             num_partitions,
             allowed_ram_usage,
             partitioner_false_positive_probability,
-            scylla,
             show_progress,
             verbose,
             log_folder,
@@ -108,8 +105,11 @@ async fn main() {
 
             let log_folder = Path::new(&log_folder).to_path_buf();
 
-            if scylla {
-                let builder = ScyllaBuild::new(database_urls);
+            if database_url.starts_with("scylla://") {
+                // remove protocol
+                let plain_database_url = database_url[9..].to_string();
+
+                let builder = ScyllaBuild::new(plain_database_url);
 
                 match builder
                     .build(
@@ -133,8 +133,8 @@ async fn main() {
                     Ok(_) => info!("Database build completed successfully!"),
                     Err(e) => info!("Database build failed: {}", e),
                 }
-            } else {
-                let builder = CitusBuild::new(database_urls);
+            } else if database_url.starts_with("postgresql://") {
+                let builder = CitusBuild::new(database_url);
 
                 match builder
                     .build(
@@ -158,6 +158,8 @@ async fn main() {
                     Ok(_) => info!("Database build completed successfully!"),
                     Err(e) => info!("Database build failed: {}", e),
                 }
+            } else {
+                error!("Unsupported database protocol: {}", database_url);
             }
         }
     }
