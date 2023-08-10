@@ -1,23 +1,16 @@
-use std::{
-    path::{Path, PathBuf},
-    thread::sleep,
-    time::Duration,
-};
+use std::{path::Path, thread::sleep, time::Duration};
 
 // 3rd party imports
-use anyhow::Result;
 use clap::{Parser, Subcommand};
-use futures::{stream, StreamExt};
 use indicatif::ProgressStyle;
 use macpepdb::{
     database::{
         citus::database_build::DatabaseBuild as CitusBuild, database_build::DatabaseBuild,
         scylla::database_build::DatabaseBuild as ScyllaBuild,
     },
-    entities::{configuration::Configuration, protein},
+    entities::configuration::Configuration,
 };
-use tokio::runtime::Builder;
-use tracing::{event, info, info_span, instrument, metadata::LevelFilter, Level, Span};
+use tracing::{info, info_span, Level};
 use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -54,7 +47,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
-    let mut filter = EnvFilter::from_default_env()
+    let filter = EnvFilter::from_default_env()
         .add_directive(Level::DEBUG.into())
         .add_directive("scylla=info".parse().unwrap())
         .add_directive("tokio_postgres=info".parse().unwrap());
@@ -83,10 +76,10 @@ async fn main() {
             let mut i = 0;
 
             let loop_span = info_span!("looping");
-            let loop_span_enter = loop_span.enter();
+            let _loop_span_enter = loop_span.enter();
 
             let loop_span2 = info_span!("looping_inner");
-            let loop_span_enter2 = loop_span2.enter();
+            let _loop_span_enter2 = loop_span2.enter();
 
             loop {
                 i += 1;

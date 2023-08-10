@@ -11,7 +11,6 @@ use std::time::Duration;
 // 3rd party imports
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
-use futures::executor::block_on;
 use futures::future::join_all;
 use rand::{self, Rng};
 use refinery::embed_migrations;
@@ -668,12 +667,8 @@ impl DatabaseBuild {
             // TODO: Add logging thread
             // Start digestion thread
             metadata_collector_thread_handles.push(spawn(async move {
-                let future = Self::collect_peptide_metadata_thread(
-                    thread_id,
-                    database_url_clone,
-                    partitions,
-                )
-                .await?;
+                Self::collect_peptide_metadata_thread(thread_id, database_url_clone, partitions)
+                    .await?;
                 Ok(())
             }));
         }

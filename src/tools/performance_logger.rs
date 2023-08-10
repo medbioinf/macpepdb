@@ -1,3 +1,4 @@
+// std imports
 use std::{
     cmp,
     sync::{
@@ -8,11 +9,10 @@ use std::{
     time::Duration,
 };
 
-use anyhow::bail;
 use anyhow::Result;
 use log::error;
-use tokio::{fs::File, io::AsyncWriteExt, time::Instant};
-use tracing::{info, info_span, Span};
+use tokio::{fs::File, time::Instant};
+use tracing::{info, info_span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::entities::protein::Protein;

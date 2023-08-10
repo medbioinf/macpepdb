@@ -10,14 +10,13 @@ use std::time::Duration;
 // 3rd party imports
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
-use futures::executor::block_on;
 use futures::future::join_all;
 use futures::StreamExt;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
-use tokio::time::{self, Instant};
-use tracing::{debug, debug_span, info, info_span, span, Level, Span};
+use tokio::time::Instant;
+use tracing::{debug, debug_span, info, span, Level};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -44,13 +43,13 @@ use crate::tools::{
     performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
 };
-use scylla::frame::response::result::{CqlValue, Row};
+use scylla::frame::response::result::CqlValue;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
 
-use super::{prepare_database_for_tests, SCYLLA_KEYSPACE_NAME};
+use super::SCYLLA_KEYSPACE_NAME;
 
 lazy_static! {
     static ref PROTEIN_QUEUE_WRITE_SLEEP_TIME: Duration = Duration::from_millis(100);
@@ -657,12 +656,8 @@ impl DatabaseBuild {
             // TODO: Add logging thread
             // Start digestion thread
             metadata_collector_thread_handles.push(spawn(async move {
-                let future = Self::collect_peptide_metadata_thread(
-                    thread_id,
-                    database_urls_clone,
-                    partitions,
-                )
-                .await?;
+                Self::collect_peptide_metadata_thread(thread_id, database_urls_clone, partitions)
+                    .await?;
                 Ok(())
             }));
         }
@@ -678,8 +673,8 @@ impl DatabaseBuild {
         database_urls: Vec<String>,
         partitions: Vec<i64>,
     ) -> Result<()> {
-        let mut client = get_client(Some(&database_urls)).await?;
-        let mut session = client.get_session();
+        let client = get_client(Some(&database_urls)).await?;
+        let session = client.get_session();
         let update_query = format!(
                         "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ? WHERE partition = ? AND mass = ? and sequence = ?",
                         SCYLLA_KEYSPACE_NAME,
@@ -761,7 +756,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
             .map(|x| x.to_string())
             .collect();
         let mut client = get_client(Some(&database_hosts)).await?;
-        let mut session = client.get_session();
 
         debug!("applying database migrations...");
 
@@ -843,7 +837,7 @@ mod test {
     use crate::database::scylla::{
         peptide_table::PeptideTable,
         protein_table::ProteinTable,
-        {get_client, prepare_database_for_tests, DATABASE_URL},
+        {get_client, DATABASE_URL},
     };
     use crate::database::selectable_table::SelectableTable;
     use crate::io::uniprot_text::reader::Reader;
@@ -863,8 +857,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_database_build_without_initial_config() {
-        let mut client = get_client(None).await.unwrap();
-        let mut session = client.get_session();
+        let client = get_client(None).await.unwrap();
 
         drop_keyspace(&client).await;
 
@@ -886,8 +879,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build() {
-        let mut client = get_client(None).await.unwrap();
-        let mut session = client.get_session();
+        let client = get_client(None).await.unwrap();
 
         drop_keyspace(&client).await;
 

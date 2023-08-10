@@ -1,6 +1,5 @@
 // 3rd party imports
 use anyhow::Result;
-use scylla::batch::Batch;
 use scylla::frame::response::result::{CqlValue, Row};
 use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
@@ -316,11 +315,11 @@ mod tests {
     use fallible_iterator::FallibleIterator;
     use serial_test::serial;
 
+    // internal imports
     use crate::biology::digestion_enzyme::functions::{
         create_peptides_entities_from_digest, get_enzyme_by_name,
     };
-    use crate::entities::protein;
-    // internal imports
+
     use super::*;
 
     use crate::database::scylla::{get_client, prepare_database_for_tests};

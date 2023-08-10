@@ -10,8 +10,6 @@ use indicatif::ProgressStyle;
 use sysinfo::{System, SystemExt};
 use tracing::{debug, info, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
-use tracing_subscriber::field::debug;
-use tracing_test::traced_test;
 
 // internal imports
 use crate::biology::digestion_enzyme::enzyme::Enzyme;
@@ -295,6 +293,9 @@ mod test {
     // std imports
     use std::collections::HashSet;
     use std::path::PathBuf;
+
+    // 3rd party imports
+    use tracing_test::traced_test;
 
     // internal imports
     use super::*;

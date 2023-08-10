@@ -321,7 +321,7 @@ pub fn calc_sequence_mass(sequence: &str) -> Result<i64> {
 
 #[cfg(test)]
 mod test {
-    use tracing::{error, info};
+    use tracing::error;
 
     // internal imports
     use super::*;
