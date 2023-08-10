@@ -310,6 +310,8 @@ mod test {
     // internal imports
     use crate::io::uniprot_text::reader::Reader;
 
+    /// Check if the protein can be converted to a UniProt-txt-file entry and back
+    ///
     #[test]
     fn test_protein_to_uniprot_txt_entry() {
         // Read test protein
