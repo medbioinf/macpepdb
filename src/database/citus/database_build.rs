@@ -45,7 +45,7 @@ use crate::entities::{configuration::Configuration, peptide::Peptide, protein::P
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
 use crate::tools::{
-    performance_logger::performance_log_thread,
+    error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
 };
 
@@ -172,6 +172,7 @@ impl DatabaseBuild {
         debug!("processing proteins using {} threads ...", num_threads);
 
         let unprocessable_proteins_log_file_path = log_folder.join("unprocessable_proteins.txt");
+        let error_log_file_path = log_folder.join("errors.log");
 
         let protein_queue_size = num_threads * 300;
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
@@ -182,6 +183,7 @@ impl DatabaseBuild {
             Sender<Protein>,
             Receiver<Protein>,
         ) = channel(1000);
+        let (error_sender, error_receiver): (Sender<String>, Receiver<String>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -194,6 +196,7 @@ impl DatabaseBuild {
             let stop_flag_clone = stop_flag.clone();
             let database_url_clone = database_url.to_string();
             let thread_unprocessable_proteins_sender = unprocessable_proteins_sender.clone();
+            let thread_error_sender = error_sender.clone();
             // Create a boxed enzyme
             let digestion_enzyme_box = get_enzyme_by_name(
                 digestion_enzyme.get_name(),
@@ -213,14 +216,17 @@ impl DatabaseBuild {
                     remove_peptides_containing_unknown,
                     num_proteins_processed,
                     thread_unprocessable_proteins_sender,
+                    thread_error_sender,
                 )
                 .await?;
                 Ok(())
             }));
         }
 
-        // Drop the original sender its not needed anymore
+        // Drop the original senders.
+        // Not required for cloning anymore
         drop(unprocessable_proteins_sender);
+        drop(error_sender);
 
         let num_proteins_processed = Arc::clone(&num_proteins_processed);
         let performance_stop_flag = Arc::new(AtomicBool::new(false));
@@ -243,6 +249,11 @@ impl DatabaseBuild {
                 unprocessable_proteins_receiver,
             )
             .await?;
+            Ok(())
+        });
+
+        let error_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            error_logger(error_log_file_path, error_receiver).await?;
             Ok(())
         });
 
@@ -282,6 +293,7 @@ impl DatabaseBuild {
         performance_stop_flag.store(true, Ordering::Relaxed);
         performance_log_thread_handle.await??;
         unprocessable_proteins_log_thread_handle.await??;
+        error_log_thread_handle.await??;
 
         Ok(())
     }
@@ -307,6 +319,7 @@ impl DatabaseBuild {
         remove_peptides_containing_unknown: bool,
         num_proteins_processed: Arc<Mutex<u64>>,
         unprocessable_proteins_sender: Sender<Protein>,
+        error_sender: Sender<String>,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls).await?;
         // The connection object performs the actual communication with the database,
@@ -411,7 +424,10 @@ impl DatabaseBuild {
                                 // Deadlock detected, retry
                                 continue;
                             }
-                            _ => {} // TODO: Propagate other errors
+                            _ => {
+                                error!("Unresolvable error logged");
+                                error_sender.send(format!("{:?}", db_err)).await?;
+                            }
                         }
                     }
                     return Err(db_err);

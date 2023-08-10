@@ -16,7 +16,7 @@ use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::{debug, debug_span, info, span, Level};
+use tracing::{debug, debug_span, error, info, span, Level};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -40,7 +40,7 @@ use crate::database::scylla::{
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
 use crate::tools::{
-    performance_logger::performance_log_thread,
+    error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
 };
 use scylla::frame::response::result::CqlValue;
@@ -174,6 +174,7 @@ impl DatabaseBuild {
         let protein_queue_size = num_threads * 300;
 
         let unprocessable_proteins_log_file_path = log_folder.join("unprocessable_proteins.txt");
+        let error_log_file_path = log_folder.join("errors.log");
 
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
@@ -183,6 +184,7 @@ impl DatabaseBuild {
             Sender<Protein>,
             Receiver<Protein>,
         ) = channel(1000);
+        let (error_sender, error_receiver): (Sender<String>, Receiver<String>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -194,6 +196,7 @@ impl DatabaseBuild {
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let thread_unprocessable_proteins_sender = unprocessable_proteins_sender.clone();
+            let thread_error_sender = error_sender.clone();
             // Create a boxed enzyme
             let digestion_enzyme_box = get_enzyme_by_name(
                 digestion_enzyme.get_name(),
@@ -215,6 +218,7 @@ impl DatabaseBuild {
                     remove_peptides_containing_unknown,
                     num_proteins_processed,
                     thread_unprocessable_proteins_sender,
+                    thread_error_sender,
                 )
                 .await?;
                 Ok(())
@@ -245,6 +249,11 @@ impl DatabaseBuild {
                 unprocessable_proteins_receiver,
             )
             .await?;
+            Ok(())
+        });
+
+        let error_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            error_logger(error_log_file_path, error_receiver).await?;
             Ok(())
         });
 
@@ -291,6 +300,7 @@ impl DatabaseBuild {
         performance_stop_flag.store(true, Ordering::Relaxed);
         performance_log_thread_handle.await??;
         unprocessable_proteins_log_thread_handle.await??;
+        error_log_thread_handle.await??;
 
         Ok(())
     }
@@ -316,6 +326,7 @@ impl DatabaseBuild {
         remove_peptides_containing_unknown: bool,
         num_proteins_processed: Arc<Mutex<u64>>,
         unprocessable_proteins_sender: Sender<Protein>,
+        error_sender: Sender<String>,
     ) -> Result<()> {
         let mut client = get_client(Some(database_urls)).await.unwrap();
 
@@ -404,7 +415,8 @@ impl DatabaseBuild {
                 }
 
                 if let Err(db_err) = db_result {
-                    debug!("Thread {} error: {}", thread_id, db_err);
+                    error!("Unresolvable error logged");
+                    error_sender.send(format!("{:?}", db_err)).await?;
                 }
             }
         }

@@ -1,5 +1,7 @@
 // Functions for formatting outputs
 pub mod display;
+/// Logger for error messages
+pub mod error_logger;
 /// Additional functions based on the crate `fancy_regex`
 pub mod fancy_regex;
 /// Additional macros, e.g. for easy creation of collectionss
