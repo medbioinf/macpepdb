@@ -41,6 +41,7 @@ enum Commands {
         show_progress: bool,
         #[clap(long)]
         verbose: bool,
+        log_folder: String,
     },
 }
 
@@ -105,11 +106,14 @@ async fn main() {
             scylla,
             show_progress,
             verbose,
+            log_folder,
         } => {
             let protein_file_paths = protein_file_paths
                 .into_iter()
                 .map(|x| Path::new(&x).to_path_buf())
                 .collect();
+
+            let log_folder = Path::new(&log_folder).to_path_buf();
 
             if scylla {
                 let builder = ScyllaBuild::new(database_urls);
@@ -129,6 +133,7 @@ async fn main() {
                             true,
                             Vec::with_capacity(0),
                         )),
+                        &log_folder,
                     )
                     .await
                 {
@@ -153,6 +158,7 @@ async fn main() {
                             true,
                             Vec::with_capacity(0),
                         )),
+                        &log_folder,
                     )
                     .await
                 {

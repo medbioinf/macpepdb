@@ -226,7 +226,7 @@ impl Protein {
             entry.push_str(&format!("     {}\n", seq_blocks[start..stop].join(" ")));
         }
 
-        entry.push_str("//\n");
+        entry.push_str("//");
 
         Ok(entry)
     }

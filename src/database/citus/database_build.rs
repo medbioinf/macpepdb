@@ -1,8 +1,10 @@
 // std import
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::Ordering;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -14,6 +16,7 @@ use futures::future::join_all;
 use rand::{self, Rng};
 use refinery::embed_migrations;
 use tokio::spawn;
+use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio_postgres::{
     error::{Error as PSQLError, SqlState},
@@ -42,7 +45,10 @@ use crate::database::table::Table;
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
-use crate::tools::performance_logger::performance_log_thread;
+use crate::tools::{
+    performance_logger::performance_log_thread,
+    unprocessable_protein_logger::unprocessable_proteins_logger,
+};
 
 // add module migration to the current module
 embed_migrations!("src/database/citus/migrations");
@@ -162,14 +168,21 @@ impl DatabaseBuild {
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
         num_proteins: usize,
+        log_folder: &PathBuf,
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
+
+        let unprocessable_proteins_log_file_path = log_folder.join("unprocessable_proteins.txt");
 
         let protein_queue_size = num_threads * 300;
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let (unprocessable_proteins_sender, unprocessable_proteins_receiver): (
+            Sender<Protein>,
+            Receiver<Protein>,
+        ) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -181,6 +194,7 @@ impl DatabaseBuild {
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let database_url_clone = database_url.to_string();
+            let thread_unprocessable_proteins_sender = unprocessable_proteins_sender.clone();
             // Create a boxed enzyme
             let digestion_enzyme_box = get_enzyme_by_name(
                 digestion_enzyme.get_name(),
@@ -199,11 +213,15 @@ impl DatabaseBuild {
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
                     num_proteins_processed,
+                    thread_unprocessable_proteins_sender,
                 )
                 .await?;
                 Ok(())
             }));
         }
+
+        // Drop the original sender its not needed anymore
+        drop(unprocessable_proteins_sender);
 
         let num_proteins_processed = Arc::clone(&num_proteins_processed);
         let performance_stop_flag = Arc::new(AtomicBool::new(false));
@@ -216,7 +234,16 @@ impl DatabaseBuild {
                 protein_queue_arc_clone,
                 stop_flag_clone,
             )
-            .await;
+            .await?;
+            Ok(())
+        });
+
+        let unprocessable_proteins_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            unprocessable_proteins_logger(
+                unprocessable_proteins_log_file_path,
+                unprocessable_proteins_receiver,
+            )
+            .await?;
             Ok(())
         });
 
@@ -255,6 +282,7 @@ impl DatabaseBuild {
         join_all(digestion_thread_handles).await;
         performance_stop_flag.store(true, Ordering::Relaxed);
         performance_log_thread_handle.await??;
+        unprocessable_proteins_log_thread_handle.await??;
 
         Ok(())
     }
@@ -279,6 +307,7 @@ impl DatabaseBuild {
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
         num_proteins_processed: Arc<Mutex<u64>>,
+        unprocessable_proteins_sender: Sender<Protein>,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls).await?;
         // The connection object performs the actual communication with the database,
@@ -331,8 +360,8 @@ impl DatabaseBuild {
                 tries += 1;
                 // After MAX_INSERT_TRIES is reached, we log the proteins as something may seem wrong
                 if tries > MAX_INSERT_TRIES {
-                    // TODO: Log protein as unprocessable
-                    debug!("Failed to process {}", tries);
+                    debug!("Failed to process {}", protein.get_accession());
+                    unprocessable_proteins_sender.send(protein).await?;
                     break;
                 }
                 let db_result: Result<()> = async {
@@ -379,7 +408,7 @@ impl DatabaseBuild {
                                 // Deadlock detected, retry
                                 continue;
                             }
-                            _ => {} // Propagate other errors
+                            _ => {} // TODO: Propagate other errors
                         }
                     }
                     return Err(db_err);
@@ -741,6 +770,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
+        log_folder: &PathBuf,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
 
@@ -797,6 +827,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             configuration.get_remove_peptides_containing_unknown(),
             configuration.get_partition_limits().to_vec(),
             protein_ctr.clone(),
+            log_folder,
         )
         .await?;
         // collect metadata
@@ -810,6 +841,8 @@ impl DatabaseBuildTrait for DatabaseBuild {
 #[cfg(test)]
 mod test {
     // std imports
+    use std::env;
+    use std::fs::{create_dir_all, remove_dir_all};
     use std::path::Path;
 
     // 3rd party imports
@@ -855,10 +888,15 @@ mod test {
         prepare_database_for_tests(&mut client).await;
 
         let protein_file_paths = vec![Path::new("test_files/uniprot.txt").to_path_buf()];
+        let log_folder = env::temp_dir().join("macpepdb_rs/database_build");
+        if log_folder.exists() {
+            remove_dir_all(&log_folder).unwrap();
+        }
+        create_dir_all(&log_folder).unwrap();
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         let build_res = database_builder
-            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None)
+            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, &log_folder)
             .await;
         assert!(build_res.is_err());
         connection_handle.abort();
@@ -886,6 +924,11 @@ mod test {
             Path::new("test_files/uniprot.txt").to_path_buf(),
             Path::new("test_files/trypsin_duplicate.txt").to_path_buf(),
         ];
+        let log_folder = env::temp_dir().join("macpepdb_rs/database_build");
+        if log_folder.exists() {
+            remove_dir_all(&log_folder).unwrap();
+        }
+        create_dir_all(&log_folder).unwrap();
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         database_builder
@@ -896,6 +939,7 @@ mod test {
                 0.5,
                 0.0002,
                 Some(CONFIGURATION.clone()),
+                &log_folder,
             )
             .await
             .unwrap();

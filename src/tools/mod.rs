@@ -11,3 +11,5 @@ pub mod peptide_partitioner;
 pub mod cql;
 
 pub mod performance_logger;
+/// Functions to create a protein partition for the database based on the protein files
+pub mod unprocessable_protein_logger;
