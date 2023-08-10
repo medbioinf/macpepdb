@@ -20,7 +20,7 @@ pub async fn run_migrations(client: &Client) {
 
     create_keyspace_if_not_exists(&client).await;
 
-    let latest_migration_id = get_latest_migration_id().await.unwrap_or(0);
+    let latest_migration_id = get_latest_migration_id(&client).await.unwrap_or(0);
     info!("Latest migration id in DB: {}", latest_migration_id);
 
     for (i, statement) in UP.iter().skip(latest_migration_id as usize).enumerate() {
@@ -48,8 +48,7 @@ pub async fn run_migrations(client: &Client) {
     }
 }
 
-pub async fn get_latest_migration_id() -> Result<i32> {
-    let mut client = get_client(None).await.unwrap();
+pub async fn get_latest_migration_id(client: &Client) -> Result<i32> {
     let session = client.get_session();
 
     let latest_migration_id_query: String = format!(
