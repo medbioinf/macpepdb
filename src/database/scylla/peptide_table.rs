@@ -3,6 +3,7 @@ use anyhow::Result;
 use scylla::frame::response::result::{CqlValue, Row};
 use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
+use scylla::transport::query_result::FirstRowError;
 
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
@@ -242,7 +243,13 @@ where
             statement += " ";
             statement += additional;
         }
-        return Ok(Some(session.query(statement, params).await?.first_row()?));
+        let row_res = session.query(statement, params).await?;
+
+        match row_res.first_row() {
+            Ok(row) => Ok(Some(row)),
+            Err(FirstRowError::RowsEmpty) => Ok(None),
+            Err(FirstRowError::RowsExpected(err)) => Err(err.into()),
+        }
     }
 
     async fn select_multiple<'b>(
