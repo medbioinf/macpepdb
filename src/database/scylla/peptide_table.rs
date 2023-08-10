@@ -401,7 +401,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
@@ -518,7 +518,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_accession_update() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
@@ -599,7 +599,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_flagging_for_metadata_update() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();

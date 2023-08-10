@@ -344,7 +344,7 @@ mod tests {
     /// Prepares database for testing and inserts proteins from test file.
     ///
     async fn test_insert() {
-        let client = get_client().await.unwrap();
+        let client = get_client(None).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -380,7 +380,7 @@ mod tests {
     /// Tests selects from database.
     ///
     async fn test_select() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -403,7 +403,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_update() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
@@ -429,7 +429,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_delete() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {

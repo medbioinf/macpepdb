@@ -5,6 +5,7 @@ use std::{
 };
 
 // 3rd party imports
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::{stream, StreamExt};
 use indicatif::ProgressStyle;
@@ -15,6 +16,7 @@ use macpepdb::{
     },
     entities::{configuration::Configuration, protein},
 };
+use tokio::runtime::Builder;
 use tracing::{event, info, info_span, instrument, metadata::LevelFilter, Level, Span};
 use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
 use tracing_subscriber::util::SubscriberInitExt;
@@ -26,7 +28,7 @@ enum Commands {
         name: String,
     },
     Build {
-        database_url: String,
+        database_urls: String,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
@@ -94,7 +96,7 @@ async fn main() {
             }
         }
         Commands::Build {
-            database_url,
+            database_urls,
             protein_file_paths,
             num_threads,
             num_partitions,
@@ -110,7 +112,7 @@ async fn main() {
                 .collect();
 
             if scylla {
-                let builder = ScyllaBuild::new(database_url);
+                let builder = ScyllaBuild::new(database_urls);
 
                 match builder
                     .build(
@@ -122,8 +124,8 @@ async fn main() {
                         Some(Configuration::new(
                             "trypsin".to_owned(),
                             2,
-                            6,
-                            50,
+                            5,
+                            60,
                             true,
                             Vec::with_capacity(0),
                         )),
@@ -134,7 +136,7 @@ async fn main() {
                     Err(e) => info!("Database build failed: {}", e),
                 }
             } else {
-                let builder = CitusBuild::new(database_url);
+                let builder = CitusBuild::new(database_urls);
 
                 match builder
                     .build(

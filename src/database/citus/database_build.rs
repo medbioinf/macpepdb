@@ -9,15 +9,17 @@ use std::time::Duration;
 // 3rd party imports
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
+use futures::executor::block_on;
 use futures::future::join_all;
 use rand::{self, Rng};
 use refinery::embed_migrations;
-use tokio::task::{spawn, JoinHandle};
+use tokio::spawn;
+use tokio::task::JoinHandle;
 use tokio_postgres::{
     error::{Error as PSQLError, SqlState},
     Client, GenericClient, NoTls,
 };
-use tracing::{debug, error};
+use tracing::{debug, debug_span, error};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -163,7 +165,7 @@ impl DatabaseBuild {
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
 
-        let protein_queue_size = num_threads * 5;
+        let protein_queue_size = num_threads * 300;
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -203,14 +205,20 @@ impl DatabaseBuild {
             }));
         }
 
-        {
-            let num_proteins_processed = Arc::clone(&num_proteins_processed);
-            let stop_flag = Arc::clone(&stop_flag);
-            digestion_thread_handles.push(spawn(async move {
-                performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
-                Ok(())
-            }));
-        }
+        let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        let performance_stop_flag = Arc::new(AtomicBool::new(false));
+        let protein_queue_arc_clone = protein_queue_arc.clone();
+        let stop_flag_clone = performance_stop_flag.clone();
+        let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            performance_log_thread(
+                &num_proteins,
+                num_proteins_processed,
+                protein_queue_arc_clone,
+                stop_flag_clone,
+            )
+            .await;
+            Ok(())
+        });
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
@@ -220,6 +228,7 @@ impl DatabaseBuild {
                     if wait_for_queue {
                         // Wait before pushing the protein into queue
                         sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
+                        wait_for_queue = false;
                     }
                     // Acquire lock on protein queue
                     let mut protein_queue = match protein_queue_arc.lock() {
@@ -244,6 +253,8 @@ impl DatabaseBuild {
 
         // Wait for digestion threads to finish
         join_all(digestion_thread_handles).await;
+        performance_stop_flag.store(true, Ordering::Relaxed);
+        performance_log_thread_handle.await??;
 
         Ok(())
     }
@@ -278,10 +289,14 @@ impl DatabaseBuild {
             }
         });
 
+        let performance_span = debug_span!("performance", thread_id);
+        let performance_span_enter = performance_span.enter();
+
         let mut wait_for_queue = true;
         loop {
             if wait_for_queue {
                 // Wait before trying to get next protein from queue
+                debug!("Sleeping");
                 sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
                 wait_for_queue = false;
             }
@@ -299,7 +314,10 @@ impl DatabaseBuild {
                     wait_for_queue = true;
                     continue;
                 }
-                protein_queue.pop().unwrap() // unwrap is safe because we checked if queue is empty
+                let protein = protein_queue.pop().unwrap(); // unwrap is safe because we checked if queue is empty
+                let mut i = num_proteins_processed.lock().unwrap();
+                *i += 1;
+                protein
             };
             let existing_protein: Option<Protein> = ProteinTable::select(
                 &mut client,
@@ -308,11 +326,13 @@ impl DatabaseBuild {
             )
             .await?;
             let mut tries: u64 = 0;
+
             loop {
                 tries += 1;
                 // After MAX_INSERT_TRIES is reached, we log the proteins as something may seem wrong
                 if tries > MAX_INSERT_TRIES {
                     // TODO: Log protein as unprocessable
+                    debug!("Failed to process {}", tries);
                     break;
                 }
                 let db_result: Result<()> = async {
@@ -341,6 +361,7 @@ impl DatabaseBuild {
                     };
                 }
                 .await;
+
                 // We can expect deadlocks and unique violations to happen
                 // when multiple threads try to insert the same peptides at the same time
                 // or a peptide is already inserted by another thread.
@@ -364,9 +385,11 @@ impl DatabaseBuild {
                     return Err(db_err);
                 }
             }
-            let mut i = num_proteins_processed.lock().unwrap();
-            *i += 1;
         }
+
+        std::mem::drop(performance_span_enter);
+        std::mem::drop(performance_span);
+
         connection_handle.abort();
         let _ = connection_handle.await;
         Ok(())
@@ -616,8 +639,12 @@ impl DatabaseBuild {
             // TODO: Add logging thread
             // Start digestion thread
             metadata_collector_thread_handles.push(spawn(async move {
-                Self::collect_peptide_metadata_thread(thread_id, database_url_clone, partitions)
-                    .await?;
+                let future = Self::collect_peptide_metadata_thread(
+                    thread_id,
+                    database_url_clone,
+                    partitions,
+                )
+                .await?;
                 Ok(())
             }));
         }

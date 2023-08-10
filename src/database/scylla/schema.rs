@@ -8,10 +8,8 @@ pub const UP: [&str; 4] = [
 pub const DROP_KEYSPACE: &str = "DROP KEYSPACE IF EXISTS macpep;";
 
 pub const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS macpep
-    WITH replication = { 
-            'class': 'NetworkTopologyStrategy',
-            'datacenter1': '1'
-        }  AND durable_writes = true;";
+                WITH REPLICATION = {'class': 'NetworkTopologyStrategy',
+                'replication_factor': 1};";
 
 const CREATE_MIGRATIONS_TABLE: &str = "CREATE TABLE macpep.migrations ( pk TEXT, id INT, created TEXT, description TEXT, PRIMARY KEY(pk, id));";
 

@@ -8,11 +8,13 @@ use std::time::Duration;
 // 3rd party imports
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
+use futures::executor::block_on;
 use futures::future::join_all;
 use futures::StreamExt;
-use tokio::task::{spawn, JoinHandle};
+use tokio::spawn;
+use tokio::task::JoinHandle;
 use tokio::time::{self, Instant};
-use tracing::{debug, info, info_span, span, Level, Span};
+use tracing::{debug, debug_span, info, info_span, span, Level, Span};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -151,7 +153,7 @@ impl DatabaseBuild {
     /// * `partition_limits` - The partition limits
     ///
     async fn protein_digestion(
-        database_url: &str,
+        database_urls: Vec<String>,
         num_threads: usize,
         protein_file_paths: &Vec<PathBuf>,
         digestion_enzyme: &dyn Enzyme,
@@ -161,7 +163,8 @@ impl DatabaseBuild {
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
 
-        let protein_queue_size = num_threads * 5;
+        let protein_queue_size = num_threads * 300;
+
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -176,7 +179,6 @@ impl DatabaseBuild {
             let num_proteins_processed = Arc::clone(&num_proteins_processed);
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
-            let database_url_clone = database_url.to_string();
             // Create a boxed enzyme
             let digestion_enzyme_box = get_enzyme_by_name(
                 digestion_enzyme.get_name(),
@@ -184,12 +186,13 @@ impl DatabaseBuild {
                 digestion_enzyme.get_min_peptide_length(),
                 digestion_enzyme.get_max_peptide_length(),
             )?;
+            let database_urls_clone = database_urls.clone();
             // TODO: Add logging thread
             // Start digestion thread
             digestion_thread_handles.push(spawn(async move {
                 Self::digestion_thread(
                     thread_id,
-                    database_url_clone,
+                    &database_urls_clone,
                     protein_queue_arc_clone,
                     partition_limits_arc_clone,
                     stop_flag_clone,
@@ -202,14 +205,22 @@ impl DatabaseBuild {
             }));
         }
 
-        {
-            let num_proteins_processed = Arc::clone(&num_proteins_processed);
-            let stop_flag = Arc::clone(&stop_flag);
-            digestion_thread_handles.push(spawn(async move {
-                performance_log_thread(&num_proteins, num_proteins_processed, stop_flag).await;
-                Ok(())
-            }));
-        }
+        let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        let performance_stop_flag = Arc::new(AtomicBool::new(false));
+        let protein_queue_arc_clone = protein_queue_arc.clone();
+        let stop_flag_clone = performance_stop_flag.clone();
+        let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            performance_log_thread(
+                &num_proteins,
+                num_proteins_processed,
+                protein_queue_arc_clone,
+                stop_flag_clone,
+            )
+            .await;
+            Ok(())
+        });
+
+        let mut last_wait_instant: Option<Instant> = None;
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
@@ -219,6 +230,11 @@ impl DatabaseBuild {
                     if wait_for_queue {
                         // Wait before pushing the protein into queue
                         sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
+                        wait_for_queue = false;
+                        if last_wait_instant.is_some_and(|x| (Instant::now() - x).as_secs() > 60) {
+                            debug!("Producer sleeping since 1 minute");
+                        }
+                        last_wait_instant = Some(Instant::now());
                     }
                     // Acquire lock on protein queue
                     let mut protein_queue = match protein_queue_arc.lock() {
@@ -230,6 +246,7 @@ impl DatabaseBuild {
                         wait_for_queue = true;
                         continue;
                     }
+                    last_wait_instant = None;
                     protein_queue.push(protein);
                     break;
                 }
@@ -243,6 +260,8 @@ impl DatabaseBuild {
 
         // Wait for digestion threads to finish
         join_all(digestion_thread_handles).await;
+        performance_stop_flag.store(true, Ordering::Relaxed);
+        performance_log_thread_handle.await??;
 
         Ok(())
     }
@@ -260,7 +279,7 @@ impl DatabaseBuild {
     ///
     async fn digestion_thread(
         thread_id: usize,
-        database_url: String,
+        database_urls: &Vec<String>,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         partition_limits_arc: Arc<Vec<i64>>,
         stop_flag: Arc<AtomicBool>,
@@ -268,12 +287,17 @@ impl DatabaseBuild {
         remove_peptides_containing_unknown: bool,
         num_proteins_processed: Arc<Mutex<u64>>,
     ) -> Result<()> {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(Some(database_urls)).await.unwrap();
 
         let mut wait_for_queue = true;
+
+        let performance_span = debug_span!("performance", thread_id);
+        let performance_span_enter = performance_span.enter();
+
         loop {
             if wait_for_queue {
                 // Wait before trying to get next protein from queue
+                debug!("Sleeping");
                 sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
                 wait_for_queue = false;
             }
@@ -291,7 +315,10 @@ impl DatabaseBuild {
                     wait_for_queue = true;
                     continue;
                 }
-                protein_queue.pop().unwrap() // unwrap is safe because we checked if queue is empty
+                let protein = protein_queue.pop().unwrap(); // unwrap is safe because we checked if queue is empty
+                let mut i = num_proteins_processed.lock().unwrap();
+                *i += 1;
+                protein
             };
 
             let mut accession_list = protein.get_secondary_accessions().clone();
@@ -329,9 +356,10 @@ impl DatabaseBuild {
                 )
                 .await?;
             }
-            let mut i = num_proteins_processed.lock().unwrap();
-            *i += 1;
         }
+        std::mem::drop(performance_span_enter);
+        std::mem::drop(performance_span);
+
         Ok(())
     }
 
@@ -551,19 +579,20 @@ impl DatabaseBuild {
 
     async fn collect_peptide_metadata(
         num_threads: usize,
-        database_url: &str,
+        database_urls: Vec<String>,
         configuration: &Configuration,
     ) -> Result<()> {
         debug!("Collecting peptide metadata...");
         debug!("Chunking partitions for {} threads...", num_threads);
-        let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
+        let chunk_size = ((configuration.get_partition_limits().len() as f64 + 1.0)
+            / num_threads as f64)
             .ceil() as usize;
-        let chunked_partitions: Vec<Vec<i64>> = (0..configuration.get_partition_limits().len()
-            as i64)
-            .collect::<Vec<i64>>()
-            .chunks(chunk_size)
-            .map(|chunk| chunk.to_vec())
-            .collect();
+        let chunked_partitions: Vec<Vec<i64>> =
+            (0..(configuration.get_partition_limits().len() as i64 + 1))
+                .collect::<Vec<i64>>()
+                .chunks(chunk_size)
+                .map(|chunk| chunk.to_vec())
+                .collect();
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -572,27 +601,32 @@ impl DatabaseBuild {
         for thread_id in 0..num_threads {
             // Clone necessary variables
             let partitions = chunked_partitions[thread_id].clone();
-            let database_url_clone = database_url.to_string();
+            let database_urls_clone = database_urls.clone();
             // TODO: Add logging thread
             // Start digestion thread
             metadata_collector_thread_handles.push(spawn(async move {
-                Self::collect_peptide_metadata_thread(thread_id, database_url_clone, partitions)
-                    .await?;
+                let future = Self::collect_peptide_metadata_thread(
+                    thread_id,
+                    database_urls_clone,
+                    partitions,
+                )
+                .await?;
                 Ok(())
             }));
         }
         debug!("Waiting threads to stop ...");
         // Wait for digestion threads to finish
         join_all(metadata_collector_thread_handles).await;
+
         Ok(())
     }
 
     async fn collect_peptide_metadata_thread(
         thread_id: usize,
-        database_url: String,
+        database_urls: Vec<String>,
         partitions: Vec<i64>,
     ) -> Result<()> {
-        let mut client = get_client().await?;
+        let mut client = get_client(Some(&database_urls)).await?;
         let mut session = client.get_session();
         let update_query = format!(
                         "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ? WHERE partition = ? AND mass = ? and sequence = ?",
@@ -669,7 +703,11 @@ impl DatabaseBuildTrait for DatabaseBuild {
     ) -> Result<()> {
         info!("Starting database build");
 
-        let mut client = get_client().await?;
+        let database_hosts = (&self.database_url)
+            .split(",")
+            .map(|x| x.to_string())
+            .collect();
+        let mut client = get_client(Some(&database_hosts)).await?;
         let mut session = client.get_session();
 
         debug!("applying database migrations...");
@@ -710,7 +748,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         }
 
         Self::protein_digestion(
-            &self.database_url,
+            database_hosts.clone(),
             num_threads,
             protein_file_paths,
             digestion_enzyme.as_ref(),
@@ -724,7 +762,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         let span = span!(Level::INFO, "metadata_updates");
         let _guard = span.enter();
 
-        Self::collect_peptide_metadata(num_threads, &self.database_url, &configuration).await?;
+        Self::collect_peptide_metadata(num_threads, database_hosts, &configuration).await?;
         // count peptides per partition
 
         Ok(())
@@ -769,7 +807,7 @@ mod test {
     #[tokio::test]
     #[serial]
     async fn test_database_build_without_initial_config() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         let mut session = client.get_session();
 
         drop_keyspace(&client).await;
@@ -787,7 +825,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         let mut session = client.get_session();
 
         drop_keyspace(&client).await;

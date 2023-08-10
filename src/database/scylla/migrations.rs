@@ -20,7 +20,7 @@ pub async fn run_migrations(client: &Client) {
 
     create_keyspace_if_not_exists(&client).await;
 
-    let latest_migration_id = get_latest_migration_id().await.unwrap_or(0);
+    let latest_migration_id = get_latest_migration_id(&client).await.unwrap_or(0);
     info!("Latest migration id in DB: {}", latest_migration_id);
 
     for (i, statement) in UP.iter().skip(latest_migration_id as usize).enumerate() {
@@ -48,8 +48,7 @@ pub async fn run_migrations(client: &Client) {
     }
 }
 
-pub async fn get_latest_migration_id() -> Result<i32> {
-    let mut client = get_client().await.unwrap();
+pub async fn get_latest_migration_id(client: &Client) -> Result<i32> {
     let session = client.get_session();
 
     let latest_migration_id_query: String = format!(
@@ -82,7 +81,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_latest_migration_id() {
-        let mut client = get_client().await.unwrap();
+        let mut client = get_client(None).await.unwrap();
         let session = client.get_session();
 
         prepare_database_for_tests(&client).await;
@@ -109,19 +108,25 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(get_latest_migration_id().await.unwrap(), 3);
+        assert_eq!(get_latest_migration_id(&client).await.unwrap(), 3);
     }
 
     #[tokio::test]
     #[serial]
     #[traced_test]
     pub async fn test_run_migrations() {
-        let client = get_client().await.unwrap();
+        let client = get_client(None).await.unwrap();
         drop_keyspace(&client).await;
 
         run_migrations(&client).await;
-        assert_eq!(get_latest_migration_id().await.unwrap(), UP.len() as i32);
+        assert_eq!(
+            get_latest_migration_id(&client).await.unwrap(),
+            UP.len() as i32
+        );
         run_migrations(&client).await;
-        assert_eq!(get_latest_migration_id().await.unwrap(), UP.len() as i32);
+        assert_eq!(
+            get_latest_migration_id(&client).await.unwrap(),
+            UP.len() as i32
+        );
     }
 }
