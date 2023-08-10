@@ -846,6 +846,7 @@ mod test {
 
     // 3rd party imports
     use serial_test::serial;
+    use tracing_test::traced_test;
 
     // internal imports
     use super::*;
@@ -903,6 +904,7 @@ mod test {
     }
 
     #[tokio::test]
+    #[traced_test]
     #[serial]
     async fn test_database_build() {
         let (mut client, connection) = get_client().await;
