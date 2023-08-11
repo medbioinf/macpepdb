@@ -344,6 +344,7 @@ impl DatabaseBuild {
             UPDATE_SET_PLACEHOLDER.as_str()
         );
 
+        debug!("Creating prepared statement");
         let prepared = client.get_session().prepare(statement).await?;
 
         loop {
