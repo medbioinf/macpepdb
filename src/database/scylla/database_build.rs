@@ -13,7 +13,6 @@ use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::StreamExt;
-use itertools::Itertools;
 use scylla::batch::Batch;
 use scylla::frame::value::BatchValues;
 use scylla::prepared_statement::PreparedStatement;
