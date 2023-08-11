@@ -38,5 +38,6 @@ pub trait DatabaseBuild {
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
+        log_folder: &PathBuf,
     ) -> Result<()>;
 }

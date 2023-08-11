@@ -1,5 +1,7 @@
 // Functions for formatting outputs
 pub mod display;
+/// Logger for error messages
+pub mod error_logger;
 /// Additional functions based on the crate `fancy_regex`
 pub mod fancy_regex;
 /// Additional macros, e.g. for easy creation of collectionss
@@ -11,3 +13,5 @@ pub mod peptide_partitioner;
 pub mod cql;
 
 pub mod performance_logger;
+/// Functions to create a protein partition for the database based on the protein files
+pub mod unprocessable_protein_logger;

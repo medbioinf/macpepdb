@@ -1,23 +1,16 @@
-use std::{
-    path::{Path, PathBuf},
-    thread::sleep,
-    time::Duration,
-};
+use std::{path::Path, thread::sleep, time::Duration};
 
 // 3rd party imports
-use anyhow::Result;
 use clap::{Parser, Subcommand};
-use futures::{stream, StreamExt};
 use indicatif::ProgressStyle;
 use macpepdb::{
     database::{
         citus::database_build::DatabaseBuild as CitusBuild, database_build::DatabaseBuild,
         scylla::database_build::DatabaseBuild as ScyllaBuild,
     },
-    entities::{configuration::Configuration, protein},
+    entities::configuration::Configuration,
 };
-use tokio::runtime::Builder;
-use tracing::{event, info, info_span, instrument, metadata::LevelFilter, Level, Span};
+use tracing::{error, info, info_span, Level};
 use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -28,7 +21,7 @@ enum Commands {
         name: String,
     },
     Build {
-        database_urls: String,
+        database_url: String,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
@@ -36,11 +29,10 @@ enum Commands {
         #[clap(value_delimiter = ',', num_args = 1..)]
         protein_file_paths: Vec<String>,
         #[clap(long)]
-        scylla: bool,
-        #[clap(long)]
         show_progress: bool,
         #[clap(long)]
         verbose: bool,
+        log_folder: String,
     },
 }
 
@@ -53,7 +45,7 @@ struct Cli {
 
 #[tokio::main]
 async fn main() {
-    let mut filter = EnvFilter::from_default_env()
+    let filter = EnvFilter::from_default_env()
         .add_directive(Level::DEBUG.into())
         .add_directive("scylla=info".parse().unwrap())
         .add_directive("tokio_postgres=info".parse().unwrap());
@@ -82,10 +74,10 @@ async fn main() {
             let mut i = 0;
 
             let loop_span = info_span!("looping");
-            let loop_span_enter = loop_span.enter();
+            let _loop_span_enter = loop_span.enter();
 
             let loop_span2 = info_span!("looping_inner");
-            let loop_span_enter2 = loop_span2.enter();
+            let _loop_span_enter2 = loop_span2.enter();
 
             loop {
                 i += 1;
@@ -96,23 +88,28 @@ async fn main() {
             }
         }
         Commands::Build {
-            database_urls,
+            database_url,
             protein_file_paths,
             num_threads,
             num_partitions,
             allowed_ram_usage,
             partitioner_false_positive_probability,
-            scylla,
             show_progress,
             verbose,
+            log_folder,
         } => {
             let protein_file_paths = protein_file_paths
                 .into_iter()
                 .map(|x| Path::new(&x).to_path_buf())
                 .collect();
 
-            if scylla {
-                let builder = ScyllaBuild::new(database_urls);
+            let log_folder = Path::new(&log_folder).to_path_buf();
+
+            if database_url.starts_with("scylla://") {
+                // remove protocol
+                let plain_database_url = database_url[9..].to_string();
+
+                let builder = ScyllaBuild::new(plain_database_url);
 
                 match builder
                     .build(
@@ -129,14 +126,15 @@ async fn main() {
                             true,
                             Vec::with_capacity(0),
                         )),
+                        &log_folder,
                     )
                     .await
                 {
                     Ok(_) => info!("Database build completed successfully!"),
                     Err(e) => info!("Database build failed: {}", e),
                 }
-            } else {
-                let builder = CitusBuild::new(database_urls);
+            } else if database_url.starts_with("postgresql://") {
+                let builder = CitusBuild::new(database_url);
 
                 match builder
                     .build(
@@ -153,12 +151,15 @@ async fn main() {
                             true,
                             Vec::with_capacity(0),
                         )),
+                        &log_folder,
                     )
                     .await
                 {
                     Ok(_) => info!("Database build completed successfully!"),
                     Err(e) => info!("Database build failed: {}", e),
                 }
+            } else {
+                error!("Unsupported database protocol: {}", database_url);
             }
         }
     }
