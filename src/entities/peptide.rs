@@ -6,8 +6,8 @@ use std::{
 
 // 3rd party imports
 use anyhow::Result;
-use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
+use scylla::{_macro_internal::ValueList, frame::response::result::CqlValue};
 use tokio_postgres::Row;
 
 // internal imports
