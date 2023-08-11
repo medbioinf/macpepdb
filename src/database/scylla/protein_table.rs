@@ -1,9 +1,9 @@
 use anyhow::Result;
-use scylla::batch::{Batch, BatchStatement};
+use scylla::batch::Batch;
 use scylla::frame::response::result::{CqlValue, Row};
 use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
-use scylla::transport::query_result::FirstRowError::RowsEmpty;
+use scylla::transport::query_result::FirstRowError;
 
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
@@ -191,7 +191,13 @@ where
             statement += additional;
         }
 
-        return Ok(Some(session.query(statement, params).await?.first_row()?));
+        let row_res = session.query(statement, params).await?;
+
+        match row_res.first_row() {
+            Ok(row) => Ok(Some(row)),
+            Err(FirstRowError::RowsEmpty) => Ok(None),
+            Err(FirstRowError::RowsExpected(err)) => Err(err.into()),
+        }
     }
 
     async fn select_multiple<'b>(
@@ -259,18 +265,15 @@ mod tests {
     // std imports
     use std::path::Path;
 
-    use anyhow::__private::kind::TraitKind;
     // external imports
     use fallible_iterator::FallibleIterator;
-    use scylla::frame::request::Query;
-    use scylla::transport::errors::DbError;
     use scylla::transport::query_result::FirstRowError;
     use serial_test::serial;
 
     // internal imports
     use super::*;
-    use crate::database::scylla::client::{Client, GenericClient};
-    use crate::database::scylla::{get_client, prepare_database_for_tests, DATABASE_URL};
+    use crate::database::scylla::client::GenericClient;
+    use crate::database::scylla::{get_client, prepare_database_for_tests};
     use crate::io::uniprot_text::reader::Reader;
 
     const EXPECTED_PROTEINS: i64 = 3;

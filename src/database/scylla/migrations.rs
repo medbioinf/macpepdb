@@ -1,13 +1,14 @@
-use std::ops::Index;
+// 3rd party imports
+use anyhow::Result;
+use chrono::Utc;
+use scylla::_macro_internal::CqlValue;
+use tracing::{debug, info};
 
+// internal imports
 use crate::{
-    database::scylla::{create_keyspace_if_not_exists, get_client, schema::UP},
+    database::scylla::{create_keyspace_if_not_exists, schema::UP},
     tools::cql::get_cql_value,
 };
-use anyhow::{bail, Result};
-use chrono::{Duration, DurationRound, Utc};
-use scylla::{_macro_internal::CqlValue, batch::Batch, query::Query};
-use tracing::{debug, info};
 
 use super::{
     client::{Client, GenericClient},
@@ -81,7 +82,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_latest_migration_id() {
-        let mut client = get_client(None).await.unwrap();
+        let client = get_client(None).await.unwrap();
         let session = client.get_session();
 
         prepare_database_for_tests(&client).await;
