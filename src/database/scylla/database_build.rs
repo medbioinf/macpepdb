@@ -174,6 +174,7 @@ impl DatabaseBuild {
         partition_limits: Vec<i64>,
         num_proteins: usize,
         log_folder: &PathBuf,
+        insertion_delay_ms: u64,
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
 
@@ -225,6 +226,7 @@ impl DatabaseBuild {
                     num_proteins_processed,
                     thread_unprocessable_proteins_sender,
                     thread_error_sender,
+                    insertion_delay_ms,
                 )
                 .await?;
                 Ok(())
@@ -333,13 +335,22 @@ impl DatabaseBuild {
         num_proteins_processed: Arc<Mutex<u64>>,
         unprocessable_proteins_sender: Sender<Protein>,
         error_sender: Sender<String>,
+        insertion_delay_ms: u64,
     ) -> Result<()> {
         let mut client = get_client(Some(database_urls)).await.unwrap();
 
-        let mut wait_for_queue = true;
+        let mut wait_for_queue = false;
 
         let performance_span = debug_span!("performance", thread_id);
         let performance_span_enter = performance_span.enter();
+
+        let statement = format!(
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+            SCYLLA_KEYSPACE_NAME,
+            TABLE_NAME,
+            UPDATE_SET_PLACEHOLDER.as_str()
+        );
+        let prepared = client.get_session().prepare(statement).await?;
 
         loop {
             if wait_for_queue {
@@ -348,6 +359,7 @@ impl DatabaseBuild {
                 sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
                 wait_for_queue = false;
             }
+            sleep(Duration::from_millis(insertion_delay_ms));
             // Get next protein from queue
             // if queue is empty and stop_flag is set, break
             let protein = {
@@ -401,6 +413,7 @@ impl DatabaseBuild {
                             &digestion_enzyme,
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
+                            &prepared,
                         )
                         .await;
                     } else {
@@ -410,6 +423,7 @@ impl DatabaseBuild {
                             &digestion_enzyme,
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
+                            &prepared,
                         )
                         .await;
                     };
@@ -458,6 +472,7 @@ impl DatabaseBuild {
         digestion_enzyme: &Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
         partition_limits: &Vec<i64>,
+        prepared: &PreparedStatement,
     ) -> Result<()> {
         let mut peptides_digest_of_stored_protein =
             digestion_enzyme.digest(&stored_protein.get_sequence());
@@ -511,6 +526,7 @@ impl DatabaseBuild {
                 client,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
+                prepared,
             )
             .await?;
         } else if updated_protein.get_accession() != stored_protein.get_accession() {
@@ -535,6 +551,7 @@ impl DatabaseBuild {
                 client,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
+                prepared,
             )
             .await?;
         }
@@ -598,6 +615,7 @@ impl DatabaseBuild {
         client: &C,
         peptides_from_stored_protein: &HashSet<Peptide>,
         peptides_from_updated_protein: &HashSet<Peptide>,
+        prepared: &PreparedStatement,
     ) -> Result<()>
     where
         C: GenericClient,
@@ -608,7 +626,7 @@ impl DatabaseBuild {
             .collect::<Vec<&Peptide>>();
 
         if peptides_to_create.len() > 0 {
-            PeptideTable::bulk_insert(client, peptides_to_create.into_iter()).await?
+            PeptideTable::bulk_insert(client, peptides_to_create.into_iter(), prepared).await?
         }
         Ok(())
     }
@@ -672,6 +690,7 @@ impl DatabaseBuild {
         digestion_enzyme: &Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
         partition_limits: &Vec<i64>,
+        prepared: &PreparedStatement,
     ) -> Result<()> {
         // Digest protein
         let mut peptide_sequences = digestion_enzyme.digest(&protein.get_sequence());
@@ -685,7 +704,8 @@ impl DatabaseBuild {
         )?;
 
         ProteinTable::insert(client, &protein).await?;
-        PeptideTable::batch_insert(client, &mut peptides.iter()).await?;
+        // PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared).await?;
+        PeptideTable::batch_insert(client, &mut peptides.iter(), prepared).await?;
 
         return Ok(());
     }
@@ -810,6 +830,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
+        insertion_delay_ms: u64,
     ) -> Result<()> {
         info!("Starting database build");
 
@@ -865,6 +886,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             configuration.get_partition_limits().to_vec(),
             protein_ctr.clone(),
             log_folder,
+            insertion_delay_ms,
         )
         .await?;
 
@@ -932,7 +954,16 @@ mod test {
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         let build_res = database_builder
-            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, &log_folder)
+            .build(
+                &protein_file_paths,
+                2,
+                100,
+                0.5,
+                0.0002,
+                None,
+                &log_folder,
+                0,
+            )
             .await;
         assert!(build_res.is_err());
     }
@@ -966,6 +997,7 @@ mod test {
                 0.0002,
                 Some(CONFIGURATION.clone()),
                 &log_folder,
+                0,
             )
             .await
             .unwrap();

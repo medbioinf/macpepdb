@@ -786,6 +786,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
+        insertion_delay_ms: u64,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
 
@@ -912,7 +913,16 @@ mod test {
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         let build_res = database_builder
-            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, &log_folder)
+            .build(
+                &protein_file_paths,
+                2,
+                100,
+                0.5,
+                0.0002,
+                None,
+                &log_folder,
+                0,
+            )
             .await;
         assert!(build_res.is_err());
         connection_handle.abort();
@@ -957,6 +967,7 @@ mod test {
                 0.0002,
                 Some(CONFIGURATION.clone()),
                 &log_folder,
+                0,
             )
             .await
             .unwrap();

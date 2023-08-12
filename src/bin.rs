@@ -26,6 +26,7 @@ enum Commands {
         num_partitions: u64,
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
+        insertion_delay_ms: u64,
         #[clap(value_delimiter = ',', num_args = 1..)]
         protein_file_paths: Vec<String>,
         #[clap(long)]
@@ -94,6 +95,7 @@ async fn main() {
             num_partitions,
             allowed_ram_usage,
             partitioner_false_positive_probability,
+            insertion_delay_ms,
             show_progress,
             verbose,
             log_folder,
@@ -127,6 +129,7 @@ async fn main() {
                             Vec::with_capacity(0),
                         )),
                         &log_folder,
+                        insertion_delay_ms,
                     )
                     .await
                 {
@@ -152,6 +155,7 @@ async fn main() {
                             Vec::with_capacity(0),
                         )),
                         &log_folder,
+                        insertion_delay_ms,
                     )
                     .await
                 {
