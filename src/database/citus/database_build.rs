@@ -425,7 +425,7 @@ impl DatabaseBuild {
                                 continue;
                             }
                             _ => {
-                                error!("Unresolvable error logged");
+                                error!("Unresolvable error logged: {:?}", db_err);
                                 error_sender.send(format!("{:?}", db_err)).await?;
                             }
                         }

@@ -435,7 +435,7 @@ impl DatabaseBuild {
                 }
 
                 if let Err(db_err) = db_result {
-                    error!("Unresolvable error logged");
+                    error!("Unresolvable error logged: {:?}", db_err);
                     error_sender.send(format!("{:?}", db_err)).await?;
                 }
             }
