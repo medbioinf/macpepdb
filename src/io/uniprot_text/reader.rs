@@ -9,7 +9,9 @@ use std::path::Path;
 use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use fallible_iterator::FallibleIterator;
+use log::error;
 
+use crate::entities::domain::Domain;
 // internal imports
 use crate::entities::protein::Protein;
 
@@ -93,9 +95,16 @@ impl FallibleIterator for Reader {
         let mut is_reviewed: bool = false;
         let mut sequence: String = String::new();
         let mut updated_at: i64 = -1;
+        let mut domains: Vec<Domain> = Vec::new();
 
         let mut in_entry: bool = false;
         let mut last_de_line_category: String = String::new();
+
+        let mut domain_start_idx: i64 = 0;
+        let mut domain_end_idx: i64 = 0;
+        let mut domain_name: String = "".to_string();
+        let mut domain_evidence: String = "".to_string();
+        let mut is_building_domain = false;
 
         loop {
             let mut line = String::new();
@@ -236,6 +245,39 @@ impl FallibleIterator for Reader {
                             );
                         }
                     }
+                    "FT" => {
+                        if line[5..].starts_with("DOMAIN") {
+                            is_building_domain = true;
+                            let indices_list: Vec<i64> = line[11..]
+                                .trim()
+                                .replace("<", "")
+                                .replace(">", "")
+                                .split("..")
+                                .map(|s| {
+                                    s.parse::<i64>()
+                                        .map_err(|x| error!("{} {} {:?}", x, line, accessions))
+                                        .unwrap()
+                                })
+                                .collect();
+                            domain_start_idx = indices_list[0];
+                            domain_end_idx = indices_list[1];
+                        } else if is_building_domain {
+                            let s = line[11..].trim();
+                            if s.starts_with("/note") {
+                                domain_name = s[7..s.len() - 1].to_string();
+                            }
+                            if s.starts_with("/evidence") {
+                                domain_evidence = s[11..s.len() - 1].to_string();
+                                domains.push(Domain::new(
+                                    domain_start_idx,
+                                    domain_end_idx,
+                                    domain_name.clone(),
+                                    domain_evidence.clone(),
+                                ));
+                                is_building_domain = false;
+                            }
+                        }
+                    }
                     "  " => {
                         for chunk in line[5..].split_ascii_whitespace() {
                             sequence.push_str(chunk);
@@ -254,6 +296,7 @@ impl FallibleIterator for Reader {
                             is_reviewed,
                             sequence,
                             updated_at,
+                            domains,
                         )));
                     }
                     _ => {
@@ -294,6 +337,10 @@ mod tests {
 
     const EXPECTED_UPDATED_AT: [i64; 3] = [1677024000, 791596800, 1677024000];
 
+    //     FT   DOMAIN          24..244
+    // FT                   /note="Peptidase S1"
+    // FT                   /evidence="ECO:0000255|PROSITE-ProRule:PRU00274"
+
     lazy_static! {
         static ref EXPECTED_SECONDARY_ACCESSION: Vec<Vec<&'static str>> = vec![
             vec![
@@ -319,6 +366,14 @@ mod tests {
     fn test_reader() {
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         let mut ctr = 0;
+
+        let EXPECTED_DOMAIN: Domain = Domain::new(
+            24,
+            244,
+            "Peptidase S1".to_string(),
+            "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
+        );
+
         while let Some(protein) = reader.next().unwrap() {
             assert_eq!(
                 protein.get_accession(),
@@ -372,6 +427,11 @@ mod tests {
                 protein.get_updated_at(),
                 *EXPECTED_UPDATED_AT.get(ctr).unwrap()
             );
+
+            if ctr == 0 {
+                assert_eq!(protein.get_domains(), &vec![EXPECTED_DOMAIN.to_owned()])
+            }
+
             ctr += 1;
         }
         assert_eq!(ctr, 3);

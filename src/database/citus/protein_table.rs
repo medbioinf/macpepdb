@@ -256,7 +256,8 @@ mod tests {
             "UP000005640".to_string(),
             true,
             "MNPLLILTFVAAALAAPFDDDDKIVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIAANS".to_string(),
-            1677024000
+            1677024000,
+            Vec::new()
         );
 
         static ref UPDATED_TRYPSIN: Protein = Protein::new(
@@ -288,7 +289,8 @@ mod tests {
             "UP999999999".to_string(),
             true,
             "RUSTISAWESOME".to_string(),
-            0
+            0,
+            Vec::new()
         );
     }
 

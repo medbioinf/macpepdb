@@ -4,3 +4,5 @@ pub mod configuration;
 pub mod peptide;
 /// Structs and functions for working with protein entities.
 pub mod protein;
+
+pub mod domain;
