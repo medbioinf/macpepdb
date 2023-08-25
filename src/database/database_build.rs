@@ -39,6 +39,5 @@ pub trait DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
-        insertion_delay_ms: u64,
     ) -> Result<()>;
 }

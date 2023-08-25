@@ -175,7 +175,6 @@ impl DatabaseBuild {
         partition_limits: Vec<i64>,
         num_proteins: usize,
         log_folder: &PathBuf,
-        insertion_delay_ms: u64,
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
 
@@ -233,7 +232,6 @@ impl DatabaseBuild {
                     thread_peptide_sender,
                     thread_unprocessable_proteins_sender,
                     thread_error_sender,
-                    insertion_delay_ms,
                 )
                 .await?;
                 Ok(())
@@ -361,7 +359,6 @@ impl DatabaseBuild {
         peptide_sender: Sender<u64>,
         unprocessable_proteins_sender: Sender<Protein>,
         error_sender: Sender<String>,
-        insertion_delay_ms: u64,
     ) -> Result<()> {
         let mut client = get_client(Some(database_urls)).await.unwrap();
 
@@ -385,7 +382,6 @@ impl DatabaseBuild {
                 sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
                 wait_for_queue = false;
             }
-            sleep(Duration::from_millis(insertion_delay_ms));
             // Get next protein from queue
             // if queue is empty and stop_flag is set, break
             let protein = {
@@ -863,7 +859,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
-        insertion_delay_ms: u64,
     ) -> Result<()> {
         info!("Starting database build");
 
@@ -919,7 +914,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
             configuration.get_partition_limits().to_vec(),
             protein_ctr.clone(),
             log_folder,
-            insertion_delay_ms,
         )
         .await?;
 
@@ -987,16 +981,7 @@ mod test {
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         let build_res = database_builder
-            .build(
-                &protein_file_paths,
-                2,
-                100,
-                0.5,
-                0.0002,
-                None,
-                &log_folder,
-                0,
-            )
+            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, &log_folder)
             .await;
         assert!(build_res.is_err());
     }
@@ -1030,7 +1015,6 @@ mod test {
                 0.0002,
                 Some(CONFIGURATION.clone()),
                 &log_folder,
-                0,
             )
             .await
             .unwrap();
