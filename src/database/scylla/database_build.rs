@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::iter::Map;
 use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -12,6 +13,10 @@ use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::StreamExt;
+use scylla::batch::Batch;
+use scylla::frame::value::BatchValues;
+use scylla::prepared_statement::PreparedStatement;
+use scylla::ValueList;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
@@ -39,6 +44,7 @@ use crate::database::scylla::{
 };
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
+use crate::tools::performance_logger::performance_log_receiver;
 use crate::tools::{
     error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
@@ -49,6 +55,7 @@ use crate::entities::{configuration::Configuration, peptide::Peptide, protein::P
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
 
+use super::peptide_table::{TABLE_NAME, UPDATE_SET_PLACEHOLDER};
 use super::SCYLLA_KEYSPACE_NAME;
 
 lazy_static! {
@@ -180,11 +187,14 @@ impl DatabaseBuild {
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let (unprocessable_proteins_sender, unprocessable_proteins_receiver): (
             Sender<Protein>,
             Receiver<Protein>,
         ) = channel(1000);
         let (error_sender, error_receiver): (Sender<String>, Receiver<String>) = channel(1000);
+        let (protein_sender, protein_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
+        let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -196,6 +206,8 @@ impl DatabaseBuild {
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let thread_unprocessable_proteins_sender = unprocessable_proteins_sender.clone();
+            let thread_protein_sender = protein_sender.clone();
+            let thread_peptide_sender = peptide_sender.clone();
             let thread_error_sender = error_sender.clone();
             // Create a boxed enzyme
             let digestion_enzyme_box = get_enzyme_by_name(
@@ -216,7 +228,8 @@ impl DatabaseBuild {
                     stop_flag_clone,
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
-                    num_proteins_processed,
+                    thread_protein_sender,
+                    thread_peptide_sender,
                     thread_unprocessable_proteins_sender,
                     thread_error_sender,
                 )
@@ -227,17 +240,34 @@ impl DatabaseBuild {
 
         // Drop the original sender its not needed anymore
         drop(unprocessable_proteins_sender);
+        drop(protein_sender);
+        drop(peptide_sender);
 
-        let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+        let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
         let performance_stop_flag = Arc::new(AtomicBool::new(false));
         let protein_queue_arc_clone = protein_queue_arc.clone();
         let stop_flag_clone = performance_stop_flag.clone();
         let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
             performance_log_thread(
                 &num_proteins,
-                num_proteins_processed,
+                num_proteins_processed_clone,
+                num_peptides_processed_clone,
                 protein_queue_arc_clone,
                 stop_flag_clone,
+            )
+            .await?;
+            Ok(())
+        });
+
+        let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        let num_peptides_processed = Arc::clone(&num_peptides_processed);
+        let performance_log_receiver_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            performance_log_receiver(
+                protein_receiver,
+                peptide_receiver,
+                num_proteins_processed,
+                num_peptides_processed,
             )
             .await?;
             Ok(())
@@ -299,6 +329,7 @@ impl DatabaseBuild {
         join_all(digestion_thread_handles).await;
         performance_stop_flag.store(true, Ordering::Relaxed);
         performance_log_thread_handle.await??;
+        performance_log_receiver_thread_handle.await??;
         unprocessable_proteins_log_thread_handle.await??;
         error_log_thread_handle.await??;
 
@@ -324,16 +355,25 @@ impl DatabaseBuild {
         stop_flag: Arc<AtomicBool>,
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
-        num_proteins_processed: Arc<Mutex<u64>>,
+        protein_sender: Sender<u64>,
+        peptide_sender: Sender<u64>,
         unprocessable_proteins_sender: Sender<Protein>,
         error_sender: Sender<String>,
     ) -> Result<()> {
         let mut client = get_client(Some(database_urls)).await.unwrap();
 
-        let mut wait_for_queue = true;
+        let mut wait_for_queue = false;
 
         let performance_span = debug_span!("performance", thread_id);
         let performance_span_enter = performance_span.enter();
+
+        let statement = format!(
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+            SCYLLA_KEYSPACE_NAME,
+            TABLE_NAME,
+            UPDATE_SET_PLACEHOLDER.as_str()
+        );
+        let prepared = client.get_session().prepare(statement).await?;
 
         loop {
             if wait_for_queue {
@@ -357,8 +397,6 @@ impl DatabaseBuild {
                     continue;
                 }
                 let protein = protein_queue.pop().unwrap(); // unwrap is safe because we checked if queue is empty
-                let mut i = num_proteins_processed.lock().unwrap();
-                *i += 1;
                 protein
             };
 
@@ -395,6 +433,8 @@ impl DatabaseBuild {
                             &digestion_enzyme,
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
+                            &prepared,
+                            &peptide_sender,
                         )
                         .await;
                     } else {
@@ -404,6 +444,8 @@ impl DatabaseBuild {
                             &digestion_enzyme,
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
+                            &prepared,
+                            &peptide_sender,
                         )
                         .await;
                     };
@@ -411,11 +453,12 @@ impl DatabaseBuild {
                 .await;
 
                 if db_result.is_ok() {
+                    protein_sender.send(1).await?;
                     break;
                 }
 
                 if let Err(db_err) = db_result {
-                    error!("Unresolvable error logged");
+                    error!("Unresolvable error logged: {:?}", db_err);
                     error_sender.send(format!("{:?}", db_err)).await?;
                 }
             }
@@ -452,6 +495,8 @@ impl DatabaseBuild {
         digestion_enzyme: &Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
         partition_limits: &Vec<i64>,
+        prepared: &PreparedStatement,
+        peptide_sender: &Sender<u64>,
     ) -> Result<()> {
         let mut peptides_digest_of_stored_protein =
             digestion_enzyme.digest(&stored_protein.get_sequence());
@@ -505,6 +550,7 @@ impl DatabaseBuild {
                 client,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
+                prepared,
             )
             .await?;
         } else if updated_protein.get_accession() != stored_protein.get_accession() {
@@ -529,6 +575,7 @@ impl DatabaseBuild {
                 client,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
+                prepared,
             )
             .await?;
         }
@@ -543,6 +590,9 @@ impl DatabaseBuild {
 
         // Update protein itself
         ProteinTable::update(client, &stored_protein, &updated_protein).await?;
+        peptide_sender
+            .send(peptides_of_updated_protein.len() as u64)
+            .await?;
 
         Ok(())
     }
@@ -592,6 +642,7 @@ impl DatabaseBuild {
         client: &C,
         peptides_from_stored_protein: &HashSet<Peptide>,
         peptides_from_updated_protein: &HashSet<Peptide>,
+        prepared: &PreparedStatement,
     ) -> Result<()>
     where
         C: GenericClient,
@@ -602,10 +653,54 @@ impl DatabaseBuild {
             .collect::<Vec<&Peptide>>();
 
         if peptides_to_create.len() > 0 {
-            PeptideTable::bulk_insert(client, peptides_to_create.into_iter()).await?
+            PeptideTable::bulk_insert(client, peptides_to_create.into_iter(), prepared).await?
         }
         Ok(())
     }
+
+    async fn digest_protein(
+        protein: &Protein,
+        digestion_enzyme: &Box<dyn Enzyme>,
+        remove_peptides_containing_unknown: bool,
+        partition_limits: &Vec<i64>,
+    ) -> Result<Vec<Peptide>> {
+        // Digest protein
+        let mut peptide_sequences = digestion_enzyme.digest(&protein.get_sequence());
+        if remove_peptides_containing_unknown {
+            remove_unknown_from_digest(&mut peptide_sequences);
+        }
+        Ok(create_peptides_entities_from_digest::<Vec<Peptide>>(
+            &peptide_sequences,
+            partition_limits,
+            Some(&protein),
+        )?)
+    }
+
+    // async fn insert_peptides<'a>(
+    //     client: &mut Client,
+    //     peptide_buckets: &HashMap<i64, Vec<&'a Peptide>>,
+    //     batch: &Batch,
+    // ) -> Result<HashMap<i64, Vec<&'a Peptide>>> {
+    //     let full_buckets = peptide_buckets.iter().filter(|x| x.1.len() >= 100);
+    //     let peptides_to_insert: Vec<&Vec<&Peptide>> = full_buckets.clone().map(|x| x.1).collect();
+
+    //     for peptides in peptides_to_insert {
+    //         PeptideTable::batch_insert(
+    //             client,
+    //             ,
+    //             batch,
+    //         )
+    //         .await?;
+    //     }
+
+    //     let mut res = peptide_buckets.clone();
+
+    //     full_buckets.for_each(|(partition, peptide)| {
+    //         res.remove(partition);
+    //     });
+
+    //     Ok(res)
+    // }
 
     /// Handles the insertion of a new protein.
     ///
@@ -622,6 +717,8 @@ impl DatabaseBuild {
         digestion_enzyme: &Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
         partition_limits: &Vec<i64>,
+        prepared: &PreparedStatement,
+        peptide_sender: &Sender<u64>,
     ) -> Result<()> {
         // Digest protein
         let mut peptide_sequences = digestion_enzyme.digest(&protein.get_sequence());
@@ -635,7 +732,9 @@ impl DatabaseBuild {
         )?;
 
         ProteinTable::insert(client, &protein).await?;
-        PeptideTable::bulk_insert(client, &mut peptides.iter()).await?;
+        // PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared).await?;
+        PeptideTable::batch_insert(client, &mut peptides.iter(), prepared).await?;
+        peptide_sender.send(peptides.len() as u64).await?;
 
         return Ok(());
     }

@@ -1,6 +1,10 @@
 // 3rd party imports
 use anyhow::Result;
+use futures::future::join_all;
+use scylla::batch::Batch;
 use scylla::frame::response::result::{CqlValue, Row};
+use scylla::frame::value::BatchValues;
+use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 use scylla::transport::query_result::FirstRowError;
@@ -13,7 +17,7 @@ use crate::entities::peptide::Peptide;
 use crate::database::scylla::client::GenericClient;
 use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 
-const TABLE_NAME: &'static str = "peptides";
+pub const TABLE_NAME: &'static str = "peptides";
 
 pub const SELECT_COLS: &'static str = "partition, mass, sequence, missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids";
 
@@ -30,7 +34,7 @@ lazy_static! {
         .map(|(_, _)| "?")
         .collect::<Vec<&str>>()
         .join(", ");
-    static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS
+    pub static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS
         .split(", ",)
         .enumerate()
         .map(|(_, col)| {
@@ -53,7 +57,11 @@ impl PeptideTable {
     /// * `client` - Database client or open transaction
     /// * `peptides` - Iterator over peptides to insert
     ///
-    pub async fn bulk_insert<'a, C, T>(client: &C, peptides: T) -> Result<()>
+    pub async fn bulk_insert<'a, C, T>(
+        client: &C,
+        peptides: T,
+        prepared: &PreparedStatement,
+    ) -> Result<()>
     where
         C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
@@ -61,37 +69,97 @@ impl PeptideTable {
         // Update has upsert functionality in Scylla. protein accessions are added to the set (see UPDATE_SET_PLACEHOLDERS)
         // Alternative: always execute two lightweight transactions update ... if exists, update ... if not exists
         // Alternative: select then check in application code then upsert
-
-        let statement = format!(
-            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            SCYLLA_KEYSPACE_NAME,
-            TABLE_NAME,
-            UPDATE_SET_PLACEHOLDER.as_str()
-        );
-
-        let prepared = client.get_session().prepare(statement).await?;
-
-        for peptide in peptides {
-            client
-                .get_session()
-                .execute(
+        let insertion_futures = peptides
+            .map(|x| {
+                client.get_session().execute(
                     &prepared,
                     (
-                        peptide.get_missed_cleavages(),
-                        peptide.get_aa_counts(),
-                        peptide.get_proteins(),
-                        peptide.get_is_swiss_prot(),
-                        peptide.get_is_trembl(),
-                        peptide.get_taxonomy_ids(),
-                        peptide.get_unique_taxonomy_ids(),
-                        peptide.get_proteome_ids(),
-                        peptide.get_partition(),
-                        peptide.get_mass(),
-                        peptide.get_sequence(),
+                        x.get_missed_cleavages(),
+                        x.get_aa_counts(),
+                        x.get_proteins(),
+                        x.get_is_swiss_prot(),
+                        x.get_is_trembl(),
+                        x.get_taxonomy_ids(),
+                        x.get_unique_taxonomy_ids(),
+                        x.get_proteome_ids(),
+                        x.get_partition(),
+                        x.get_mass(),
+                        x.get_sequence(),
                     ),
                 )
-                .await?;
+            })
+            .collect::<Vec<_>>();
+
+        join_all(insertion_futures).await;
+
+        return Ok(());
+    }
+
+    pub async fn batch_insert<'a, C, T>(
+        client: &C,
+        peptides: T,
+        prepared: &PreparedStatement,
+    ) -> Result<()>
+    where
+        C: GenericClient,
+        T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
+    {
+        let mut peptides_groups = vec![Vec::<&Peptide>::new(); 100];
+        for peptide in peptides {
+            let partition = peptide.get_partition() as usize;
+            peptides_groups[partition].push(peptide);
         }
+
+        peptides_groups = peptides_groups
+            .into_iter()
+            .filter(|pep_vec| pep_vec.len() > 0)
+            .collect();
+
+        let mut batch: Batch = Default::default();
+        batch.append_statement(prepared.clone());
+
+        let session = client.get_session();
+
+        let futures = peptides_groups
+            .into_iter()
+            .map(|pep_vec| {
+                session.batch(
+                    &batch,
+                    pep_vec
+                        .iter()
+                        .map(|x| {
+                            (
+                                x.get_missed_cleavages(),
+                                x.get_aa_counts(),
+                                x.get_proteins(),
+                                x.get_is_swiss_prot(),
+                                x.get_is_trembl(),
+                                x.get_taxonomy_ids(),
+                                x.get_unique_taxonomy_ids(),
+                                x.get_proteome_ids(),
+                                x.get_partition(),
+                                x.get_mass(),
+                                x.get_sequence(),
+                            )
+                        })
+                        .collect::<Vec<(
+                            i16,
+                            &Vec<i16>,
+                            &Vec<String>,
+                            bool,
+                            bool,
+                            &Vec<i64>,
+                            &Vec<i64>,
+                            &Vec<String>,
+                            i64,
+                            i64,
+                            &String,
+                        )>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        join_all(futures).await;
 
         return Ok(());
     }
@@ -442,11 +510,19 @@ mod tests {
         )
         .unwrap()];
 
-        PeptideTable::bulk_insert(&client, &mut conflicting_peptides.iter())
+        let statement = format!(
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+            SCYLLA_KEYSPACE_NAME,
+            TABLE_NAME,
+            UPDATE_SET_PLACEHOLDER.as_str()
+        );
+        let prepared = client.get_session().prepare(statement).await.unwrap();
+
+        PeptideTable::bulk_insert(&client, &mut conflicting_peptides.iter(), &prepared)
             .await
             .unwrap();
 
-        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
             .await
             .unwrap();
 
@@ -543,7 +619,16 @@ mod tests {
 
         assert_eq!(peptides.len(), EXPECTED_PEPTIDES.len());
 
-        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+        let statement = format!(
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+            SCYLLA_KEYSPACE_NAME,
+            TABLE_NAME,
+            UPDATE_SET_PLACEHOLDER.as_str()
+        );
+
+        let prepared = client.get_session().prepare(statement).await.unwrap();
+
+        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
             .await
             .unwrap();
 
@@ -622,7 +707,16 @@ mod tests {
         )
         .unwrap();
 
-        PeptideTable::bulk_insert(&client, &mut peptides.iter())
+        let statement = format!(
+            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+            SCYLLA_KEYSPACE_NAME,
+            TABLE_NAME,
+            UPDATE_SET_PLACEHOLDER.as_str()
+        );
+
+        let prepared = client.get_session().prepare(statement).await.unwrap();
+
+        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
             .await
             .unwrap();
 

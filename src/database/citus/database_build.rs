@@ -44,6 +44,7 @@ use crate::database::table::Table;
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
+use crate::tools::performance_logger::performance_log_receiver;
 use crate::tools::{
     error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
@@ -179,11 +180,14 @@ impl DatabaseBuild {
         let partition_limits_arc = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
         let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let (unprocessable_proteins_sender, unprocessable_proteins_receiver): (
             Sender<Protein>,
             Receiver<Protein>,
         ) = channel(1000);
         let (error_sender, error_receiver): (Sender<String>, Receiver<String>) = channel(1000);
+        let (protein_sender, protein_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
+        let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -191,11 +195,12 @@ impl DatabaseBuild {
         for thread_id in 0..num_threads {
             // Clone necessary variables
             let protein_queue_arc_clone = protein_queue_arc.clone();
-            let num_proteins_processed = Arc::clone(&num_proteins_processed);
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let database_url_clone = database_url.to_string();
             let thread_unprocessable_proteins_sender = unprocessable_proteins_sender.clone();
+            let thread_protein_sender = protein_sender.clone();
+            let thread_peptide_sender = peptide_sender.clone();
             let thread_error_sender = error_sender.clone();
             // Create a boxed enzyme
             let digestion_enzyme_box = get_enzyme_by_name(
@@ -214,7 +219,8 @@ impl DatabaseBuild {
                     stop_flag_clone,
                     digestion_enzyme_box,
                     remove_peptides_containing_unknown,
-                    num_proteins_processed,
+                    thread_protein_sender,
+                    thread_peptide_sender,
                     thread_unprocessable_proteins_sender,
                     thread_error_sender,
                 )
@@ -227,17 +233,34 @@ impl DatabaseBuild {
         // Not required for cloning anymore
         drop(unprocessable_proteins_sender);
         drop(error_sender);
+        drop(protein_sender);
+        drop(peptide_sender);
 
-        let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+        let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
         let performance_stop_flag = Arc::new(AtomicBool::new(false));
         let protein_queue_arc_clone = protein_queue_arc.clone();
         let stop_flag_clone = performance_stop_flag.clone();
         let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
             performance_log_thread(
                 &num_proteins,
-                num_proteins_processed,
+                num_proteins_processed_clone,
+                num_peptides_processed_clone,
                 protein_queue_arc_clone,
                 stop_flag_clone,
+            )
+            .await?;
+            Ok(())
+        });
+
+        let num_proteins_processed = Arc::clone(&num_proteins_processed);
+        let num_peptides_processed = Arc::clone(&num_peptides_processed);
+        let performance_log_receiver_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            performance_log_receiver(
+                protein_receiver,
+                peptide_receiver,
+                num_proteins_processed,
+                num_peptides_processed,
             )
             .await?;
             Ok(())
@@ -292,6 +315,7 @@ impl DatabaseBuild {
         join_all(digestion_thread_handles).await;
         performance_stop_flag.store(true, Ordering::Relaxed);
         performance_log_thread_handle.await??;
+        performance_log_receiver_thread_handle.await??;
         unprocessable_proteins_log_thread_handle.await??;
         error_log_thread_handle.await??;
 
@@ -317,7 +341,8 @@ impl DatabaseBuild {
         stop_flag: Arc<AtomicBool>,
         digestion_enzyme: Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
-        num_proteins_processed: Arc<Mutex<u64>>,
+        protein_sender: Sender<u64>,
+        peptide_sender: Sender<u64>,
         unprocessable_proteins_sender: Sender<Protein>,
         error_sender: Sender<String>,
     ) -> Result<()> {
@@ -356,8 +381,6 @@ impl DatabaseBuild {
                     continue;
                 }
                 let protein = protein_queue.pop().unwrap(); // unwrap is safe because we checked if queue is empty
-                let mut i = num_proteins_processed.lock().unwrap();
-                *i += 1;
                 protein
             };
             let existing_protein: Option<Protein> = ProteinTable::select(
@@ -388,6 +411,7 @@ impl DatabaseBuild {
                             &digestion_enzyme,
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
+                            &peptide_sender,
                         )
                         .await;
                     } else {
@@ -397,6 +421,7 @@ impl DatabaseBuild {
                             &digestion_enzyme,
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
+                            &peptide_sender,
                         )
                         .await;
                     };
@@ -404,6 +429,7 @@ impl DatabaseBuild {
                 .await;
 
                 if db_result.is_ok() {
+                    protein_sender.send(1).await?;
                     break;
                 }
 
@@ -425,7 +451,7 @@ impl DatabaseBuild {
                                 continue;
                             }
                             _ => {
-                                error!("Unresolvable error logged");
+                                error!("Unresolvable error logged: {:?}", db_err);
                                 error_sender.send(format!("{:?}", db_err)).await?;
                             }
                         }
@@ -469,6 +495,7 @@ impl DatabaseBuild {
         digestion_enzyme: &Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
         partition_limits: &Vec<i64>,
+        peptide_sender: &Sender<u64>,
     ) -> Result<()> {
         let mut peptides_digest_of_stored_protein =
             digestion_enzyme.digest(&stored_protein.get_sequence());
@@ -562,6 +589,9 @@ impl DatabaseBuild {
         ProteinTable::update(&mut transaction, &stored_protein, &updated_protein).await?;
 
         transaction.commit().await?;
+        peptide_sender
+            .send(peptides_of_updated_protein.len() as u64)
+            .await?;
         Ok(())
     }
 
@@ -640,6 +670,7 @@ impl DatabaseBuild {
         digestion_enzyme: &Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
         partition_limits: &Vec<i64>,
+        peptide_sender: &Sender<u64>,
     ) -> Result<()> {
         // Digest protein
         let mut peptide_sequences = digestion_enzyme.digest(&protein.get_sequence());
@@ -656,6 +687,7 @@ impl DatabaseBuild {
         ProteinTable::insert(&mut transaction, &protein).await?;
         PeptideTable::bulk_insert(&mut transaction, &mut peptides.iter()).await?;
         transaction.commit().await?;
+        peptide_sender.send(peptides.len() as u64).await?;
 
         return Ok(());
     }

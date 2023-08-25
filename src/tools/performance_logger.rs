@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::Result;
 use log::error;
+use tokio::sync::mpsc::Receiver;
 use tokio::{fs::File, time::Instant};
 use tracing::{info, info_span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
@@ -41,16 +42,46 @@ macro_rules! async_writeln {
     };
 }
 
+pub async fn performance_log_receiver(
+    mut protein_receiver: Receiver<u64>,
+    mut peptides_receiver: Receiver<u64>,
+    num_proteins_processed: Arc<Mutex<u64>>,
+    num_peptides_processed: Arc<Mutex<u64>>,
+) -> Result<()> {
+    loop {
+        match protein_receiver.recv().await {
+            Some(count) => {
+                let mut i = num_proteins_processed.lock().unwrap();
+                *i += count;
+            }
+            None => break,
+        }
+        match peptides_receiver.recv().await {
+            Some(count) => {
+                let mut i = num_peptides_processed.lock().unwrap();
+                *i += count;
+            }
+            None => break,
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn performance_log_thread(
     num_proteins: &usize,
     num_proteins_processed: Arc<Mutex<u64>>,
+    num_peptides_processed: Arc<Mutex<u64>>,
     protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
     stop_flag: Arc<AtomicBool>,
 ) -> Result<()> {
-    let performance_span = info_span!("insertion_performance");
-    let performance_span_enter = performance_span.enter();
+    let protein_performance_span = info_span!("protein_performance");
+    let protein_performance_span_enter = protein_performance_span.enter();
+    let peptide_performance_span = info_span!("peptide_performance");
+    let peptide_performance_span_enter = peptide_performance_span.enter();
 
     let mut prev_num_proteins_processed = 0;
+    let mut prev_num_peptides_processed = 0;
 
     let interval = Duration::from_secs(1);
     let mut next_time = Instant::now() + interval;
@@ -58,26 +89,31 @@ pub async fn performance_log_thread(
 
     let mut i = 1;
     const FILE_LOG_INTERVAL: u64 = 600;
-    let mut num_proteins_processed_last_interval = 0;
-    let mut file = File::create("performance.csv").await?;
-    async_writeln!(file, "seconds,processed_proteins,proteins/sec")?;
+    // let mut num_proteins_processed_last_interval = 0;
+    // let mut file = File::create("performance.csv").await?;
+    // async_writeln!(file, "seconds,processed_proteins,proteins/sec")?;
 
     // This loop runs exactly every second
     loop {
         let num_proteins_processed = *num_proteins_processed.lock().unwrap();
-        let delta = num_proteins_processed - prev_num_proteins_processed;
+        let delta_proteins = num_proteins_processed - prev_num_proteins_processed;
         let seconds_expired = (Instant::now() - start_time).as_secs();
         let proteins_per_second = num_proteins_processed / cmp::max(1, seconds_expired);
-        num_proteins_processed_last_interval += delta;
+
+        let num_peptides_processed = *num_peptides_processed.lock().unwrap();
+        let delta_peptides = num_peptides_processed - prev_num_peptides_processed;
+        let seconds_expired = (Instant::now() - start_time).as_secs();
+        let peptides_per_second = num_peptides_processed / cmp::max(1, seconds_expired);
+        // num_proteins_processed_last_interval += delta;
 
         if stop_flag.load(Ordering::Relaxed) {
-            async_writeln!(
-                file,
-                "{},{},{}",
-                i,
-                num_proteins_processed,
-                num_proteins_processed_last_interval / FILE_LOG_INTERVAL
-            )?;
+            // async_writeln!(
+            //     file,
+            //     "{},{},{}",
+            //     i,
+            //     num_proteins_processed,
+            //     num_proteins_processed_last_interval / FILE_LOG_INTERVAL
+            // )?;
             break;
         }
 
@@ -93,26 +129,33 @@ pub async fn performance_log_thread(
             protein_queue.len()
         };
 
-        if i % FILE_LOG_INTERVAL == 0 {
-            async_writeln!(
-                file,
-                "{},{},{}",
-                i,
-                num_proteins_processed,
-                num_proteins_processed_last_interval / FILE_LOG_INTERVAL
-            )?;
-            num_proteins_processed_last_interval = 0;
-        }
+        // if i % FILE_LOG_INTERVAL == 0 {
+        //     async_writeln!(
+        //         file,
+        //         "{},{},{}",
+        //         i,
+        //         num_proteins_processed,
+        //         num_proteins_processed_last_interval / FILE_LOG_INTERVAL
+        //     )?;
+        //     num_proteins_processed_last_interval = 0;
+        // }
 
-        performance_span.pb_set_message(
+        protein_performance_span.pb_set_message(
             format!(
-                "Just processed: {}\tP/sec: {}\tTotal processed: {}\tQueue size: {}",
-                delta, proteins_per_second, num_proteins_processed, protein_queue_size
+                "Just processed {}\tThroughput: {}\tTotal processed: {}\tQueue size: {}",
+                delta_proteins, proteins_per_second, num_proteins_processed, protein_queue_size,
             )
             .as_str(),
         );
-
+        peptide_performance_span.pb_set_message(
+            format!(
+                "Just processed {}\tThroughput: {}\tTotal processed: {}",
+                delta_peptides, peptides_per_second, num_peptides_processed
+            )
+            .as_str(),
+        );
         prev_num_proteins_processed = num_proteins_processed;
+        prev_num_peptides_processed = num_peptides_processed;
 
         sleep(next_time - Instant::now());
         next_time += interval;
@@ -120,13 +163,21 @@ pub async fn performance_log_thread(
     }
 
     let num_proteins_processed = *num_proteins_processed.lock().unwrap();
+    let num_peptides_processed = *num_peptides_processed.lock().unwrap();
     let total_seconds = (Instant::now() - start_time).as_secs();
     info!("Processed {} proteins", num_proteins_processed);
+    info!("Processed {} peptides", num_peptides_processed);
     info!("Finished in {} seconds", total_seconds);
-    info!("Overall {} P/sec", num_proteins_processed / total_seconds);
+    info!(
+        "Overall {} Prot/sec",
+        num_proteins_processed / total_seconds
+    );
+    info!("Overall {} Pep/sec", num_peptides_processed / total_seconds);
 
-    std::mem::drop(performance_span_enter);
-    std::mem::drop(performance_span);
+    std::mem::drop(protein_performance_span_enter);
+    std::mem::drop(protein_performance_span);
+    std::mem::drop(peptide_performance_span_enter);
+    std::mem::drop(peptide_performance_span);
 
     Ok(())
 }

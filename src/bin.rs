@@ -146,8 +146,8 @@ async fn main() {
                         Some(Configuration::new(
                             "trypsin".to_owned(),
                             2,
-                            6,
-                            50,
+                            5,
+                            60,
                             true,
                             Vec::with_capacity(0),
                         )),

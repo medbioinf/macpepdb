@@ -4,3 +4,7 @@
 
 # Rust / Cargo
 /target
+
+/experiment
+performance.csv
+logs
