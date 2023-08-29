@@ -254,6 +254,7 @@ impl DatabaseBuild {
 
         // Drop the original sender its not needed anymore
         drop(unprocessable_proteins_sender);
+        drop(error_sender);
         drop(protein_sender);
         drop(peptide_sender);
 
