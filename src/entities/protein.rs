@@ -276,10 +276,10 @@ impl From<ScyllaRow> for Protein {
         ) = row
             .into_typed::<(
                 String,
-                Vec<String>,
+                Option<Vec<String>>,
                 String,
                 String,
-                Vec<String>,
+                Option<Vec<String>>,
                 i64,
                 String,
                 bool,
@@ -290,10 +290,10 @@ impl From<ScyllaRow> for Protein {
             .unwrap();
         Protein {
             accession,
-            secondary_accessions,
+            secondary_accessions: secondary_accessions.unwrap_or(vec![]),
             entry_name,
             name,
-            genes,
+            genes: genes.unwrap_or(vec![]),
             taxonomy_id,
             proteome_id,
             is_reviewed,

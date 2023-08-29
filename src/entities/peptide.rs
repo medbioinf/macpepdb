@@ -9,6 +9,7 @@ use anyhow::Result;
 use scylla::frame::response::result::Row as ScyllaRow;
 use scylla::{_macro_internal::ValueList, frame::response::result::CqlValue};
 use tokio_postgres::Row;
+use tracing::error;
 
 // internal imports
 use crate::{entities::protein::Protein, tools::cql::get_cql_value};
@@ -246,60 +247,45 @@ impl From<Row> for Peptide {
 
 impl From<ScyllaRow> for Peptide {
     fn from(row: ScyllaRow) -> Self {
+        let (
+            partition,
+            mass,
+            sequence,
+            missed_cleavages,
+            aa_counts,
+            proteins,
+            is_swiss_prot,
+            is_trembl,
+            taxonomy_ids,
+            unique_taxonomy_ids,
+            proteome_ids,
+        ) = row
+            .into_typed::<(
+                i64,
+                i64,
+                String,
+                i16,
+                Vec<i16>,
+                Vec<String>,
+                bool,
+                bool,
+                Vec<i64>,
+                Vec<i64>,
+                Vec<String>,
+            )>()
+            .unwrap();
         Self {
-            partition: get_cql_value(&row.columns, 0).unwrap().as_bigint().unwrap(),
-            mass: get_cql_value(&row.columns, 1).unwrap().as_bigint().unwrap(),
-            sequence: get_cql_value(&row.columns, 2)
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            missed_cleavages: get_cql_value(&row.columns, 3)
-                .unwrap()
-                .as_smallint()
-                .unwrap_or(0),
-            aa_counts: get_cql_value(&row.columns, 4)
-                .unwrap()
-                .as_list()
-                .unwrap()
-                .into_iter()
-                .map(|cql_val| cql_val.as_smallint().unwrap().to_owned())
-                .collect(),
-            proteins: get_cql_value(&row.columns, 5)
-                .unwrap_or(CqlValue::Set(vec![]))
-                .as_set()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-                .collect(),
-            is_swiss_prot: get_cql_value(&row.columns, 6)
-                .unwrap()
-                .as_boolean()
-                .unwrap(),
-            is_trembl: get_cql_value(&row.columns, 7)
-                .unwrap()
-                .as_boolean()
-                .unwrap(),
-            taxonomy_ids: get_cql_value(&row.columns, 8)
-                .unwrap_or(CqlValue::Set(vec![]))
-                .as_set()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
-                .collect(),
-            unique_taxonomy_ids: get_cql_value(&row.columns, 9)
-                .unwrap_or(CqlValue::Set(vec![]))
-                .as_set()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
-                .collect(),
-            proteome_ids: get_cql_value(&row.columns, 10)
-                .unwrap_or(CqlValue::Set(vec![]))
-                .as_set()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-                .collect(),
+            partition,
+            mass,
+            sequence,
+            missed_cleavages,
+            aa_counts,
+            proteins,
+            is_swiss_prot,
+            is_trembl,
+            taxonomy_ids,
+            unique_taxonomy_ids,
+            proteome_ids,
         }
     }
 }
