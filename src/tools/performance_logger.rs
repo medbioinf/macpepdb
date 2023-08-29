@@ -87,12 +87,6 @@ pub async fn performance_log_thread(
     let mut next_time = Instant::now() + interval;
     let start_time = Instant::now();
 
-    let mut i = 1;
-    const FILE_LOG_INTERVAL: u64 = 600;
-    // let mut num_proteins_processed_last_interval = 0;
-    // let mut file = File::create("performance.csv").await?;
-    // async_writeln!(file, "seconds,processed_proteins,proteins/sec")?;
-
     // This loop runs exactly every second
     loop {
         let num_proteins_processed = *num_proteins_processed.lock().unwrap();
@@ -107,13 +101,6 @@ pub async fn performance_log_thread(
         // num_proteins_processed_last_interval += delta;
 
         if stop_flag.load(Ordering::Relaxed) {
-            // async_writeln!(
-            //     file,
-            //     "{},{},{}",
-            //     i,
-            //     num_proteins_processed,
-            //     num_proteins_processed_last_interval / FILE_LOG_INTERVAL
-            // )?;
             break;
         }
 
@@ -128,17 +115,6 @@ pub async fn performance_log_thread(
 
             protein_queue.len()
         };
-
-        // if i % FILE_LOG_INTERVAL == 0 {
-        //     async_writeln!(
-        //         file,
-        //         "{},{},{}",
-        //         i,
-        //         num_proteins_processed,
-        //         num_proteins_processed_last_interval / FILE_LOG_INTERVAL
-        //     )?;
-        //     num_proteins_processed_last_interval = 0;
-        // }
 
         protein_performance_span.pb_set_message(
             format!(
@@ -159,7 +135,6 @@ pub async fn performance_log_thread(
 
         sleep(next_time - Instant::now());
         next_time += interval;
-        i += 1;
     }
 
     let num_proteins_processed = *num_proteins_processed.lock().unwrap();
@@ -179,5 +154,60 @@ pub async fn performance_log_thread(
     std::mem::drop(peptide_performance_span_enter);
     std::mem::drop(peptide_performance_span);
 
+    Ok(())
+}
+
+pub async fn performance_csv_logger(
+    num_proteins: &usize,
+    num_proteins_processed: Arc<Mutex<u64>>,
+    num_peptides_processed: Arc<Mutex<u64>>,
+    protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
+    stop_flag: Arc<AtomicBool>,
+) -> Result<()> {
+    const LOG_INTERVAL_SECONDS: u64 = 5;
+    let interval = Duration::from_secs(LOG_INTERVAL_SECONDS);
+    let mut next_time = Instant::now() + interval;
+    let start_time = Instant::now();
+
+    let mut prev_num_proteins_processed = 0;
+    let mut prev_num_peptides_processed = 0;
+
+    let mut file = File::create("performance.csv").await?;
+    async_writeln!(
+        file,
+        "seconds,processed_proteins,processed_peptides,proteins/sec,peptides/sec"
+    )?;
+
+    loop {
+        let seconds_expired = (Instant::now() - start_time).as_secs();
+
+        let num_proteins_processed = *num_proteins_processed.lock().unwrap();
+        let delta_proteins = num_proteins_processed - prev_num_proteins_processed;
+        let proteins_per_second = delta_proteins / LOG_INTERVAL_SECONDS;
+
+        let num_peptides_processed = *num_peptides_processed.lock().unwrap();
+        let delta_peptides = num_peptides_processed - prev_num_peptides_processed;
+        let peptides_per_second = delta_peptides / LOG_INTERVAL_SECONDS;
+
+        async_writeln!(
+            file,
+            "{},{},{},{},{}",
+            seconds_expired,
+            num_proteins_processed,
+            num_peptides_processed,
+            proteins_per_second,
+            peptides_per_second
+        )?;
+
+        if stop_flag.load(Ordering::Relaxed) {
+            break;
+        }
+
+        prev_num_proteins_processed = num_proteins_processed;
+        prev_num_peptides_processed = num_peptides_processed;
+
+        sleep(next_time - Instant::now());
+        next_time += interval;
+    }
     Ok(())
 }

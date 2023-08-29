@@ -44,7 +44,7 @@ use crate::database::scylla::{
 };
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
-use crate::tools::performance_logger::performance_log_receiver;
+use crate::tools::performance_logger::{performance_csv_logger, performance_log_receiver};
 use crate::tools::{
     error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
@@ -186,6 +186,7 @@ impl DatabaseBuild {
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
         let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let (unprocessable_proteins_sender, unprocessable_proteins_receiver): (
@@ -197,6 +198,19 @@ impl DatabaseBuild {
         let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
+
+        let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+        let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+        let performance_log_receiver_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            performance_log_receiver(
+                protein_receiver,
+                peptide_receiver,
+                num_proteins_processed_clone,
+                num_peptides_processed_clone,
+            )
+            .await?;
+            Ok(())
+        });
 
         // Start digestion threads
         for thread_id in 0..num_threads {
@@ -245,9 +259,8 @@ impl DatabaseBuild {
 
         let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
         let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
-        let performance_stop_flag = Arc::new(AtomicBool::new(false));
         let protein_queue_arc_clone = protein_queue_arc.clone();
-        let stop_flag_clone = performance_stop_flag.clone();
+        let stop_flag_clone = performance_log_stop_flag.clone();
         let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
             performance_log_thread(
                 &num_proteins,
@@ -260,14 +273,17 @@ impl DatabaseBuild {
             Ok(())
         });
 
-        let num_proteins_processed = Arc::clone(&num_proteins_processed);
-        let num_peptides_processed = Arc::clone(&num_peptides_processed);
-        let performance_log_receiver_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            performance_log_receiver(
-                protein_receiver,
-                peptide_receiver,
-                num_proteins_processed,
-                num_peptides_processed,
+        let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+        let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+        let protein_queue_arc_clone = protein_queue_arc.clone();
+        let stop_flag_clone = performance_log_stop_flag.clone();
+        let performance_csv_thread_handle: JoinHandle<Result<()>> = spawn(async move {
+            performance_csv_logger(
+                &num_proteins,
+                num_proteins_processed_clone,
+                num_peptides_processed_clone,
+                protein_queue_arc_clone,
+                stop_flag_clone,
             )
             .await?;
             Ok(())
@@ -327,8 +343,9 @@ impl DatabaseBuild {
 
         // Wait for digestion threads to finish
         join_all(digestion_thread_handles).await;
-        performance_stop_flag.store(true, Ordering::Relaxed);
+        performance_log_stop_flag.store(true, Ordering::Relaxed);
         performance_log_thread_handle.await??;
+        performance_csv_thread_handle.await??;
         performance_log_receiver_thread_handle.await??;
         unprocessable_proteins_log_thread_handle.await??;
         error_log_thread_handle.await??;
