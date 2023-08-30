@@ -66,6 +66,10 @@ impl PeptideTable {
         C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
+        if peptides.len() == 0 {
+            return Ok(());
+        }
+
         // Update has upsert functionality in Scylla. protein accessions are added to the set (see UPDATE_SET_PLACEHOLDERS)
         // Alternative: always execute two lightweight transactions update ... if exists, update ... if not exists
         // Alternative: select then check in application code then upsert
