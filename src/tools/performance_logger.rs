@@ -1,6 +1,7 @@
 // std imports
 use std::{
     cmp,
+    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -158,10 +159,9 @@ pub async fn performance_log_thread(
 }
 
 pub async fn performance_csv_logger(
-    num_proteins: &usize,
     num_proteins_processed: Arc<Mutex<u64>>,
     num_peptides_processed: Arc<Mutex<u64>>,
-    protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
+    log_folder: &str,
     stop_flag: Arc<AtomicBool>,
 ) -> Result<()> {
     const LOG_INTERVAL_SECONDS: u64 = 5;
@@ -172,7 +172,7 @@ pub async fn performance_csv_logger(
     let mut prev_num_proteins_processed = 0;
     let mut prev_num_peptides_processed = 0;
 
-    let mut file = File::create("performance.csv").await?;
+    let mut file = File::create(format!("{}/performance.csv", log_folder)).await?;
     async_writeln!(
         file,
         "seconds,processed_proteins,processed_peptides,proteins/sec,peptides/sec"

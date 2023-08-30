@@ -216,7 +216,6 @@ impl DatabaseBuild {
         for thread_id in 0..num_threads {
             // Clone necessary variables
             let protein_queue_arc_clone = protein_queue_arc.clone();
-            let num_proteins_processed = Arc::clone(&num_proteins_processed);
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let thread_unprocessable_proteins_sender = unprocessable_proteins_sender.clone();
@@ -276,14 +275,13 @@ impl DatabaseBuild {
 
         let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
         let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
-        let protein_queue_arc_clone = protein_queue_arc.clone();
         let stop_flag_clone = performance_log_stop_flag.clone();
+        let log_folder_str = log_folder.clone();
         let performance_csv_thread_handle: JoinHandle<Result<()>> = spawn(async move {
             performance_csv_logger(
-                &num_proteins,
                 num_proteins_processed_clone,
                 num_peptides_processed_clone,
-                protein_queue_arc_clone,
+                log_folder_str.to_str().unwrap(),
                 stop_flag_clone,
             )
             .await?;
