@@ -441,14 +441,15 @@ mod tests {
 
         ProteinTable::delete(&mut client, &TRYPSIN).await.unwrap();
 
-        let err = ProteinTable::raw_select(
+        let row_opt = ProteinTable::raw_select(
             &mut client,
             SELECT_COLS,
             "WHERE accession = ? ",
             &[&CqlValue::Text(TRYPSIN.get_accession().to_owned())],
         )
         .await
-        .unwrap_err()
-        .is::<FirstRowError>();
+        .unwrap();
+
+        assert!(row_opt.is_none());
     }
 }
