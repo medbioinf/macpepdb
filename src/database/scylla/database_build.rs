@@ -749,7 +749,9 @@ impl DatabaseBuild {
 
         ProteinTable::insert(client, &protein).await?;
         // PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared).await?;
-        PeptideTable::batch_insert(client, &mut peptides.iter(), prepared).await?;
+        PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared)
+            .await
+            .unwrap();
         peptide_sender.send(peptides.len() as u64).await?;
 
         return Ok(());
