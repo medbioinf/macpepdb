@@ -19,4 +19,15 @@ jobs:
     steps:
       - uses: actions/checkout@v3
       - name: Start containers
-        run: echo "test"
+        run: docker-compose up -d --build
+      - name: Install Custom C Dependencies
+        run: sudo apt update && sudo apt install -y libhdf5-serial-dev --fix-missing
+      - name: Toolchain fix
+        run: rustup toolchain install nightly
+      - name: Build
+        run: cargo build -r --verbose
+      - name: Run tests
+        run: cargo test -r --verbose
+      - name: Stop containers
+        if: always()
+        run: docker-compose down
