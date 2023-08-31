@@ -45,7 +45,7 @@ use crate::database::scylla::{
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
 use crate::tools::performance_logger::{
-    performance_csv_logger, performance_log_peptide_receiver, performance_log_protein_receiver,
+    metadata_update_performance_log_thread, performance_csv_logger, performance_log_receiver,
 };
 use crate::tools::{
     error_logger::error_logger, performance_logger::performance_log_thread,
@@ -211,14 +211,12 @@ impl DatabaseBuild {
             let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
 
             performance_log_protein_receiver_thread_handle = Some(spawn(async move {
-                performance_log_protein_receiver(protein_receiver, num_proteins_processed_clone)
-                    .await?;
+                performance_log_receiver(protein_receiver, num_proteins_processed_clone).await?;
                 Ok(())
             }));
 
             performance_log_peptide_receiver_thread_handle = Some(spawn(async move {
-                performance_log_peptide_receiver(peptide_receiver, num_peptides_processed_clone)
-                    .await?;
+                performance_log_receiver(peptide_receiver, num_peptides_processed_clone).await?;
                 Ok(())
             }));
         }
@@ -406,9 +404,6 @@ impl DatabaseBuild {
 
         let mut wait_for_queue = false;
 
-        let performance_span = debug_span!("performance", thread_id);
-        let performance_span_enter = performance_span.enter();
-
         let statement = format!(
             "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
             SCYLLA_KEYSPACE_NAME,
@@ -505,8 +500,6 @@ impl DatabaseBuild {
                 }
             }
         }
-        std::mem::drop(performance_span_enter);
-        std::mem::drop(performance_span);
 
         Ok(())
     }
@@ -787,9 +780,14 @@ impl DatabaseBuild {
         num_threads: usize,
         database_urls: Vec<String>,
         configuration: &Configuration,
+        is_test_run: bool,
     ) -> Result<()> {
         debug!("Collecting peptide metadata...");
         debug!("Chunking partitions for {} threads...", num_threads);
+        let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
+        let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
+
         let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
             .floor() as usize;
         let chunked_partitions: Vec<Vec<i64>> = (0..(configuration.get_partition_limits().len()
@@ -800,6 +798,17 @@ impl DatabaseBuild {
             .collect();
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
+        let mut performance_log_peptide_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
+
+        if !is_test_run {
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+
+            performance_log_peptide_receiver_thread_handle = Some(spawn(async move {
+                performance_log_receiver(peptide_receiver, num_peptides_processed_clone).await?;
+                Ok(())
+            }));
+        }
 
         debug!("Starting {} threads...", num_threads);
         // Start digestion threads
@@ -807,17 +816,46 @@ impl DatabaseBuild {
             // Clone necessary variables
             let partitions = chunked_partitions[thread_id].clone();
             let database_urls_clone = database_urls.clone();
+            let thread_peptide_sender = peptide_sender.clone();
             // TODO: Add logging thread
             // Start digestion thread
             metadata_collector_thread_handles.push(spawn(async move {
-                Self::collect_peptide_metadata_thread(thread_id, database_urls_clone, partitions)
-                    .await?;
+                Self::collect_peptide_metadata_thread(
+                    thread_id,
+                    database_urls_clone,
+                    partitions,
+                    thread_peptide_sender,
+                )
+                .await?;
                 Ok(())
             }));
         }
+        drop(peptide_sender);
+
+        let mut performance_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        if !is_test_run {
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+            let stop_flag_clone = performance_log_stop_flag.clone();
+            performance_log_thread_handle = Some(spawn(async move {
+                metadata_update_performance_log_thread(
+                    num_peptides_processed_clone,
+                    stop_flag_clone,
+                )
+                .await?;
+                Ok(())
+            }));
+        }
+
         debug!("Waiting threads to stop ...");
         // Wait for digestion threads to finish
         join_all(metadata_collector_thread_handles).await;
+        if !is_test_run {
+            performance_log_stop_flag.store(true, Ordering::Relaxed);
+            performance_log_thread_handle.unwrap().await??;
+            performance_log_peptide_receiver_thread_handle
+                .unwrap()
+                .await??;
+        }
 
         Ok(())
     }
@@ -826,6 +864,7 @@ impl DatabaseBuild {
         thread_id: usize,
         database_urls: Vec<String>,
         partitions: Vec<i64>,
+        peptide_sender: Sender<u64>,
     ) -> Result<()> {
         let client = get_client(Some(&database_urls)).await?;
         let session = client.get_session();
@@ -882,6 +921,7 @@ impl DatabaseBuild {
                         ),
                     )
                     .await?;
+                peptide_sender.send(1).await.unwrap();
             }
         }
         Ok(())
@@ -966,7 +1006,8 @@ impl DatabaseBuildTrait for DatabaseBuild {
         let span = span!(Level::INFO, "metadata_updates");
         let _guard = span.enter();
 
-        Self::collect_peptide_metadata(num_threads, database_hosts, &configuration).await?;
+        Self::collect_peptide_metadata(num_threads, database_hosts, &configuration, is_test_run)
+            .await?;
         // count peptides per partition
 
         Ok(())
