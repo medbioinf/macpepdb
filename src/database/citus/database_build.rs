@@ -44,7 +44,9 @@ use crate::database::table::Table;
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
-use crate::tools::performance_logger::{performance_csv_logger, performance_log_receiver};
+use crate::tools::performance_logger::{
+    performance_csv_logger, performance_log_peptide_receiver, performance_log_protein_receiver,
+};
 use crate::tools::{
     error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
@@ -192,19 +194,24 @@ impl DatabaseBuild {
         let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
-        let mut performance_log_receiver_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut performance_log_protein_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
+        let mut performance_log_peptide_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
 
         if !is_test_run {
             let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
             let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
-            performance_log_receiver_thread_handle = Some(spawn(async move {
-                performance_log_receiver(
-                    protein_receiver,
-                    peptide_receiver,
-                    num_proteins_processed_clone,
-                    num_peptides_processed_clone,
-                )
-                .await?;
+
+            performance_log_protein_receiver_thread_handle = Some(spawn(async move {
+                performance_log_protein_receiver(protein_receiver, num_proteins_processed_clone)
+                    .await?;
+                Ok(())
+            }));
+
+            performance_log_peptide_receiver_thread_handle = Some(spawn(async move {
+                performance_log_peptide_receiver(peptide_receiver, num_peptides_processed_clone)
+                    .await?;
                 Ok(())
             }));
         }
@@ -343,7 +350,12 @@ impl DatabaseBuild {
             performance_log_stop_flag.store(true, Ordering::Relaxed);
             performance_log_thread_handle.unwrap().await??;
             performance_csv_thread_handle.unwrap().await??;
-            performance_log_receiver_thread_handle.unwrap().await??;
+            performance_log_protein_receiver_thread_handle
+                .unwrap()
+                .await??;
+            performance_log_peptide_receiver_thread_handle
+                .unwrap()
+                .await??;
             unprocessable_proteins_log_thread_handle.unwrap().await??;
             error_log_thread_handle.unwrap().await??;
         }

@@ -43,11 +43,9 @@ macro_rules! async_writeln {
     };
 }
 
-pub async fn performance_log_receiver(
+pub async fn performance_log_protein_receiver(
     mut protein_receiver: Receiver<u64>,
-    mut peptides_receiver: Receiver<u64>,
     num_proteins_processed: Arc<Mutex<u64>>,
-    num_peptides_processed: Arc<Mutex<u64>>,
 ) -> Result<()> {
     loop {
         match protein_receiver.recv().await {
@@ -57,6 +55,16 @@ pub async fn performance_log_receiver(
             }
             None => break,
         }
+    }
+
+    Ok(())
+}
+
+pub async fn performance_log_peptide_receiver(
+    mut peptides_receiver: Receiver<u64>,
+    num_peptides_processed: Arc<Mutex<u64>>,
+) -> Result<()> {
+    loop {
         match peptides_receiver.recv().await {
             Some(count) => {
                 let mut i = num_peptides_processed.lock().unwrap();

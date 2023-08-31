@@ -44,7 +44,9 @@ use crate::database::scylla::{
 };
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
-use crate::tools::performance_logger::{performance_csv_logger, performance_log_receiver};
+use crate::tools::performance_logger::{
+    performance_csv_logger, performance_log_peptide_receiver, performance_log_protein_receiver,
+};
 use crate::tools::{
     error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
@@ -199,19 +201,24 @@ impl DatabaseBuild {
         let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
-        let mut performance_log_receiver_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut performance_log_protein_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
+        let mut performance_log_peptide_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
 
         if !is_test_run {
             let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
             let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
-            performance_log_receiver_thread_handle = Some(spawn(async move {
-                performance_log_receiver(
-                    protein_receiver,
-                    peptide_receiver,
-                    num_proteins_processed_clone,
-                    num_peptides_processed_clone,
-                )
-                .await?;
+
+            performance_log_protein_receiver_thread_handle = Some(spawn(async move {
+                performance_log_protein_receiver(protein_receiver, num_proteins_processed_clone)
+                    .await?;
+                Ok(())
+            }));
+
+            performance_log_peptide_receiver_thread_handle = Some(spawn(async move {
+                performance_log_peptide_receiver(peptide_receiver, num_peptides_processed_clone)
+                    .await?;
                 Ok(())
             }));
         }
@@ -313,32 +320,6 @@ impl DatabaseBuild {
             }));
         }
 
-        for protein_file_path in protein_file_paths {
-            let mut reader = Reader::new(protein_file_path, 4096)?;
-            let mut wait_for_queue = false;
-            while let Some(protein) = reader.next()? {
-                loop {
-                    if wait_for_queue {
-                        // Wait before pushing the protein into queue
-                        sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
-                        wait_for_queue = false;
-                    }
-                    // Acquire lock on protein queue
-                    let mut protein_queue = match protein_queue_arc.lock() {
-                        Ok(protein_queue) => protein_queue,
-                        Err(err) => bail!(format!("Could not lock protein queue: {}", err)),
-                    };
-                    // If protein queue is already full, set wait and try again
-                    if protein_queue.len() >= protein_queue_size {
-                        wait_for_queue = true;
-                        continue;
-                    }
-                    protein_queue.push(protein);
-                    break;
-                }
-            }
-        }
-
         let mut last_wait_instant: Option<Instant> = None;
 
         for protein_file_path in protein_file_paths {
@@ -384,7 +365,12 @@ impl DatabaseBuild {
             performance_log_stop_flag.store(true, Ordering::Relaxed);
             performance_log_thread_handle.unwrap().await??;
             performance_csv_thread_handle.unwrap().await??;
-            performance_log_receiver_thread_handle.unwrap().await??;
+            performance_log_protein_receiver_thread_handle
+                .unwrap()
+                .await??;
+            performance_log_peptide_receiver_thread_handle
+                .unwrap()
+                .await??;
             unprocessable_proteins_log_thread_handle.unwrap().await??;
             error_log_thread_handle.unwrap().await??;
         }
@@ -509,7 +495,7 @@ impl DatabaseBuild {
                 .await;
 
                 if db_result.is_ok() {
-                    protein_sender.send(1).await?;
+                    protein_sender.send(1).await.unwrap();
                     break;
                 }
 
