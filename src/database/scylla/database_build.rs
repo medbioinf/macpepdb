@@ -882,7 +882,6 @@ impl DatabaseBuild {
         let update_query_prepared_statement = session.prepare(update_query).await?;
 
         for partition in partitions.iter() {
-            debug!("Querying partition {}", partition);
             let query_statement = format!(
                 "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
                 SELECT_COLS,
@@ -890,18 +889,15 @@ impl DatabaseBuild {
                 PeptideTable::table_name()
             );
 
-            let mut query: Query = Query::new(query_statement);
-            query.set_page_size(100);
-
-            let mut rows_stream = session.query_iter(query, (partition,)).await.unwrap();
-            debug!("entering while");
+            let mut rows_stream = session
+                .query_iter(query_statement, (partition,))
+                .await
+                .unwrap();
 
             while let Some(row_opt) = rows_stream.next().await {
-                debug!("in while");
                 let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
-                debug!("ProteinTable associtaed proteins");
 
                 let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
                     CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
@@ -934,7 +930,6 @@ impl DatabaseBuild {
                         ),
                     )
                     .await?;
-                debug!("Sending peptide count");
                 peptide_sender.send(1).await.unwrap();
             }
         }
