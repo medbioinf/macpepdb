@@ -913,7 +913,8 @@ impl DatabaseBuild {
                             .collect(),
                     )],
                 )
-                .await?;
+                .await
+                .unwrap();
 
                 debug!("Updating metadta");
 
