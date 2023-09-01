@@ -882,6 +882,7 @@ impl DatabaseBuild {
         let update_query_prepared_statement = session.prepare(update_query).await?;
 
         for partition in partitions.iter() {
+            debug!("Querying partition {}", partition);
             let query_statement = format!(
                 "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
                 SELECT_COLS,
@@ -895,7 +896,7 @@ impl DatabaseBuild {
             let mut rows_stream = session.query_iter(query, (partition,)).await.unwrap();
 
             while let Some(row_opt) = rows_stream.next().await {
-                let row = row_opt?;
+                let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
                 let associated_proteins = ProteinTable::select_multiple(
