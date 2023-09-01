@@ -894,11 +894,14 @@ impl DatabaseBuild {
             query.set_page_size(100);
 
             let mut rows_stream = session.query_iter(query, (partition,)).await.unwrap();
+            debug!("entering while");
 
             while let Some(row_opt) = rows_stream.next().await {
+                debug!("in while");
                 let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
+                debug!("ProteinTable associtaed proteins");
                 let associated_proteins = ProteinTable::select_multiple(
                     &client,
                     "WHERE accession IN ?",
@@ -911,6 +914,8 @@ impl DatabaseBuild {
                     )],
                 )
                 .await?;
+
+                debug!("Updating metadta");
 
                 let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
                     Peptide::get_metadata_from_proteins(&associated_proteins);
@@ -929,9 +934,11 @@ impl DatabaseBuild {
                         ),
                     )
                     .await?;
+                debug!("Sending peptide count");
                 peptide_sender.send(1).await.unwrap();
             }
         }
+        debug!("Quitting thread");
         Ok(())
     }
 }
