@@ -442,8 +442,16 @@ impl DatabaseBuild {
 
             let existing_protein = ProteinTable::select(
                 &client,
-                "WHERE accession IN (?)",
-                &[&CqlValue::Text(accession_list.join(","))],
+                format!(
+                    "WHERE accession IN ({})",
+                    accession_list
+                        .iter()
+                        .map(|x| format!("'{x}'"))
+                        .collect::<Vec<String>>()
+                        .join(",")
+                )
+                .as_str(),
+                &[],
             )
             .await?;
             let mut tries: u64 = 0;
