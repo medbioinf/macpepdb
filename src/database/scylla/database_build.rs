@@ -902,21 +902,20 @@ impl DatabaseBuild {
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
                 debug!("ProteinTable associtaed proteins");
-                let associated_proteins = ProteinTable::select_multiple(
-                    &client,
-                    "WHERE accession IN ?",
-                    &[&CqlValue::List(
-                        peptide
-                            .get_proteins()
-                            .into_iter()
-                            .map(|x| CqlValue::Text(x.to_owned()))
-                            .collect(),
-                    )],
-                )
-                .await
-                .unwrap();
 
-                debug!("Updating metadta");
+                let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
+                    CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
+                });
+                let mut associated_proteins = vec![];
+
+                for chunk in proteins_chunks {
+                    // ToDo query in parallel here
+                    associated_proteins.extend(
+                        ProteinTable::select_multiple(&client, "WHERE accession IN ?", &[&chunk])
+                            .await
+                            .unwrap(),
+                    );
+                }
 
                 let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
                     Peptide::get_metadata_from_proteins(&associated_proteins);
