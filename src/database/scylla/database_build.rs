@@ -16,6 +16,7 @@ use futures::StreamExt;
 use scylla::batch::Batch;
 use scylla::frame::value::BatchValues;
 use scylla::prepared_statement::PreparedStatement;
+use scylla::query::Query;
 use scylla::ValueList;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -442,16 +443,13 @@ impl DatabaseBuild {
 
             let existing_protein = ProteinTable::select(
                 &client,
-                format!(
-                    "WHERE accession IN ({})",
+                "WHERE accession IN ?",
+                &[&CqlValue::List(
                     accession_list
-                        .iter()
-                        .map(|x| format!("'{x}'"))
-                        .collect::<Vec<String>>()
-                        .join(",")
-                )
-                .as_str(),
-                &[],
+                        .into_iter()
+                        .map(|x| CqlValue::Text(x.to_owned()))
+                        .collect(),
+                )],
             )
             .await?;
             let mut tries: u64 = 0;
@@ -890,10 +888,11 @@ impl DatabaseBuild {
                 SCYLLA_KEYSPACE_NAME,
                 PeptideTable::table_name()
             );
-            let mut rows_stream = session
-                .query_iter(query_statement, (partition,))
-                .await
-                .unwrap();
+
+            let mut query: Query = Query::new(query_statement);
+            query.set_page_size(100);
+
+            let mut rows_stream = session.query_iter(query, (partition,)).await.unwrap();
 
             while let Some(row_opt) = rows_stream.next().await {
                 let row = row_opt?;
