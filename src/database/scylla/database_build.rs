@@ -501,8 +501,14 @@ impl DatabaseBuild {
                 }
 
                 if let Err(db_err) = db_result {
-                    error!("Unresolvable error logged: {:?}", db_err);
-                    error_sender.send(format!("{:?}", db_err)).await?;
+                    error!(
+                        "Unresolvable error logged: {:?} Protein {:?}",
+                        db_err,
+                        &protein.get_accession()
+                    );
+                    error_sender
+                        .send(format!("{:?} Protein {}", db_err, &protein.get_accession()))
+                        .await?;
                 }
             }
         }
