@@ -738,7 +738,7 @@ impl DatabaseBuild {
         let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
 
         let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
-            .floor() as usize;
+            .ceil() as usize;
         let chunked_partitions: Vec<Vec<i64>> = (0..(configuration.get_partition_limits().len()
             as i64))
             .collect::<Vec<i64>>()
@@ -761,9 +761,10 @@ impl DatabaseBuild {
 
         debug!("Starting {} threads...", num_threads);
         // Start digestion threads
-        for thread_id in 0..num_threads {
+        for thread_id in 0..chunked_partitions.len() {
             // Clone necessary variables
             let partitions = chunked_partitions[thread_id].clone();
+            debug!("Thread {} partitions {:?}", thread_id, partitions);
             let database_url_clone = database_url.to_string();
             let thread_peptide_sender = peptide_sender.clone();
             // TODO: Add logging thread
