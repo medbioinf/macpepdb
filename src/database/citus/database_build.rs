@@ -394,7 +394,7 @@ impl DatabaseBuild {
             }
         });
 
-        let mut wait_for_queue = true;
+        let mut wait_for_queue = false;
         loop {
             if wait_for_queue {
                 // Wait before trying to get next protein from queue
