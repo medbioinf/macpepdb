@@ -16,6 +16,7 @@ use futures::StreamExt;
 use scylla::batch::Batch;
 use scylla::frame::value::BatchValues;
 use scylla::prepared_statement::PreparedStatement;
+use scylla::query::Query;
 use scylla::ValueList;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -44,7 +45,9 @@ use crate::database::scylla::{
 };
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
-use crate::tools::performance_logger::performance_log_receiver;
+use crate::tools::performance_logger::{
+    metadata_update_performance_log_thread, performance_csv_logger, performance_log_receiver,
+};
 use crate::tools::{
     error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
@@ -175,6 +178,7 @@ impl DatabaseBuild {
         partition_limits: Vec<i64>,
         num_proteins: usize,
         log_folder: &PathBuf,
+        is_test_run: bool,
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
 
@@ -186,6 +190,7 @@ impl DatabaseBuild {
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
         let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let (unprocessable_proteins_sender, unprocessable_proteins_receiver): (
@@ -197,12 +202,30 @@ impl DatabaseBuild {
         let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
+        let mut performance_log_protein_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
+        let mut performance_log_peptide_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
+
+        if !is_test_run {
+            let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+
+            performance_log_protein_receiver_thread_handle = Some(spawn(async move {
+                performance_log_receiver(protein_receiver, num_proteins_processed_clone).await?;
+                Ok(())
+            }));
+
+            performance_log_peptide_receiver_thread_handle = Some(spawn(async move {
+                performance_log_receiver(peptide_receiver, num_peptides_processed_clone).await?;
+                Ok(())
+            }));
+        }
 
         // Start digestion threads
         for thread_id in 0..num_threads {
             // Clone necessary variables
             let protein_queue_arc_clone = protein_queue_arc.clone();
-            let num_proteins_processed = Arc::clone(&num_proteins_processed);
             let partition_limits_arc_clone = partition_limits_arc.clone();
             let stop_flag_clone = stop_flag.clone();
             let thread_unprocessable_proteins_sender = unprocessable_proteins_sender.clone();
@@ -240,52 +263,61 @@ impl DatabaseBuild {
 
         // Drop the original sender its not needed anymore
         drop(unprocessable_proteins_sender);
+        drop(error_sender);
         drop(protein_sender);
         drop(peptide_sender);
 
-        let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
-        let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
-        let performance_stop_flag = Arc::new(AtomicBool::new(false));
-        let protein_queue_arc_clone = protein_queue_arc.clone();
-        let stop_flag_clone = performance_stop_flag.clone();
-        let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            performance_log_thread(
-                &num_proteins,
-                num_proteins_processed_clone,
-                num_peptides_processed_clone,
-                protein_queue_arc_clone,
-                stop_flag_clone,
-            )
-            .await?;
-            Ok(())
-        });
+        let mut performance_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut performance_csv_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut unprocessable_proteins_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut error_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
 
-        let num_proteins_processed = Arc::clone(&num_proteins_processed);
-        let num_peptides_processed = Arc::clone(&num_peptides_processed);
-        let performance_log_receiver_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            performance_log_receiver(
-                protein_receiver,
-                peptide_receiver,
-                num_proteins_processed,
-                num_peptides_processed,
-            )
-            .await?;
-            Ok(())
-        });
+        if !is_test_run {
+            let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+            let protein_queue_arc_clone = protein_queue_arc.clone();
+            let stop_flag_clone = performance_log_stop_flag.clone();
+            performance_log_thread_handle = Some(spawn(async move {
+                performance_log_thread(
+                    &num_proteins,
+                    num_proteins_processed_clone,
+                    num_peptides_processed_clone,
+                    protein_queue_arc_clone,
+                    stop_flag_clone,
+                )
+                .await?;
+                Ok(())
+            }));
 
-        let unprocessable_proteins_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            unprocessable_proteins_logger(
-                unprocessable_proteins_log_file_path,
-                unprocessable_proteins_receiver,
-            )
-            .await?;
-            Ok(())
-        });
+            let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+            let stop_flag_clone = performance_log_stop_flag.clone();
+            let log_folder_str = log_folder.clone();
+            performance_csv_thread_handle = Some(spawn(async move {
+                performance_csv_logger(
+                    num_proteins_processed_clone,
+                    num_peptides_processed_clone,
+                    log_folder_str.to_str().unwrap(),
+                    stop_flag_clone,
+                )
+                .await?;
+                Ok(())
+            }));
 
-        let error_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            error_logger(error_log_file_path, error_receiver).await?;
-            Ok(())
-        });
+            unprocessable_proteins_log_thread_handle = Some(spawn(async move {
+                unprocessable_proteins_logger(
+                    unprocessable_proteins_log_file_path,
+                    unprocessable_proteins_receiver,
+                )
+                .await?;
+                Ok(())
+            }));
+
+            error_log_thread_handle = Some(spawn(async move {
+                error_logger(error_log_file_path, error_receiver).await?;
+                Ok(())
+            }));
+        }
 
         let mut last_wait_instant: Option<Instant> = None;
 
@@ -320,18 +352,27 @@ impl DatabaseBuild {
             }
         }
 
-        // Set stop flag
+        // // Set stop flag
         stop_flag.store(true, Ordering::Relaxed);
 
         debug!("last proteins queued, waiting for digestion threads to finish ...");
 
         // Wait for digestion threads to finish
         join_all(digestion_thread_handles).await;
-        performance_stop_flag.store(true, Ordering::Relaxed);
-        performance_log_thread_handle.await??;
-        performance_log_receiver_thread_handle.await??;
-        unprocessable_proteins_log_thread_handle.await??;
-        error_log_thread_handle.await??;
+        debug!("Digestion threads joined");
+        if !is_test_run {
+            performance_log_stop_flag.store(true, Ordering::Relaxed);
+            performance_log_thread_handle.unwrap().await??;
+            performance_csv_thread_handle.unwrap().await??;
+            performance_log_protein_receiver_thread_handle
+                .unwrap()
+                .await??;
+            performance_log_peptide_receiver_thread_handle
+                .unwrap()
+                .await??;
+            unprocessable_proteins_log_thread_handle.unwrap().await??;
+            error_log_thread_handle.unwrap().await??;
+        }
 
         Ok(())
     }
@@ -363,9 +404,6 @@ impl DatabaseBuild {
         let mut client = get_client(Some(database_urls)).await.unwrap();
 
         let mut wait_for_queue = false;
-
-        let performance_span = debug_span!("performance", thread_id);
-        let performance_span_enter = performance_span.enter();
 
         let statement = format!(
             "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
@@ -405,8 +443,13 @@ impl DatabaseBuild {
 
             let existing_protein = ProteinTable::select(
                 &client,
-                "WHERE accession IN (?)",
-                &[&CqlValue::Text(accession_list.join(","))],
+                "WHERE accession IN ?",
+                &[&CqlValue::List(
+                    accession_list
+                        .into_iter()
+                        .map(|x| CqlValue::Text(x.to_owned()))
+                        .collect(),
+                )],
             )
             .await?;
             let mut tries: u64 = 0;
@@ -453,18 +496,22 @@ impl DatabaseBuild {
                 .await;
 
                 if db_result.is_ok() {
-                    protein_sender.send(1).await?;
+                    protein_sender.send(1).await.unwrap();
                     break;
                 }
 
                 if let Err(db_err) = db_result {
-                    error!("Unresolvable error logged: {:?}", db_err);
-                    error_sender.send(format!("{:?}", db_err)).await?;
+                    error!(
+                        "Unresolvable error logged: {:?} Protein {:?}",
+                        db_err,
+                        &protein.get_accession()
+                    );
+                    error_sender
+                        .send(format!("{:?} Protein {}", db_err, &protein.get_accession()))
+                        .await?;
                 }
             }
         }
-        std::mem::drop(performance_span_enter);
-        std::mem::drop(performance_span);
 
         Ok(())
     }
@@ -733,7 +780,9 @@ impl DatabaseBuild {
 
         ProteinTable::insert(client, &protein).await?;
         // PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared).await?;
-        PeptideTable::batch_insert(client, &mut peptides.iter(), prepared).await?;
+        PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared)
+            .await
+            .unwrap();
         peptide_sender.send(peptides.len() as u64).await?;
 
         return Ok(());
@@ -743,38 +792,83 @@ impl DatabaseBuild {
         num_threads: usize,
         database_urls: Vec<String>,
         configuration: &Configuration,
+        is_test_run: bool,
     ) -> Result<()> {
         debug!("Collecting peptide metadata...");
         debug!("Chunking partitions for {} threads...", num_threads);
-        let chunk_size = ((configuration.get_partition_limits().len() as f64 + 1.0)
-            / num_threads as f64)
+        let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
+        let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
+
+        let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
             .ceil() as usize;
-        let chunked_partitions: Vec<Vec<i64>> =
-            (0..(configuration.get_partition_limits().len() as i64 + 1))
-                .collect::<Vec<i64>>()
-                .chunks(chunk_size)
-                .map(|chunk| chunk.to_vec())
-                .collect();
+        let chunked_partitions: Vec<Vec<i64>> = (0..(configuration.get_partition_limits().len()
+            as i64))
+            .collect::<Vec<i64>>()
+            .chunks(chunk_size)
+            .map(|chunk| chunk.to_vec())
+            .collect();
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
+        let mut performance_log_peptide_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
 
-        debug!("Starting {} threads...", num_threads);
-        // Start digestion threads
-        for thread_id in 0..num_threads {
-            // Clone necessary variables
-            let partitions = chunked_partitions[thread_id].clone();
-            let database_urls_clone = database_urls.clone();
-            // TODO: Add logging thread
-            // Start digestion thread
-            metadata_collector_thread_handles.push(spawn(async move {
-                Self::collect_peptide_metadata_thread(thread_id, database_urls_clone, partitions)
-                    .await?;
+        if !is_test_run {
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+
+            performance_log_peptide_receiver_thread_handle = Some(spawn(async move {
+                performance_log_receiver(peptide_receiver, num_peptides_processed_clone).await?;
                 Ok(())
             }));
         }
+
+        debug!("Starting {} threads...", num_threads);
+        // Start digestion threads
+        for thread_id in 0..chunked_partitions.len() {
+            // Clone necessary variables
+            let partitions = chunked_partitions[thread_id].clone();
+            debug!("Thread {} partitions {:?}", thread_id, partitions);
+            let database_urls_clone = database_urls.clone();
+            let thread_peptide_sender = peptide_sender.clone();
+            // TODO: Add logging thread
+            // Start digestion thread
+            metadata_collector_thread_handles.push(spawn(async move {
+                Self::collect_peptide_metadata_thread(
+                    thread_id,
+                    database_urls_clone,
+                    partitions,
+                    thread_peptide_sender,
+                )
+                .await?;
+                Ok(())
+            }));
+        }
+        drop(peptide_sender);
+
+        let mut performance_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        if !is_test_run {
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+            let stop_flag_clone = performance_log_stop_flag.clone();
+            performance_log_thread_handle = Some(spawn(async move {
+                metadata_update_performance_log_thread(
+                    num_peptides_processed_clone,
+                    stop_flag_clone,
+                )
+                .await?;
+                Ok(())
+            }));
+        }
+
         debug!("Waiting threads to stop ...");
         // Wait for digestion threads to finish
         join_all(metadata_collector_thread_handles).await;
+        if !is_test_run {
+            performance_log_stop_flag.store(true, Ordering::Relaxed);
+            performance_log_thread_handle.unwrap().await??;
+            performance_log_peptide_receiver_thread_handle
+                .unwrap()
+                .await??;
+        }
 
         Ok(())
     }
@@ -783,6 +877,7 @@ impl DatabaseBuild {
         thread_id: usize,
         database_urls: Vec<String>,
         partitions: Vec<i64>,
+        peptide_sender: Sender<u64>,
     ) -> Result<()> {
         let client = get_client(Some(&database_urls)).await?;
         let session = client.get_session();
@@ -800,27 +895,30 @@ impl DatabaseBuild {
                 SCYLLA_KEYSPACE_NAME,
                 PeptideTable::table_name()
             );
+
             let mut rows_stream = session
                 .query_iter(query_statement, (partition,))
                 .await
                 .unwrap();
 
             while let Some(row_opt) = rows_stream.next().await {
-                let row = row_opt?;
+                let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
-                let associated_proteins = ProteinTable::select_multiple(
-                    &client,
-                    "WHERE accession IN ?",
-                    &[&CqlValue::List(
-                        peptide
-                            .get_proteins()
-                            .into_iter()
-                            .map(|x| CqlValue::Text(x.to_owned()))
-                            .collect(),
-                    )],
-                )
-                .await?;
+
+                let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
+                    CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
+                });
+                let mut associated_proteins = vec![];
+
+                for chunk in proteins_chunks {
+                    // ToDo query in parallel here
+                    associated_proteins.extend(
+                        ProteinTable::select_multiple(&client, "WHERE accession IN ?", &[&chunk])
+                            .await
+                            .unwrap(),
+                    );
+                }
 
                 let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
                     Peptide::get_metadata_from_proteins(&associated_proteins);
@@ -839,8 +937,10 @@ impl DatabaseBuild {
                         ),
                     )
                     .await?;
+                peptide_sender.send(1).await.unwrap();
             }
         }
+        debug!("Quitting thread");
         Ok(())
     }
 }
@@ -859,6 +959,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
+        is_test_run: bool,
     ) -> Result<()> {
         info!("Starting database build");
 
@@ -914,6 +1015,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             configuration.get_partition_limits().to_vec(),
             protein_ctr.clone(),
             log_folder,
+            is_test_run,
         )
         .await?;
 
@@ -921,7 +1023,8 @@ impl DatabaseBuildTrait for DatabaseBuild {
         let span = span!(Level::INFO, "metadata_updates");
         let _guard = span.enter();
 
-        Self::collect_peptide_metadata(num_threads, database_hosts, &configuration).await?;
+        Self::collect_peptide_metadata(num_threads, database_hosts, &configuration, is_test_run)
+            .await?;
         // count peptides per partition
 
         Ok(())
@@ -955,7 +1058,7 @@ mod test {
 
     lazy_static! {
         static ref CONFIGURATION: Configuration =
-            Configuration::new("trypsin".to_owned(), 2, 6, 50, true, Vec::with_capacity(0));
+            Configuration::new("trypsin".to_owned(), 2, 5, 60, true, Vec::with_capacity(0));
     }
 
     const EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN: [&'static str; 2] =
@@ -966,9 +1069,10 @@ mod test {
 
     // Test the database building
     #[tokio::test]
+    #[traced_test]
     #[serial]
     async fn test_database_build_without_initial_config() {
-        let client = get_client(None).await.unwrap();
+        let client: Client = get_client(None).await.unwrap();
 
         drop_keyspace(&client).await;
 
@@ -981,7 +1085,16 @@ mod test {
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         let build_res = database_builder
-            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, &log_folder)
+            .build(
+                &protein_file_paths,
+                2,
+                100,
+                0.5,
+                0.0002,
+                None,
+                &log_folder,
+                true,
+            )
             .await;
         assert!(build_res.is_err());
     }
@@ -1015,6 +1128,7 @@ mod test {
                 0.0002,
                 Some(CONFIGURATION.clone()),
                 &log_folder,
+                true,
             )
             .await
             .unwrap();

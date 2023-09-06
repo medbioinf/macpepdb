@@ -74,6 +74,9 @@ impl PeptideTable {
         C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
+        if peptides.len() == 0 {
+            return Ok(());
+        }
         let num_placeholders = peptides.len() * *NUM_INSERT_COLS;
         // Generate vec of placeholders from $1 to $NUM_INSERT_COLS * num_placeholders
         let placeholders =

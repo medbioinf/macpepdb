@@ -19,7 +19,11 @@ impl GenericClient for Client {
         Self: Sized,
     {
         Ok(Self {
-            session: SessionBuilder::new().known_nodes(hostnames).build().await?,
+            session: SessionBuilder::new()
+                .known_nodes(hostnames)
+                .build()
+                .await
+                .unwrap(),
         })
     }
 

@@ -127,6 +127,7 @@ async fn main() {
                             Vec::with_capacity(0),
                         )),
                         &log_folder,
+                        false,
                     )
                     .await
                 {
@@ -152,6 +153,7 @@ async fn main() {
                             Vec::with_capacity(0),
                         )),
                         &log_folder,
+                        false,
                     )
                     .await
                 {

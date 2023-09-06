@@ -44,7 +44,9 @@ use crate::database::table::Table;
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
-use crate::tools::performance_logger::performance_log_receiver;
+use crate::tools::performance_logger::{
+    metadata_update_performance_log_thread, performance_csv_logger, performance_log_receiver,
+};
 use crate::tools::{
     error_logger::error_logger, performance_logger::performance_log_thread,
     unprocessable_protein_logger::unprocessable_proteins_logger,
@@ -169,6 +171,7 @@ impl DatabaseBuild {
         partition_limits: Vec<i64>,
         num_proteins: usize,
         log_folder: &PathBuf,
+        is_test_run: bool,
     ) -> Result<()> {
         debug!("processing proteins using {} threads ...", num_threads);
 
@@ -179,6 +182,7 @@ impl DatabaseBuild {
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
+        let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
         let num_proteins_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let (unprocessable_proteins_sender, unprocessable_proteins_receiver): (
@@ -190,6 +194,25 @@ impl DatabaseBuild {
         let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
 
         let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
+        let mut performance_log_protein_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
+        let mut performance_log_peptide_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
+
+        if !is_test_run {
+            let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+
+            performance_log_protein_receiver_thread_handle = Some(spawn(async move {
+                performance_log_receiver(protein_receiver, num_proteins_processed_clone).await?;
+                Ok(())
+            }));
+
+            performance_log_peptide_receiver_thread_handle = Some(spawn(async move {
+                performance_log_receiver(peptide_receiver, num_peptides_processed_clone).await?;
+                Ok(())
+            }));
+        }
 
         // Start digestion threads
         for thread_id in 0..num_threads {
@@ -236,49 +259,57 @@ impl DatabaseBuild {
         drop(protein_sender);
         drop(peptide_sender);
 
-        let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
-        let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
-        let performance_stop_flag = Arc::new(AtomicBool::new(false));
-        let protein_queue_arc_clone = protein_queue_arc.clone();
-        let stop_flag_clone = performance_stop_flag.clone();
-        let performance_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            performance_log_thread(
-                &num_proteins,
-                num_proteins_processed_clone,
-                num_peptides_processed_clone,
-                protein_queue_arc_clone,
-                stop_flag_clone,
-            )
-            .await?;
-            Ok(())
-        });
+        let mut performance_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut performance_csv_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut unprocessable_proteins_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        let mut error_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
 
-        let num_proteins_processed = Arc::clone(&num_proteins_processed);
-        let num_peptides_processed = Arc::clone(&num_peptides_processed);
-        let performance_log_receiver_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            performance_log_receiver(
-                protein_receiver,
-                peptide_receiver,
-                num_proteins_processed,
-                num_peptides_processed,
-            )
-            .await?;
-            Ok(())
-        });
+        if !is_test_run {
+            let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+            let protein_queue_arc_clone = protein_queue_arc.clone();
+            let stop_flag_clone = performance_log_stop_flag.clone();
+            performance_log_thread_handle = Some(spawn(async move {
+                performance_log_thread(
+                    &num_proteins,
+                    num_proteins_processed_clone,
+                    num_peptides_processed_clone,
+                    protein_queue_arc_clone,
+                    stop_flag_clone,
+                )
+                .await?;
+                Ok(())
+            }));
 
-        let unprocessable_proteins_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            unprocessable_proteins_logger(
-                unprocessable_proteins_log_file_path,
-                unprocessable_proteins_receiver,
-            )
-            .await?;
-            Ok(())
-        });
+            let num_proteins_processed_clone = Arc::clone(&num_proteins_processed);
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+            let stop_flag_clone = performance_log_stop_flag.clone();
+            let log_folder_str = log_folder.clone();
+            performance_csv_thread_handle = Some(spawn(async move {
+                performance_csv_logger(
+                    num_proteins_processed_clone,
+                    num_peptides_processed_clone,
+                    log_folder_str.to_str().unwrap(),
+                    stop_flag_clone,
+                )
+                .await?;
+                Ok(())
+            }));
 
-        let error_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            error_logger(error_log_file_path, error_receiver).await?;
-            Ok(())
-        });
+            unprocessable_proteins_log_thread_handle = Some(spawn(async move {
+                unprocessable_proteins_logger(
+                    unprocessable_proteins_log_file_path,
+                    unprocessable_proteins_receiver,
+                )
+                .await?;
+                Ok(())
+            }));
+
+            error_log_thread_handle = Some(spawn(async move {
+                error_logger(error_log_file_path, error_receiver).await?;
+                Ok(())
+            }));
+        }
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
@@ -313,11 +344,19 @@ impl DatabaseBuild {
 
         // Wait for digestion threads to finish
         join_all(digestion_thread_handles).await;
-        performance_stop_flag.store(true, Ordering::Relaxed);
-        performance_log_thread_handle.await??;
-        performance_log_receiver_thread_handle.await??;
-        unprocessable_proteins_log_thread_handle.await??;
-        error_log_thread_handle.await??;
+        if !is_test_run {
+            performance_log_stop_flag.store(true, Ordering::Relaxed);
+            performance_log_thread_handle.unwrap().await??;
+            performance_csv_thread_handle.unwrap().await??;
+            performance_log_protein_receiver_thread_handle
+                .unwrap()
+                .await??;
+            performance_log_peptide_receiver_thread_handle
+                .unwrap()
+                .await??;
+            unprocessable_proteins_log_thread_handle.unwrap().await??;
+            error_log_thread_handle.unwrap().await??;
+        }
 
         Ok(())
     }
@@ -355,10 +394,7 @@ impl DatabaseBuild {
             }
         });
 
-        let performance_span = debug_span!("performance", thread_id);
-        let performance_span_enter = performance_span.enter();
-
-        let mut wait_for_queue = true;
+        let mut wait_for_queue = false;
         loop {
             if wait_for_queue {
                 // Wait before trying to get next protein from queue
@@ -451,8 +487,18 @@ impl DatabaseBuild {
                                 continue;
                             }
                             _ => {
-                                error!("Unresolvable error logged: {:?}", db_err);
-                                error_sender.send(format!("{:?}", db_err)).await?;
+                                error!(
+                                    "Unresolvable error logged: {:?} Protein {:?}",
+                                    db_err,
+                                    &protein.get_accession()
+                                );
+                                error_sender
+                                    .send(format!(
+                                        "{:?} Protein {}",
+                                        db_err,
+                                        &protein.get_accession()
+                                    ))
+                                    .await?;
                             }
                         }
                     }
@@ -460,9 +506,6 @@ impl DatabaseBuild {
                 }
             }
         }
-
-        std::mem::drop(performance_span_enter);
-        std::mem::drop(performance_span);
 
         connection_handle.abort();
         let _ = connection_handle.await;
@@ -696,37 +739,83 @@ impl DatabaseBuild {
         num_threads: usize,
         database_url: &str,
         configuration: &Configuration,
+        is_test_run: bool,
     ) -> Result<()> {
         debug!("Collecting peptide metadata...");
         debug!("Chunking partitions for {} threads...", num_threads);
+        let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+        let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
+        let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
+
         let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
             .ceil() as usize;
-        let chunked_partitions: Vec<Vec<i64>> = (0..configuration.get_partition_limits().len()
-            as i64)
+        let chunked_partitions: Vec<Vec<i64>> = (0..(configuration.get_partition_limits().len()
+            as i64))
             .collect::<Vec<i64>>()
             .chunks(chunk_size)
             .map(|chunk| chunk.to_vec())
             .collect();
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
+        let mut performance_log_peptide_receiver_thread_handle: Option<JoinHandle<Result<()>>> =
+            None;
 
-        debug!("Starting {} threads...", num_threads);
-        // Start digestion threads
-        for thread_id in 0..num_threads {
-            // Clone necessary variables
-            let partitions = chunked_partitions[thread_id].clone();
-            let database_url_clone = database_url.to_string();
-            // TODO: Add logging thread
-            // Start digestion thread
-            metadata_collector_thread_handles.push(spawn(async move {
-                Self::collect_peptide_metadata_thread(thread_id, database_url_clone, partitions)
-                    .await?;
+        if !is_test_run {
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+
+            performance_log_peptide_receiver_thread_handle = Some(spawn(async move {
+                performance_log_receiver(peptide_receiver, num_peptides_processed_clone).await?;
                 Ok(())
             }));
         }
+
+        debug!("Starting {} threads...", num_threads);
+        // Start digestion threads
+        for thread_id in 0..chunked_partitions.len() {
+            // Clone necessary variables
+            let partitions = chunked_partitions[thread_id].clone();
+            debug!("Thread {} partitions {:?}", thread_id, partitions);
+            let database_url_clone = database_url.to_string();
+            let thread_peptide_sender = peptide_sender.clone();
+            // TODO: Add logging thread
+            // Start digestion thread
+            metadata_collector_thread_handles.push(spawn(async move {
+                Self::collect_peptide_metadata_thread(
+                    thread_id,
+                    database_url_clone,
+                    partitions,
+                    thread_peptide_sender,
+                )
+                .await?;
+                Ok(())
+            }));
+        }
+        drop(peptide_sender);
+
+        let mut performance_log_thread_handle: Option<JoinHandle<Result<()>>> = None;
+        if !is_test_run {
+            let num_peptides_processed_clone = Arc::clone(&num_peptides_processed);
+            let stop_flag_clone = performance_log_stop_flag.clone();
+            performance_log_thread_handle = Some(spawn(async move {
+                metadata_update_performance_log_thread(
+                    num_peptides_processed_clone,
+                    stop_flag_clone,
+                )
+                .await?;
+                Ok(())
+            }));
+        }
+
         debug!("Waiting threads to stop ...");
         // Wait for digestion threads to finish
         join_all(metadata_collector_thread_handles).await;
+        if !is_test_run {
+            performance_log_stop_flag.store(true, Ordering::Relaxed);
+            performance_log_thread_handle.unwrap().await??;
+            performance_log_peptide_receiver_thread_handle
+                .unwrap()
+                .await??;
+        }
         Ok(())
     }
 
@@ -734,6 +823,7 @@ impl DatabaseBuild {
         thread_id: usize,
         database_url: String,
         partitions: Vec<i64>,
+        peptide_sender: Sender<u64>,
     ) -> Result<()> {
         for partition in partitions.iter() {
             let (mut client, connection) = tokio_postgres::connect(&database_url, NoTls).await?;
@@ -762,6 +852,7 @@ impl DatabaseBuild {
                     break;
                 }
                 let mut peptide_transaction = partition_transaction.transaction().await?;
+                let rows_len = (&rows).len();
                 for row in rows {
                     let associated_proteins = ProteinTable::select_multiple(
                         &mut peptide_transaction,
@@ -792,6 +883,7 @@ impl DatabaseBuild {
                         .await?;
                 }
                 peptide_transaction.commit().await?;
+                peptide_sender.send(rows_len as u64).await.unwrap();
             }
             partition_transaction
                 .execute(&cursor_close_statement, &[])
@@ -818,6 +910,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
+        is_test_run: bool,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
 
@@ -875,10 +968,17 @@ impl DatabaseBuildTrait for DatabaseBuild {
             configuration.get_partition_limits().to_vec(),
             protein_ctr.clone(),
             log_folder,
+            is_test_run,
         )
         .await?;
         // collect metadata
-        Self::collect_peptide_metadata(num_threads, &self.database_url, &configuration).await?;
+        Self::collect_peptide_metadata(
+            num_threads,
+            &self.database_url,
+            &configuration,
+            is_test_run,
+        )
+        .await?;
         // count peptides per partition
 
         Ok(())
@@ -944,7 +1044,16 @@ mod test {
 
         let database_builder = DatabaseBuild::new(DATABASE_URL.to_owned());
         let build_res = database_builder
-            .build(&protein_file_paths, 2, 100, 0.5, 0.0002, None, &log_folder)
+            .build(
+                &protein_file_paths,
+                2,
+                100,
+                0.5,
+                0.0002,
+                None,
+                &log_folder,
+                true,
+            )
             .await;
         assert!(build_res.is_err());
         connection_handle.abort();
@@ -989,6 +1098,7 @@ mod test {
                 0.0002,
                 Some(CONFIGURATION.clone()),
                 &log_folder,
+                true,
             )
             .await
             .unwrap();
