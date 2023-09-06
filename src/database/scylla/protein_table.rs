@@ -276,6 +276,7 @@ mod tests {
     use super::*;
     use crate::database::scylla::client::GenericClient;
     use crate::database::scylla::{get_client, prepare_database_for_tests};
+    use crate::entities::domain::Domain;
     use crate::io::uniprot_text::reader::Reader;
 
     const EXPECTED_PROTEINS: i64 = 3;
@@ -309,7 +310,8 @@ mod tests {
             true,
             "MNPLLILTFVAAALAAPFDDDDKIVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIAANS".to_string(),
             1677024000,
-            Vec::new()
+            vec![Domain::new( 24, 244,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string())]
+
         );
 
         static ref UPDATED_TRYPSIN: Protein = Protein::new(
@@ -342,7 +344,7 @@ mod tests {
             true,
             "RUSTISAWESOME".to_string(),
             0,
-            Vec::new()
+            vec![Domain::new( 24, 244,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string())]
         );
     }
 

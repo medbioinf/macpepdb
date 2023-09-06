@@ -269,9 +269,9 @@ impl From<ScyllaRow> for Peptide {
                 Vec<String>,
                 bool,
                 bool,
-                Vec<i64>,
-                Vec<i64>,
-                Vec<String>,
+                Option<Vec<i64>>,
+                Option<Vec<i64>>,
+                Option<Vec<String>>,
             )>()
             .unwrap();
         Self {
@@ -283,9 +283,9 @@ impl From<ScyllaRow> for Peptide {
             proteins,
             is_swiss_prot,
             is_trembl,
-            taxonomy_ids,
-            unique_taxonomy_ids,
-            proteome_ids,
+            taxonomy_ids: taxonomy_ids.unwrap_or(vec![]),
+            unique_taxonomy_ids: unique_taxonomy_ids.unwrap_or(vec![]),
+            proteome_ids: proteome_ids.unwrap_or(vec![]),
         }
     }
 }
