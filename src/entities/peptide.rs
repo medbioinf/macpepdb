@@ -8,7 +8,6 @@ use std::{
 use anyhow::Result;
 use scylla::frame::response::result::Row as ScyllaRow;
 use scylla::{_macro_internal::ValueList, frame::response::result::CqlValue};
-use tokio_postgres::Row;
 use tracing::error;
 
 // internal imports
@@ -226,25 +225,6 @@ impl Hash for Peptide {
         self.sequence.hash(state);
     }
 }
-
-impl From<Row> for Peptide {
-    fn from(row: Row) -> Self {
-        Self {
-            partition: row.get("partition"),
-            mass: row.get("mass"),
-            sequence: row.get("sequence"),
-            missed_cleavages: row.get("missed_cleavages"),
-            aa_counts: row.get("aa_counts"),
-            proteins: row.get("proteins"),
-            is_swiss_prot: row.get("is_swiss_prot"),
-            is_trembl: row.get("is_trembl"),
-            taxonomy_ids: row.get("taxonomy_ids"),
-            unique_taxonomy_ids: row.get("unique_taxonomy_ids"),
-            proteome_ids: row.get("proteome_ids"),
-        }
-    }
-}
-
 impl From<ScyllaRow> for Peptide {
     fn from(row: ScyllaRow) -> Self {
         let (

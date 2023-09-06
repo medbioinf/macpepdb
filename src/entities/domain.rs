@@ -7,7 +7,6 @@ use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
 use scylla::FromUserType;
 use scylla::IntoUserType;
-use tokio_postgres::Row;
 
 use crate::tools::cql::get_cql_value;
 

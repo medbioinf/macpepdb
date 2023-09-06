@@ -6,7 +6,6 @@ use anyhow::{anyhow, Result};
 use chrono::NaiveDateTime;
 use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
-use tokio_postgres::Row;
 
 use crate::tools::cql::get_cql_value;
 
@@ -238,24 +237,6 @@ impl Protein {
         entry.push_str("//");
 
         Ok(entry)
-    }
-}
-
-impl From<Row> for Protein {
-    fn from(row: Row) -> Self {
-        Protein {
-            accession: row.get("accession"),
-            secondary_accessions: row.get("secondary_accessions"),
-            entry_name: row.get("entry_name"),
-            name: row.get("name"),
-            genes: row.get("genes"),
-            taxonomy_id: row.get("taxonomy_id"),
-            proteome_id: row.get("proteome_id"),
-            is_reviewed: row.get("is_reviewed"),
-            sequence: row.get("sequence"),
-            updated_at: row.get("updated_at"),
-            domains: Vec::new(),
-        }
     }
 }
 
