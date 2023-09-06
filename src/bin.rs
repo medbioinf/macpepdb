@@ -5,8 +5,7 @@ use clap::{Parser, Subcommand};
 use indicatif::ProgressStyle;
 use macpepdb::{
     database::{
-        citus::database_build::DatabaseBuild as CitusBuild, database_build::DatabaseBuild,
-        scylla::database_build::DatabaseBuild as ScyllaBuild,
+        database_build::DatabaseBuild, scylla::database_build::DatabaseBuild as ScyllaBuild,
     },
     entities::configuration::Configuration,
 };
@@ -110,32 +109,6 @@ async fn main() {
                 let plain_database_url = database_url[9..].to_string();
 
                 let builder = ScyllaBuild::new(plain_database_url);
-
-                match builder
-                    .build(
-                        &protein_file_paths,
-                        num_threads,
-                        num_partitions,
-                        allowed_ram_usage,
-                        partitioner_false_positive_probability,
-                        Some(Configuration::new(
-                            "trypsin".to_owned(),
-                            2,
-                            5,
-                            60,
-                            true,
-                            Vec::with_capacity(0),
-                        )),
-                        &log_folder,
-                        false,
-                    )
-                    .await
-                {
-                    Ok(_) => info!("Database build completed successfully!"),
-                    Err(e) => info!("Database build failed: {}", e),
-                }
-            } else if database_url.starts_with("postgresql://") {
-                let builder = CitusBuild::new(database_url);
 
                 match builder
                     .build(
