@@ -31,5 +31,7 @@ pub mod chemistry;
 pub mod database;
 /// Contains different entities, e.g. proteins, peptides, etc.
 pub mod entities;
+/// Various functions to prepare queries, access the database, etc.
+pub mod functions;
 /// Input and output functions
 pub mod io;
