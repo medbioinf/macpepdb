@@ -882,7 +882,7 @@ impl DatabaseBuild {
         let client = get_client(Some(&database_urls)).await?;
         let session = client.get_session();
         let update_query = format!(
-                        "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ? WHERE partition = ? AND mass = ? and sequence = ?",
+                        "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
                         SCYLLA_KEYSPACE_NAME,
                         PeptideTable::table_name()
                     );
@@ -920,8 +920,15 @@ impl DatabaseBuild {
                     );
                 }
 
-                let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
-                    Peptide::get_metadata_from_proteins(&associated_proteins);
+                let (
+                    is_swiss_prot,
+                    is_trembl,
+                    taxonomy_ids,
+                    unique_taxonomy_ids,
+                    proteome_ids,
+                    domains,
+                ) = peptide.get_metadata_from_proteins(&associated_proteins);
+
                 session
                     .execute(
                         &update_query_prepared_statement,
@@ -931,6 +938,7 @@ impl DatabaseBuild {
                             &taxonomy_ids,
                             &unique_taxonomy_ids,
                             &proteome_ids,
+                            &domains,
                             peptide.get_partition(),
                             peptide.get_mass(),
                             peptide.get_sequence(),

@@ -269,10 +269,13 @@ impl FallibleIterator for Reader {
                             if s.starts_with("/evidence") {
                                 domain_evidence = s[11..s.len() - 1].to_string();
                                 domains.push(Domain::new(
-                                    domain_start_idx,
-                                    domain_end_idx,
+                                    domain_start_idx - 1,
+                                    domain_end_idx - 1,
                                     domain_name.clone(),
                                     domain_evidence.clone(),
+                                    None,
+                                    None,
+                                    None,
                                 ));
                                 is_building_domain = false;
                             }
@@ -368,10 +371,13 @@ mod tests {
         let mut ctr = 0;
 
         let EXPECTED_DOMAIN: Domain = Domain::new(
-            24,
-            244,
+            23,
+            243,
             "Peptidase S1".to_string(),
             "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
+            None,
+            None,
+            None,
         );
 
         while let Some(protein) = reader.next().unwrap() {

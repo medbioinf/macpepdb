@@ -310,7 +310,7 @@ mod tests {
             true,
             "MNPLLILTFVAAALAAPFDDDDKIVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIAANS".to_string(),
             1677024000,
-            vec![Domain::new( 24, 244,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string())]
+            vec![Domain::new( 23, 243,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(), None, None, None)]
 
         );
 
@@ -344,7 +344,7 @@ mod tests {
             true,
             "RUSTISAWESOME".to_string(),
             0,
-            vec![Domain::new( 24, 244,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string())]
+            vec![Domain::new( 23, 243,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(), None, None, None)]
         );
     }
 

@@ -16,15 +16,29 @@ pub struct Domain {
     evidence: String,
     start_index: i64,
     end_index: i64,
+    protein: Option<String>,
+    start_index_protein: Option<i64>,
+    end_index_protein: Option<i64>,
 }
 
 impl Domain {
-    pub fn new(start_index: i64, end_index: i64, name: String, evidence: String) -> Self {
+    pub fn new(
+        start_index: i64,
+        end_index: i64,
+        name: String,
+        evidence: String,
+        protein: Option<String>,
+        start_index_protein: Option<i64>,
+        end_index_protein: Option<i64>,
+    ) -> Self {
         Self {
             start_index,
             end_index,
             name,
             evidence,
+            protein,
+            start_index_protein,
+            end_index_protein,
         }
     }
 
@@ -42,5 +56,17 @@ impl Domain {
 
     pub fn get_evidence(&self) -> &String {
         &self.evidence
+    }
+
+    pub fn get_protein_opt(self) -> Option<String> {
+        self.protein
+    }
+
+    pub fn get_protein_start_index_opt(self) -> Option<i64> {
+        self.start_index_protein
+    }
+
+    pub fn get_protein_end_index_opt(self) -> Option<i64> {
+        self.end_index_protein
     }
 }
