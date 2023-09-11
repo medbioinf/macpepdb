@@ -79,7 +79,8 @@ impl Display for AminoAcidOccurrence {
     }
 }
 
-/// PTMCondition to check peptides against
+/// PTMCondition to check peptides against a given mass and PTMs.
+/// Each PTM condition can be used to query a range of peptides.
 ///
 pub struct PTMCondition {
     mass: i64,
