@@ -1180,8 +1180,6 @@ mod test {
                 .unwrap();
                 assert_eq!(proteins.len(), 1);
 
-                // See if domains are there
-
                 let expected_peptides: Vec<Peptide> = create_peptides_entities_from_digest(
                     &enzyme.digest(&protein.get_sequence()),
                     configuration.get_partition_limits(),

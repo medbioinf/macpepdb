@@ -240,13 +240,17 @@ impl Peptide {
                                 &self
                                     .get_sequence()
                                     .chars()
-                                    .nth(x.1 as usize + 2)
+                                    .nth(x.1 as usize + 1)
                                     .unwrap_or(' '),
                             ) && enzyme.get_cleavage_chars().contains(
-                                &p.get_sequence().chars().nth(x.1 as usize + 1).unwrap(),
+                                &self
+                                    .get_sequence()
+                                    .chars()
+                                    .nth(&self.get_sequence().len() - 1)
+                                    .unwrap(),
                             ));
 
-                        is_valid_start || is_valid_end
+                        is_valid_start && is_valid_end
                     })
                     .collect();
 
