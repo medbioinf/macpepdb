@@ -227,13 +227,26 @@ impl Peptide {
                     .map(|x| i64::try_from(x.0).unwrap())
                     .map(|x| (x, x + i64::try_from(self.get_sequence().len()).unwrap() - 1))
                     .filter(|x| {
-                        x.0 == 0
+                        let is_valid_start = x.0 == 0
                             || (!enzyme
                                 .get_cleavage_blocker_chars()
                                 .contains(&self.get_sequence().chars().nth(0).unwrap())
                                 && enzyme.get_cleavage_chars().contains(
                                     &p.get_sequence().chars().nth((x.0 - 1) as usize).unwrap(),
-                                ))
+                                ));
+
+                        let is_valid_end = x.1 as usize == p.get_sequence().len() - 1
+                            || (!enzyme.get_cleavage_blocker_chars().contains(
+                                &self
+                                    .get_sequence()
+                                    .chars()
+                                    .nth(x.1 as usize + 2)
+                                    .unwrap_or(' '),
+                            ) && enzyme.get_cleavage_chars().contains(
+                                &p.get_sequence().chars().nth(x.1 as usize + 1).unwrap(),
+                            ));
+
+                        is_valid_start || is_valid_end
                     })
                     .collect();
 
