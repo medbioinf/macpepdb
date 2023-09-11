@@ -13,7 +13,10 @@ use scylla::{_macro_internal::ValueList, frame::response::result::CqlValue};
 use tracing::error;
 
 // internal imports
-use crate::{entities::protein::Protein, tools::cql::get_cql_value};
+use crate::{
+    biology::digestion_enzyme::enzyme::Enzyme, entities::protein::Protein,
+    tools::cql::get_cql_value,
+};
 
 use super::domain::Domain;
 
@@ -186,6 +189,7 @@ impl Peptide {
     pub fn get_metadata_from_proteins(
         &self,
         proteins: &Vec<Protein>,
+        enzyme: &dyn Enzyme,
     ) -> (bool, bool, Vec<i64>, Vec<i64>, Vec<String>, Vec<Domain>) {
         let is_swiss_prot = proteins.iter().any(|protein| protein.get_is_reviewed());
         let is_trembl = proteins.iter().any(|protein| !protein.get_is_reviewed());
@@ -222,6 +226,15 @@ impl Peptide {
                     .match_indices(&self.get_sequence().as_str())
                     .map(|x| i64::try_from(x.0).unwrap())
                     .map(|x| (x, x + i64::try_from(self.get_sequence().len()).unwrap() - 1))
+                    .filter(|x| {
+                        x.0 == 0
+                            || (!enzyme
+                                .get_cleavage_blocker_chars()
+                                .contains(&self.get_sequence().chars().nth(0).unwrap())
+                                && enzyme.get_cleavage_chars().contains(
+                                    &p.get_sequence().chars().nth((x.0 - 1) as usize).unwrap(),
+                                ))
+                    })
                     .collect();
 
                 let mut domains: Vec<Domain> = vec![];

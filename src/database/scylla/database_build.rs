@@ -793,6 +793,7 @@ impl DatabaseBuild {
         database_urls: Vec<String>,
         configuration: &Configuration,
         is_test_run: bool,
+        enzyme: &dyn Enzyme,
     ) -> Result<()> {
         debug!("Collecting peptide metadata...");
         debug!("Chunking partitions for {} threads...", num_threads);
@@ -830,6 +831,12 @@ impl DatabaseBuild {
             debug!("Thread {} partitions {:?}", thread_id, partitions);
             let database_urls_clone = database_urls.clone();
             let thread_peptide_sender = peptide_sender.clone();
+            let digestion_enzyme_box = get_enzyme_by_name(
+                enzyme.get_name(),
+                enzyme.get_max_number_of_missed_cleavages(),
+                enzyme.get_min_peptide_length(),
+                enzyme.get_max_peptide_length(),
+            )?;
             // TODO: Add logging thread
             // Start digestion thread
             metadata_collector_thread_handles.push(spawn(async move {
@@ -838,6 +845,7 @@ impl DatabaseBuild {
                     database_urls_clone,
                     partitions,
                     thread_peptide_sender,
+                    digestion_enzyme_box,
                 )
                 .await?;
                 Ok(())
@@ -878,6 +886,7 @@ impl DatabaseBuild {
         database_urls: Vec<String>,
         partitions: Vec<i64>,
         peptide_sender: Sender<u64>,
+        enzyme: Box<dyn Enzyme>,
     ) -> Result<()> {
         let client = get_client(Some(&database_urls)).await?;
         let session = client.get_session();
@@ -927,7 +936,7 @@ impl DatabaseBuild {
                     unique_taxonomy_ids,
                     proteome_ids,
                     domains,
-                ) = peptide.get_metadata_from_proteins(&associated_proteins);
+                ) = peptide.get_metadata_from_proteins(&associated_proteins, enzyme.as_ref());
 
                 session
                     .execute(
@@ -1031,8 +1040,14 @@ impl DatabaseBuildTrait for DatabaseBuild {
         let span = span!(Level::INFO, "metadata_updates");
         let _guard = span.enter();
 
-        Self::collect_peptide_metadata(num_threads, database_hosts, &configuration, is_test_run)
-            .await?;
+        Self::collect_peptide_metadata(
+            num_threads,
+            database_hosts,
+            &configuration,
+            is_test_run,
+            digestion_enzyme.as_ref(),
+        )
+        .await?;
         // count peptides per partition
 
         Ok(())
