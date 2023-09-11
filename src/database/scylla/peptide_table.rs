@@ -12,6 +12,7 @@ use scylla::transport::query_result::FirstRowError;
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
+use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 
 use crate::database::scylla::client::GenericClient;
@@ -19,11 +20,11 @@ use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 
 pub const TABLE_NAME: &'static str = "peptides";
 
-pub const SELECT_COLS: &'static str = "partition, mass, sequence, missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids";
+pub const SELECT_COLS: &'static str = "partition, mass, sequence, missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids, domains";
 
 const INSERT_COLS: &'static str = SELECT_COLS;
 
-const UPDATE_COLS: &'static str = "missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids";
+const UPDATE_COLS: &'static str = "missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids, domains";
 
 const NUM_PRIMARY_KEY_COLS: usize = 3;
 
@@ -86,6 +87,7 @@ impl PeptideTable {
                         x.get_taxonomy_ids(),
                         x.get_unique_taxonomy_ids(),
                         x.get_proteome_ids(),
+                        x.get_domains(),
                         x.get_partition(),
                         x.get_mass(),
                         x.get_sequence(),
@@ -99,74 +101,76 @@ impl PeptideTable {
         return Ok(());
     }
 
-    pub async fn batch_insert<'a, C, T>(
-        client: &C,
-        peptides: T,
-        prepared: &PreparedStatement,
-    ) -> Result<()>
-    where
-        C: GenericClient,
-        T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
-    {
-        let mut peptides_groups = vec![Vec::<&Peptide>::new(); 100];
-        for peptide in peptides {
-            let partition = peptide.get_partition() as usize;
-            peptides_groups[partition].push(peptide);
-        }
+    // pub async fn batch_insert<'a, C, T>(
+    //     client: &C,
+    //     peptides: T,
+    //     prepared: &PreparedStatement,
+    // ) -> Result<()>
+    // where
+    //     C: GenericClient,
+    //     T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
+    // {
+    //     let mut peptides_groups = vec![Vec::<&Peptide>::new(); 100];
+    //     for peptide in peptides {
+    //         let partition = peptide.get_partition() as usize;
+    //         peptides_groups[partition].push(peptide);
+    //     }
 
-        peptides_groups = peptides_groups
-            .into_iter()
-            .filter(|pep_vec| pep_vec.len() > 0)
-            .collect();
+    //     peptides_groups = peptides_groups
+    //         .into_iter()
+    //         .filter(|pep_vec| pep_vec.len() > 0)
+    //         .collect();
 
-        let mut batch: Batch = Default::default();
-        batch.append_statement(prepared.clone());
+    //     let mut batch: Batch = Default::default();
+    //     batch.append_statement(prepared.clone());
 
-        let session = client.get_session();
+    //     let session = client.get_session();
 
-        let futures = peptides_groups
-            .into_iter()
-            .map(|pep_vec| {
-                session.batch(
-                    &batch,
-                    pep_vec
-                        .iter()
-                        .map(|x| {
-                            (
-                                x.get_missed_cleavages(),
-                                x.get_aa_counts(),
-                                x.get_proteins(),
-                                x.get_is_swiss_prot(),
-                                x.get_is_trembl(),
-                                x.get_taxonomy_ids(),
-                                x.get_unique_taxonomy_ids(),
-                                x.get_proteome_ids(),
-                                x.get_partition(),
-                                x.get_mass(),
-                                x.get_sequence(),
-                            )
-                        })
-                        .collect::<Vec<(
-                            i16,
-                            &Vec<i16>,
-                            &Vec<String>,
-                            bool,
-                            bool,
-                            &Vec<i64>,
-                            &Vec<i64>,
-                            &Vec<String>,
-                            i64,
-                            i64,
-                            &String,
-                        )>>(),
-                )
-            })
-            .collect::<Vec<_>>();
+    //     let futures = peptides_groups
+    //         .into_iter()
+    //         .map(|pep_vec| {
+    //             session.batch(
+    //                 &batch,
+    //                 pep_vec
+    //                     .iter()
+    //                     .map(|x| {
+    //                         (
+    //                             x.get_missed_cleavages(),
+    //                             x.get_aa_counts(),
+    //                             x.get_proteins(),
+    //                             x.get_is_swiss_prot(),
+    //                             x.get_is_trembl(),
+    //                             x.get_taxonomy_ids(),
+    //                             x.get_unique_taxonomy_ids(),
+    //                             x.get_proteome_ids(),
+    //                             x.get_partition(),
+    //                             x.get_mass(),
+    //                             x.get_sequence(),
+    //                             x.get_domains(),
+    //                         )
+    //                     })
+    //                     .collect::<Vec<(
+    //                         i16,
+    //                         &Vec<i16>,
+    //                         &Vec<String>,
+    //                         bool,
+    //                         bool,
+    //                         &Vec<i64>,
+    //                         &Vec<i64>,
+    //                         &Vec<String>,
+    //                         i64,
+    //                         i64,
+    //                         &String,
+    //                         &Vec<Domain>,
+    //                     )>>(),
+    //             )
+    //         })
+    //         .collect::<Vec<_>>();
 
-        join_all(futures).await;
+    //     join_all(futures).await;
 
-        return Ok(());
-    }
+    //     return Ok(());
+    // }
 
     /// Updates the protein accessions of the given peptides.
     /// If new_protein_accession is given a metadata flaged as outdated.
@@ -511,6 +515,7 @@ mod tests {
             vec![9925],
             vec![9925],
             vec!["UP000291000".to_owned()],
+            vec![],
         )
         .unwrap()];
 

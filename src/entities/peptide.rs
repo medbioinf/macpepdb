@@ -30,6 +30,7 @@ pub struct Peptide {
     taxonomy_ids: Vec<i64>,
     unique_taxonomy_ids: Vec<i64>,
     proteome_ids: Vec<String>,
+    domains: Vec<Domain>,
 }
 
 impl Peptide {
@@ -58,6 +59,7 @@ impl Peptide {
         taxonomy_ids: Vec<i64>,
         unique_taxonomy_ids: Vec<i64>,
         proteome_ids: Vec<String>,
+        domains: Vec<Domain>,
     ) -> Result<Peptide> {
         let mut aa_counts = vec![0; 26];
         for one_letter_code in sequence.chars() {
@@ -76,6 +78,7 @@ impl Peptide {
             taxonomy_ids,
             unique_taxonomy_ids,
             proteome_ids,
+            domains,
         });
     }
 
@@ -167,6 +170,12 @@ impl Peptide {
     ///
     pub fn get_proteome_ids(&self) -> &Vec<String> {
         return &self.proteome_ids;
+    }
+
+    /// Returns the proteome IDs
+    ///
+    pub fn get_domains(&self) -> &Vec<Domain> {
+        return &self.domains;
     }
 
     /// Returns the peptide metadata from the given proteins, format:
@@ -288,6 +297,7 @@ impl From<ScyllaRow> for Peptide {
             taxonomy_ids,
             unique_taxonomy_ids,
             proteome_ids,
+            domains,
         ) = row
             .into_typed::<(
                 i64,
@@ -301,6 +311,7 @@ impl From<ScyllaRow> for Peptide {
                 Option<Vec<i64>>,
                 Option<Vec<i64>>,
                 Option<Vec<String>>,
+                Option<Vec<Domain>>,
             )>()
             .unwrap();
         Self {
@@ -315,6 +326,7 @@ impl From<ScyllaRow> for Peptide {
             taxonomy_ids: taxonomy_ids.unwrap_or(vec![]),
             unique_taxonomy_ids: unique_taxonomy_ids.unwrap_or(vec![]),
             proteome_ids: proteome_ids.unwrap_or(vec![]),
+            domains: domains.unwrap_or(vec![]),
         }
     }
 }
