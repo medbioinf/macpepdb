@@ -4,6 +4,8 @@ use std::time::Instant;
 // 3rd party imports
 use anyhow::Result;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
+use futures::{pin_mut, StreamExt};
+use tokio_postgres::types::ToSql;
 use tokio_postgres::NoTls;
 
 // internal imports
@@ -20,7 +22,7 @@ pub async fn query_performance(
     ptms: Vec<PTM>,
 ) -> Result<()> {
     //
-    let (client, connection) = tokio_postgres::connect(database_url, NoTls).await?;
+    let (mut client, connection) = tokio_postgres::connect(database_url, NoTls).await?;
     let mut mass_stats: Vec<(i64, usize, u64, u128)> = Vec::new();
     tokio::spawn(async move {
         if let Err(e) = connection.await {
@@ -42,16 +44,13 @@ pub async fn query_performance(
                 + (ptm_condition.get_mass() / 1000000 * upper_mass_tolerance);
             // Count matching peptides
             let mut matching_peptides_ctr: u64 = 0;
-            // Iterate peptides
-            for peptide in PeptideTable::select_multiple(
-                &client,
-                "WHERE mass BETWEEN $1 AND $2",
-                &[&lower_mass_limit, &upper_mass_limit],
-            )
-            .await?
-            .iter()
-            {
-                if ptm_condition.check_peptide(peptide) {
+            let params: Vec<&(dyn ToSql + Sync)> = vec![&lower_mass_limit, &upper_mass_limit];
+            let peptide_iter =
+                PeptideTable::stream(&mut client, "WHERE mass BETWEEN $1 AND $2", &params, 1000)
+                    .await?;
+            pin_mut!(peptide_iter);
+            while let Some(peptide) = peptide_iter.next().await {
+                if ptm_condition.check_peptide(&peptide?) {
                     matching_peptides_ctr += 1;
                 }
             }
