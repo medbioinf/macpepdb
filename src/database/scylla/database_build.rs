@@ -918,11 +918,22 @@ impl DatabaseBuild {
 
                 for chunk in proteins_chunks {
                     // ToDo query in parallel here
-                    associated_proteins.extend(
-                        ProteinTable::select_multiple(&client, "WHERE accession IN ?", &[&chunk])
-                            .await
-                            .unwrap(),
-                    );
+                    loop {
+                        let associated_proteins_res = ProteinTable::select_multiple(
+                            &client,
+                            "WHERE accession IN ?",
+                            &[&chunk],
+                        )
+                        .await;
+
+                        if associated_proteins_res.is_err() {
+                            sleep(Duration::from_millis(100));
+                            continue;
+                        }
+
+                        associated_proteins.extend(associated_proteins_res.unwrap());
+                        break;
+                    }
                 }
 
                 let (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids) =
