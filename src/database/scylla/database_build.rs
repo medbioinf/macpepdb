@@ -66,7 +66,7 @@ lazy_static! {
     static ref PROTEIN_QUEUE_READ_SLEEP_TIME: Duration = Duration::from_secs(2);
 }
 
-const MAX_INSERT_TRIES: u64 = 3;
+const MAX_INSERT_TRIES: u64 = 5;
 
 /// Struct which maintains the database content.
 /// * Inserts and updates proteins from given files
@@ -509,6 +509,7 @@ impl DatabaseBuild {
                     error_sender
                         .send(format!("{:?} Protein {}", db_err, &protein.get_accession()))
                         .await?;
+                    sleep(Duration::from_millis(100));
                 }
             }
         }
@@ -902,6 +903,10 @@ impl DatabaseBuild {
                 .unwrap();
 
             while let Some(row_opt) = rows_stream.next().await {
+                if row_opt.is_err() {
+                    sleep(Duration::from_millis(100));
+                    continue;
+                }
                 let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
