@@ -40,5 +40,6 @@ pub trait DatabaseBuild {
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
         is_test_run: bool,
+        only_metadata_update: bool,
     ) -> Result<()>;
 }

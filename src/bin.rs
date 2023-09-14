@@ -33,6 +33,8 @@ enum Commands {
         #[clap(long)]
         verbose: bool,
         log_folder: String,
+        #[clap(long)]
+        only_metadata: bool,
     },
 }
 
@@ -97,6 +99,7 @@ async fn main() {
             show_progress,
             verbose,
             log_folder,
+            only_metadata,
         } => {
             let protein_file_paths = protein_file_paths
                 .into_iter()
@@ -128,6 +131,7 @@ async fn main() {
                         )),
                         &log_folder,
                         false,
+                        only_metadata,
                     )
                     .await
                 {
@@ -154,6 +158,7 @@ async fn main() {
                         )),
                         &log_folder,
                         false,
+                        only_metadata,
                     )
                     .await
                 {

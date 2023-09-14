@@ -911,6 +911,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
         is_test_run: bool,
+        only_metadata_update: bool,
     ) -> Result<()> {
         let (mut client, connection) = tokio_postgres::connect(&self.database_url, NoTls).await?;
 
@@ -937,40 +938,41 @@ impl DatabaseBuildTrait for DatabaseBuild {
             initial_configuration_opt,
         )
         .await?;
-
         connection_handle.abort();
         let _ = connection_handle.await;
 
-        let digestion_enzyme = get_enzyme_by_name(
-            configuration.get_enzyme_name(),
-            configuration.get_max_number_of_missed_cleavages(),
-            configuration.get_min_peptide_length(),
-            configuration.get_max_peptide_length(),
-        )?;
+        if !only_metadata_update {
+            let digestion_enzyme = get_enzyme_by_name(
+                configuration.get_enzyme_name(),
+                configuration.get_max_number_of_missed_cleavages(),
+                configuration.get_min_peptide_length(),
+                configuration.get_max_peptide_length(),
+            )?;
 
-        // read, digest and insert proteins and peptides
+            // read, digest and insert proteins and peptides
 
-        let mut protein_ctr: usize = 0;
+            let mut protein_ctr: usize = 0;
 
-        debug!("Counting proteins");
+            debug!("Counting proteins");
 
-        for path in protein_file_paths.iter() {
-            debug!("... {}", path.display());
-            protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
+            for path in protein_file_paths.iter() {
+                debug!("... {}", path.display());
+                protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
+            }
+
+            Self::protein_digestion(
+                &self.database_url,
+                num_threads,
+                protein_file_paths,
+                digestion_enzyme.as_ref(),
+                configuration.get_remove_peptides_containing_unknown(),
+                configuration.get_partition_limits().to_vec(),
+                protein_ctr.clone(),
+                log_folder,
+                is_test_run,
+            )
+            .await?;
         }
-
-        Self::protein_digestion(
-            &self.database_url,
-            num_threads,
-            protein_file_paths,
-            digestion_enzyme.as_ref(),
-            configuration.get_remove_peptides_containing_unknown(),
-            configuration.get_partition_limits().to_vec(),
-            protein_ctr.clone(),
-            log_folder,
-            is_test_run,
-        )
-        .await?;
         // collect metadata
         Self::collect_peptide_metadata(
             num_threads,
@@ -1053,6 +1055,7 @@ mod test {
                 None,
                 &log_folder,
                 true,
+                false,
             )
             .await;
         assert!(build_res.is_err());
@@ -1099,6 +1102,7 @@ mod test {
                 Some(CONFIGURATION.clone()),
                 &log_folder,
                 true,
+                false,
             )
             .await
             .unwrap();
