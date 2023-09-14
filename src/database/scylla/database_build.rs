@@ -880,7 +880,6 @@ impl DatabaseBuild {
         partitions: Vec<i64>,
         peptide_sender: Sender<u64>,
     ) -> Result<()> {
-        debug!("In thread");
         let client = get_client(Some(&database_urls)).await?;
         let session = client.get_session();
         let update_query = format!(
@@ -889,7 +888,6 @@ impl DatabaseBuild {
                         PeptideTable::table_name()
                     );
         let update_query_prepared_statement = session.prepare(update_query).await?;
-        debug!("Prepared query");
 
         for partition in partitions.iter() {
             let query_statement = format!(
@@ -899,15 +897,14 @@ impl DatabaseBuild {
                 PeptideTable::table_name()
             );
 
-            debug!("Querying {}", query_statement);
+            debug!("Streaming rows of partition {}", partition);
+
             let mut rows_stream = session
                 .query_iter(query_statement, (partition,))
                 .await
                 .unwrap();
-            debug!("Before while");
 
             while let Some(row_opt) = rows_stream.next().await {
-                debug!("In while");
                 if row_opt.is_err() {
                     debug!("Row opt err");
                     sleep(Duration::from_millis(100));
@@ -917,7 +914,6 @@ impl DatabaseBuild {
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
 
-                debug!("Getting proteins");
                 let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
                     CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
                 });
