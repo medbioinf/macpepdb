@@ -43,7 +43,7 @@ pub async fn query_performance(
             let mut matching_peptides_ctr: u64 = 0;
             let params: Vec<&CqlValue> = vec![&lower_mass_limit, &upper_mass_limit];
             let peptide_iter =
-                PeptideTable::stream(&mut client, "WHERE mass BETWEEN $1 AND $2", &params, 1000)
+                PeptideTable::stream(&mut client, "WHERE mass >= ? AND mass <= ?", &params, 1000)
                     .await?;
             pin_mut!(peptide_iter);
             while let Some(peptide) = peptide_iter.next().await {

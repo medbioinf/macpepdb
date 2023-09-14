@@ -207,7 +207,7 @@ async fn main() -> Result<()> {
             if database_url.starts_with("scylla://") {
                 // remove protocol
                 let plain_database_url = database_url[9..].to_string();
-                let database_hosts = (&plain_database_url[9..]).split(",").map(|x| x).collect();
+                let database_hosts = &plain_database_url.split(",").map(|x| x).collect();
 
                 scylla_performance::query_performance(
                     &database_hosts,
