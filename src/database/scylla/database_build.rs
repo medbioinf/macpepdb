@@ -90,7 +90,7 @@ impl DatabaseBuild {
     /// * `partitioner_false_positive_probability` - The false positive probability of the partitioner
     /// * `initial_configuration_opt` - The initial configuration
     ///
-    async fn get_or_set_configuration(
+    pub async fn get_or_set_configuration(
         client: &mut Client,
         protein_file_paths: &Vec<PathBuf>,
         num_partitions: u64,

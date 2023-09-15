@@ -1,3 +1,4 @@
+pub mod mass_to_partition;
 // Functions for formatting outputs
 pub mod display;
 /// Logger for error messages
