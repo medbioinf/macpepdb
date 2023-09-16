@@ -51,6 +51,15 @@ pub async fn query_performance(
     header_span.pb_set_length(masses.len() as u64);
     let header_span_enter = header_span.enter();
 
+    let query_statement_str = format!(
+        "SELECT {} FROM {}.{} WHERE partition = ? AND mass >= ? AND mass <= ?",
+        SELECT_COLS,
+        SCYLLA_KEYSPACE_NAME,
+        PeptideTable::table_name()
+    );
+
+    let query_statement = session.prepare(query_statement_str).await?;
+
     // Iterate masses
     for mass in masses.iter() {
         // Create PTM conditions
@@ -82,17 +91,10 @@ pub async fn query_performance(
                 // let params: Vec<&CqlValue> =
                 //     vec![&partition_cql_value, &lower_mass_limit, &upper_mass_limit];
 
-                let query_statement = format!(
-                    "SELECT {} FROM {}.{} WHERE partition = ? AND mass >= ? AND mass <= ?",
-                    SELECT_COLS,
-                    SCYLLA_KEYSPACE_NAME,
-                    PeptideTable::table_name()
-                );
-
                 let mut rows_stream = session
-                    .query_iter(
-                        query_statement,
-                        (partition_cql_value, &lower_mass_limit, &upper_mass_limit),
+                    .execute_iter(
+                        query_statement.to_owned(),
+                        (&partition_cql_value, &lower_mass_limit, &upper_mass_limit),
                     )
                     .await
                     .unwrap();
