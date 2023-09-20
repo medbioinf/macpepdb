@@ -106,13 +106,13 @@ pub async fn query_performance(
         .map(|(_, _, millis)| *millis as usize)
         .sum::<usize>();
     // calculate averages
-    let average_queries = mass_stats.len() / masses.len();
-    let average_matching_peptides = num_matching_peptides / mass_stats.len();
-    let average_millis = num_millis / mass_stats.len();
+    let average_queries = mass_stats.len() as f64 / masses.len() as f64;
+    let average_matching_peptides = num_matching_peptides as f64 / mass_stats.len() as f64;
+    let average_millis = num_millis as f64 / mass_stats.len() as f64;
     println!("Querying took {} ms", num_millis);
     println!("Queries\tMatching peptides\tTime");
     println!(
-        "{}/{}\t{}/{}\t{}/{}",
+        "{}/{:.1}\t{}/{:.1}\t{}/{:.1}",
         mass_stats.len(),
         average_queries,
         num_matching_peptides,
