@@ -16,8 +16,8 @@ pub fn convert_placeholders(query: &str) -> Result<String> {
     let b_query = query.as_bytes();
 
     let mut i: usize = 0;
-    while i < query.len() - 1 {
-        if b_query[i] != b'{' && b_query[i + 1] != b'}' {
+    while i < query.len() {
+        if i == query.len() - 1 || b_query[i] != b'{' && b_query[i + 1] != b'}' {
             finished_query.push(b_query[i]);
             i += 1;
         } else {
