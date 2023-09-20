@@ -10,16 +10,18 @@ use scylla::frame::response::result::CqlValue;
 use tracing::{debug, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
+use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
+use crate::database::scylla::configuration_table::ConfigurationTable;
 use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 // internal imports
 use crate::database::scylla::client::{Client, GenericClient};
-use crate::database::scylla::database_build::DatabaseBuild;
 use crate::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
 use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::mass_to_partition::mass_to_partition_index;
+use crate::tools::peptide_partitioner::get_mass_partition;
 
 pub async fn query_performance(
     hostnames: &Vec<&str>,
@@ -31,18 +33,9 @@ pub async fn query_performance(
 ) -> Result<()> {
     let client = Client::new(hostnames).await?;
     let session = (&client).get_session();
-    let mut mass_stats: Vec<(i64, usize, u64, u128)> = Vec::new();
+    let mut mass_stats: Vec<(i64, u64, u128)> = Vec::new();
 
-    let config = DatabaseBuild::get_or_set_configuration(
-        &mut Client::new(hostnames).await?,
-        &vec![],
-        0,
-        0.0,
-        0.0,
-        None,
-    )
-    .await
-    .unwrap();
+    let config = ConfigurationTable::select(&client).await?;
 
     let partition_limits = config.get_partition_limits();
 
@@ -64,11 +57,10 @@ pub async fn query_performance(
     for mass in masses.iter() {
         // Create PTM conditions
         let ptm_conditions = get_ptm_conditions(*mass, max_variable_modifications, &ptms)?;
-        let query_start = Instant::now();
-        let mut matching_peptides_ctr: u64 = 0;
 
         // Iterate PTM conditions
         for ptm_condition in ptm_conditions.iter() {
+            let query_start = Instant::now();
             // Calculate mass range
             let lower_mass_limit = CqlValue::BigInt(
                 ptm_condition.get_mass()
@@ -80,14 +72,16 @@ pub async fn query_performance(
             );
 
             let lower_partition_index =
-                mass_to_partition_index(&partition_limits, lower_mass_limit.as_bigint().unwrap())
+                get_mass_partition(&partition_limits, lower_mass_limit.as_bigint().unwrap())
                     .unwrap();
             let upper_partition_index =
-                mass_to_partition_index(&partition_limits, upper_mass_limit.as_bigint().unwrap())
+                get_mass_partition(&partition_limits, upper_mass_limit.as_bigint().unwrap())
                     .unwrap();
 
+            let mut matching_peptides_ctr: u64 = 0;
+
             for partition in lower_partition_index..upper_partition_index + 1 {
-                let partition_cql_value = CqlValue::BigInt(partition);
+                let partition_cql_value = CqlValue::BigInt(partition as i64);
                 // let params: Vec<&CqlValue> =
                 //     vec![&partition_cql_value, &lower_mass_limit, &upper_mass_limit];
 
@@ -108,39 +102,34 @@ pub async fn query_performance(
                     }
                 }
             }
+            mass_stats.push((
+                *mass,
+                matching_peptides_ctr,
+                query_start.elapsed().as_millis(),
+            ));
         }
-        mass_stats.push((
-            *mass,
-            ptm_conditions.len(),
-            matching_peptides_ctr,
-            query_start.elapsed().as_millis(),
-        ));
         Span::current().pb_inc(1);
     }
     std::mem::drop(header_span_enter);
     std::mem::drop(header_span);
     // Sum up queries, matching peptides and time
-    let num_queries = mass_stats
-        .iter()
-        .map(|(_, queries, _, _)| *queries as usize)
-        .sum::<usize>();
     let num_matching_peptides = mass_stats
         .iter()
-        .map(|(_, _, peps, _)| *peps as usize)
+        .map(|(_, peps, _)| *peps as usize)
         .sum::<usize>();
     let num_millis = mass_stats
         .iter()
-        .map(|(_, _, millis, _)| *millis as usize)
+        .map(|(_, _, millis)| *millis as usize)
         .sum::<usize>();
     // calculate averages
-    let average_queries = num_queries / mass_stats.len();
+    let average_queries = mass_stats.len() / masses.len();
     let average_matching_peptides = num_matching_peptides / mass_stats.len();
     let average_millis = num_millis / mass_stats.len();
     println!("Querying took {} ms", num_millis);
     println!("Queries\tMatching peptides\tTime");
     println!(
         "{}/{}\t{}/{}\t{}/{}",
-        num_queries,
+        mass_stats.len(),
         average_queries,
         num_matching_peptides,
         average_matching_peptides,
