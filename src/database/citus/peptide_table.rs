@@ -1,14 +1,14 @@
 // 3rd party imports
 use anyhow::Result;
-use tokio_postgres::{
-    types::{BorrowToSql, ToSql},
-    GenericClient, Row, RowStream,
-};
+use async_stream::try_stream;
+use futures::Stream;
+use tokio_postgres::{types::ToSql, GenericClient, Row, RowStream};
 
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
+use crate::tools::psql::convert_placeholders;
 
 const TABLE_NAME: &'static str = "peptides";
 
@@ -213,7 +213,7 @@ impl Table for PeptideTable {
 
 impl<'a, C> SelectableTableTrait<'a, C> for PeptideTable
 where
-    C: GenericClient + Send + Sync,
+    C: GenericClient + Send + Sync + Unpin + 'a,
 {
     type Parameter = (dyn ToSql + Sync);
     type Record = Row;
@@ -234,7 +234,7 @@ where
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
-            statement += additional;
+            statement += convert_placeholders(additional)?.as_str();
         }
         return Ok(client.query(&statement, params).await?);
     }
@@ -248,7 +248,7 @@ where
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
-            statement += additional;
+            statement += convert_placeholders(additional)?.as_str();
         }
         return Ok(client.query_opt(&statement, params).await?);
     }
@@ -290,20 +290,61 @@ where
         return Ok(Some(Self::Entity::from(row.unwrap())));
     }
 
-    async fn raw_stream<'b>(
-        client: &'a C,
+    async fn raw_stream(
+        client: &'a mut C,
         cols: &str,
         additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Self::RecordIter> {
+        params: &'a [&'a Self::Parameter],
+        num_rows: i32,
+    ) -> Result<impl Stream<Item = Result<Self::Record>>> {
         let mut statement = format!("SELECT {} FROM {}", cols, Self::table_name());
         if additional.len() > 0 {
             statement += " ";
-            statement += additional;
+            statement += convert_placeholders(additional)?.as_str();
         }
-        return Ok(client
-            .query_raw(&statement, params.iter().map(|param| param.borrow_to_sql()))
-            .await?);
+        Ok(try_stream! {
+            let transaction = client.transaction().await?;
+            let portal = transaction.bind(&statement, params).await?;
+            loop {
+                let rows = transaction.query_portal(&portal, num_rows).await?;
+                if rows.is_empty() {
+                    break;
+                }
+                for row in rows {
+                    yield row;
+                }
+            }
+        })
+    }
+
+    async fn stream(
+        client: &'a mut C,
+        additional: &str,
+        params: &'a [&'a Self::Parameter],
+        num_rows: i32,
+    ) -> Result<impl Stream<Item = Result<Self::Entity>>> {
+        let mut statement = format!(
+            "SELECT {} FROM {}",
+            <Self as SelectableTableTrait<C>>::select_cols(),
+            Self::table_name()
+        );
+        if additional.len() > 0 {
+            statement += " ";
+            statement += convert_placeholders(additional)?.as_str();
+        }
+        Ok(try_stream! {
+            let transaction = client.transaction().await?;
+            let portal = transaction.bind(&statement, params).await?;
+            loop {
+                let rows = transaction.query_portal(&portal, num_rows).await?;
+                if rows.is_empty() {
+                    break;
+                }
+                for row in rows {
+                    yield Self::Entity::from(row);
+                }
+            }
+        })
     }
 }
 

@@ -9,6 +9,7 @@ use dihardts_omicstools::proteomics::post_translational_modifications::PostTrans
 
 // internal imports
 use crate::chemistry::amino_acid::AminoAcid as InternalAminoAcid;
+use crate::entities::peptide::Peptide;
 use crate::mass::convert::{to_float as mass_to_float, to_int as mass_to_int};
 
 /// Validates a list of PTMs:
@@ -78,7 +79,8 @@ impl Display for AminoAcidOccurrence {
     }
 }
 
-/// PTMCondition to check peptides against
+/// PTMCondition to check peptides against a given mass and PTMs.
+/// Each PTM condition can be used to query a range of peptides.
 ///
 pub struct PTMCondition {
     mass: i64,
@@ -148,6 +150,29 @@ impl PTMCondition {
 
     pub fn get_c_terminus_amino_acid(&self) -> &Option<&'static InternalAminoAcid> {
         return &self.c_terminus_amino_acid;
+    }
+
+    pub fn check_peptide(&self, peptide: &Peptide) -> bool {
+        return self
+            .amino_acid_occurrences
+            .iter()
+            .all(|(amino_acid_idx, amino_acid_occurence)| {
+                amino_acid_occurence.check(&peptide.get_aa_counts()[*amino_acid_idx])
+            })
+            && match &self.n_terminus_amino_acid {
+                Some(amino_acid) => {
+                    peptide.get_sequence().chars().next().unwrap()
+                        == *amino_acid.get_one_letter_code()
+                }
+                None => true,
+            }
+            && match &self.c_terminus_amino_acid {
+                Some(amino_acid) => {
+                    peptide.get_sequence().chars().last().unwrap()
+                        == *amino_acid.get_one_letter_code()
+                }
+                None => true,
+            };
     }
 }
 

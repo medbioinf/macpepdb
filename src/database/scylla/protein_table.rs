@@ -1,6 +1,10 @@
+// 3rd party imports
 use anyhow::Result;
-use scylla::batch::Batch;
+use async_stream::try_stream;
+use futures::Stream;
+use scylla::batch::{Batch, BatchStatement};
 use scylla::frame::response::result::{CqlValue, Row};
+use scylla::statement::query::Query;
 use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 use scylla::transport::query_result::FirstRowError;
@@ -9,6 +13,7 @@ use scylla::transport::query_result::FirstRowError;
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::protein::Protein;
+use crate::tools::cql::get_cql_value;
 
 use super::client::GenericClient;
 use super::SCYLLA_KEYSPACE_NAME;
@@ -140,7 +145,7 @@ impl Table for ProteinTable {
 
 impl<'a, C> SelectableTableTrait<'a, C> for ProteinTable
 where
-    C: GenericClient + Send + Sync,
+    C: GenericClient + Send + Sync + Unpin + 'a,
 {
     type Parameter = CqlValue;
     type Record = Row;
@@ -237,14 +242,13 @@ where
         }
         return Ok(Some(Self::Entity::from(row.unwrap())));
     }
-
-    async fn raw_stream<'b>(
-        client: &'a C,
+    async fn raw_stream(
+        client: &'a mut C,
         cols: &str,
         additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Self::RecordIter> {
-        let session = client.get_session();
+        params: &'a [&'a Self::Parameter],
+        num_rows: i32,
+    ) -> Result<impl Stream<Item = Result<Self::Record>>> {
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
@@ -255,8 +259,64 @@ where
             statement += " ";
             statement += additional;
         }
+        Ok(try_stream! {
+            let query = Query::new(statement).with_page_size(num_rows);
+            let prepared_statement = client.get_session().prepare(query).await?;
+            let mut query_res = client.get_session().execute(&prepared_statement, params).await?;
+            loop {
+                let paging_state = query_res.paging_state.clone();
+                let rows = query_res.rows_or_empty();
+                if rows.is_empty() {
+                    break;
+                }
+                for row in rows {
+                    yield row;
+                }
+                query_res = client.get_session().execute_paged(
+                    &prepared_statement,
+                    params,
+                    paging_state,
+                ).await?;
+            }
+        })
+    }
 
-        return Ok(session.query_iter(statement, params).await?);
+    async fn stream(
+        client: &'a mut C,
+        additional: &str,
+        params: &'a [&'a Self::Parameter],
+        num_rows: i32,
+    ) -> Result<impl Stream<Item = Result<Self::Entity>>> {
+        let mut statement = format!(
+            "SELECT {} FROM {}.{}",
+            <Self as SelectableTableTrait<C>>::select_cols(),
+            SCYLLA_KEYSPACE_NAME,
+            Self::table_name()
+        );
+        if additional.len() > 0 {
+            statement += " ";
+            statement += additional;
+        }
+        Ok(try_stream! {
+            let query = Query::new(statement).with_page_size(num_rows);
+            let prepared_statement = client.get_session().prepare(query).await?;
+            let mut query_res = client.get_session().execute(&prepared_statement, params).await?;
+            loop {
+                let paging_state = query_res.paging_state.clone();
+                let rows = query_res.rows_or_empty();
+                if rows.is_empty() {
+                    break;
+                }
+                for row in rows {
+                    yield Self::Entity::from(row);
+                }
+                query_res = client.get_session().execute_paged(
+                    &prepared_statement,
+                    params,
+                    paging_state,
+                ).await?;
+            }
+        })
     }
 }
 

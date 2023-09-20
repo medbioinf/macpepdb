@@ -40,7 +40,9 @@ tracing-test = "0.2.4"
 dihardts_cstools = "~1.0.0"
 tracing-indicatif = "0.3.4"
 indicatif = "0.17.6"
-dihardts_omicstools = "1.1.0"
+dihardts_omicstools = "~1.2.0"
+csv = "1.2.2"
+async-stream = "0.3.5"
 
 [dev-dependencies]
 serial_test = "*"

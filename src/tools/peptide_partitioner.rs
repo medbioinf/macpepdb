@@ -327,4 +327,19 @@ mod test {
         assert_eq!(partition_limits.len(), NUM_PARTITIONS as usize);
         assert_eq!(partition_limits[partition_limits.len() - 1], *MAX_MASS);
     }
+
+    #[test]
+    fn test_get_partition() {
+        let partition_limits: Vec<i64> = (1..=100_i64)
+            .collect::<Vec<i64>>()
+            .iter()
+            .map(|i| i * 100)
+            .collect();
+        for i in 1..=99 {
+            assert_eq!(
+                get_mass_partition(&partition_limits, i * 100 + 10).unwrap(), // search 10, 110, 210, ...
+                i as usize
+            );
+        }
+    }
 }

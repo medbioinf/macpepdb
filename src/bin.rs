@@ -1,8 +1,22 @@
+// std imports
+use std::fs::read_to_string;
 use std::{path::Path, thread::sleep, time::Duration};
 
 // 3rd party imports
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use indicatif::ProgressStyle;
+use tracing::{error, info, info_span, Level};
+use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+
+// internal imports
+use macpepdb::functions::performance_measurement::{
+    citus as citus_performance, scylla as scylla_performance,
+};
+use macpepdb::io::post_translational_modification_csv::reader::Reader as PtmReader;
+use macpepdb::mass::convert::to_int as mass_to_int;
 use macpepdb::{
     database::{
         citus::database_build::DatabaseBuild as CitusBuild, database_build::DatabaseBuild,
@@ -10,10 +24,6 @@ use macpepdb::{
     },
     entities::configuration::Configuration,
 };
-use tracing::{error, info, info_span, Level};
-use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
-use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
 #[derive(Debug, Subcommand)]
 enum Commands {
@@ -36,6 +46,14 @@ enum Commands {
         #[clap(long)]
         only_metadata: bool,
     },
+    QueryPerformance {
+        database_url: String,
+        masses_file: String,
+        ptm_file: String,
+        lower_mass_tolerance: i64,
+        upper_mass_tolerance: i64,
+        max_variable_modifications: i16,
+    },
 }
 
 #[derive(Debug, Parser)]
@@ -46,7 +64,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let filter = EnvFilter::from_default_env()
         .add_directive(Level::DEBUG.into())
         .add_directive("scylla=info".parse().unwrap())
@@ -169,5 +187,57 @@ async fn main() {
                 error!("Unsupported database protocol: {}", database_url);
             }
         }
-    }
+        Commands::QueryPerformance {
+            database_url,
+            masses_file,
+            ptm_file,
+            lower_mass_tolerance,
+            upper_mass_tolerance,
+            max_variable_modifications,
+        } => {
+            let masses: Vec<i64> = read_to_string(Path::new(&masses_file))?
+                .split("\n")
+                .filter_map(|line| {
+                    if !line.is_empty() {
+                        let mass = mass_to_int(line.parse::<f64>().unwrap());
+                        Some(mass)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let ptms = PtmReader::read(Path::new(&ptm_file))?;
+
+            if database_url.starts_with("scylla://") {
+                // remove protocol
+                let plain_database_url = database_url[9..].to_string();
+                let database_hosts = &plain_database_url.split(",").map(|x| x).collect();
+
+                scylla_performance::query_performance(
+                    &database_hosts,
+                    masses,
+                    lower_mass_tolerance,
+                    upper_mass_tolerance,
+                    max_variable_modifications,
+                    ptms,
+                )
+                .await?;
+            } else if database_url.starts_with("postgresql://") {
+                citus_performance::query_performance(
+                    &database_url,
+                    masses,
+                    lower_mass_tolerance,
+                    upper_mass_tolerance,
+                    max_variable_modifications,
+                    ptms,
+                )
+                .await?;
+            } else {
+                error!("Unsupported database protocol: {}", database_url);
+            }
+        }
+    };
+
+    Ok(())
 }
