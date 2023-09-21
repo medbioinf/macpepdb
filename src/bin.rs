@@ -6,10 +6,15 @@ use std::{path::Path, thread::sleep, time::Duration};
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use indicatif::ProgressStyle;
+use macpepdb::api::peptides::routes::peptide_routes;
+use macpepdb::database::scylla::get_client;
+use macpepdb::database::scylla::peptide_table::PeptideTable;
+use macpepdb::database::selectable_table::SelectableTable;
 use tracing::{error, info, info_span, Level};
 use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
+use warp::Filter;
 
 // internal imports
 use macpepdb::functions::performance_measurement::scylla as scylla_performance;
@@ -50,6 +55,9 @@ enum Commands {
         lower_mass_tolerance: i64,
         upper_mass_tolerance: i64,
         max_variable_modifications: i16,
+    },
+    API {
+        database_url: String,
     },
 }
 
@@ -193,6 +201,21 @@ async fn main() -> Result<()> {
                     ptms,
                 )
                 .await?;
+            } else {
+                error!("Unsupported database protocol: {}", database_url);
+            }
+        }
+        Commands::API { database_url } => {
+            if database_url.starts_with("scylla://") {
+                let plain_database_url = database_url[9..].to_string();
+                let database_hosts = plain_database_url
+                    .split(",")
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>();
+
+                warp::serve(peptide_routes(database_hosts))
+                    .run(([127, 0, 0, 1], 3000))
+                    .await;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }

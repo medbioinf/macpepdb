@@ -20,7 +20,7 @@ use crate::{
 
 use super::domain::Domain;
 
-#[derive(Clone)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Peptide {
     partition: i64,
     mass: i64,

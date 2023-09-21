@@ -10,7 +10,9 @@ use scylla::IntoUserType;
 
 use crate::tools::cql::get_cql_value;
 
-#[derive(Clone, PartialEq, Debug, IntoUserType, FromUserType)]
+#[derive(
+    Clone, PartialEq, Debug, IntoUserType, FromUserType, serde::Deserialize, serde::Serialize,
+)]
 pub struct Domain {
     name: String,
     evidence: String,

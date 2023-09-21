@@ -42,6 +42,7 @@ indicatif = "0.17.6"
 dihardts_omicstools = "~1.2.0"
 csv = "1.2.2"
 async-stream = "0.3.5"
+warp = "0.3.5"
 
 [dev-dependencies]
 serial_test = "*"
