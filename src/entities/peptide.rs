@@ -237,8 +237,7 @@ impl Peptide {
 
                         let is_valid_end = x.1 as usize == p.get_sequence().len() - 1
                             || (!enzyme.get_cleavage_blocker_chars().contains(
-                                &self
-                                    .get_sequence()
+                                &p.get_sequence()
                                     .chars()
                                     .nth(x.1 as usize + 1)
                                     .unwrap_or(' '),
@@ -277,6 +276,7 @@ impl Peptide {
                                 Some(p.get_accession().to_string()),
                                 Some(d.get_start_index().clone()),
                                 Some(d.get_end_index().clone()),
+                                Some(start_idx),
                             ));
                         }
                     }

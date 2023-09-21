@@ -276,6 +276,7 @@ impl FallibleIterator for Reader {
                                     None,
                                     None,
                                     None,
+                                    None,
                                 ));
                                 is_building_domain = false;
                             }
@@ -375,6 +376,7 @@ mod tests {
             243,
             "Peptidase S1".to_string(),
             "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
+            None,
             None,
             None,
             None,

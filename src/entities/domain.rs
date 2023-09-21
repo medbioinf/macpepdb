@@ -19,6 +19,7 @@ pub struct Domain {
     protein: Option<String>,
     start_index_protein: Option<i64>,
     end_index_protein: Option<i64>,
+    peptide_offset: Option<i64>,
 }
 
 impl Domain {
@@ -30,6 +31,7 @@ impl Domain {
         protein: Option<String>,
         start_index_protein: Option<i64>,
         end_index_protein: Option<i64>,
+        peptide_offset: Option<i64>,
     ) -> Self {
         Self {
             start_index,
@@ -39,6 +41,7 @@ impl Domain {
             protein,
             start_index_protein,
             end_index_protein,
+            peptide_offset,
         }
     }
 
@@ -68,5 +71,9 @@ impl Domain {
 
     pub fn get_protein_end_index_opt(self) -> Option<i64> {
         self.end_index_protein
+    }
+
+    pub fn get_peptide_offset(self) -> Option<i64> {
+        self.peptide_offset
     }
 }
