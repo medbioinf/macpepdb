@@ -1024,15 +1024,14 @@ impl DatabaseBuildTrait for DatabaseBuild {
             initial_configuration_opt,
         )
         .await?;
+        let digestion_enzyme = get_enzyme_by_name(
+            configuration.get_enzyme_name(),
+            configuration.get_max_number_of_missed_cleavages(),
+            configuration.get_min_peptide_length(),
+            configuration.get_max_peptide_length(),
+        )?;
 
         if !only_metadata_update {
-            let digestion_enzyme = get_enzyme_by_name(
-                configuration.get_enzyme_name(),
-                configuration.get_max_number_of_missed_cleavages(),
-                configuration.get_min_peptide_length(),
-                configuration.get_max_peptide_length(),
-            )?;
-
             // read, digest and insert proteins and peptides
             info!("Starting digest and insert");
 
