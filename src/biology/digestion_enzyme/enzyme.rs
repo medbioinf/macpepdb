@@ -36,6 +36,9 @@ pub trait Enzyme: Send + Sync {
     /// Returns the name of the enzyme
     fn get_name(&self) -> &str;
 
+    fn get_cleavage_chars(&self) -> Vec<char>;
+    fn get_cleavage_blocker_chars(&self) -> Vec<char>;
+
     /// Digests a protein into peptides
     fn digest(&self, amino_acid_sequence: &str) -> HashMap<String, i16> {
         let cleavages_site_regex: &Regex = self.get_cleavages_site_regex();

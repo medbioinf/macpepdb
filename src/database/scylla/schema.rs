@@ -1,6 +1,7 @@
-pub const UP: [&str; 4] = [
+pub const UP: [&str; 5] = [
     CREATE_MIGRATIONS_TABLE,
     CREATE_CONFIG_TABLE,
+    CREATE_DOMAINS_TYPE,
     CREATE_PROTEINS_TABLE,
     CREATE_PEPTIDES_TABLE,
 ];
@@ -18,6 +19,9 @@ const CREATE_CONFIG_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.config (
         value text
     );";
 
+const CREATE_DOMAINS_TYPE: &str =
+    "CREATE TYPE IF NOT EXISTS macpep.Domain (name text, evidence text, start_index bigint, end_index bigint, protein text, start_index_protein bigint, end_index_protein bigint);";
+
 const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.proteins (
         accession text PRIMARY KEY,
         secondary_accessions list<text>,
@@ -28,7 +32,8 @@ const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.proteins 
         proteome_id text,
         is_reviewed boolean,
         sequence text,
-        updated_at bigint
+        updated_at bigint,
+        domains frozen<set<Domain>>
     );";
 
 const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides (
@@ -43,6 +48,7 @@ const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides 
         taxonomy_ids set<bigint>,
         unique_taxonomy_ids set<bigint>,
         proteome_ids set<text>,
+        domains frozen<set<Domain>>,
         is_metadata_updated boolean,
         PRIMARY KEY (partition, mass, sequence)
     );";

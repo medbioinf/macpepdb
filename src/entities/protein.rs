@@ -6,9 +6,10 @@ use anyhow::{anyhow, Result};
 use chrono::NaiveDateTime;
 use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
-use tokio_postgres::Row;
 
 use crate::tools::cql::get_cql_value;
+
+use super::domain::Domain;
 
 #[derive(Clone, Debug, PartialEq)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
@@ -24,6 +25,7 @@ pub struct Protein {
     is_reviewed: bool,
     sequence: String,
     updated_at: i64,
+    domains: Vec<Domain>,
 }
 
 impl Protein {
@@ -52,6 +54,7 @@ impl Protein {
         is_reviewed: bool,
         sequence: String,
         updated_at: i64,
+        domains: Vec<Domain>,
     ) -> Self {
         Self {
             accession,
@@ -64,6 +67,7 @@ impl Protein {
             is_reviewed,
             sequence,
             updated_at,
+            domains,
         }
     }
 
@@ -125,6 +129,10 @@ impl Protein {
     ///
     pub fn get_updated_at(&self) -> i64 {
         self.updated_at
+    }
+
+    pub fn get_domains(&self) -> &Vec<Domain> {
+        &self.domains
     }
 
     pub fn get_all_accessions(&self) -> Vec<&String> {
@@ -232,66 +240,47 @@ impl Protein {
     }
 }
 
-impl From<Row> for Protein {
-    fn from(row: Row) -> Self {
-        Protein {
-            accession: row.get("accession"),
-            secondary_accessions: row.get("secondary_accessions"),
-            entry_name: row.get("entry_name"),
-            name: row.get("name"),
-            genes: row.get("genes"),
-            taxonomy_id: row.get("taxonomy_id"),
-            proteome_id: row.get("proteome_id"),
-            is_reviewed: row.get("is_reviewed"),
-            sequence: row.get("sequence"),
-            updated_at: row.get("updated_at"),
-        }
-    }
-}
-
 impl From<ScyllaRow> for Protein {
     fn from(row: ScyllaRow) -> Self {
+        let (
+            accession,
+            secondary_accessions,
+            entry_name,
+            name,
+            genes,
+            taxonomy_id,
+            proteome_id,
+            is_reviewed,
+            sequence,
+            updated_at,
+            domains,
+        ) = row
+            .into_typed::<(
+                String,
+                Option<Vec<String>>,
+                String,
+                String,
+                Option<Vec<String>>,
+                i64,
+                String,
+                bool,
+                String,
+                i64,
+                Vec<Domain>,
+            )>()
+            .unwrap();
         Protein {
-            accession: get_cql_value(&row.columns, 0)
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            secondary_accessions: get_cql_value(&row.columns, 1)
-                .unwrap_or(CqlValue::List(vec![]))
-                .as_list()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-                .collect(),
-            entry_name: get_cql_value(&row.columns, 2)
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            name: get_cql_value(&row.columns, 3)
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            genes: get_cql_value(&row.columns, 4)
-                .unwrap_or(CqlValue::List(vec![]))
-                .as_list()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-                .collect(),
-            taxonomy_id: get_cql_value(&row.columns, 5).unwrap().as_bigint().unwrap(),
-            proteome_id: get_cql_value(&row.columns, 6)
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            is_reviewed: get_cql_value(&row.columns, 7)
-                .unwrap()
-                .as_boolean()
-                .unwrap(),
-            sequence: get_cql_value(&row.columns, 8)
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            updated_at: get_cql_value(&row.columns, 9).unwrap().as_bigint().unwrap(),
+            accession,
+            secondary_accessions: secondary_accessions.unwrap_or(vec![]),
+            entry_name,
+            name,
+            genes: genes.unwrap_or(vec![]),
+            taxonomy_id,
+            proteome_id,
+            is_reviewed,
+            sequence,
+            updated_at,
+            domains,
         }
     }
 }

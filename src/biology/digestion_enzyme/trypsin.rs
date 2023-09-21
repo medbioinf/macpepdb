@@ -51,6 +51,14 @@ impl Enzyme for Trypsin {
     fn get_name(&self) -> &str {
         return NAME;
     }
+
+    fn get_cleavage_chars(&self) -> Vec<char> {
+        vec!['K', 'R']
+    }
+
+    fn get_cleavage_blocker_chars(&self) -> Vec<char> {
+        vec!['P']
+    }
 }
 
 #[cfg(test)]

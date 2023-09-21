@@ -1,17 +1,24 @@
 // std imports
 use std::{
+    cmp,
     collections::HashMap,
     hash::{Hash, Hasher},
+    ops::Index,
 };
 
 // 3rd party imports
 use anyhow::Result;
 use scylla::frame::response::result::Row as ScyllaRow;
 use scylla::{_macro_internal::ValueList, frame::response::result::CqlValue};
-use tokio_postgres::Row;
+use tracing::error;
 
 // internal imports
-use crate::{entities::protein::Protein, tools::cql::get_cql_value};
+use crate::{
+    biology::digestion_enzyme::enzyme::Enzyme, entities::protein::Protein,
+    tools::cql::get_cql_value,
+};
+
+use super::domain::Domain;
 
 #[derive(Clone)]
 pub struct Peptide {
@@ -26,6 +33,7 @@ pub struct Peptide {
     taxonomy_ids: Vec<i64>,
     unique_taxonomy_ids: Vec<i64>,
     proteome_ids: Vec<String>,
+    domains: Vec<Domain>,
 }
 
 impl Peptide {
@@ -54,6 +62,7 @@ impl Peptide {
         taxonomy_ids: Vec<i64>,
         unique_taxonomy_ids: Vec<i64>,
         proteome_ids: Vec<String>,
+        domains: Vec<Domain>,
     ) -> Result<Peptide> {
         let mut aa_counts = vec![0; 26];
         for one_letter_code in sequence.chars() {
@@ -72,6 +81,7 @@ impl Peptide {
             taxonomy_ids,
             unique_taxonomy_ids,
             proteome_ids,
+            domains,
         });
     }
 
@@ -165,14 +175,22 @@ impl Peptide {
         return &self.proteome_ids;
     }
 
+    /// Returns the proteome IDs
+    ///
+    pub fn get_domains(&self) -> &Vec<Domain> {
+        return &self.domains;
+    }
+
     /// Returns the peptide metadata from the given proteins, format:
     /// (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids)
     ///
     /// # Arguments
     /// * `proteins` - The proteins
     pub fn get_metadata_from_proteins(
+        &self,
         proteins: &Vec<Protein>,
-    ) -> (bool, bool, Vec<i64>, Vec<i64>, Vec<String>) {
+        enzyme: &dyn Enzyme,
+    ) -> (bool, bool, Vec<i64>, Vec<i64>, Vec<String>, Vec<Domain>) {
         let is_swiss_prot = proteins.iter().any(|protein| protein.get_is_reviewed());
         let is_trembl = proteins.iter().any(|protein| !protein.get_is_reviewed());
 
@@ -199,6 +217,75 @@ impl Peptide {
             .map(|protein| protein.get_proteome_id().to_owned())
             .collect();
 
+        let domains: Vec<Domain> = proteins
+            .iter()
+            .flat_map(|p| {
+                let dom = p.get_domains();
+                let occurence_indices: Vec<(i64, i64)> = p
+                    .get_sequence()
+                    .match_indices(&self.get_sequence().as_str())
+                    .map(|x| i64::try_from(x.0).unwrap())
+                    .map(|x| (x, x + i64::try_from(self.get_sequence().len()).unwrap() - 1))
+                    .filter(|x| {
+                        let is_valid_start = x.0 == 0
+                            || (!enzyme
+                                .get_cleavage_blocker_chars()
+                                .contains(&self.get_sequence().chars().nth(0).unwrap())
+                                && enzyme.get_cleavage_chars().contains(
+                                    &p.get_sequence().chars().nth((x.0 - 1) as usize).unwrap(),
+                                ));
+
+                        let is_valid_end = x.1 as usize == p.get_sequence().len() - 1
+                            || (!enzyme.get_cleavage_blocker_chars().contains(
+                                &self
+                                    .get_sequence()
+                                    .chars()
+                                    .nth(x.1 as usize + 1)
+                                    .unwrap_or(' '),
+                            ) && enzyme.get_cleavage_chars().contains(
+                                &self
+                                    .get_sequence()
+                                    .chars()
+                                    .nth(&self.get_sequence().len() - 1)
+                                    .unwrap(),
+                            ));
+
+                        is_valid_start && is_valid_end
+                    })
+                    .collect();
+
+                let mut domains: Vec<Domain> = vec![];
+
+                for (start_idx, end_idx) in occurence_indices {
+                    for d in dom {
+                        let start_idx_in_domain_range =
+                            d.get_start_index() <= &start_idx && &start_idx <= d.get_end_index();
+                        let end_idx_in_domain_range =
+                            d.get_start_index() <= &end_idx && &end_idx <= d.get_end_index();
+
+                        if start_idx_in_domain_range || end_idx_in_domain_range {
+                            let relative_start_idx = cmp::max(d.get_start_index() - start_idx, 0);
+                            let relative_end_idx = i64::try_from(self.get_sequence().len())
+                                .unwrap()
+                                - 1
+                                - cmp::max(end_idx - d.get_end_index(), 0);
+                            domains.push(Domain::new(
+                                relative_start_idx,
+                                relative_end_idx,
+                                d.get_name().clone(),
+                                d.get_evidence().clone(),
+                                Some(p.get_accession().to_string()),
+                                Some(d.get_start_index().clone()),
+                                Some(d.get_end_index().clone()),
+                            ));
+                        }
+                    }
+                }
+
+                return domains;
+            })
+            .collect();
+
         taxonomy_ids.sort();
         taxonomy_ids.dedup();
 
@@ -208,6 +295,7 @@ impl Peptide {
             taxonomy_ids,
             unique_taxonomy_ids,
             proteome_ids,
+            domains,
         );
     }
 }
@@ -225,81 +313,50 @@ impl Hash for Peptide {
         self.sequence.hash(state);
     }
 }
-
-impl From<Row> for Peptide {
-    fn from(row: Row) -> Self {
-        Self {
-            partition: row.get("partition"),
-            mass: row.get("mass"),
-            sequence: row.get("sequence"),
-            missed_cleavages: row.get("missed_cleavages"),
-            aa_counts: row.get("aa_counts"),
-            proteins: row.get("proteins"),
-            is_swiss_prot: row.get("is_swiss_prot"),
-            is_trembl: row.get("is_trembl"),
-            taxonomy_ids: row.get("taxonomy_ids"),
-            unique_taxonomy_ids: row.get("unique_taxonomy_ids"),
-            proteome_ids: row.get("proteome_ids"),
-        }
-    }
-}
-
 impl From<ScyllaRow> for Peptide {
     fn from(row: ScyllaRow) -> Self {
+        let (
+            partition,
+            mass,
+            sequence,
+            missed_cleavages,
+            aa_counts,
+            proteins,
+            is_swiss_prot,
+            is_trembl,
+            taxonomy_ids,
+            unique_taxonomy_ids,
+            proteome_ids,
+            domains,
+        ) = row
+            .into_typed::<(
+                i64,
+                i64,
+                String,
+                i16,
+                Vec<i16>,
+                Vec<String>,
+                bool,
+                bool,
+                Option<Vec<i64>>,
+                Option<Vec<i64>>,
+                Option<Vec<String>>,
+                Option<Vec<Domain>>,
+            )>()
+            .unwrap();
         Self {
-            partition: get_cql_value(&row.columns, 0).unwrap().as_bigint().unwrap(),
-            mass: get_cql_value(&row.columns, 1).unwrap().as_bigint().unwrap(),
-            sequence: get_cql_value(&row.columns, 2)
-                .unwrap()
-                .into_string()
-                .unwrap(),
-            missed_cleavages: get_cql_value(&row.columns, 3)
-                .unwrap()
-                .as_smallint()
-                .unwrap_or(0),
-            aa_counts: get_cql_value(&row.columns, 4)
-                .unwrap()
-                .as_list()
-                .unwrap()
-                .into_iter()
-                .map(|cql_val| cql_val.as_smallint().unwrap().to_owned())
-                .collect(),
-            proteins: get_cql_value(&row.columns, 5)
-                .unwrap_or(CqlValue::Set(vec![]))
-                .as_set()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-                .collect(),
-            is_swiss_prot: get_cql_value(&row.columns, 6)
-                .unwrap()
-                .as_boolean()
-                .unwrap(),
-            is_trembl: get_cql_value(&row.columns, 7)
-                .unwrap()
-                .as_boolean()
-                .unwrap(),
-            taxonomy_ids: get_cql_value(&row.columns, 8)
-                .unwrap_or(CqlValue::Set(vec![]))
-                .as_set()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
-                .collect(),
-            unique_taxonomy_ids: get_cql_value(&row.columns, 9)
-                .unwrap_or(CqlValue::Set(vec![]))
-                .as_set()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_bigint().unwrap().to_owned())
-                .collect(),
-            proteome_ids: get_cql_value(&row.columns, 10)
-                .unwrap_or(CqlValue::Set(vec![]))
-                .as_set()
-                .unwrap_or(&vec![])
-                .into_iter()
-                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-                .collect(),
+            partition,
+            mass,
+            sequence,
+            missed_cleavages,
+            aa_counts,
+            proteins,
+            is_swiss_prot,
+            is_trembl,
+            taxonomy_ids: taxonomy_ids.unwrap_or(vec![]),
+            unique_taxonomy_ids: unique_taxonomy_ids.unwrap_or(vec![]),
+            proteome_ids: proteome_ids.unwrap_or(vec![]),
+            domains: domains.unwrap_or(vec![]),
         }
     }
 }

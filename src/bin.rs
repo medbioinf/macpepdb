@@ -12,15 +12,12 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
 // internal imports
-use macpepdb::functions::performance_measurement::{
-    citus as citus_performance, scylla as scylla_performance,
-};
+use macpepdb::functions::performance_measurement::scylla as scylla_performance;
 use macpepdb::io::post_translational_modification_csv::reader::Reader as PtmReader;
 use macpepdb::mass::convert::to_int as mass_to_int;
 use macpepdb::{
     database::{
-        citus::database_build::DatabaseBuild as CitusBuild, database_build::DatabaseBuild,
-        scylla::database_build::DatabaseBuild as ScyllaBuild,
+        database_build::DatabaseBuild, scylla::database_build::DatabaseBuild as ScyllaBuild,
     },
     entities::configuration::Configuration,
 };
@@ -156,33 +153,6 @@ async fn main() -> Result<()> {
                     Ok(_) => info!("Database build completed successfully!"),
                     Err(e) => info!("Database build failed: {}", e),
                 }
-            } else if database_url.starts_with("postgresql://") {
-                let builder = CitusBuild::new(database_url);
-
-                match builder
-                    .build(
-                        &protein_file_paths,
-                        num_threads,
-                        num_partitions,
-                        allowed_ram_usage,
-                        partitioner_false_positive_probability,
-                        Some(Configuration::new(
-                            "trypsin".to_owned(),
-                            2,
-                            5,
-                            60,
-                            true,
-                            Vec::with_capacity(0),
-                        )),
-                        &log_folder,
-                        false,
-                        only_metadata,
-                    )
-                    .await
-                {
-                    Ok(_) => info!("Database build completed successfully!"),
-                    Err(e) => info!("Database build failed: {}", e),
-                }
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
@@ -216,16 +186,6 @@ async fn main() -> Result<()> {
 
                 scylla_performance::query_performance(
                     &database_hosts,
-                    masses,
-                    lower_mass_tolerance,
-                    upper_mass_tolerance,
-                    max_variable_modifications,
-                    ptms,
-                )
-                .await?;
-            } else if database_url.starts_with("postgresql://") {
-                citus_performance::query_performance(
-                    &database_url,
                     masses,
                     lower_mass_tolerance,
                     upper_mass_tolerance,

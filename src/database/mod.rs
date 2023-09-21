@@ -1,5 +1,3 @@
-/// Support for CitusData database.
-pub mod citus;
 /// Trait define configuration table
 pub mod configuration_table;
 /// Trait for database building / maintenance.

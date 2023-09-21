@@ -21,12 +21,12 @@ use super::SCYLLA_KEYSPACE_NAME;
 const TABLE_NAME: &'static str = "proteins";
 
 const SELECT_COLS: &'static str = "accession, secondary_accessions, entry_name, name, \
-    genes, taxonomy_id, proteome_id, is_reviewed, sequence, updated_at";
+    genes, taxonomy_id, proteome_id, is_reviewed, sequence, updated_at, domains";
 
 const INSERT_COLS: &'static str = SELECT_COLS;
 
 const UPDATE_COLS: &'static str = "secondary_accessions, entry_name, name, \
-    genes, taxonomy_id, proteome_id, is_reviewed, sequence, updated_at";
+    genes, taxonomy_id, proteome_id, is_reviewed, sequence, updated_at, domains";
 
 lazy_static! {
     static ref INSERT_PLACEHOLDERS: String = INSERT_COLS
@@ -69,6 +69,7 @@ impl ProteinTable {
                     &protein.get_is_reviewed(),
                     protein.get_sequence(),
                     &protein.get_updated_at(),
+                    protein.get_domains(),
                 ),
             )
             .await?;
@@ -114,6 +115,7 @@ impl ProteinTable {
                         &updated_prot.get_is_reviewed(),
                         updated_prot.get_sequence(),
                         &updated_prot.get_updated_at(),
+                        updated_prot.get_domains(),
                     ),
                 ),
             )
@@ -334,6 +336,7 @@ mod tests {
     use super::*;
     use crate::database::scylla::client::GenericClient;
     use crate::database::scylla::{get_client, prepare_database_for_tests};
+    use crate::entities::domain::Domain;
     use crate::io::uniprot_text::reader::Reader;
 
     const EXPECTED_PROTEINS: i64 = 3;
@@ -366,7 +369,9 @@ mod tests {
             "UP000005640".to_string(),
             true,
             "MNPLLILTFVAAALAAPFDDDDKIVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIAANS".to_string(),
-            1677024000
+            1677024000,
+            vec![Domain::new( 23, 243,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(), None, None, None)]
+
         );
 
         static ref UPDATED_TRYPSIN: Protein = Protein::new(
@@ -398,7 +403,8 @@ mod tests {
             "UP999999999".to_string(),
             true,
             "RUSTISAWESOME".to_string(),
-            0
+            0,
+            vec![Domain::new( 23, 243,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(), None, None, None)]
         );
     }
 
