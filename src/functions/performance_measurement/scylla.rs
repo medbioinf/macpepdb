@@ -1,5 +1,6 @@
+use std::thread::sleep;
 // std imports
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // 3rd party imports
 use anyhow::Result;
@@ -7,7 +8,8 @@ use dihardts_omicstools::proteomics::post_translational_modifications::PostTrans
 use futures::{pin_mut, StreamExt};
 use indicatif::ProgressStyle;
 use scylla::frame::response::result::CqlValue;
-use tracing::{debug, info_span, Span};
+use scylla::transport::iterator::RowIterator;
+use tracing::{debug, error, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
@@ -85,15 +87,30 @@ pub async fn query_performance(
                 // let params: Vec<&CqlValue> =
                 //     vec![&partition_cql_value, &lower_mass_limit, &upper_mass_limit];
 
-                let mut rows_stream = session
-                    .execute_iter(
-                        query_statement.to_owned(),
-                        (&partition_cql_value, &lower_mass_limit, &upper_mass_limit),
-                    )
-                    .await
-                    .unwrap();
+                let mut rows_stream: RowIterator;
+
+                loop {
+                    let rows_stream_res = session
+                        .execute_iter(
+                            query_statement.to_owned(),
+                            (&partition_cql_value, &lower_mass_limit, &upper_mass_limit),
+                        )
+                        .await;
+                    if rows_stream_res.is_err() {
+                        error!("Row stream err");
+                        sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    rows_stream = rows_stream_res.unwrap();
+                    break;
+                }
 
                 while let Some(row_opt) = rows_stream.next().await {
+                    if row_opt.is_err() {
+                        error!("Row stream err");
+                        sleep(Duration::from_millis(100));
+                        continue;
+                    }
                     let row = row_opt.unwrap();
                     let peptide = Peptide::from(row);
 
