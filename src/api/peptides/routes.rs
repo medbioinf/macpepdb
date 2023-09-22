@@ -15,7 +15,6 @@ fn get_domains(
     database_urls: Vec<String>,
 ) -> impl Filter<Extract = impl warp::Reply, Error = warp::Rejection> + Clone {
     warp::get()
-        .and(warp::path("peptides"))
         .and(warp::path("domains"))
         .and(warp::query::<DomainsParams>())
         .and(warp::path::end())
