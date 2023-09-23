@@ -12,9 +12,8 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
 // internal imports
-use macpepdb::functions::performance_measurement::{
-    citus as citus_performance, scylla as scylla_performance,
-};
+use macpepdb::functions::performance_measurement::citus as citus_performance;
+use macpepdb::io::post_translational_modification_csv::reader::Reader as PtmReader;
 use macpepdb::mass::convert::to_int as mass_to_int;
 use macpepdb::{
     database::{
@@ -52,6 +51,7 @@ enum Commands {
         lower_mass_tolerance: i64,
         upper_mass_tolerance: i64,
         max_variable_modifications: i16,
+        threads: usize,
     },
 }
 
@@ -193,6 +193,7 @@ async fn main() -> Result<()> {
             lower_mass_tolerance,
             upper_mass_tolerance,
             max_variable_modifications,
+            threads,
         } => {
             let masses: Vec<i64> = read_to_string(Path::new(&masses_file))?
                 .split("\n")
@@ -206,20 +207,24 @@ async fn main() -> Result<()> {
                 })
                 .collect();
 
-            if database_url.starts_with("scylla://") {
-                // remove protocol
-                let plain_database_url = database_url[9..].to_string();
-                let database_hosts = &plain_database_url.split(",").map(|x| x).collect();
+            let ptms = PtmReader::read(Path::new(&ptm_file))?;
 
-                scylla_performance::query_performance(
-                    &database_hosts,
-                    masses,
-                    lower_mass_tolerance,
-                    upper_mass_tolerance,
-                    max_variable_modifications,
-                    ptm_file,
-                )
-                .await?;
+            if database_url.starts_with("scylla://") {
+                // Uncomment when fixed. Also removed the import above.
+
+                // remove protocol
+                // let plain_database_url = database_url[9..].to_string();
+                // let database_hosts = &plain_database_url.split(",").map(|x| x).collect();
+
+                // scylla_performance::query_performance(
+                //     &database_hosts,
+                //     masses,
+                //     lower_mass_tolerance,
+                //     upper_mass_tolerance,
+                //     max_variable_modifications,
+                //     ptm_file,
+                // )
+                // .await?;
             } else if database_url.starts_with("postgresql://") {
                 citus_performance::query_performance(
                     &database_url,
@@ -227,7 +232,8 @@ async fn main() -> Result<()> {
                     lower_mass_tolerance,
                     upper_mass_tolerance,
                     max_variable_modifications,
-                    ptms,
+                    &ptms,
+                    threads,
                 )
                 .await?;
             } else {
