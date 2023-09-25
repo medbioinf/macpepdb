@@ -1244,7 +1244,7 @@ mod test {
                                     Some("P07477".to_string()),
                                     Some(23),
                                     Some(243),
-                                    Some(23),
+                                    Some(66),
                                 )
                             );
                         }
