@@ -1243,7 +1243,8 @@ mod test {
                                     "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
                                     Some("P07477".to_string()),
                                     Some(23),
-                                    Some(243)
+                                    Some(243),
+                                    Some(66),
                                 )
                             );
                         }

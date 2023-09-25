@@ -36,3 +36,5 @@ pub mod entities;
 pub mod functions;
 /// Input and output functions
 pub mod io;
+
+pub mod api;

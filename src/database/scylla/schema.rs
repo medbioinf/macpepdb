@@ -20,7 +20,7 @@ const CREATE_CONFIG_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.config (
     );";
 
 const CREATE_DOMAINS_TYPE: &str =
-    "CREATE TYPE IF NOT EXISTS macpep.Domain (name text, evidence text, start_index bigint, end_index bigint, protein text, start_index_protein bigint, end_index_protein bigint);";
+    "CREATE TYPE IF NOT EXISTS macpep.Domain (name text, evidence text, start_index bigint, end_index bigint, protein text, start_index_protein bigint, end_index_protein bigint, peptide_offset bigint);";
 
 const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.proteins (
         accession text PRIMARY KEY,
