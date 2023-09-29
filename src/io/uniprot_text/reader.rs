@@ -252,6 +252,7 @@ impl FallibleIterator for Reader {
                                 .trim()
                                 .replace("<", "")
                                 .replace(">", "")
+                                .replace("?", "")
                                 .split("..")
                                 .map(|s| {
                                     s.parse::<i64>()
