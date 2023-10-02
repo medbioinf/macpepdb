@@ -10,6 +10,7 @@ use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use fallible_iterator::FallibleIterator;
 use log::error;
+use tracing::warn;
 
 use crate::entities::domain::Domain;
 // internal imports
@@ -248,28 +249,33 @@ impl FallibleIterator for Reader {
                     "FT" => {
                         if line[5..].starts_with("DOMAIN") {
                             is_building_domain = true;
-                            let indices_str: Vec<String> = line[11..]
+                            let indices_list: Vec<_> = line[11..]
                                 .trim()
                                 .replace("<", "")
                                 .replace(">", "")
                                 .replace("?", "")
                                 .split("..")
-                                .map(|x| x.to_string())
+                                .map(|s| {
+                                    s.parse::<i64>()
+                                        .map_err(|x| error!("{} {} {:?}", x, line, accessions))
+                                })
                                 .collect();
 
-                            if indices_str[0] != "" && indices_str[1] != "" {
-                                let indices_list: Vec<i64> = indices_str
-                                    .iter()
-                                    .map(|s| {
-                                        s.parse::<i64>()
-                                            .map_err(|x| error!("{} {} {:?}", x, line, accessions))
-                                            .unwrap()
-                                    })
-                                    .collect();
-                                domain_start_idx = indices_list[0];
-                                domain_end_idx = indices_list[1];
-                            } else {
+                            if indices_list[0].is_err() {
+                                warn!(
+                                    "Could not process domain {:?}",
+                                    indices_list[0].unwrap_err()
+                                );
                                 is_building_domain = false;
+                            } else if indices_list[1].is_err() {
+                                warn!(
+                                    "Could not process domain {:?}",
+                                    indices_list[1].unwrap_err()
+                                );
+                                is_building_domain = false;
+                            } else {
+                                domain_start_idx = indices_list[0].unwrap();
+                                domain_end_idx = indices_list[1].unwrap();
                             }
                         } else if is_building_domain {
                             let s = line[11..].trim();
