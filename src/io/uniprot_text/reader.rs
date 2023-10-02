@@ -248,20 +248,29 @@ impl FallibleIterator for Reader {
                     "FT" => {
                         if line[5..].starts_with("DOMAIN") {
                             is_building_domain = true;
-                            let indices_list: Vec<i64> = line[11..]
+                            let indices_str: Vec<String> = line[11..]
                                 .trim()
                                 .replace("<", "")
                                 .replace(">", "")
                                 .replace("?", "")
                                 .split("..")
-                                .map(|s| {
-                                    s.parse::<i64>()
-                                        .map_err(|x| error!("{} {} {:?}", x, line, accessions))
-                                        .unwrap()
-                                })
+                                .map(|x| x.to_string())
                                 .collect();
-                            domain_start_idx = indices_list[0];
-                            domain_end_idx = indices_list[1];
+
+                            if indices_str[0] != "" && indices_str[1] != "" {
+                                let indices_list: Vec<i64> = indices_str
+                                    .iter()
+                                    .map(|s| {
+                                        s.parse::<i64>()
+                                            .map_err(|x| error!("{} {} {:?}", x, line, accessions))
+                                            .unwrap()
+                                    })
+                                    .collect();
+                                domain_start_idx = indices_list[0];
+                                domain_end_idx = indices_list[1];
+                            } else {
+                                is_building_domain = false;
+                            }
                         } else if is_building_domain {
                             let s = line[11..].trim();
                             if s.starts_with("/note") {
