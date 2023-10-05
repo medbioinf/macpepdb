@@ -244,7 +244,7 @@ async fn main() -> Result<()> {
                 let not_updated_peptides = info_span!("not_updated_peptides");
                 let not_updated_peptides_enter = not_updated_peptides.enter();
 
-                for partition in 0..100 {
+                for partition in 0_i64..100_i64 {
                     let query_statement = format!(
                 "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
                 SELECT_COLS,
