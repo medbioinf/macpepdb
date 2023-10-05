@@ -5,12 +5,17 @@ use std::{path::Path, thread::sleep, time::Duration};
 // 3rd party imports
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use futures::StreamExt;
 use indicatif::ProgressStyle;
 use macpepdb::api::peptides::routes::peptide_routes;
-use macpepdb::database::scylla::get_client;
-use macpepdb::database::scylla::peptide_table::PeptideTable;
+use macpepdb::database::scylla::client::GenericClient;
+use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
+use macpepdb::database::scylla::protein_table::ProteinTable;
+use macpepdb::database::scylla::{get_client, SCYLLA_KEYSPACE_NAME};
 use macpepdb::database::selectable_table::SelectableTable;
-use tracing::{error, info, info_span, Level};
+use macpepdb::database::table::Table;
+use macpepdb::entities::peptide::Peptide;
+use tracing::{debug, error, info, info_span, Level};
 use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -26,6 +31,7 @@ use macpepdb::{
     },
     entities::configuration::Configuration,
 };
+use scylla::frame::response::result::CqlValue;
 
 #[derive(Debug, Subcommand)]
 enum Commands {
@@ -57,6 +63,9 @@ enum Commands {
         max_variable_modifications: i16,
     },
     API {
+        database_url: String,
+    },
+    CheckIsUpdated {
         database_url: String,
     },
 }
@@ -216,6 +225,55 @@ async fn main() -> Result<()> {
                 warp::serve(peptide_routes(database_hosts))
                     .run(([127, 0, 0, 1], 3000))
                     .await;
+            } else {
+                error!("Unsupported database protocol: {}", database_url);
+            }
+        }
+        Commands::CheckIsUpdated { database_url } => {
+            if database_url.starts_with("scylla://") {
+                let plain_database_url = database_url[9..].to_string();
+                let database_hosts = plain_database_url
+                    .split(",")
+                    .map(|x| x.to_string())
+                    .collect::<Vec<String>>();
+
+                let client = get_client(Some(&database_hosts)).await?;
+                let session = client.get_session();
+                let mut not_updated_cnt = 0;
+
+                let not_updated_peptides = info_span!("not_updated_peptides");
+                let not_updated_peptides_enter = not_updated_peptides.enter();
+
+                for partition in 0..100 {
+                    let query_statement = format!(
+                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
+                SELECT_COLS,
+                SCYLLA_KEYSPACE_NAME,
+                PeptideTable::table_name()
+            );
+
+                    debug!("Streaming rows of partition {}", partition);
+
+                    let mut rows_stream = session
+                        .query_iter(query_statement, (partition,))
+                        .await
+                        .unwrap();
+
+                    while let Some(row_opt) = rows_stream.next().await {
+                        if row_opt.is_err() {
+                            debug!("Row opt err");
+                            sleep(Duration::from_millis(100));
+                            continue;
+                        }
+                        let row = row_opt.unwrap();
+                        not_updated_cnt += 1;
+                        not_updated_peptides.pb_set_message(
+                            format!("Found {} unupdated peptides", not_updated_cnt).as_str(),
+                        );
+                    }
+                }
+                std::mem::drop(not_updated_peptides_enter);
+                std::mem::drop(not_updated_peptides);
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
