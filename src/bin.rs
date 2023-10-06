@@ -266,7 +266,11 @@ async fn main() -> Result<()> {
                         }
                         let row = row_opt.unwrap();
                         let peptide = Peptide::from(row);
-                        info!("peptide {:?}", peptide.get_proteins());
+                        info!(
+                            "peptide {} {:?}",
+                            peptide.get_sequence(),
+                            peptide.get_proteins()
+                        );
                         break;
                     }
                 }
