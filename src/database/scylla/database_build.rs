@@ -900,7 +900,7 @@ impl DatabaseBuild {
 
         for partition in partitions.iter() {
             let query_statement = format!(
-                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
+                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = true ALLOW FILTERING",
                 SELECT_COLS,
                 SCYLLA_KEYSPACE_NAME,
                 PeptideTable::table_name()
