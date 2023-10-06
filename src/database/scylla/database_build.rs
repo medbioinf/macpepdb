@@ -922,6 +922,7 @@ impl DatabaseBuild {
                 let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
+                peptide_sender.send(1).await.unwrap();
 
                 let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
                     CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
@@ -982,7 +983,6 @@ impl DatabaseBuild {
                         domains.len()
                     );
                 } else {
-                    peptide_sender.send(1).await.unwrap();
                 }
             }
         }
