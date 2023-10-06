@@ -922,76 +922,76 @@ impl DatabaseBuild {
                 let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
-                peptide_sender.send(1).await.unwrap();
-                // let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
-                //     CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
-                // });
-                // let mut associated_proteins = vec![];
 
-                // debug!("Querying proteins");
+                let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
+                    CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
+                });
+                let mut associated_proteins = vec![];
 
-                // for chunk in proteins_chunks {
-                //     // ToDo query in parallel here
-                //     loop {
-                //         let associated_proteins_res = ProteinTable::select_multiple(
-                //             &client,
-                //             "WHERE accession IN ?",
-                //             &[&chunk],
-                //         )
-                //         .await;
+                debug!("Querying proteins");
 
-                //         if associated_proteins_res.is_err() {
-                //             debug!("Protein err");
-                //             sleep(Duration::from_millis(100));
-                //             continue;
-                //         }
+                for chunk in proteins_chunks {
+                    // ToDo query in parallel here
+                    loop {
+                        let associated_proteins_res = ProteinTable::select_multiple(
+                            &client,
+                            "WHERE accession IN ?",
+                            &[&chunk],
+                        )
+                        .await;
 
-                //         associated_proteins.extend(associated_proteins_res.unwrap());
-                //         break;
-                //     }
-                // }
+                        if associated_proteins_res.is_err() {
+                            debug!("Protein err");
+                            sleep(Duration::from_millis(100));
+                            continue;
+                        }
 
-                // debug!("Proteins {}", associated_proteins.len());
+                        associated_proteins.extend(associated_proteins_res.unwrap());
+                        break;
+                    }
+                }
 
-                // let (
-                //     is_swiss_prot,
-                //     is_trembl,
-                //     taxonomy_ids,
-                //     unique_taxonomy_ids,
-                //     proteome_ids,
-                //     domains,
-                // ) = peptide.get_metadata_from_proteins(&associated_proteins, enzyme.as_ref());
+                debug!("Proteins {}", associated_proteins.len());
 
-                // debug!("Domains {}", domains.len());
+                let (
+                    is_swiss_prot,
+                    is_trembl,
+                    taxonomy_ids,
+                    unique_taxonomy_ids,
+                    proteome_ids,
+                    domains,
+                ) = peptide.get_metadata_from_proteins(&associated_proteins, enzyme.as_ref());
 
-                // let insert_result = session
-                //     .execute(
-                //         &update_query_prepared_statement,
-                //         (
-                //             &is_swiss_prot,
-                //             &is_trembl,
-                //             &taxonomy_ids,
-                //             &unique_taxonomy_ids,
-                //             &proteome_ids,
-                //             &domains,
-                //             peptide.get_partition(),
-                //             peptide.get_mass(),
-                //             peptide.get_sequence(),
-                //         ),
-                //     )
-                //     .await;
+                debug!("Domains {}", domains.len());
 
-                // debug!("Inserted");
+                let insert_result = session
+                    .execute(
+                        &update_query_prepared_statement,
+                        (
+                            &is_swiss_prot,
+                            &is_trembl,
+                            &taxonomy_ids,
+                            &unique_taxonomy_ids,
+                            &proteome_ids,
+                            &domains,
+                            peptide.get_partition(),
+                            peptide.get_mass(),
+                            peptide.get_sequence(),
+                        ),
+                    )
+                    .await;
 
-                // if insert_result.is_err() {
-                //     warn!(
-                //         "Could not insert {} with {} domains",
-                //         peptide.get_sequence(),
-                //         domains.len()
-                //     );
-                // } else {
-                //     peptide_sender.send(1).await.unwrap();
-                // }
+                debug!("Inserted");
+
+                if insert_result.is_err() {
+                    warn!(
+                        "Could not insert {} with {} domains",
+                        peptide.get_sequence(),
+                        domains.len()
+                    );
+                } else {
+                    peptide_sender.send(1).await.unwrap();
+                }
             }
         }
         debug!("Quitting thread");
