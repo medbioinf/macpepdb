@@ -924,6 +924,8 @@ impl DatabaseBuild {
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
 
+                debug!("Peptide {}", peptide.get_sequence());
+
                 let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
                     CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
                 });
@@ -963,7 +965,7 @@ impl DatabaseBuild {
                     domains,
                 ) = peptide.get_metadata_from_proteins(&associated_proteins, enzyme.as_ref());
 
-                debug!("Domains: {:?}", domains);
+                debug!("Domains len: {:?}", domains.len());
 
                 session
                     .execute(
@@ -980,7 +982,8 @@ impl DatabaseBuild {
                             peptide.get_sequence(),
                         ),
                     )
-                    .await?;
+                    .await
+                    .unwrap();
                 debug!("Finished upsert");
             }
         }
