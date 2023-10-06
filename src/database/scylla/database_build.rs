@@ -919,6 +919,7 @@ impl DatabaseBuild {
                     sleep(Duration::from_millis(100));
                     continue;
                 }
+                peptide_sender.send(1).await.unwrap();
                 let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
@@ -927,6 +928,8 @@ impl DatabaseBuild {
                     CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
                 });
                 let mut associated_proteins = vec![];
+
+                debug!("Querying associated proteins");
 
                 for chunk in proteins_chunks {
                     // ToDo query in parallel here
@@ -949,6 +952,8 @@ impl DatabaseBuild {
                     }
                 }
 
+                debug!("Found {} associated proteins", associated_proteins.len());
+
                 let (
                     is_swiss_prot,
                     is_trembl,
@@ -957,6 +962,8 @@ impl DatabaseBuild {
                     proteome_ids,
                     domains,
                 ) = peptide.get_metadata_from_proteins(&associated_proteins, enzyme.as_ref());
+
+                debug!("Domains: {:?}", domains);
 
                 session
                     .execute(
@@ -974,7 +981,7 @@ impl DatabaseBuild {
                         ),
                     )
                     .await?;
-                peptide_sender.send(1).await.unwrap();
+                debug!("Finished upsert");
             }
         }
         debug!("Quitting thread");
