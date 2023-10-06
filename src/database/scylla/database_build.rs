@@ -22,7 +22,7 @@ use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::{debug, debug_span, error, info, span, Level};
+use tracing::{debug, debug_span, error, info, span, warn, Level};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -919,19 +919,14 @@ impl DatabaseBuild {
                     sleep(Duration::from_millis(100));
                     continue;
                 }
-                peptide_sender.send(1).await.unwrap();
                 let row = row_opt.unwrap();
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
-
-                debug!("Peptide {}", peptide.get_sequence());
 
                 let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
                     CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
                 });
                 let mut associated_proteins = vec![];
-
-                debug!("Querying associated proteins");
 
                 for chunk in proteins_chunks {
                     // ToDo query in parallel here
@@ -954,8 +949,6 @@ impl DatabaseBuild {
                     }
                 }
 
-                debug!("Found {} associated proteins", associated_proteins.len());
-
                 let (
                     is_swiss_prot,
                     is_trembl,
@@ -965,9 +958,7 @@ impl DatabaseBuild {
                     domains,
                 ) = peptide.get_metadata_from_proteins(&associated_proteins, enzyme.as_ref());
 
-                debug!("Domains len: {:?}", domains.len());
-
-                session
+                let insert_result = session
                     .execute(
                         &update_query_prepared_statement,
                         (
@@ -982,9 +973,17 @@ impl DatabaseBuild {
                             peptide.get_sequence(),
                         ),
                     )
-                    .await
-                    .unwrap();
-                debug!("Finished upsert");
+                    .await;
+
+                if insert_result.is_err() {
+                    warn!(
+                        "Could not insert {} with {} domains",
+                        peptide.get_sequence(),
+                        domains.len()
+                    );
+                } else {
+                    peptide_sender.send(1).await.unwrap();
+                }
             }
         }
         debug!("Quitting thread");
