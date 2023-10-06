@@ -40,7 +40,6 @@ use crate::database::configuration_table::{
 use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
-
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
@@ -685,7 +684,9 @@ impl DatabaseBuild {
 
         let mut transaction = client.transaction().await?;
         ProteinTable::insert(&mut transaction, &protein).await?;
-        PeptideTable::bulk_insert(&mut transaction, &mut peptides.iter()).await?;
+        for peptide_chunk in peptides.chunks(1000) {
+            PeptideTable::bulk_insert(&mut transaction, &mut peptide_chunk.iter()).await?;
+        }
         transaction.commit().await?;
         peptide_sender.send(peptides.len() as u64).await?;
 
