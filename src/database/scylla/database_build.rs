@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::iter::Map;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -12,7 +13,8 @@ use std::time::Duration;
 use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
-use futures::StreamExt;
+use futures::stream::FuturesUnordered;
+use futures::{Future, StreamExt};
 use scylla::batch::Batch;
 use scylla::frame::value::BatchValues;
 use scylla::prepared_statement::PreparedStatement;
@@ -882,6 +884,21 @@ impl DatabaseBuild {
         Ok(())
     }
 
+    async fn yo(client: &Client, chunk: CqlValue) -> Vec<Protein> {
+        loop {
+            let associated_proteins_res =
+                ProteinTable::select_multiple(client, "WHERE accession IN ?", &[&chunk]).await;
+
+            if associated_proteins_res.is_err() {
+                debug!("Protein err");
+                sleep(Duration::from_millis(100));
+                continue;
+            }
+
+            return associated_proteins_res.unwrap();
+        }
+    }
+
     async fn collect_peptide_metadata_thread(
         thread_id: usize,
         database_urls: Vec<String>,
@@ -900,7 +917,7 @@ impl DatabaseBuild {
 
         for partition in partitions.iter() {
             let query_statement = format!(
-                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = true ALLOW FILTERING",
+                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
                 SELECT_COLS,
                 SCYLLA_KEYSPACE_NAME,
                 PeptideTable::table_name()
@@ -923,32 +940,18 @@ impl DatabaseBuild {
                 // ToDo: This might be bad performance wise
                 let peptide = Peptide::from(row);
 
-                let proteins_chunks = peptide.get_proteins().chunks(100).map(|x| {
+                let protein_chunks = peptide.get_proteins().chunks(100).map(|x| {
                     CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
                 });
                 let mut associated_proteins = vec![];
 
                 debug!("Querying proteins");
 
-                for chunk in proteins_chunks {
-                    // ToDo query in parallel here
-                    loop {
-                        let associated_proteins_res = ProteinTable::select_multiple(
-                            &client,
-                            "WHERE accession IN ?",
-                            &[&chunk],
-                        )
-                        .await;
+                let mut tasks: FuturesUnordered<_> =
+                    protein_chunks.map(|x| Self::yo(&client, x)).collect();
 
-                        if associated_proteins_res.is_err() {
-                            debug!("Protein err");
-                            sleep(Duration::from_millis(100));
-                            continue;
-                        }
-
-                        associated_proteins.extend(associated_proteins_res.unwrap());
-                        break;
-                    }
+                while let Some(result) = tasks.next().await {
+                    associated_proteins.extend(result);
                 }
 
                 debug!("Proteins {}", associated_proteins.len());
