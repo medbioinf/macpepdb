@@ -442,6 +442,14 @@ impl DatabaseBuild {
                         match db_err.code() {
                             Some(&SqlState::T_R_DEADLOCK_DETECTED)
                             | Some(&SqlState::UNIQUE_VIOLATION) => {
+                                error_sender
+                                    .send(format!(
+                                        "Protein {} try {}: {:?}",
+                                        protein.get_accession(),
+                                        tries,
+                                        db_err
+                                    ))
+                                    .await?;
                                 let mut rng = rand::thread_rng();
                                 let mut sleep_time = rng.gen_range(0..=3);
                                 sleep_time += tries;
@@ -450,7 +458,7 @@ impl DatabaseBuild {
                                 continue;
                             }
                             _ => {
-                                error!("Unresolvable error logged: {:?}", db_err);
+                                error!("Unresolvable database error logged: {:?}", db_err);
                                 error_sender.send(format!("{:?}", db_err)).await?;
                             }
                         }
