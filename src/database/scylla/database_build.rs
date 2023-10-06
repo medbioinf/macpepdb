@@ -945,16 +945,12 @@ impl DatabaseBuild {
                 });
                 let mut associated_proteins = vec![];
 
-                debug!("Querying proteins");
-
                 let mut tasks: FuturesUnordered<_> =
                     protein_chunks.map(|x| Self::yo(&client, x)).collect();
 
                 while let Some(result) = tasks.next().await {
                     associated_proteins.extend(result);
                 }
-
-                debug!("Proteins {}", associated_proteins.len());
 
                 let (
                     is_swiss_prot,
@@ -964,8 +960,6 @@ impl DatabaseBuild {
                     proteome_ids,
                     domains,
                 ) = peptide.get_metadata_from_proteins(&associated_proteins, enzyme.as_ref());
-
-                debug!("Domains {}", domains.len());
 
                 let insert_result = session
                     .execute(
@@ -983,8 +977,6 @@ impl DatabaseBuild {
                         ),
                     )
                     .await;
-
-                debug!("Inserted");
 
                 if insert_result.is_err() {
                     warn!(
