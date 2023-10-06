@@ -455,7 +455,8 @@ impl DatabaseBuild {
                             }
                         }
                     }
-                    return Err(db_err);
+                    debug!("Unexpected error logged: {:?}", db_err);
+                    error_sender.send(format!("{:?}", db_err)).await?;
                 }
             }
         }
