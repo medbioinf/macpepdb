@@ -239,7 +239,6 @@ async fn main() -> Result<()> {
 
                 let client = get_client(Some(&database_hosts)).await?;
                 let session = client.get_session();
-                let mut not_updated_cnt = 0;
 
                 let not_updated_peptides = info_span!("not_updated_peptides");
                 let not_updated_peptides_enter = not_updated_peptides.enter();
@@ -266,10 +265,9 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let row = row_opt.unwrap();
-                        not_updated_cnt += 1;
-                        not_updated_peptides.pb_set_message(
-                            format!("Found {} unupdated peptides", not_updated_cnt).as_str(),
-                        );
+                        let peptide = Peptide::from(row);
+                        info!("peptide {:?}", peptide.get_proteins());
+                        break;
                     }
                 }
                 std::mem::drop(not_updated_peptides_enter);
