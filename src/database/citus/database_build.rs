@@ -479,6 +479,14 @@ impl DatabaseBuild {
                         match db_err.code() {
                             Some(&SqlState::T_R_DEADLOCK_DETECTED)
                             | Some(&SqlState::UNIQUE_VIOLATION) => {
+                                error_sender
+                                    .send(format!(
+                                        "Protein {} try {}: {:?}",
+                                        protein.get_accession(),
+                                        tries,
+                                        db_err
+                                    ))
+                                    .await?;
                                 let mut rng = rand::thread_rng();
                                 let mut sleep_time = rng.gen_range(0..=3);
                                 sleep_time += tries;
@@ -487,22 +495,13 @@ impl DatabaseBuild {
                                 continue;
                             }
                             _ => {
-                                error!(
-                                    "Unresolvable error logged: {:?} Protein {:?}",
-                                    db_err,
-                                    &protein.get_accession()
-                                );
-                                error_sender
-                                    .send(format!(
-                                        "{:?} Protein {}",
-                                        db_err,
-                                        &protein.get_accession()
-                                    ))
-                                    .await?;
+                                error!("Unresolvable database error logged: {:?}", db_err);
+                                error_sender.send(format!("{:?}", db_err)).await?;
                             }
                         }
                     }
-                    return Err(db_err);
+                    debug!("Unexpected error logged: {:?}", db_err);
+                    error_sender.send(format!("{:?}", db_err)).await?;
                 }
             }
         }
@@ -728,7 +727,9 @@ impl DatabaseBuild {
 
         let mut transaction = client.transaction().await?;
         ProteinTable::insert(&mut transaction, &protein).await?;
-        PeptideTable::bulk_insert(&mut transaction, &mut peptides.iter()).await?;
+        for peptide_chunk in peptides.chunks(1000) {
+            PeptideTable::bulk_insert(&mut transaction, &mut peptide_chunk.iter()).await?;
+        }
         transaction.commit().await?;
         peptide_sender.send(peptides.len() as u64).await?;
 
