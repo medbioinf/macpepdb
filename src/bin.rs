@@ -223,7 +223,7 @@ async fn main() -> Result<()> {
                     .collect::<Vec<String>>();
 
                 warp::serve(peptide_routes(database_hosts))
-                    .run(([127, 0, 0, 1], 3000))
+                    .run(([127, 0, 0, 1], 8080))
                     .await;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
