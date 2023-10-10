@@ -32,7 +32,7 @@ pub async fn get_domains_handler(
     let mass = calc_sequence_mass(&params.sequence).unwrap();
     let partition = get_mass_partition(partition_limits, mass).unwrap();
 
-    let peptide = PeptideTable::select(
+    let peptide_opt = PeptideTable::select(
         &client,
         "WHERE partition = ? AND mass = ? and sequence = ?",
         &[
@@ -42,8 +42,11 @@ pub async fn get_domains_handler(
         ],
     )
     .await
-    .unwrap()
     .unwrap();
 
-    Ok(warp::reply::json(&peptide.get_domains()))
+    if peptide_opt.is_none() {
+        return Ok(warp::reply::json(&(vec![] as Vec<Domain>)));
+    }
+
+    Ok(warp::reply::json(&(peptide_opt.unwrap()).get_domains()))
 }
