@@ -20,6 +20,12 @@ pub struct DomainsParams {
     sequence: String,
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+pub struct DomainsResponse {
+    domains: Vec<Domain>,
+    species: Vec<i64>,
+}
+
 pub async fn get_domains_handler(
     params: DomainsParams,
     database_urls: Vec<String>,
@@ -45,8 +51,18 @@ pub async fn get_domains_handler(
     .unwrap();
 
     if peptide_opt.is_none() {
-        return Ok(warp::reply::json(&(vec![] as Vec<Domain>)));
+        let res = DomainsResponse {
+            domains: vec![] as Vec<Domain>,
+            species: vec![] as Vec<i64>,
+        };
+        return Ok(warp::reply::json(&res));
     }
 
-    Ok(warp::reply::json(&(peptide_opt.unwrap()).get_domains()))
+    let peptide = peptide_opt.unwrap();
+
+    let res = DomainsResponse {
+        domains: peptide.get_domains().to_vec(),
+        species: peptide.get_taxonomy_ids().to_vec(),
+    };
+    Ok(warp::reply::json(&res))
 }
