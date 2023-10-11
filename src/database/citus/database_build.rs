@@ -431,7 +431,6 @@ impl DatabaseBuild {
                 tries += 1;
                 // After MAX_INSERT_TRIES is reached, we log the proteins as something may seem wrong
                 if tries > MAX_INSERT_TRIES {
-                    debug!("Failed to process {}", protein.get_accession());
                     unprocessable_proteins_sender.send(protein).await?;
                     break;
                 }
