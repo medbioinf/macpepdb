@@ -82,8 +82,10 @@ Table: proteins
 ### Supported database engines
 * [Citus Data](https://www.citusdata.com/)
 
-## Querying
-!!!TODO
+## Usage
+
+### Web API
+cargo run -r web scylla://<COMMA_SEPARATED_SCYLLA_NODES_LIST> <IP> <PORT>
 
 ## Citation
 
