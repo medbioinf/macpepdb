@@ -262,61 +262,30 @@ where
             statement += additional;
         }
         Ok(try_stream! {
-            let query = Query::new(statement).with_page_size(num_rows);
-            let prepared_statement = client.get_session().prepare(query).await?;
-            let mut query_res = client.get_session().execute(&prepared_statement, params).await?;
-            loop {
-                let paging_state = query_res.paging_state.clone();
-                let rows = query_res.rows_or_empty();
-                if rows.is_empty() {
-                    break;
-                }
-                for row in rows {
-                    yield row;
-                }
-                query_res = client.get_session().execute_paged(
-                    &prepared_statement,
-                    params,
-                    paging_state,
-                ).await?;
+            let mut prepared_statement = client.get_session().prepare(statement).await?;
+            prepared_statement.set_page_size(num_rows);
+            let row_stream = client.get_session().execute_iter(prepared_statement, params).await?;
+            for await row in row_stream {
+                yield row?;
             }
         })
     }
 
     async fn stream(
         client: &'a mut C,
-        additional: &str,
+        additional: &'a str,
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
     ) -> Result<impl Stream<Item = Result<Self::Entity>>> {
-        let mut statement = format!(
-            "SELECT {} FROM {}.{}",
-            <Self as SelectableTableTrait<C>>::select_cols(),
-            SCYLLA_KEYSPACE_NAME,
-            Self::table_name()
-        );
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
         Ok(try_stream! {
-            let query = Query::new(statement).with_page_size(num_rows);
-            let prepared_statement = client.get_session().prepare(query).await?;
-            let mut query_res = client.get_session().execute(&prepared_statement, params).await?;
-            loop {
-                let paging_state = query_res.paging_state.clone();
-                let rows = query_res.rows_or_empty();
-                if rows.is_empty() {
-                    break;
-                }
-                for row in rows {
-                    yield Self::Entity::from(row);
-                }
-                query_res = client.get_session().execute_paged(
-                    &prepared_statement,
-                    params,
-                    paging_state,
-                ).await?;
+            for await row in Self::raw_stream(
+                client,
+                <Self as SelectableTableTrait<C>>::select_cols(),
+                additional,
+                params,
+                num_rows,
+            ).await? {
+                yield Self::Entity::from(row?);
             }
         })
     }

@@ -120,7 +120,7 @@ where
     ///
     async fn stream(
         client: &'a mut C,
-        additional: &str,
+        additional: &'a str,
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
     ) -> Result<impl Stream<Item = Result<Self::Entity>>>;
