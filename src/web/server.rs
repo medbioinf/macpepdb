@@ -4,14 +4,15 @@ use std::sync::Arc;
 
 // 3rd party imports
 use anyhow::Result;
-use axum::{routing::get, Router};
+use axum::routing::{get, post};
+use axum::Router;
 
 // internal imports
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
 use crate::database::scylla::client::{Client, GenericClient};
 use crate::database::scylla::configuration_table::ConfigurationTable;
 use crate::entities::configuration::Configuration;
-use crate::web::peptide_controller::get_peptide;
+use crate::web::peptide_controller::{get_peptide, search as peptide_search};
 
 pub async fn start(
     database_nodes: Vec<String>,
@@ -40,6 +41,8 @@ pub async fn start(
     // Build our application with route
     let app = Router::new()
         // Peptide routes
+        .route("/api/peptides/search", post(peptide_search))
+        .with_state((db_client.clone(), configuration.clone()))
         .route("/api/peptides/:sequence", get(get_peptide))
         .with_state((db_client.clone(), configuration.clone()));
 

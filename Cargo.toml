@@ -41,8 +41,9 @@ tracing-indicatif = "0.3.4"
 indicatif = "0.17.6"
 csv = "1.2.2"
 async-stream = "0.3.5"
-dihardts_omicstools = "1.3.0"
+dihardts_omicstools = "1.4.0"
 axum = "0.6.20"
+axum-streams = { version = "0.9.1", features = ["json", "csv", "text"] }
 
 [dev-dependencies]
 serial_test = "*"

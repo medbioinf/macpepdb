@@ -245,7 +245,7 @@ where
         return Ok(Some(Self::Entity::from(row.unwrap())));
     }
     async fn raw_stream(
-        client: &'a mut C,
+        client: &'a C,
         cols: &str,
         additional: &str,
         params: &'a [&'a Self::Parameter],
@@ -272,7 +272,7 @@ where
     }
 
     async fn stream(
-        client: &'a mut C,
+        client: &'a C,
         additional: &'a str,
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
