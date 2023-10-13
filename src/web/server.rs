@@ -13,6 +13,7 @@ use crate::database::scylla::client::{Client, GenericClient};
 use crate::database::scylla::configuration_table::ConfigurationTable;
 use crate::entities::configuration::Configuration;
 use crate::web::peptide_controller::{get_peptide, search as peptide_search};
+use crate::web::protein_controller::get_protein;
 
 pub async fn start(
     database_nodes: Vec<String>,
@@ -44,6 +45,9 @@ pub async fn start(
         .route("/api/peptides/search", post(peptide_search))
         .with_state((db_client.clone(), configuration.clone()))
         .route("/api/peptides/:sequence", get(get_peptide))
+        .with_state((db_client.clone(), configuration.clone()))
+        // Protein routes
+        .route("/api/proteins/:accession", get(get_protein))
         .with_state((db_client.clone(), configuration.clone()));
 
     // Run our app with hyper
