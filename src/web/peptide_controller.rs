@@ -276,6 +276,7 @@ pub async fn search(
                     Ok(peptide) => yield peptide.to_string(),
                     Err(err) => error!("{:?}", err)
                 }
+                yield "\n".to_string();
             }
         }),
         _ => StreamBodyAs::text(WebError::new_string_stream(
