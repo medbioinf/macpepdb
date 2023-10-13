@@ -16,12 +16,7 @@ use crate::web::configuration_controller::get_configuration;
 use crate::web::peptide_controller::{get_peptide, search as peptide_search};
 use crate::web::protein_controller::get_protein;
 
-pub async fn start(
-    database_nodes: Vec<String>,
-    interface: String,
-    port: u16,
-    is_verbose: bool,
-) -> Result<()> {
+pub async fn start(database_nodes: Vec<String>, interface: String, port: u16) -> Result<()> {
     // Create a database client
     // Session maintains it own connection pool internally: https://github.com/scylladb/scylla-rust-driver/issues/724
     // A single client with a session should be sufficient for the entire application

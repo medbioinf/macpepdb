@@ -64,7 +64,6 @@ enum Commands {
         database_url: String,
         interface: String,
         port: u16,
-        verbose: bool,
     },
     CheckIsUpdated {
         database_url: String,
@@ -219,7 +218,6 @@ async fn main() -> Result<()> {
             database_url,
             interface,
             port,
-            verbose,
         } => {
             if database_url.starts_with("scylla://") {
                 let plain_database_url = database_url[9..].to_string();
@@ -227,7 +225,7 @@ async fn main() -> Result<()> {
                     .split(",")
                     .map(|x| x.to_string())
                     .collect::<Vec<String>>();
-                start_web_server(database_hosts, interface, port, verbose).await?;
+                start_web_server(database_hosts, interface, port).await?;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
