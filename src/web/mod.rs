@@ -1,3 +1,5 @@
+/// Controller for getting configuration information
+pub mod configuration_controller;
 /// Controller for getting peptide information
 pub mod peptide_controller;
 /// Controller for getting protein information
