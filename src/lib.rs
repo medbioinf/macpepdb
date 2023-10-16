@@ -36,5 +36,5 @@ pub mod entities;
 pub mod functions;
 /// Input and output functions
 pub mod io;
-/// Start the web server
+/// Web API, for details how to use the endpoints look into the function of the `*_controller`-modules
 pub mod web;

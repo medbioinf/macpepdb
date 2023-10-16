@@ -1,12 +1,12 @@
-/// Controller for getting configuration information
+/// Endpoints for getting information about the database, digestion enzymes, max missed cleavages, etc.
 pub mod configuration_controller;
-/// Controller for getting peptide information
+/// Endpoints for getting peptides by sequence, mass search, ...
 pub mod peptide_controller;
-/// Controller for getting protein information
+/// Endpoints for getting proteins by accession, ...
 pub mod protein_controller;
-/// Web server definition
+/// Web server definition and configuration
 pub mod server;
-/// Controller for different tools and functions which comes along the MaCPepDB
+/// Endpoint for different tools and functions which comes along the MaCPepDB, e.g. mass calculation, digestion, ...
 pub mod tools_controller;
-/// Wrapper for anyhow::Error
+/// Module for error handling
 pub mod web_error;

@@ -17,6 +17,13 @@ use crate::web::peptide_controller::{get_peptide, search as peptide_search};
 use crate::web::protein_controller::get_protein;
 use crate::web::tools_controller::{digest, get_mass};
 
+/// Starts the MaCPepDB web server on the given interface and port.
+///
+/// # Arguments
+/// * `database_nodes` - List of database nodes
+/// * `interface` - Interface to listen on
+/// * `port` - Port to listen on
+///
 pub async fn start(database_nodes: Vec<String>, interface: String, port: u16) -> Result<()> {
     // Create a database client
     // Session maintains it own connection pool internally: https://github.com/scylladb/scylla-rust-driver/issues/724

@@ -32,6 +32,46 @@ use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::web::web_error::WebError;
 
+/// Returns the peptide for given sequence.
+///
+/// # Arguments
+/// * `db_client` - The database client
+/// * `configuration` - MaCPepDB configuration
+/// * `accession` - Protein accession extracted from URL path
+///
+/// # API
+/// ## Request
+/// * Path: `/api/peptides/:sequence`
+/// * Method: `GET`
+///
+/// ## Response
+/// ```json
+/// {
+///     "partition": 19,
+///     "mass": 1015475679562,
+///     "sequence": "HMENEKTK",
+///     "missed_cleavages": 1,
+///     # Amino acid counts, the amino acid at index 0 is A, at index 1 is B, ...
+///     "aa_counts": [
+///         0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 2, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
+///     ],
+///     "proteins": [
+///         "Q924W6"
+///     ],
+///     "is_swiss_prot": true,
+///     "is_trembl": false,
+///     "taxonomy_ids": [
+///         10090
+///     ],
+///     "unique_taxonomy_ids": [
+///         10090
+///     ],
+///     "proteome_ids": [
+///         "UP000000589"
+///     ],
+///     "domains": []
+/// }
+///
 pub async fn get_peptide(
     State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,
     Path(sequence): Path<String>,
@@ -94,6 +134,16 @@ impl SearchRequestBody {
     }
 }
 
+/// Returns a basic fallible stream over the filtered peptides
+///
+/// # Arguments
+/// * `payload` - The request body
+/// * `mass` - The mass to search for
+/// * `db_client` - The database client
+/// * `configuration` - MaCPepDB configuration
+/// * `matching_peptides` - A bloom filter to check if a peptide was already found
+/// * `ptm_condition` - Optional: PTM condition to check if a peptide is matches
+///
 async fn search_peptide_stream_mass<'a>(
     payload: &'a SearchRequestBody,
     mass: i64,
@@ -173,10 +223,14 @@ async fn search_peptide_stream_mass<'a>(
     })
 }
 
-/// Returns a fallible stream over the filtered peptides
+/// Returns a fallible stream over the filtered peptides.
+/// (Combines stream for multiple PTM conditions)
 ///
 /// # Arguments
-/// *
+/// * `payload` - The request body
+/// * `db_client` - The database client
+/// * `configuration` - MaCPepDB configuration
+///
 async fn search_peptide_stream<'a>(
     payload: SearchRequestBody,
     db_client: Arc<Client>,
@@ -206,22 +260,83 @@ async fn search_peptide_stream<'a>(
     })
 }
 
-/// Search for peptides by several parameters:
-/// * mass
-/// * lower_mass_tolerance_ppm
-/// * upper_mass_tolerance_ppm
-/// * max_variable_modifications
-/// * modifications
-/// * taxonomy_id
-/// * proteome_id
-/// * is_reviewed
-/// And return them as stream in the requested format
-/// (application/json, text/csv, text/plain)
+/// Returns a stream of peptides matching the given parameters.
 ///
 /// # Arguments
 /// * `db_client` - The database client
-/// * `headers` - The request headers
+/// * `configuration` - The configuration
 /// * `payload` - The request body
+///
+/// # API
+/// ## Request
+/// * Path: `/api/peptides/search`
+/// * Method: `POST`
+/// * Headers:
+///     * `Content-Type`: `application/json`
+///     * `Accept`: `application/json`, `text/csv`, `text/plain` (optional, default: `application/json`, controls the output format)
+/// * Body:
+///     ```json
+///     {
+///         # Mass to search for
+///         "mass": 2006.988396539,
+///         # Lower mass tolerance in ppm
+///         "lower_mass_tolerance_ppm": 5,
+///         # Upper mass tolerance in ppm
+///         "upper_mass_tolerance_ppm": 5,
+///         # Optional parameters for digestion, if one of them is skipped
+///         "max_variable_modifications": 3,
+///         # List of post translational modifications
+///         "modifications": [
+///             [
+///                 "C",        # Amino acid one letter code
+///                 57.021464,  # Mass shift
+///                 "static",   # Type: static, variable
+///                 "anywhere"  # Position: anywhere, n, c
+///             ]
+///         ]
+///     }
+///     ```
+///     Deserialized into [SearchRequestBody](SearchRequestBody)
+///
+/// ## Response
+/// ### `application/json`
+/// ```json
+/// [
+///    peptide_1,
+///    peptide_2,
+///    ...
+/// ]
+/// ```
+/// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](get_peptide).
+///
+/// ### `text/csv`
+/// Due to serde limitations, the CSV does not contain a header.
+/// The columns are:
+/// * `partition`
+/// * `mass`
+/// * `sequence`
+/// * `amino_acid_count_a`
+/// * `amino_acid_count_b`
+/// * ...
+/// * `amino_acid_count_z`
+/// * `proteins`
+/// * `is_swiss_prot`
+/// * `is_trembl`
+/// * `taxonomy_ids`
+/// * `unique_taxonomy_ids`
+/// * `proteome_ids`
+///
+/// ```csv
+/// 51,2006988396539,NLETPSCKNGFLLDGFPR,1,0,0,1,1,1,2,2,0,0,0,1,3,0,2,0,2,0,1,1,1,0,0,0,0,0,0,Q9WTP6,true,false,10090,10090,UP000000589
+/// ...
+/// ```
+///
+/// ### `text/plain`
+/// ```text
+/// sequence_1
+/// sequence_2
+/// ...
+/// ```
 ///
 pub async fn search(
     State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,

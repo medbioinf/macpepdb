@@ -24,40 +24,25 @@ use crate::web::web_error::WebError;
 
 /// Request body for the digest endpoint
 ///
-/// # API
-/// ## Request
-/// ```json
-/// {
-///     "sequence": "PEPTIDER",
-///     # Optional parameters
-///     "db_match": false,
-///     "digestion_enzyme": "trypsin",
-///     "max_number_of_missed_cleavages": "2"
-///     "min_peptide_length": "6",
-///     "max_peptide_length": "50",
-/// }
-/// ```
-///
 #[derive(Deserialize)]
 pub struct DigestionRequestBody {
     /// Sequence to digest
-    pub sequence: String,
+    sequence: String,
     /// If true the resulting peptides will be matched against the database
     /// And the result will include a list `db_peptides` with all of the peptides which are in the database
     #[serde(default = "bool::default")]
-    pub db_match: bool,
+    db_match: bool,
     /// The enzyme to use for digestion, default the enzyme specified during MaCPepDB creation is used
-    pub digestion_enzyme: Option<String>,
+    digestion_enzyme: Option<String>,
     /// The `max_number_of_missed_cleavages` to use for digestion, default the enzyme specified during MaCPepDB creation is used
-    pub max_number_of_missed_cleavages: Option<usize>,
+    max_number_of_missed_cleavages: Option<usize>,
     /// The `min_peptide_length` to use for digestion, default the enzyme specified during MaCPepDB creation is used
-    pub min_peptide_length: Option<usize>,
+    min_peptide_length: Option<usize>,
     /// The `max_peptide_length` to use for digestion, default the enzyme specified during MaCPepDB creation is used
-    pub max_peptide_length: Option<usize>,
+    max_peptide_length: Option<usize>,
 }
 
 /// Digests a sequence with the optionally specified enzyme and returns the peptides.
-/// See: [DigestionRequestBody](DigestionRequestBody) for parameter details
 ///
 /// # Arguments
 /// * `db_client` - The database client
@@ -70,11 +55,30 @@ pub struct DigestionRequestBody {
 /// * Method: `POST`
 /// * Headers:
 ///     * `Content-Type`: `application/json`
-/// * Body: see [DigestionRequestBody](DigestionRequestBody)
+/// * Body:
+///     ```json
+///     {
+///         # Sequence to digest
+///         "sequence": "PEPTIDER",
+///         # Optional parameters for digestion, if one of them is skipped
+///         # the default value from the MaCPeDB configuration is used
+///         # If true the resulting peptides will be matched against the database    
+///         "db_match": false,
+///         # The enzyme to use for digestion
+///         "digestion_enzyme": "trypsin",
+///         # The `max_number_of_missed_cleavages` to use for digestion
+///         "max_number_of_missed_cleavages": "2"
+///         # The `min_peptide_length` to use for digestion
+///         "min_peptide_length": "6",
+///         # The `max_peptide_length` to use for digestion
+///         "max_peptide_length": "50",
+///     }
+///     ```
+///     Deserialized into [DigestionRequestBody](DigestionRequestBody)
 ///
 /// ## Response
 /// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](crate::web::peptide_controller::get_peptide).
-/// ```
+/// ```json
 /// {
 ///     "peptides": [
 ///         peptide_1,
@@ -179,7 +183,7 @@ pub async fn digest(
 /// Calculates the mass of the given sequence
 ///
 /// # Arguments
-/// * `sequence` - The sequence to calculate the mass for extractable from the path
+/// * `sequence` - The sequence to calculate the mass for, extracted from URL path
 ///
 /// # API
 /// ## Request
