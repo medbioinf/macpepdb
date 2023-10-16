@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 // 3rd party imports
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::Json;
 use scylla::frame::response::result::CqlValue;
 use serde::Deserialize;
@@ -13,11 +13,13 @@ use serde_json::{json, Value as JsonValue};
 use crate::biology::digestion_enzyme::functions::{
     create_peptides_entities_from_digest, get_enzyme_by_name,
 };
+use crate::chemistry::amino_acid::calc_sequence_mass;
 use crate::database::scylla::client::Client;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::selectable_table::SelectableTable;
 use crate::entities::configuration::Configuration;
 use crate::entities::peptide::Peptide;
+use crate::mass::convert::to_float as mass_to_float;
 use crate::web::web_error::WebError;
 
 /// Request body for the digest endpoint
@@ -172,4 +174,22 @@ pub async fn digest(
             "peptides": peptides,
         })))
     }
+}
+
+/// Calculates the mass of the given sequence
+///
+/// # Arguments
+/// * `sequence` - The sequence to calculate the mass for extractable from the path
+///
+/// # API
+/// ## Request
+/// * Path: `/api/tools/mass/:sequence`
+/// * Method: `GET`
+///
+pub async fn get_mass(Path(sequence): Path<String>) -> Result<Json<JsonValue>, WebError> {
+    let mass = calc_sequence_mass(&sequence)?;
+
+    Ok(Json(json!({
+        "mass": mass_to_float(mass),
+    })))
 }

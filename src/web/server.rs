@@ -15,7 +15,7 @@ use crate::entities::configuration::Configuration;
 use crate::web::configuration_controller::get_configuration;
 use crate::web::peptide_controller::{get_peptide, search as peptide_search};
 use crate::web::protein_controller::get_protein;
-use crate::web::tools_controller::digest;
+use crate::web::tools_controller::{digest, get_mass};
 
 pub async fn start(database_nodes: Vec<String>, interface: String, port: u16) -> Result<()> {
     // Create a database client
@@ -51,7 +51,8 @@ pub async fn start(database_nodes: Vec<String>, interface: String, port: u16) ->
         .with_state(configuration.clone())
         // tools
         .route("/api/tools/digest", post(digest))
-        .with_state((db_client.clone(), configuration.clone()));
+        .with_state((db_client.clone(), configuration.clone()))
+        .route("/api/tools/mass/:sequence", post(get_mass));
 
     // Run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
