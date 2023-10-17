@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use fallible_iterator::FallibleIterator;
 use log::error;
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::entities::domain::Domain;
 // internal imports
@@ -106,6 +106,7 @@ impl FallibleIterator for Reader {
         let mut domain_name: String = "".to_string();
         let mut domain_evidence: String = "".to_string();
         let mut is_building_domain = false;
+        let mut ft_type: String = "".to_string();
 
         loop {
             let mut line = String::new();
@@ -247,42 +248,58 @@ impl FallibleIterator for Reader {
                         }
                     }
                     "FT" => {
-                        if line[5..].starts_with("DOMAIN") {
-                            is_building_domain = true;
-                            let indices_list: Vec<_> = line[11..]
-                                .trim()
-                                .replace("<", "")
-                                .replace(">", "")
-                                .replace("?", "")
-                                .split("..")
-                                .map(|s| {
-                                    s.parse::<i64>()
-                                        .map_err(|x| error!("{} {} {:?}", x, line, accessions))
-                                })
-                                .collect();
+                        if !is_building_domain {
+                            ft_type = line[5..13].to_string();
+                            if ft_type == "TOPO_DOM"
+                                || ft_type == "TRANSMEM"
+                                || ft_type == "INTRAMEM"
+                            {
+                                is_building_domain = true;
+                                let indices_list: Vec<_> = line[13..]
+                                    .trim()
+                                    .replace("<", "")
+                                    .replace(">", "")
+                                    .replace("?", "")
+                                    .split("..")
+                                    .map(|s| {
+                                        s.parse::<i64>()
+                                            .map_err(|x| error!("{} {} {:?}", x, line, accessions))
+                                    })
+                                    .collect();
 
-                            if indices_list[0].is_err() {
-                                warn!(
-                                    "Could not process domain {:?}",
-                                    indices_list[0].unwrap_err()
-                                );
-                                is_building_domain = false;
-                            } else if indices_list[1].is_err() {
-                                warn!(
-                                    "Could not process domain {:?}",
-                                    indices_list[1].unwrap_err()
-                                );
-                                is_building_domain = false;
-                            } else {
-                                domain_start_idx = indices_list[0].unwrap();
-                                domain_end_idx = indices_list[1].unwrap();
+                                if indices_list[0].is_err() {
+                                    warn!(
+                                        "Could not process domain {:?}",
+                                        indices_list[0].unwrap_err()
+                                    );
+                                    is_building_domain = false;
+                                } else if indices_list.len() > 1 && indices_list[1].is_err() {
+                                    warn!(
+                                        "Could not process domain {:?}",
+                                        indices_list[1].unwrap_err()
+                                    );
+                                    is_building_domain = false;
+                                } else if indices_list.len() > 1 {
+                                    domain_start_idx = indices_list[0].unwrap();
+                                    domain_end_idx = indices_list[1].unwrap();
+                                } else {
+                                    domain_start_idx = indices_list[0].unwrap();
+                                    domain_end_idx = indices_list[0].unwrap();
+                                }
                             }
-                        } else if is_building_domain {
-                            let s = line[11..].trim();
-                            if s.starts_with("/note") {
+                        } else {
+                            let s = line[13..].trim();
+                            if s.starts_with("/note") && ft_type == "TOPO_DOM" {
                                 domain_name = s[7..s.len() - 1].to_string();
                             }
                             if s.starts_with("/evidence") {
+                                if domain_name == "" {
+                                    if ft_type == "TRANSMEM" {
+                                        domain_name = "Transmembrane".to_string();
+                                    } else if ft_type == "INTRAMEM" {
+                                        domain_name = "Intramembrane".to_string();
+                                    }
+                                }
                                 domain_evidence = s[11..s.len() - 1].to_string();
                                 domains.push(Domain::new(
                                     domain_start_idx - 1,
@@ -294,6 +311,7 @@ impl FallibleIterator for Reader {
                                     None,
                                     None,
                                 ));
+                                domain_name = "".to_string();
                                 is_building_domain = false;
                             }
                         }

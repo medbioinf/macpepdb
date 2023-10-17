@@ -923,8 +923,6 @@ impl DatabaseBuild {
                 PeptideTable::table_name()
             );
 
-            debug!("Streaming rows of partition {}", partition);
-
             let mut rows_stream = session
                 .query_iter(query_statement, (partition,))
                 .await

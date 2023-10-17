@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 // std imports
 use std::fs::read_to_string;
 use std::{path::Path, thread::sleep, time::Duration};
@@ -65,7 +66,7 @@ enum Commands {
         interface: String,
         port: u16,
     },
-    CheckIsUpdated {
+    DomainTypes {
         database_url: String,
     },
 }
@@ -230,7 +231,7 @@ async fn main() -> Result<()> {
                 error!("Unsupported database protocol: {}", database_url);
             }
         }
-        Commands::CheckIsUpdated { database_url } => {
+        Commands::DomainTypes { database_url } => {
             if database_url.starts_with("scylla://") {
                 let plain_database_url = database_url[9..].to_string();
                 let database_hosts = plain_database_url
@@ -244,9 +245,11 @@ async fn main() -> Result<()> {
                 let not_updated_peptides = info_span!("not_updated_peptides");
                 let not_updated_peptides_enter = not_updated_peptides.enter();
 
+                let mut domains: HashSet<String> = HashSet::new();
+
                 for partition in 0_i64..100_i64 {
                     let query_statement = format!(
-                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
+                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = true ALLOW FILTERING",
                 SELECT_COLS,
                 SCYLLA_KEYSPACE_NAME,
                 PeptideTable::table_name()
@@ -267,14 +270,19 @@ async fn main() -> Result<()> {
                         }
                         let row = row_opt.unwrap();
                         let peptide = Peptide::from(row);
-                        info!(
-                            "peptide {} {:?}",
-                            peptide.get_sequence(),
-                            peptide.get_proteins()
-                        );
-                        break;
+
+                        let a = peptide.get_domains().iter().map(|x| x.get_name());
+
+                        for name in a {
+                            if name == "" {
+                                info!("{:?}", peptide.get_proteins());
+                            }
+                            domains.insert(name.to_string());
+                        }
                     }
                 }
+
+                info!("{:?}", domains);
                 std::mem::drop(not_updated_peptides_enter);
                 std::mem::drop(not_updated_peptides);
             } else {
