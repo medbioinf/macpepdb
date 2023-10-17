@@ -102,9 +102,11 @@ This is a ScyllaDB user defined datatype.
 | end_index_protein   | bigint | End index of domain for the protein sequence (this column empty for the Protein table)                                                               |
 | peptide_offset      | bigint | Start index of the peptide sequence within the protein                                                                                               |
 
-## Querying
 
-!!!TODO
+## Usage
+
+### Web API
+`cargo run -r web scylla://<COMMA_SEPARATED_SCYLLA_NODES_LIST> <IP> <PORT>`
 
 ## Citation
 

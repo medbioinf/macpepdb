@@ -8,7 +8,6 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use indicatif::ProgressStyle;
-use macpepdb::api::peptides::routes::peptide_routes;
 use macpepdb::database::scylla::client::GenericClient;
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use macpepdb::database::scylla::protein_table::ProteinTable;
@@ -20,19 +19,18 @@ use tracing::{debug, error, info, info_span, Level};
 use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
-use warp::Filter;
 
 // internal imports
 use macpepdb::functions::performance_measurement::scylla as scylla_performance;
 use macpepdb::io::post_translational_modification_csv::reader::Reader as PtmReader;
 use macpepdb::mass::convert::to_int as mass_to_int;
+use macpepdb::web::server::start as start_web_server;
 use macpepdb::{
     database::{
         database_build::DatabaseBuild, scylla::database_build::DatabaseBuild as ScyllaBuild,
     },
     entities::configuration::Configuration,
 };
-use scylla::frame::response::result::CqlValue;
 
 #[derive(Debug, Subcommand)]
 enum Commands {
@@ -63,8 +61,10 @@ enum Commands {
         upper_mass_tolerance: i64,
         max_variable_modifications: i16,
     },
-    API {
+    Web {
         database_url: String,
+        interface: String,
+        port: u16,
     },
     DomainTypes {
         database_url: String,
@@ -215,17 +215,18 @@ async fn main() -> Result<()> {
                 error!("Unsupported database protocol: {}", database_url);
             }
         }
-        Commands::API { database_url } => {
+        Commands::Web {
+            database_url,
+            interface,
+            port,
+        } => {
             if database_url.starts_with("scylla://") {
                 let plain_database_url = database_url[9..].to_string();
                 let database_hosts = plain_database_url
                     .split(",")
                     .map(|x| x.to_string())
                     .collect::<Vec<String>>();
-
-                warp::serve(peptide_routes(database_hosts))
-                    .run(([127, 0, 0, 1], 8080))
-                    .await;
+                start_web_server(database_hosts, interface, port).await?;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }

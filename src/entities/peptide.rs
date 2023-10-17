@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     hash::{Hash, Hasher},
     ops::Index,
+    string::ToString,
 };
 
 // 3rd party imports
@@ -358,5 +359,11 @@ impl From<ScyllaRow> for Peptide {
             proteome_ids: proteome_ids.unwrap_or(vec![]),
             domains: domains.unwrap_or(vec![]),
         }
+    }
+}
+
+impl ToString for Peptide {
+    fn to_string(&self) -> String {
+        self.sequence.clone()
     }
 }

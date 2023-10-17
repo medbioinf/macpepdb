@@ -97,7 +97,7 @@ where
     /// * `num_rows` - The number of rows to fetch at once
     ///
     async fn raw_stream(
-        client: &'a mut C,
+        client: &'a C,
         cols: &str,
         additional: &str,
         params: &'a [&'a Self::Parameter],
@@ -119,8 +119,8 @@ where
     /// * `num_rows` - The number of rows to fetch at once
     ///
     async fn stream(
-        client: &'a mut C,
-        additional: &str,
+        client: &'a C,
+        additional: &'a str,
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
     ) -> Result<impl Stream<Item = Result<Self::Entity>>>;

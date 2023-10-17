@@ -1,5 +1,8 @@
+// 3rd party imports
+use serde::Serialize;
+
 /// Keeps the configuration parameters for MaCPepDB, e.g. digestion parameters, distribution ...
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Configuration {
     enzyme_name: String,
     max_number_of_missed_cleavages: usize,
