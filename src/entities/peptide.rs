@@ -3,21 +3,15 @@ use std::{
     cmp,
     collections::HashMap,
     hash::{Hash, Hasher},
-    ops::Index,
     string::ToString,
 };
 
 // 3rd party imports
 use anyhow::Result;
 use scylla::frame::response::result::Row as ScyllaRow;
-use scylla::{_macro_internal::ValueList, frame::response::result::CqlValue};
-use tracing::error;
 
 // internal imports
-use crate::{
-    biology::digestion_enzyme::enzyme::Enzyme, entities::protein::Protein,
-    tools::cql::get_cql_value,
-};
+use crate::{biology::digestion_enzyme::enzyme::Enzyme, entities::protein::Protein};
 
 use super::domain::Domain;
 

@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use fallible_iterator::FallibleIterator;
 use log::error;
-use tracing::{info, warn};
+use tracing::warn;
 
 use crate::entities::domain::Domain;
 // internal imports
@@ -104,7 +104,7 @@ impl FallibleIterator for Reader {
         let mut domain_start_idx: i64 = 0;
         let mut domain_end_idx: i64 = 0;
         let mut domain_name: String = "".to_string();
-        let mut domain_evidence: String = "".to_string();
+        let mut domain_evidence: String;
         let mut is_building_domain = false;
         let mut ft_type: String = "".to_string();
 
@@ -405,7 +405,7 @@ mod tests {
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         let mut ctr = 0;
 
-        let EXPECTED_DOMAIN: Domain = Domain::new(
+        let expected_domain: Domain = Domain::new(
             23,
             243,
             "Peptidase S1".to_string(),
@@ -471,7 +471,7 @@ mod tests {
             );
 
             if ctr == 0 {
-                assert_eq!(protein.get_domains(), &vec![EXPECTED_DOMAIN.to_owned()])
+                assert_eq!(protein.get_domains(), &vec![expected_domain.to_owned()])
             }
 
             ctr += 1;

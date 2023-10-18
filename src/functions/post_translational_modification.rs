@@ -468,7 +468,7 @@ fn recursively_apply_ptms(
 mod test {
     // 3rd party imports
     use dihardts_omicstools::{
-        chemistry::amino_acid::{CYSTEINE, METHIONINE, TRYPTOPHAN},
+        chemistry::amino_acid::{CYSTEINE, METHIONINE},
         proteomics::peptide::Terminus,
         proteomics::post_translational_modifications::{
             ModificationType, Position, PostTranslationalModification as PTM,

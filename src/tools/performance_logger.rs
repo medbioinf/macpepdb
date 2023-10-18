@@ -1,7 +1,6 @@
 // std imports
 use std::{
     cmp,
-    path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
@@ -14,7 +13,7 @@ use anyhow::Result;
 use log::error;
 use tokio::sync::mpsc::Receiver;
 use tokio::{fs::File, time::Instant};
-use tracing::{debug, info, info_span};
+use tracing::{info, info_span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::entities::protein::Protein;
@@ -61,7 +60,6 @@ pub async fn performance_log_receiver(
 }
 
 pub async fn performance_log_thread(
-    num_proteins: &usize,
     num_proteins_processed: Arc<Mutex<u64>>,
     num_peptides_processed: Arc<Mutex<u64>>,
     protein_queue_arc: Arc<Mutex<Vec<Protein>>>,

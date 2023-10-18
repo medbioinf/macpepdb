@@ -1,14 +1,6 @@
-use std::cmp::min;
-
 // 3rd party imports
-use anyhow::{anyhow, Result};
-use chrono::NaiveDateTime;
-use scylla::frame::response::result::CqlValue;
-use scylla::frame::response::result::Row as ScyllaRow;
 use scylla::FromUserType;
 use scylla::IntoUserType;
-
-use crate::tools::cql::get_cql_value;
 
 #[derive(
     Clone, PartialEq, Debug, IntoUserType, FromUserType, serde::Deserialize, serde::Serialize,

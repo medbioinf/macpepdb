@@ -1,7 +1,5 @@
-use std::collections::{HashMap, HashSet};
-use std::iter::Map;
+use std::collections::HashSet;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -14,17 +12,13 @@ use anyhow::{bail, Result};
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::stream::FuturesUnordered;
-use futures::{Future, StreamExt};
-use scylla::batch::Batch;
-use scylla::frame::value::BatchValues;
+use futures::StreamExt;
 use scylla::prepared_statement::PreparedStatement;
-use scylla::query::Query;
-use scylla::ValueList;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
-use tracing::{debug, debug_span, error, info, span, warn, Level};
+use tracing::{debug, error, info, span, warn, Level};
 
 // internal imports
 use crate::biology::digestion_enzyme::{
@@ -178,7 +172,6 @@ impl DatabaseBuild {
         digestion_enzyme: &dyn Enzyme,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
-        num_proteins: usize,
         log_folder: &PathBuf,
         is_test_run: bool,
     ) -> Result<()> {
@@ -281,7 +274,6 @@ impl DatabaseBuild {
             let stop_flag_clone = performance_log_stop_flag.clone();
             performance_log_thread_handle = Some(spawn(async move {
                 performance_log_thread(
-                    &num_proteins,
                     num_proteins_processed_clone,
                     num_peptides_processed_clone,
                     protein_queue_arc_clone,
@@ -391,7 +383,7 @@ impl DatabaseBuild {
     /// * `remove_peptides_containing_unknown` - If true, peptides containing unknown amino acids are removed
     ///
     async fn digestion_thread(
-        thread_id: usize,
+        _thread_id: usize,
         database_urls: &Vec<String>,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         partition_limits_arc: Arc<Vec<i64>>,
@@ -708,7 +700,7 @@ impl DatabaseBuild {
         Ok(())
     }
 
-    async fn digest_protein(
+    async fn _digest_protein(
         protein: &Protein,
         digestion_enzyme: &Box<dyn Enzyme>,
         remove_peptides_containing_unknown: bool,
@@ -900,7 +892,7 @@ impl DatabaseBuild {
     }
 
     async fn collect_peptide_metadata_thread(
-        thread_id: usize,
+        _thread_id: usize,
         database_urls: Vec<String>,
         partitions: Vec<i64>,
         peptide_sender: Sender<u64>,
@@ -1054,6 +1046,8 @@ impl DatabaseBuildTrait for DatabaseBuild {
                 protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
             }
 
+            info!("{} proteins counted", protein_ctr);
+
             Self::protein_digestion(
                 database_hosts.clone(),
                 num_threads,
@@ -1061,7 +1055,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
                 digestion_enzyme.as_ref(),
                 configuration.get_remove_peptides_containing_unknown(),
                 configuration.get_partition_limits().to_vec(),
-                protein_ctr.clone(),
                 log_folder,
                 is_test_run,
             )

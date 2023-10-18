@@ -4,7 +4,6 @@ use std::cmp::min;
 // 3rd party imports
 use anyhow::{anyhow, Result};
 use chrono::NaiveDateTime;
-use scylla::frame::response::result::CqlValue;
 use scylla::frame::response::result::Row as ScyllaRow;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -12,7 +11,6 @@ use serde_json::Value as JsonValue;
 // internal imports
 use crate::biology::digestion_enzyme::enzyme::Enzyme as DigestionEnzyme;
 use crate::entities::domain::Domain;
-use crate::tools::cql::get_cql_value;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB

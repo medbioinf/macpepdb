@@ -2,9 +2,8 @@
 use anyhow::Result;
 use async_stream::try_stream;
 use futures::Stream;
-use scylla::batch::{Batch, BatchStatement};
+use scylla::batch::Batch;
 use scylla::frame::response::result::{CqlValue, Row};
-use scylla::statement::query::Query;
 use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 use scylla::transport::query_result::FirstRowError;
@@ -13,7 +12,6 @@ use scylla::transport::query_result::FirstRowError;
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::protein::Protein;
-use crate::tools::cql::get_cql_value;
 
 use super::client::GenericClient;
 use super::SCYLLA_KEYSPACE_NAME;
@@ -298,7 +296,6 @@ mod tests {
 
     // external imports
     use fallible_iterator::FallibleIterator;
-    use scylla::transport::query_result::FirstRowError;
     use serial_test::serial;
 
     // internal imports

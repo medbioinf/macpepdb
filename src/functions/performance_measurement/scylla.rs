@@ -4,10 +4,10 @@ use std::time::Instant;
 // 3rd party imports
 use anyhow::Result;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
-use futures::{pin_mut, StreamExt};
+use futures::StreamExt;
 use indicatif::ProgressStyle;
 use scylla::frame::response::result::CqlValue;
-use tracing::{debug, info_span, Span};
+use tracing::{info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
@@ -16,11 +16,9 @@ use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 // internal imports
 use crate::database::scylla::client::{Client, GenericClient};
 use crate::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
-use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
 use crate::functions::post_translational_modification::get_ptm_conditions;
-use crate::tools::mass_to_partition::mass_to_partition_index;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
 pub async fn query_performance(

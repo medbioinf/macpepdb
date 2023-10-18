@@ -3,11 +3,8 @@ use anyhow::Result;
 use async_stream::try_stream;
 use futures::future::join_all;
 use futures::Stream;
-use scylla::batch::Batch;
 use scylla::frame::response::result::{CqlValue, Row};
-use scylla::frame::value::BatchValues;
 use scylla::prepared_statement::PreparedStatement;
-use scylla::query::Query;
 use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 use scylla::transport::query_result::FirstRowError;
@@ -15,12 +12,10 @@ use scylla::transport::query_result::FirstRowError;
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
-use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 
 use crate::database::scylla::client::GenericClient;
 use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
-use crate::tools::cql::get_cql_value;
 
 pub const TABLE_NAME: &'static str = "peptides";
 
@@ -29,8 +24,6 @@ pub const SELECT_COLS: &'static str = "partition, mass, sequence, missed_cleavag
 const INSERT_COLS: &'static str = SELECT_COLS;
 
 const UPDATE_COLS: &'static str = "missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids, domains";
-
-const NUM_PRIMARY_KEY_COLS: usize = 3;
 
 lazy_static! {
     static ref INSERT_PLACEHOLDERS: String = INSERT_COLS

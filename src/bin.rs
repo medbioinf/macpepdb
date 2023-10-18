@@ -10,9 +10,7 @@ use futures::StreamExt;
 use indicatif::ProgressStyle;
 use macpepdb::database::scylla::client::GenericClient;
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
-use macpepdb::database::scylla::protein_table::ProteinTable;
 use macpepdb::database::scylla::{get_client, SCYLLA_KEYSPACE_NAME};
-use macpepdb::database::selectable_table::SelectableTable;
 use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
 use tracing::{debug, error, info, info_span, Level};
@@ -45,10 +43,6 @@ enum Commands {
         partitioner_false_positive_probability: f64,
         #[clap(value_delimiter = ',', num_args = 1..)]
         protein_file_paths: Vec<String>,
-        #[clap(long)]
-        show_progress: bool,
-        #[clap(long)]
-        verbose: bool,
         log_folder: String,
         #[clap(long)]
         only_metadata: bool,
@@ -129,8 +123,6 @@ async fn main() -> Result<()> {
             num_partitions,
             allowed_ram_usage,
             partitioner_false_positive_probability,
-            show_progress,
-            verbose,
             log_folder,
             only_metadata,
         } => {
