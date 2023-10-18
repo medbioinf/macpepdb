@@ -102,10 +102,42 @@ This is a ScyllaDB user defined datatype.
 | end_index_protein   | bigint | End index of domain for the protein sequence (this column empty for the Protein table)                                                               |
 | peptide_offset      | bigint | Start index of the peptide sequence within the protein                                                                                               |
 
+## Scylla Cluster Deployment
+
+### Install Scylla
+
+[Ubuntu 22.04](https://www.scylladb.com/download/?platform=ubuntu-22.04&version=scylla-5.2#open-source)
+
+### Configure
+
+For every node in the cluster:
+
+Edit `/etc/scylla/scylla.yaml` and
+
+- set the seed to the IP of the first node in the cluster
+- Set listen-address and rpm-address to the IP of the current node
+- Set the same cluster name
+- Use GossipingPropertyFileSnitch as a snitch
+
+Edit `/etc/scylla/cassandra-rackdc.properties` and
+
+- uncomment and name dc and rack
+
+### Scylla Setup
+
+For every node in the cluster:
+
+- Run `scylla_setup` and use XFS setup on the desired drive
+- Don’t use io tuner during setup
+- Enable dev mode: `sudo scylla_dev_mode_setup —developer_mode 1`
+- `sudo systemctl start scylla-server`
+
+You can try using io tuner for your disk, however in some cases the performance with io tuner and non-devmode seems worse than performance with no iotuner and devmode enabled
 
 ## Usage
 
 ### Web API
+
 `cargo run -r web scylla://<COMMA_SEPARATED_SCYLLA_NODES_LIST> <IP> <PORT>`
 
 ## Citation
