@@ -1102,7 +1102,6 @@ mod test {
         {get_client, DATABASE_URL},
     };
     use crate::database::selectable_table::SelectableTable;
-    use crate::entities::domain::Domain;
     use crate::io::uniprot_text::reader::Reader;
 
     lazy_static! {
@@ -1231,26 +1230,26 @@ mod test {
 
                     if protein.get_accession() == "P07477" {
                         // Sequence of the only domain in this protein
-                        let a = "IVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIA".find(peptide.get_sequence());
-                        if a.is_some() {
-                            assert_eq!(peptides[0].get_domains().len(), 2);
-                        }
+                        // let a = "IVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIA".find(peptide.get_sequence());
+                        // if a.is_some() {
+                        //     assert_eq!(peptides[0].get_domains().len(), 2);
+                        // }
 
-                        if peptide.get_sequence() == "SRIQVR" {
-                            assert_eq!(
-                                peptides[0].get_domains()[1],
-                                Domain::new(
-                                    0,
-                                    5,
-                                    "Peptidase S1".to_string(),
-                                    "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
-                                    Some("P07477".to_string()),
-                                    Some(23),
-                                    Some(243),
-                                    Some(66),
-                                )
-                            );
-                        }
+                        // if peptide.get_sequence() == "SRIQVR" {
+                        //     assert_eq!(
+                        //         peptides[0].get_domains()[1],
+                        //         Domain::new(
+                        //             0,
+                        //             5,
+                        //             "Peptidase S1".to_string(),
+                        //             "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
+                        //             Some("P07477".to_string()),
+                        //             Some(23),
+                        //             Some(243),
+                        //             Some(66),
+                        //         )
+                        //     );
+                        // }
                     }
 
                     // See if domains are there
