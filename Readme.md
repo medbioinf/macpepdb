@@ -2,6 +2,8 @@
 
 MaCPepDB creates and maintains a peptide database and provides a web API for accessing the database.
 
+Note: This is the next iteration of MaCPepDB, moving from the [previous Python-implementation](https://github.com/mpc-bioinformatics/macpepdb) to Rust and using ScyllaDB instead of PostgreSQL / Citus, in order to get better performance and make MaCPepDB ready to include more data.d
+
 ## Ambiguous amino acids
 
 Some UniProt entries contain one letter codes which encode multiple amino acids. Usually the encoded amino acids
