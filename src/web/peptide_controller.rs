@@ -8,7 +8,7 @@ use async_stream::{stream, try_stream};
 use axum::extract::{Json, Path, State};
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use axum_streams::*;
 use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::chemistry::amino_acid::get_amino_acid_by_one_letter_code;
@@ -98,6 +98,48 @@ pub async fn get_peptide(
             StatusCode::NOT_FOUND,
             "Peptide not found".to_string(),
         ));
+    }
+}
+
+/// Returns if a peptide exists.
+///
+/// # Arguments
+/// * `db_client` - The database client
+/// * `configuration` - MaCPepDB configuration
+/// * `sequence` - Peptide sequence from path
+///
+/// # API
+/// ## Request
+/// * Path: `/api/peptides/:sequence/exists`
+/// * Method: `GET`
+///
+/// ## Response
+/// Response will be empty.
+/// Statuscode 200 if peptide exists, otherwise 404
+///
+pub async fn get_peptide_existence(
+    State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,
+    Path(sequence): Path<String>,
+) -> Result<Response, WebError> {
+    let sequence = sequence.to_uppercase();
+    let mass = calc_sequence_mass(sequence.as_str())?;
+    let partition = get_mass_partition(configuration.get_partition_limits(), mass)?;
+
+    let peptide_opt = PeptideTable::select(
+        db_client.as_ref(),
+        "WHERE partition = ? AND mass = ? and sequence = ?",
+        &[
+            &CqlValue::BigInt(partition as i64),
+            &CqlValue::BigInt(mass),
+            &CqlValue::Text(sequence),
+        ],
+    )
+    .await?;
+
+    if peptide_opt.is_some() {
+        Ok((StatusCode::OK, "").into_response())
+    } else {
+        Ok((StatusCode::NOT_FOUND, "").into_response())
     }
 }
 

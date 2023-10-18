@@ -13,7 +13,9 @@ use crate::database::scylla::client::{Client, GenericClient};
 use crate::database::scylla::configuration_table::ConfigurationTable;
 use crate::entities::configuration::Configuration;
 use crate::web::configuration_controller::get_configuration;
-use crate::web::peptide_controller::{get_peptide, search as peptide_search};
+use crate::web::peptide_controller::{
+    get_peptide, get_peptide_existence, search as peptide_search,
+};
 use crate::web::protein_controller::get_protein;
 use crate::web::tools_controller::{digest, get_mass};
 
@@ -47,6 +49,8 @@ pub async fn start(database_nodes: Vec<String>, interface: String, port: u16) ->
     let app = Router::new()
         // Peptide routes
         .route("/api/peptides/search", post(peptide_search))
+        .with_state((db_client.clone(), configuration.clone()))
+        .route("/api/peptides/:sequence/exists", get(get_peptide_existence))
         .with_state((db_client.clone(), configuration.clone()))
         .route("/api/peptides/:sequence", get(get_peptide))
         .with_state((db_client.clone(), configuration.clone()))
