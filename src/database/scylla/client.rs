@@ -18,6 +18,12 @@ pub struct Client {
 }
 
 impl GenericClient for Client {
+    /// Creates a new ScyllaDB client
+    ///
+    /// # Arguments
+    /// * `hostnames` - List of hostnames to connect to
+    /// * `database` - Name of the keyspace to use
+    ///
     async fn new(hostnames: &Vec<String>, database: &str) -> Result<Self>
     where
         Self: Sized,
