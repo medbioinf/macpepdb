@@ -9,9 +9,9 @@ Note: This is the next iteration of MaCPepDB, moving from the [previous Python-i
 Some UniProt entries contain one letter codes which encode multiple amino acids. Usually the encoded amino acids
 have a similar or equal mass. Ambiguous one letter codes are:
 
-- `B` encodes `D` & `N`
-- `J` encodes `I` & `L`
-- `Z` encodes `E` & `Q`
+* `B` encodes `D` & `N`
+* `J` encodes `I` & `L`
+* `Z` encodes `E` & `Q`
 
 Because the amino acids encoded by `B` & `Z` have a different mass and only a few hundreds entries contain these, MaCPepDB resolves the ambiguity by creating all possible combination of the peptide with the distinct amino acids, e.g.:
 
@@ -28,13 +28,12 @@ In theory `X` is also ambiguous, encoding **all** amino acids. Practically a lot
 
 ## Input
 
-- Protein data are provided by UniProt Text/EMBL format (
-  - [Documentation](https://web.expasy.org/docs/userman.html)
-  - [Source](https://ftp.expasy.org/databases/uniprot/) (dat-files) or on UniProt download as `Text`
-- Taxonomy data are provided
-  _ [Documentation](https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump_readme.txt)
-  _ [Source](https://ftp.ncbi.nih.gov/pub/taxonomy/) (taxdump.zip)
-  )
+* Protein data are provided by UniProt Text/EMBL format (
+  * [Documentation](https://web.expasy.org/docs/userman.html)
+  * [Source](https://ftp.expasy.org/databases/uniprot/) (dat-files) or on UniProt download as `Text`
+* Taxonomy data are provided
+  * [Documentation](https://ftp.ncbi.nih.gov/pub/taxonomy/taxdump_readme.txt)
+  * [Source](https://ftp.ncbi.nih.gov/pub/taxonomy/) (taxdump.zip)
 
 ## Database structure
 
@@ -116,23 +115,23 @@ For every node in the cluster:
 
 Edit `/etc/scylla/scylla.yaml` and
 
-- set the seed to the IP of the first node in the cluster
-- Set listen-address and rpm-address to the IP of the current node
-- Set the same cluster name
-- Use GossipingPropertyFileSnitch as a snitch
+* set the seed to the IP of the first node in the cluster
+* Set listen-address and rpm-address to the IP of the current node
+* Set the same cluster name
+* Use GossipingPropertyFileSnitch as a snitch
 
 Edit `/etc/scylla/cassandra-rackdc.properties` and
 
-- uncomment and name dc and rack
+* uncomment and name dc and rack
 
 ### Scylla Setup
 
 For every node in the cluster:
 
-- Run `scylla_setup` and use XFS setup on the desired drive
-- Don’t use io tuner during setup
-- Enable dev mode: `sudo scylla_dev_mode_setup —developer_mode 1`
-- `sudo systemctl start scylla-server`
+* Run `scylla_setup` and use XFS setup on the desired drive
+* Don’t use io tuner during setup
+* Enable dev mode: `sudo scylla_dev_mode_setup —developer_mode 1`
+* `sudo systemctl start scylla-server`
 
 You can try using io tuner for your disk, however in some cases the performance with io tuner and non-devmode seems worse than performance with no iotuner and devmode enabled
 
@@ -151,5 +150,5 @@ DOI: 10.1021/acs.jproteome.0c00967
 
 ## Posters about further development
 
-- [MaCPepDB: Increasing the performance of the mass centric peptide database with old hardware and a distributed database](https://macpepdb.mpc.rub.de/api/documents/20220314-macpepdb__increasing-performance.pdf)
-- [Enhancements of MaCPepDB – the Mass Centric Peptide Database](https://macpepdb.mpc.rub.de/api/documents/20220331-enhancement_of_macpepdb.pdf)
+* [MaCPepDB: Increasing the performance of the mass centric peptide database with old hardware and a distributed database](https://macpepdb.mpc.rub.de/api/documents/20220314-macpepdb__increasing-performance.pdf)
+* [Enhancements of MaCPepDB – the Mass Centric Peptide Database](https://macpepdb.mpc.rub.de/api/documents/20220331-enhancement_of_macpepdb.pdf)
