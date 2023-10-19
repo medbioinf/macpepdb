@@ -3,8 +3,12 @@ name = "macpepdb"
 version = "0.1.0"
 authors = ["Dirk Winkelhardt <dirk.winkelhardt@rub.de>"] 
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+readme = "Readme.md"
+description = "Large peptide database for mass spectrometry"
+repository = "https://github.com/medbioinf/macpepdb"
+homepage = "https://github.com/medbioinf/macpepdb"
+documentation = "https://github.com/medbioinf/macpepdb"
+license-file = "LICENSE"
 
 [lib]
 name = "macpepdb"
