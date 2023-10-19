@@ -13,8 +13,6 @@ use crate::database::scylla::client::GenericClient;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
 
-use super::SCYLLA_KEYSPACE_NAME;
-
 pub struct ConfigurationTable {}
 
 impl Table for ConfigurationTable {
@@ -35,7 +33,7 @@ where
     {
         let statement = format!(
             "SELECT conf_key, value FROM {}.{} WHERE conf_key = ?;",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             Self::table_name()
         );
         let row = client
@@ -60,7 +58,7 @@ where
     {
         let statement = format!(
             "INSERT INTO {}.{} (conf_key, value) VALUES (?,?);",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             Self::table_name()
         );
 
@@ -197,7 +195,9 @@ mod tests {
 
     // internal imports
     use super::*;
-    use crate::database::scylla::{get_client, prepare_database_for_tests};
+    use crate::database::scylla::client::Client;
+    use crate::database::scylla::prepare_database_for_tests;
+    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
 
     const EXPECTED_ENZYME_NAME: &'static str = "Trypsin";
     const EXPECTED_MAX_MISSED_CLEAVAGES: usize = 2;
@@ -216,7 +216,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select_without_insert() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         prepare_database_for_tests(&client).await;
 
         let configuration_res = ConfigurationTable::select(&mut client).await;
@@ -234,7 +236,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         prepare_database_for_tests(&client).await;
 
         let configuration = Configuration::new(
@@ -256,7 +260,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         prepare_database_for_tests(&client).await;
 
         let expected_configuration = Configuration::new(

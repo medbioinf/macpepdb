@@ -6,23 +6,23 @@ pub const UP: [&str; 5] = [
     CREATE_PEPTIDES_TABLE,
 ];
 
-pub const DROP_KEYSPACE: &str = "DROP KEYSPACE IF EXISTS macpep;";
+pub const DROP_KEYSPACE: &str = "DROP KEYSPACE IF EXISTS :KEYSPACE:;";
 
-pub const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS macpep
+pub const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS :KEYSPACE:
                 WITH REPLICATION = {'class': 'NetworkTopologyStrategy',
                 'replication_factor': 1};";
 
-const CREATE_MIGRATIONS_TABLE: &str = "CREATE TABLE macpep.migrations ( pk TEXT, id INT, created TEXT, description TEXT, PRIMARY KEY(pk, id));";
+const CREATE_MIGRATIONS_TABLE: &str = "CREATE TABLE :KEYSPACE:.migrations ( pk TEXT, id INT, created TEXT, description TEXT, PRIMARY KEY(pk, id));";
 
-const CREATE_CONFIG_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.config (
+const CREATE_CONFIG_TABLE: &str = "CREATE TABLE IF NOT EXISTS :KEYSPACE:.config (
         conf_key text PRIMARY KEY,
         value text
     );";
 
 const CREATE_DOMAINS_TYPE: &str =
-    "CREATE TYPE IF NOT EXISTS macpep.Domain (name text, evidence text, start_index bigint, end_index bigint, protein text, start_index_protein bigint, end_index_protein bigint, peptide_offset bigint);";
+    "CREATE TYPE IF NOT EXISTS :KEYSPACE:.Domain (name text, evidence text, start_index bigint, end_index bigint, protein text, start_index_protein bigint, end_index_protein bigint, peptide_offset bigint);";
 
-const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.proteins (
+const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS :KEYSPACE:.proteins (
         accession text PRIMARY KEY,
         secondary_accessions list<text>,
         entry_name text,
@@ -36,7 +36,7 @@ const CREATE_PROTEINS_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.proteins 
         domains frozen<set<Domain>>
     );";
 
-const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS macpep.peptides (
+const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS :KEYSPACE:.peptides (
         partition bigint,
         mass bigint,
         sequence text,

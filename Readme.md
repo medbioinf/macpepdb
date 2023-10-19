@@ -140,7 +140,7 @@ You can try using io tuner for your disk, however in some cases the performance 
 
 ### Web API
 
-`cargo run -r web scylla://<COMMA_SEPARATED_SCYLLA_NODES_LIST> <IP> <PORT>`
+`cargo run -r web scylla://<COMMA_SEPARATED_SCYLLA_NODES_LIST> <KEYSPACE/DATABASE> <IP> <PORT>`
 
 ## Citation
 

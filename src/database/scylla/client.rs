@@ -2,19 +2,29 @@
 use anyhow::Result;
 use scylla::{transport::session::Session, SessionBuilder};
 
-pub trait GenericClient {
-    async fn new(hostnames: &Vec<&str>) -> Result<Self>
+/// Wrapper trait for a ScyllaDB session to make it more convenient to use with generic implementation
+///
+pub trait GenericClient: Send + Sync {
+    async fn new(hostnames: &Vec<String>, database: &str) -> Result<Self>
     where
         Self: Sized;
     fn get_session(&self) -> &Session;
+    fn get_database(&self) -> &str;
 }
 
 pub struct Client {
     session: Session,
+    database: String,
 }
 
 impl GenericClient for Client {
-    async fn new(hostnames: &Vec<&str>) -> Result<Self>
+    /// Creates a new ScyllaDB client
+    ///
+    /// # Arguments
+    /// * `hostnames` - List of hostnames to connect to
+    /// * `database` - Name of the keyspace to use
+    ///
+    async fn new(hostnames: &Vec<String>, database: &str) -> Result<Self>
     where
         Self: Sized,
     {
@@ -24,10 +34,15 @@ impl GenericClient for Client {
                 .build()
                 .await
                 .unwrap(),
+            database: database.to_owned(),
         })
     }
 
     fn get_session(&self) -> &Session {
         &self.session
+    }
+
+    fn get_database(&self) -> &str {
+        &self.database
     }
 }
