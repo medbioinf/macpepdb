@@ -7,41 +7,24 @@ pub mod peptide_table;
 pub mod protein_table;
 pub mod schema;
 
-// 3rd party imports
-use anyhow::Result;
-
 // internal imports
 use crate::database::scylla::client::{Client, GenericClient};
-use crate::database::scylla::schema::{DROP_KEYSPACE, UP};
-
-use self::schema::CREATE_KEYSPACE;
-
-pub const SCYLLA_KEYSPACE_NAME: &str = "macpep";
-pub const DATABASE_URL: &str = "127.0.0.1:9042";
-
-pub async fn get_client(database_url: Option<&Vec<String>>) -> Result<Client> {
-    Client::new(
-        &database_url
-            .unwrap_or(&[DATABASE_URL.to_string()].to_vec())
-            .iter()
-            .map(|x| x.as_str())
-            .collect(),
-    )
-    .await
-}
+use crate::database::scylla::schema::{CREATE_KEYSPACE, DROP_KEYSPACE, UP};
 
 pub async fn drop_keyspace(client: &Client) {
+    let drop_statement = DROP_KEYSPACE.replace(":KEYSPACE:", client.get_database());
     client
         .get_session()
-        .query(DROP_KEYSPACE, &[])
+        .query(drop_statement, &[])
         .await
         .unwrap();
 }
 
 pub async fn create_keyspace_if_not_exists(client: &Client) {
+    let create_statement = CREATE_KEYSPACE.replace(":KEYSPACE:", client.get_database());
     client
         .get_session()
-        .query(CREATE_KEYSPACE, &[])
+        .query(create_statement, &[])
         .await
         .unwrap();
 }
@@ -52,9 +35,13 @@ pub async fn prepare_database_for_tests(client: &Client) {
     create_keyspace_if_not_exists(&client).await;
 
     for statement in UP {
+        let statement = statement.replace(":KEYSPACE:", client.get_database());
         client.get_session().query(statement, &[]).await.unwrap();
     }
 }
 
 #[cfg(test)]
-pub mod tests {}
+pub mod tests {
+    pub const SCYLLA_KEYSPACE_NAME: &'static str = "macpepdb";
+    pub const DATABASE_URL: &'static str = "127.0.0.1:9042";
+}

@@ -15,7 +15,6 @@ use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
 
 use crate::database::scylla::client::GenericClient;
-use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 
 pub const TABLE_NAME: &'static str = "peptides";
 
@@ -208,7 +207,9 @@ impl PeptideTable {
 
         let statement = format!(
             "UPDATE {}.{} SET {} WHERE partition = ? and mass = ? and sequence = ?",
-            SCYLLA_KEYSPACE_NAME, TABLE_NAME, set_statement,
+            client.get_database(),
+            TABLE_NAME,
+            set_statement,
         );
 
         let prepared = client.get_session().prepare(statement).await?;
@@ -237,7 +238,7 @@ impl PeptideTable {
     {
         let statement = format!(
             "UPDATE {}.{} SET is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            SCYLLA_KEYSPACE_NAME, TABLE_NAME
+            client.get_database(), TABLE_NAME
         );
         let prepared = client.get_session().prepare(statement).await?;
 
@@ -289,7 +290,7 @@ where
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             Self::table_name(),
         );
         if additional.len() > 0 {
@@ -309,7 +310,7 @@ where
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             Self::table_name(),
         );
         if additional.len() > 0 {
@@ -372,7 +373,7 @@ where
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             Self::table_name()
         );
         if additional.len() > 0 {
@@ -424,10 +425,12 @@ mod tests {
     use crate::biology::digestion_enzyme::functions::{
         create_peptides_entities_from_digest, get_enzyme_by_name,
     };
+    use crate::database::scylla::client::Client;
+    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
 
     use super::*;
 
-    use crate::database::scylla::{get_client, prepare_database_for_tests};
+    use crate::database::scylla::prepare_database_for_tests;
     use crate::io::uniprot_text::reader::Reader;
 
     const CONFLICTING_PEPTIDE_PROTEIN_ACCESSION: &'static str = "P41159";
@@ -505,7 +508,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
@@ -543,7 +548,7 @@ mod tests {
 
         let statement = format!(
             "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             TABLE_NAME,
             UPDATE_SET_PLACEHOLDER.as_str()
         );
@@ -559,7 +564,7 @@ mod tests {
 
         let count_statement = format!(
             "SELECT count(*) FROM {}.{}",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             PeptideTable::table_name()
         );
         let row = client
@@ -631,7 +636,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_accession_update() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
@@ -652,7 +659,7 @@ mod tests {
 
         let statement = format!(
             "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             TABLE_NAME,
             UPDATE_SET_PLACEHOLDER.as_str()
         );
@@ -721,7 +728,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_flagging_for_metadata_update() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
@@ -740,7 +749,7 @@ mod tests {
 
         let statement = format!(
             "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             TABLE_NAME,
             UPDATE_SET_PLACEHOLDER.as_str()
         );
@@ -753,7 +762,7 @@ mod tests {
 
         let statement = format!(
             "UPDATE {}.{} SET is_metadata_updated = true WHERE partition = ? and mass = ? and sequence = ?",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             PeptideTable::table_name()
         );
 

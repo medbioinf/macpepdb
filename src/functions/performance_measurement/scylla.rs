@@ -12,7 +12,6 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
 use crate::database::scylla::configuration_table::ConfigurationTable;
-use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 // internal imports
 use crate::database::scylla::client::{Client, GenericClient};
 use crate::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
@@ -22,14 +21,15 @@ use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
 pub async fn query_performance(
-    hostnames: &Vec<&str>,
+    hostnames: &Vec<String>,
+    database: String,
     masses: Vec<i64>,
     lower_mass_tolerance: i64,
     upper_mass_tolerance: i64,
     max_variable_modifications: i16,
     ptms: Vec<PTM>,
 ) -> Result<()> {
-    let client = Client::new(hostnames).await?;
+    let client = Client::new(hostnames, &database).await?;
     let session = (&client).get_session();
     let mut mass_stats: Vec<(i64, u64, u128)> = Vec::new();
 
@@ -45,7 +45,7 @@ pub async fn query_performance(
     let query_statement_str = format!(
         "SELECT {} FROM {}.{} WHERE partition = ? AND mass >= ? AND mass <= ?",
         SELECT_COLS,
-        SCYLLA_KEYSPACE_NAME,
+        client.get_database(),
         PeptideTable::table_name()
     );
 

@@ -10,10 +10,7 @@ use crate::{
     tools::cql::get_cql_value,
 };
 
-use super::{
-    client::{Client, GenericClient},
-    SCYLLA_KEYSPACE_NAME,
-};
+use super::client::{Client, GenericClient};
 
 pub async fn run_migrations(client: &Client) {
     info!("Running Scylla migrations");
@@ -30,11 +27,12 @@ pub async fn run_migrations(client: &Client) {
 
         let migration_history_statement = format!(
             "INSERT INTO {}.migrations (pk, id, created, description) VALUES ('pk1', ?, ?, ?);",
-            SCYLLA_KEYSPACE_NAME
+            client.get_database()
         );
 
+        let statement = statement.replace(":KEYSPACE:", client.get_database());
         // Have to do it consecutively because batch statements dont allow CREATE
-        session.query(*statement, &[]).await.unwrap();
+        session.query(statement.as_str(), &[]).await.unwrap();
         session
             .query(
                 migration_history_statement,
@@ -54,7 +52,7 @@ pub async fn get_latest_migration_id(client: &Client) -> Result<i32> {
 
     let latest_migration_id_query: String = format!(
         "SELECT id FROM {}.migrations WHERE pk='pk1' ORDER BY id DESC LIMIT 1",
-        SCYLLA_KEYSPACE_NAME
+        client.get_database()
     );
 
     let row = session
@@ -72,9 +70,13 @@ mod tests {
     use serial_test::serial;
     use tracing_test::traced_test;
 
+    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
     use crate::database::scylla::{
-        client::GenericClient, drop_keyspace, get_client, migrations::get_latest_migration_id,
-        prepare_database_for_tests, schema::UP,
+        client::{Client, GenericClient},
+        drop_keyspace,
+        migrations::get_latest_migration_id,
+        prepare_database_for_tests,
+        schema::UP,
     };
 
     use super::run_migrations;
@@ -82,15 +84,18 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_latest_migration_id() {
-        let client = get_client(None).await.unwrap();
+        let client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         let session = client.get_session();
 
         prepare_database_for_tests(&client).await;
 
         let prepared = session
-            .prepare(
-                "INSERT INTO macpep.migrations (pk, id, created, description) VALUES (?,?,?,?)",
-            )
+            .prepare(format!(
+                "INSERT INTO {}.migrations (pk, id, created, description) VALUES (?,?,?,?)",
+                client.get_database()
+            ))
             .await
             .unwrap();
 
@@ -116,7 +121,9 @@ mod tests {
     #[serial]
     #[traced_test]
     pub async fn test_run_migrations() {
-        let client = get_client(None).await.unwrap();
+        let client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         drop_keyspace(&client).await;
 
         run_migrations(&client).await;

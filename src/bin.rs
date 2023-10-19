@@ -8,9 +8,8 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use indicatif::ProgressStyle;
-use macpepdb::database::scylla::client::GenericClient;
+use macpepdb::database::scylla::client::{Client, GenericClient};
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
-use macpepdb::database::scylla::{get_client, SCYLLA_KEYSPACE_NAME};
 use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
 use tracing::{debug, error, info, info_span, Level};
@@ -37,6 +36,7 @@ enum Commands {
     },
     Build {
         database_url: String,
+        database: String,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
@@ -49,6 +49,7 @@ enum Commands {
     },
     QueryPerformance {
         database_url: String,
+        database: String,
         masses_file: String,
         ptm_file: String,
         lower_mass_tolerance: i64,
@@ -57,11 +58,13 @@ enum Commands {
     },
     Web {
         database_url: String,
+        database: String,
         interface: String,
         port: u16,
     },
     DomainTypes {
         database_url: String,
+        database: String,
     },
 }
 
@@ -118,6 +121,7 @@ async fn main() -> Result<()> {
         }
         Commands::Build {
             database_url,
+            database,
             protein_file_paths,
             num_threads,
             num_partitions,
@@ -137,7 +141,7 @@ async fn main() -> Result<()> {
                 // remove protocol
                 let plain_database_url = database_url[9..].to_string();
 
-                let builder = ScyllaBuild::new(plain_database_url);
+                let builder = ScyllaBuild::new(plain_database_url, database);
 
                 match builder
                     .build(
@@ -169,6 +173,7 @@ async fn main() -> Result<()> {
         }
         Commands::QueryPerformance {
             database_url,
+            database,
             masses_file,
             ptm_file,
             lower_mass_tolerance,
@@ -192,10 +197,14 @@ async fn main() -> Result<()> {
             if database_url.starts_with("scylla://") {
                 // remove protocol
                 let plain_database_url = database_url[9..].to_string();
-                let database_hosts = &plain_database_url.split(",").map(|x| x).collect();
+                let database_hosts = plain_database_url
+                    .split(",")
+                    .map(|x| x.to_owned())
+                    .collect();
 
                 scylla_performance::query_performance(
                     &database_hosts,
+                    database,
                     masses,
                     lower_mass_tolerance,
                     upper_mass_tolerance,
@@ -209,6 +218,7 @@ async fn main() -> Result<()> {
         }
         Commands::Web {
             database_url,
+            database,
             interface,
             port,
         } => {
@@ -218,12 +228,15 @@ async fn main() -> Result<()> {
                     .split(",")
                     .map(|x| x.to_string())
                     .collect::<Vec<String>>();
-                start_web_server(database_hosts, interface, port).await?;
+                start_web_server(database_hosts, database, interface, port).await?;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
         }
-        Commands::DomainTypes { database_url } => {
+        Commands::DomainTypes {
+            database_url,
+            database,
+        } => {
             if database_url.starts_with("scylla://") {
                 let plain_database_url = database_url[9..].to_string();
                 let database_hosts = plain_database_url
@@ -231,7 +244,7 @@ async fn main() -> Result<()> {
                     .map(|x| x.to_string())
                     .collect::<Vec<String>>();
 
-                let client = get_client(Some(&database_hosts)).await?;
+                let client = Client::new(&database_hosts, &database).await?;
                 let session = client.get_session();
 
                 let not_updated_peptides = info_span!("not_updated_peptides");
@@ -243,7 +256,7 @@ async fn main() -> Result<()> {
                     let query_statement = format!(
                 "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = true ALLOW FILTERING",
                 SELECT_COLS,
-                SCYLLA_KEYSPACE_NAME,
+                client.get_database(),
                 PeptideTable::table_name()
             );
 

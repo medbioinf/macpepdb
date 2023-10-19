@@ -12,8 +12,9 @@ pub trait DatabaseBuild {
     ///
     /// # Arguments
     /// * `database_url` - URL of the database.
+    /// * `database` - Name of the database. For some databases, e.g. ScyllaDB (keyspace), you cannot include it in the URL.
     ///
-    fn new(database_url: String) -> Self;
+    fn new(database_url: String, database: String) -> Self;
 
     /// Builds / Maintains the database.
     /// 1. Inserts / updates the proteins and peptides from the files

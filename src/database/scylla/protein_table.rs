@@ -14,7 +14,6 @@ use crate::database::table::Table;
 use crate::entities::protein::Protein;
 
 use super::client::GenericClient;
-use super::SCYLLA_KEYSPACE_NAME;
 
 const TABLE_NAME: &'static str = "proteins";
 
@@ -47,7 +46,7 @@ impl ProteinTable {
     pub async fn insert<'a, C: GenericClient>(client: &C, protein: &Protein) -> Result<()> {
         let statement = format!(
             "INSERT INTO {}.{} ({}) VALUES ({})",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             TABLE_NAME,
             INSERT_COLS,
             INSERT_PLACEHOLDERS.as_str()
@@ -83,11 +82,12 @@ impl ProteinTable {
 
         let delete_statement = format!(
             "DELETE FROM {}.{} WHERE accession = ?",
-            SCYLLA_KEYSPACE_NAME, TABLE_NAME
+            client.get_database(),
+            TABLE_NAME
         );
         let insert_statement = format!(
             "INSERT INTO {}.{} ({}) VALUES ({})",
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             TABLE_NAME,
             INSERT_COLS,
             INSERT_PLACEHOLDERS.as_str()
@@ -125,7 +125,8 @@ impl ProteinTable {
     pub async fn delete<'a, C: GenericClient>(client: &C, protein: &Protein) -> Result<()> {
         let statement = format!(
             "DELETE FROM {}.{} WHERE accession = ?",
-            SCYLLA_KEYSPACE_NAME, TABLE_NAME
+            client.get_database(),
+            TABLE_NAME
         );
 
         client
@@ -167,7 +168,7 @@ where
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             Self::table_name(),
         );
         if additional.len() > 0 {
@@ -188,7 +189,7 @@ where
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             Self::table_name(),
         );
         if additional.len() > 0 {
@@ -252,7 +253,7 @@ where
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
-            SCYLLA_KEYSPACE_NAME,
+            client.get_database(),
             Self::table_name()
         );
         if additional.len() > 0 {
@@ -300,8 +301,9 @@ mod tests {
 
     // internal imports
     use super::*;
-    use crate::database::scylla::client::GenericClient;
-    use crate::database::scylla::{get_client, prepare_database_for_tests};
+    use crate::database::scylla::client::Client;
+    use crate::database::scylla::prepare_database_for_tests;
+    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
     use crate::entities::domain::Domain;
     use crate::io::uniprot_text::reader::Reader;
 
@@ -379,7 +381,9 @@ mod tests {
     /// Prepares database for testing and inserts proteins from test file.
     ///
     async fn test_insert() {
-        let client = get_client(None).await.unwrap();
+        let client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -388,7 +392,8 @@ mod tests {
         }
         let count_statement = format!(
             "SELECT count(*) FROM {}.{}",
-            SCYLLA_KEYSPACE_NAME, TABLE_NAME
+            client.get_database(),
+            TABLE_NAME
         );
         let row = client
             .get_session()
@@ -415,7 +420,9 @@ mod tests {
     /// Tests selects from database.
     ///
     async fn test_select() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -438,7 +445,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_update() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
@@ -464,7 +473,9 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_delete() {
-        let mut client = get_client(None).await.unwrap();
+        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
+            .await
+            .unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
