@@ -303,7 +303,7 @@ mod tests {
     use super::*;
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
-    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
+    use crate::database::scylla::tests::DATABASE_URL;
     use crate::entities::domain::Domain;
     use crate::io::uniprot_text::reader::Reader;
 
@@ -381,9 +381,7 @@ mod tests {
     /// Prepares database for testing and inserts proteins from test file.
     ///
     async fn test_insert() {
-        let client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -420,9 +418,7 @@ mod tests {
     /// Tests selects from database.
     ///
     async fn test_select() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -445,9 +441,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_update() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
@@ -473,9 +467,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_delete() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {

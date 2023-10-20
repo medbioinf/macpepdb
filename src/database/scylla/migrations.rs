@@ -70,7 +70,7 @@ mod tests {
     use serial_test::serial;
     use tracing_test::traced_test;
 
-    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
+    use crate::database::scylla::tests::DATABASE_URL;
     use crate::database::scylla::{
         client::{Client, GenericClient},
         drop_keyspace,
@@ -84,9 +84,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_latest_migration_id() {
-        let client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
         let session = client.get_session();
 
         prepare_database_for_tests(&client).await;
@@ -121,9 +119,7 @@ mod tests {
     #[serial]
     #[traced_test]
     pub async fn test_run_migrations() {
-        let client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
         drop_keyspace(&client).await;
 
         run_migrations(&client).await;

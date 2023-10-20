@@ -42,6 +42,5 @@ pub async fn prepare_database_for_tests(client: &Client) {
 
 #[cfg(test)]
 pub mod tests {
-    pub const SCYLLA_KEYSPACE_NAME: &'static str = "macpepdb";
-    pub const DATABASE_URL: &'static str = "127.0.0.1:9042";
+    pub const DATABASE_URL: &'static str = "scylla://127.0.0.1:9042/macpepdb";
 }

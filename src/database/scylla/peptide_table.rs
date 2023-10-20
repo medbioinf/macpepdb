@@ -426,7 +426,7 @@ mod tests {
         create_peptides_entities_from_digest, get_enzyme_by_name,
     };
     use crate::database::scylla::client::Client;
-    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
+    use crate::database::scylla::tests::DATABASE_URL;
 
     use super::*;
 
@@ -508,9 +508,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
@@ -636,9 +634,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_accession_update() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
@@ -728,9 +724,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_flagging_for_metadata_update() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&mut client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();

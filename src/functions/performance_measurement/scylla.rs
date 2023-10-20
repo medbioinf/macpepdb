@@ -21,15 +21,14 @@ use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
 pub async fn query_performance(
-    hostnames: &Vec<String>,
-    database: String,
+    database_url: &str,
     masses: Vec<i64>,
     lower_mass_tolerance: i64,
     upper_mass_tolerance: i64,
     max_variable_modifications: i16,
     ptms: Vec<PTM>,
 ) -> Result<()> {
-    let client = Client::new(hostnames, &database).await?;
+    let client = Client::new(database_url).await?;
     let session = (&client).get_session();
     let mut mass_stats: Vec<(i64, u64, u128)> = Vec::new();
 

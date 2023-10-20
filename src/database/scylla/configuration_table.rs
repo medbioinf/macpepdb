@@ -197,7 +197,7 @@ mod tests {
     use super::*;
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
-    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
+    use crate::database::scylla::tests::DATABASE_URL;
 
     const EXPECTED_ENZYME_NAME: &'static str = "Trypsin";
     const EXPECTED_MAX_MISSED_CLEAVAGES: usize = 2;
@@ -216,9 +216,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select_without_insert() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let configuration_res = ConfigurationTable::select(&mut client).await;
@@ -236,9 +234,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let configuration = Configuration::new(
@@ -260,9 +256,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select() {
-        let mut client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let mut client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let expected_configuration = Configuration::new(

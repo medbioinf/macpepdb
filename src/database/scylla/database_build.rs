@@ -70,7 +70,6 @@ const MAX_INSERT_TRIES: u64 = 5;
 /// * ...
 pub struct DatabaseBuild {
     database_url: String,
-    database: String,
 }
 
 impl DatabaseBuild {
@@ -166,8 +165,7 @@ impl DatabaseBuild {
     /// * `partition_limits` - The partition limits
     ///
     async fn protein_digestion(
-        database_urls: Vec<String>,
-        database: String,
+        database_url: &str,
         num_threads: usize,
         protein_file_paths: &Vec<PathBuf>,
         digestion_enzyme: &dyn Enzyme,
@@ -235,15 +233,13 @@ impl DatabaseBuild {
                 digestion_enzyme.get_min_peptide_length(),
                 digestion_enzyme.get_max_peptide_length(),
             )?;
-            let database_urls_clone = database_urls.clone();
-            let database_clone = database.clone();
+            let database_url_clone = database_url.to_string();
             // TODO: Add logging thread
             // Start digestion thread
             digestion_thread_handles.push(spawn(async move {
                 Self::digestion_thread(
                     thread_id,
-                    &database_urls_clone,
-                    database_clone,
+                    database_url_clone,
                     protein_queue_arc_clone,
                     partition_limits_arc_clone,
                     stop_flag_clone,
@@ -387,8 +383,7 @@ impl DatabaseBuild {
     ///
     async fn digestion_thread(
         _thread_id: usize,
-        database_urls: &Vec<String>,
-        database: String,
+        database_url: String,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         partition_limits_arc: Arc<Vec<i64>>,
         stop_flag: Arc<AtomicBool>,
@@ -399,7 +394,7 @@ impl DatabaseBuild {
         unprocessable_proteins_sender: Sender<Protein>,
         error_sender: Sender<String>,
     ) -> Result<()> {
-        let mut client = Client::new(&database_urls, database.as_str()).await?;
+        let mut client = Client::new(&database_url).await?;
 
         let mut wait_for_queue = false;
 
@@ -789,8 +784,7 @@ impl DatabaseBuild {
 
     async fn collect_peptide_metadata(
         num_threads: usize,
-        database_urls: Vec<String>,
-        database: String,
+        database_url: &str,
         configuration: &Configuration,
         is_test_run: bool,
         enzyme: &dyn Enzyme,
@@ -829,8 +823,7 @@ impl DatabaseBuild {
             // Clone necessary variables
             let partitions = chunked_partitions[thread_id].clone();
             debug!("Thread {} partitions {:?}", thread_id, partitions);
-            let database_urls_clone = database_urls.clone();
-            let database_clone = database.clone();
+            let database_url_clone = database_url.to_string();
             let thread_peptide_sender = peptide_sender.clone();
             let digestion_enzyme_box = get_enzyme_by_name(
                 enzyme.get_name(),
@@ -843,8 +836,7 @@ impl DatabaseBuild {
             metadata_collector_thread_handles.push(spawn(async move {
                 Self::collect_peptide_metadata_thread(
                     thread_id,
-                    database_urls_clone,
-                    database_clone,
+                    database_url_clone,
                     partitions,
                     thread_peptide_sender,
                     digestion_enzyme_box,
@@ -900,13 +892,12 @@ impl DatabaseBuild {
 
     async fn collect_peptide_metadata_thread(
         _thread_id: usize,
-        database_urls: Vec<String>,
-        database: String,
+        database_url: String,
         partitions: Vec<i64>,
         peptide_sender: Sender<u64>,
         enzyme: Box<dyn Enzyme>,
     ) -> Result<()> {
-        let client = Client::new(&database_urls, database.as_str()).await?;
+        let client = Client::new(&database_url).await?;
         let session = client.get_session();
         let update_query = format!(
                         "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
@@ -993,10 +984,9 @@ impl DatabaseBuild {
 }
 
 impl DatabaseBuildTrait for DatabaseBuild {
-    fn new(database_url: String, database: String) -> Self {
+    fn new(database_url: &str) -> Self {
         return Self {
-            database_url,
-            database,
+            database_url: database_url.to_owned(),
         };
     }
 
@@ -1014,11 +1004,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
     ) -> Result<()> {
         info!("Starting database build");
 
-        let database_hosts: Vec<String> = (&self.database_url)
-            .split(",")
-            .map(|x| x.to_string())
-            .collect();
-        let mut client = Client::new(&database_hosts, self.database.as_str()).await?;
+        let mut client = Client::new(&self.database_url).await?;
 
         debug!("applying database migrations...");
 
@@ -1060,8 +1046,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             info!("{} proteins counted", protein_ctr);
 
             Self::protein_digestion(
-                database_hosts.clone(),
-                self.database.clone(),
+                &self.database_url,
                 num_threads,
                 protein_file_paths,
                 digestion_enzyme.as_ref(),
@@ -1079,8 +1064,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
 
         Self::collect_peptide_metadata(
             num_threads,
-            database_hosts,
-            self.database.to_string(),
+            &self.database_url,
             &configuration,
             is_test_run,
             digestion_enzyme.as_ref(),
@@ -1109,7 +1093,7 @@ mod test {
         create_peptides_entities_from_digest, get_enzyme_by_name,
     };
     use crate::database::scylla::drop_keyspace;
-    use crate::database::scylla::tests::{DATABASE_URL, SCYLLA_KEYSPACE_NAME};
+    use crate::database::scylla::tests::DATABASE_URL;
     use crate::database::scylla::{peptide_table::PeptideTable, protein_table::ProteinTable};
     use crate::database::selectable_table::SelectableTable;
     use crate::io::uniprot_text::reader::Reader;
@@ -1130,9 +1114,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build_without_initial_config() {
-        let client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
 
         drop_keyspace(&client).await;
 
@@ -1143,8 +1125,7 @@ mod test {
         }
         create_dir_all(&log_folder).unwrap();
 
-        let database_builder =
-            DatabaseBuild::new(DATABASE_URL.to_owned(), SCYLLA_KEYSPACE_NAME.to_owned());
+        let database_builder = DatabaseBuild::new(DATABASE_URL);
         let build_res = database_builder
             .build(
                 &protein_file_paths,
@@ -1165,9 +1146,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build() {
-        let client = Client::new(&vec![DATABASE_URL.to_owned()], SCYLLA_KEYSPACE_NAME)
-            .await
-            .unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
 
         drop_keyspace(&client).await;
 
@@ -1182,8 +1161,7 @@ mod test {
         }
         create_dir_all(&log_folder).unwrap();
 
-        let database_builder =
-            DatabaseBuild::new(DATABASE_URL.to_owned(), SCYLLA_KEYSPACE_NAME.to_owned());
+        let database_builder = DatabaseBuild::new(DATABASE_URL);
         database_builder
             .build(
                 &protein_file_paths,

@@ -36,7 +36,6 @@ enum Commands {
     },
     Build {
         database_url: String,
-        database: String,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
@@ -49,7 +48,6 @@ enum Commands {
     },
     QueryPerformance {
         database_url: String,
-        database: String,
         masses_file: String,
         ptm_file: String,
         lower_mass_tolerance: i64,
@@ -58,13 +56,11 @@ enum Commands {
     },
     Web {
         database_url: String,
-        database: String,
         interface: String,
         port: u16,
     },
     DomainTypes {
         database_url: String,
-        database: String,
     },
 }
 
@@ -121,7 +117,6 @@ async fn main() -> Result<()> {
         }
         Commands::Build {
             database_url,
-            database,
             protein_file_paths,
             num_threads,
             num_partitions,
@@ -138,10 +133,7 @@ async fn main() -> Result<()> {
             let log_folder = Path::new(&log_folder).to_path_buf();
 
             if database_url.starts_with("scylla://") {
-                // remove protocol
-                let plain_database_url = database_url[9..].to_string();
-
-                let builder = ScyllaBuild::new(plain_database_url, database);
+                let builder = ScyllaBuild::new(&database_url);
 
                 match builder
                     .build(
@@ -173,7 +165,6 @@ async fn main() -> Result<()> {
         }
         Commands::QueryPerformance {
             database_url,
-            database,
             masses_file,
             ptm_file,
             lower_mass_tolerance,
@@ -195,16 +186,8 @@ async fn main() -> Result<()> {
             let ptms = PtmReader::read(Path::new(&ptm_file))?;
 
             if database_url.starts_with("scylla://") {
-                // remove protocol
-                let plain_database_url = database_url[9..].to_string();
-                let database_hosts = plain_database_url
-                    .split(",")
-                    .map(|x| x.to_owned())
-                    .collect();
-
                 scylla_performance::query_performance(
-                    &database_hosts,
-                    database,
+                    &database_url,
                     masses,
                     lower_mass_tolerance,
                     upper_mass_tolerance,
@@ -218,33 +201,18 @@ async fn main() -> Result<()> {
         }
         Commands::Web {
             database_url,
-            database,
             interface,
             port,
         } => {
             if database_url.starts_with("scylla://") {
-                let plain_database_url = database_url[9..].to_string();
-                let database_hosts = plain_database_url
-                    .split(",")
-                    .map(|x| x.to_string())
-                    .collect::<Vec<String>>();
-                start_web_server(database_hosts, database, interface, port).await?;
+                start_web_server(&database_url, interface, port).await?;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
         }
-        Commands::DomainTypes {
-            database_url,
-            database,
-        } => {
+        Commands::DomainTypes { database_url } => {
             if database_url.starts_with("scylla://") {
-                let plain_database_url = database_url[9..].to_string();
-                let database_hosts = plain_database_url
-                    .split(",")
-                    .map(|x| x.to_string())
-                    .collect::<Vec<String>>();
-
-                let client = Client::new(&database_hosts, &database).await?;
+                let client = Client::new(&database_url).await?;
                 let session = client.get_session();
 
                 let not_updated_peptides = info_span!("not_updated_peptides");
