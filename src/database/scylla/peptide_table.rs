@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 // 3rd party imports
 use anyhow::Result;
 use async_stream::try_stream;
+use dihardts_cstools::bloom_filter::BloomFilter;
+use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::future::join_all;
-use futures::Stream;
+use futures::{pin_mut, Stream, StreamExt};
 use scylla::frame::response::result::{CqlValue, Row};
 use scylla::prepared_statement::PreparedStatement;
 use scylla::transport::errors::QueryError;
@@ -12,9 +16,12 @@ use scylla::transport::query_result::FirstRowError;
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
+use crate::entities::configuration::Configuration;
 use crate::entities::peptide::Peptide;
 
 use crate::database::scylla::client::GenericClient;
+use crate::functions::post_translational_modification::{get_ptm_conditions, PTMCondition};
+use crate::tools::peptide_partitioner::get_mass_partition;
 
 pub const TABLE_NAME: &'static str = "peptides";
 
@@ -257,6 +264,178 @@ impl PeptideTable {
         }
 
         return Ok(());
+    }
+
+    /// Returns a basic fallible stream over the filtered peptides
+    ///
+    /// # Arguments
+    /// * `payload` - The request body
+    /// * `mass` - The mass to search for
+    /// * `db_client` - The database client
+    /// * `configuration` - MaCPepDB configuration
+    /// * `matching_peptides` - A bloom filter to check if a peptide was already found
+    /// * `ptm_condition` - Optional: PTM condition to check if a peptide is matches
+    ///
+    async fn search_ptm_condition<'a, C>(
+        client: Arc<C>,
+        configuration: Arc<Configuration>,
+        mass: i64,
+        lower_mass_tolerance_ppm: i64,
+        upper_mass_tolerance_ppm: i64,
+        taxonomy_id: &'a Option<i64>,
+        proteome_id: &'a Option<String>,
+        is_reviewed: &'a Option<bool>,
+        matching_peptides: &'a mut BloomFilter,
+        ptm_condition: Option<&'a PTMCondition>,
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a>
+    where
+        C: GenericClient + Unpin + 'a,
+    {
+        Ok(try_stream! {
+            // Calculate mass range
+            let lower_mass_limit = mass - (mass / 1000000 * lower_mass_tolerance_ppm);
+            let upper_mass_limit = mass + (mass / 1000000 * upper_mass_tolerance_ppm);
+
+            // Get partition
+            let lower_partition_index =
+                get_mass_partition(&configuration.get_partition_limits(), lower_mass_limit)?;
+            let upper_partition_index =
+                get_mass_partition(&configuration.get_partition_limits(), upper_mass_limit)?;
+
+            // Convert to CqlValue
+            let lower_mass_limit = CqlValue::BigInt(lower_mass_limit);
+            let upper_mass_limit = CqlValue::BigInt(upper_mass_limit);
+
+            for partition in lower_partition_index..=upper_partition_index {
+                let partition = CqlValue::BigInt(partition as i64);
+
+                let params = vec![&partition, &lower_mass_limit, &upper_mass_limit];
+
+                let peptide_stream = PeptideTable::stream(
+                    client.as_ref(),
+                    "WHERE partition = ? AND mass >= ? AND mass <= ?",
+                    params.as_slice(),
+                    10000,
+                )
+                .await?;
+                pin_mut!(peptide_stream);
+
+                while let Some(peptide) = peptide_stream.next().await {
+                    let peptide = peptide?;
+                    // Fastest check first
+                    if matching_peptides.contains(peptide.get_sequence())? {
+                        continue;
+                    }
+
+                    // Check PTM conditions
+                    if let Some(ptm_condition) =  ptm_condition {
+                        if !ptm_condition.check_peptide(&peptide) {
+                            continue;
+                        }
+                    }
+
+                    if let Some(taxonomy_id) = taxonomy_id {
+                        if !peptide.get_taxonomy_ids().contains(&taxonomy_id) {
+                            continue;
+                        }
+                    }
+
+                    if let Some(proteome_id) = proteome_id {
+                        if !peptide.get_proteome_ids().contains(proteome_id) {
+                            continue;
+                        }
+                    }
+
+                    if let Some(is_reviewed) = is_reviewed {
+                        if *is_reviewed && !peptide.get_is_swiss_prot()
+                            || !is_reviewed && !peptide.get_is_trembl()
+                        {
+                            continue;
+                        }
+                    }
+
+                    matching_peptides.add(&peptide.get_sequence())?;
+
+                    yield peptide;
+                }
+            }
+        })
+    }
+
+    /// Returns a fallible stream over the filtered peptides.
+    /// (Combines stream for multiple PTM conditions)
+    ///
+    /// # Arguments
+    /// * `client` - The database client in an Arc, so it can owned by the stream
+    /// * `configuration` - MaCPepDB configuration in an Arc, so it can owned by the stream
+    /// * `mass` - The mass to search for
+    /// * `lower_mass_tolerance_ppm` - The lower mass tolerance in ppm
+    /// * `upper_mass_tolerance_ppm` - The upper mass tolerance in ppm
+    /// * `max_variable_modifications` - The maximum number of variable modifications
+    /// * `taxonomy_id` - Optional: The taxonomy id to filter for
+    /// * `proteome_id` - Optional: The proteome id to filter for
+    /// * `is_reviewed` - Optional: If the peptides should be reviewed or unreviewed
+    /// * `ptms` - The PTMs to search for
+    /// * `matching_peptides` - A bloom filter to check if a peptide was already found
+    ///
+    pub async fn search<'a, C>(
+        client: Arc<C>,
+        configuration: Arc<Configuration>,
+        mass: i64,
+        lower_mass_tolerance_ppm: i64,
+        upper_mass_tolerance_ppm: i64,
+        max_variable_modifications: i16,
+        taxonomy_id: Option<i64>,
+        proteome_id: Option<String>,
+        is_reviewed: Option<bool>,
+        ptms: Vec<PTM>,
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a>
+    where
+        C: GenericClient + Unpin + 'a,
+    {
+        Ok(try_stream! {
+            let mut matching_peptides = BloomFilter::new_by_size_and_fp_prob(80_000_000, 0.001)?; // around 10MB
+
+            if ptms.len() == 0 {
+                for await peptide in Self::search_ptm_condition(
+                    client,
+                    configuration,
+                    mass,
+                    lower_mass_tolerance_ppm,
+                    upper_mass_tolerance_ppm,
+                    &taxonomy_id,
+                    &proteome_id,
+                    &is_reviewed,
+                    &mut matching_peptides,
+                    None
+                ).await? {
+                    yield peptide?;
+                }
+            } else {
+                let ptm_conditions = get_ptm_conditions(
+                    mass,
+                    max_variable_modifications,
+                    &ptms,
+                )?;
+
+                for ptm_condition in ptm_conditions.iter() {
+                    for await peptide in Self::search_ptm_condition(
+                        client.clone(),
+                        configuration.clone(),
+                        mass,
+                        lower_mass_tolerance_ppm,
+                        upper_mass_tolerance_ppm,
+                        &taxonomy_id,
+                        &proteome_id,
+                        &is_reviewed,
+                        &mut matching_peptides,
+                        Some(ptm_condition)
+                    ).await? {
+                        yield peptide?;
+                    }
+                }
+            }
+        })
     }
 }
 

@@ -13,7 +13,7 @@ use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
 use tracing::{debug, error, info, info_span, Level};
-use tracing_indicatif::{span_ext::IndicatifSpanExt, IndicatifLayer};
+use tracing_indicatif::IndicatifLayer;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
@@ -31,9 +31,6 @@ use macpepdb::{
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    LETSGO {
-        name: String,
-    },
     Build {
         database_url: String,
         num_threads: usize,
@@ -96,25 +93,6 @@ async fn main() -> Result<()> {
     let args = Cli::parse();
 
     match args.command {
-        Commands::LETSGO { name } => {
-            info!("Hello, {}", name);
-            info!("Test");
-            let mut i = 0;
-
-            let loop_span = info_span!("looping");
-            let _loop_span_enter = loop_span.enter();
-
-            let loop_span2 = info_span!("looping_inner");
-            let _loop_span_enter2 = loop_span2.enter();
-
-            loop {
-                i += 1;
-
-                loop_span.pb_set_message(format!("i is {}", i).as_str());
-
-                sleep(Duration::from_secs(1));
-            }
-        }
         Commands::Build {
             database_url,
             protein_file_paths,
