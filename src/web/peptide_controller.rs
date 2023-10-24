@@ -118,22 +118,13 @@ pub async fn get_peptide_existence(
     State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,
     Path(sequence): Path<String>,
 ) -> Result<Response, WebError> {
-    let sequence = sequence.to_uppercase();
-    let mass = calc_sequence_mass(sequence.as_str())?;
-    let partition = get_mass_partition(configuration.get_partition_limits(), mass)?;
-
-    let peptide_opt = PeptideTable::select(
+    if PeptideTable::exists_by_sequence(
         db_client.as_ref(),
-        "WHERE partition = ? AND mass = ? and sequence = ?",
-        &[
-            &CqlValue::BigInt(partition as i64),
-            &CqlValue::BigInt(mass),
-            &CqlValue::Text(sequence),
-        ],
+        sequence.as_str(),
+        configuration.as_ref(),
     )
-    .await?;
-
-    if peptide_opt.is_some() {
+    .await?
+    {
         Ok((StatusCode::OK, "").into_response())
     } else {
         Ok((StatusCode::NOT_FOUND, "").into_response())

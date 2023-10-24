@@ -13,6 +13,7 @@ use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 use scylla::transport::query_result::FirstRowError;
 
+use crate::chemistry::amino_acid::calc_sequence_mass;
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
@@ -436,6 +437,39 @@ impl PeptideTable {
                 }
             }
         })
+    }
+
+    /// Checks if the given sequence is an existing peptide in the database.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `sequence` - The sequence to check
+    /// * `configuration` - MaCPepDB configuration
+    ///
+    pub async fn exists_by_sequence<C>(
+        client: &C,
+        sequence: &str,
+        configuration: &Configuration,
+    ) -> Result<bool>
+    where
+        C: GenericClient + Unpin,
+    {
+        let sequence = sequence.to_uppercase();
+        let mass = calc_sequence_mass(sequence.as_str())?;
+        let partition = get_mass_partition(configuration.get_partition_limits(), mass)?;
+
+        let peptide_opt = PeptideTable::select(
+            client,
+            "WHERE partition = ? AND mass = ? and sequence = ?",
+            &[
+                &CqlValue::BigInt(partition as i64),
+                &CqlValue::BigInt(mass),
+                &CqlValue::Text(sequence),
+            ],
+        )
+        .await?;
+
+        Ok(peptide_opt.is_some())
     }
 }
 
