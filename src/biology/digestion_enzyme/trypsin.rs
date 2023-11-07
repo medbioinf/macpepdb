@@ -9,6 +9,8 @@ pub const NAME: &'static str = "trypsin";
 
 lazy_static! {
     static ref CLEAVAGE_SITE_REGEX: Regex = Regex::new("(?<=[KR])(?!P)").unwrap();
+    static ref CLEAVAGE_CHARS: Vec<char> = vec!['K', 'R'];
+    static ref CLEAVAGE_BLOCKER_CHARS: Vec<char> = vec!['P'];
 }
 
 /// Digestion enzyme Trypsin, which cuts after K and R not followed by P.
@@ -52,12 +54,12 @@ impl Enzyme for Trypsin {
         return NAME;
     }
 
-    fn get_cleavage_chars(&self) -> Vec<char> {
-        vec!['K', 'R']
+    fn get_cleavage_chars(&self) -> &Vec<char> {
+        &CLEAVAGE_CHARS
     }
 
-    fn get_cleavage_blocker_chars(&self) -> Vec<char> {
-        vec!['P']
+    fn get_cleavage_blocker_chars(&self) -> &Vec<char> {
+        &CLEAVAGE_BLOCKER_CHARS
     }
 }
 
