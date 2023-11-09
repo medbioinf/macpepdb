@@ -31,7 +31,7 @@ pub trait DatabaseBuild {
     /// * `partitioner_false_positive_probability` - False positive probability of the partitioners Bloom filters.
     /// * `initial_configuration_opt` - Optional initial configuration.
     ///
-    async fn build(
+    fn build(
         &self,
         protein_file_paths: &Vec<PathBuf>,
         num_threads: usize,
@@ -42,5 +42,5 @@ pub trait DatabaseBuild {
         log_folder: &PathBuf,
         is_test_run: bool,
         only_metadata_update: bool,
-    ) -> Result<()>;
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }

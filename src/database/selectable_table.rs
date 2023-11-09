@@ -41,12 +41,12 @@ where
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
     ///
-    async fn raw_select_multiple<'b>(
+    fn raw_select_multiple<'b>(
         client: &C,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
-    ) -> Result<Vec<Self::Record>>;
+    ) -> impl std::future::Future<Output = Result<Vec<Self::Record>>> + Send;
 
     /// Selects a protein and returns it as row. If no protein is found, None is returned.
     ///
@@ -55,12 +55,12 @@ where
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
     ///
-    async fn raw_select<'b>(
+    fn raw_select<'b>(
         client: &C,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
-    ) -> Result<Option<Self::Record>>;
+    ) -> impl std::future::Future<Output = Result<Option<Self::Record>>> + Send;
 
     /// Selects proteins and returns them.
     ///
@@ -69,11 +69,11 @@ where
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
     ///
-    async fn select_multiple<'b>(
+    fn select_multiple<'b>(
         client: &C,
         additional: &str,
         params: &[&'b Self::Parameter],
-    ) -> Result<Vec<Self::Entity>>;
+    ) -> impl std::future::Future<Output = Result<Vec<Self::Entity>>> + Send;
 
     /// Selects a protein and returns it. If no protein is found, None is returned.
     ///
@@ -82,11 +82,11 @@ where
     /// * `additional` - Additional SQL to add to the query , e.g "WHERE accession = $1"
     /// * `params` - The parameters to use in the query
     ///
-    async fn select<'b>(
+    fn select<'b>(
         client: &C,
         additional: &str,
         params: &[&'b Self::Parameter],
-    ) -> Result<Option<Self::Entity>>;
+    ) -> impl std::future::Future<Output = Result<Option<Self::Entity>>> + Send;
 
     /// Selects proteins and returns it them row iterator.
     ///
@@ -96,13 +96,13 @@ where
     /// * `params` - The parameters to use in the query
     /// * `num_rows` - The number of rows to fetch at once
     ///
-    async fn raw_stream(
+    fn raw_stream(
         client: &'a C,
         cols: &str,
         additional: &str,
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
-    ) -> Result<impl Stream<Item = Result<Self::Record>>>;
+    ) -> impl std::future::Future<Output = Result<impl Stream<Item = Result<Self::Record>>>> + Send;
 
     /// Selects entities and returns them as iterator.
     ///
@@ -118,10 +118,10 @@ where
     /// * `params` - The parameters to use in the query
     /// * `num_rows` - The number of rows to fetch at once
     ///
-    async fn stream(
+    fn stream(
         client: &'a C,
         additional: &'a str,
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
-    ) -> Result<impl Stream<Item = Result<Self::Entity>>>;
+    ) -> impl std::future::Future<Output = Result<impl Stream<Item = Result<Self::Entity>>>> + Send;
 }

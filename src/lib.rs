@@ -4,12 +4,9 @@
 // Going nightly for now to use async traits and related features
 // Accoirding to [this article](https://blog.rust-lang.org/inside-rust/2023/05/03/stabilizing-async-fn-in-trait.html)
 // the feature should be stable in 1.74 (estimated)
-#![feature(async_fn_in_trait)]
-#![feature(impl_trait_projections)]
 #![feature(trait_alias)]
 #![feature(type_alias_impl_trait)]
 #![feature(async_iterator)]
-#![feature(return_position_impl_trait_in_trait)]
 
 // 3rd party imports
 #[allow(unused_imports)]

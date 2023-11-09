@@ -5,7 +5,7 @@ use scylla::{transport::session::Session, SessionBuilder};
 /// Wrapper trait for a ScyllaDB session to make it more convenient to use with generic implementation
 ///
 pub trait GenericClient: Send + Sync {
-    async fn new(database_url: &str) -> Result<Self>
+    fn new(database_url: &str) -> impl std::future::Future<Output = Result<Self>> + Send
     where
         Self: Sized;
     fn get_session(&self) -> &Session;

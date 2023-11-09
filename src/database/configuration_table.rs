@@ -48,7 +48,10 @@ pub trait ConfigurationTable<C>: Table {
     /// * `client` - A database client
     /// * `key` - The key to look up
     ///
-    async fn get_setting<T>(client: &C, key: &str) -> Result<Option<T>>
+    fn get_setting<T>(
+        client: &C,
+        key: &str,
+    ) -> impl std::future::Future<Output = Result<Option<T>>> + Send
     where
         T: DeserializeOwned;
 
@@ -59,7 +62,11 @@ pub trait ConfigurationTable<C>: Table {
     /// * `key` - The key to look up
     /// * `value` - The value to save
     ///
-    async fn set_setting<T>(client: &C, key: &str, value: &T) -> Result<()>
+    fn set_setting<T>(
+        client: &C,
+        key: &str,
+        value: &T,
+    ) -> impl std::future::Future<Output = Result<()>> + Send
     where
         T: Serialize + Sync;
 
@@ -68,7 +75,7 @@ pub trait ConfigurationTable<C>: Table {
     /// # Arguments
     /// * `client` - A database client
     ///
-    async fn select(client: &C) -> Result<Configuration>;
+    fn select(client: &C) -> impl std::future::Future<Output = Result<Configuration>> + Send;
 
     /// Inserts the configuration into the database.
     ///
@@ -76,5 +83,8 @@ pub trait ConfigurationTable<C>: Table {
     /// * `client` - A database client
     /// * `configuration` - The configuration to insert
     ///
-    async fn insert(client: &mut C, configuration: &Configuration) -> Result<()>;
+    fn insert(
+        client: &mut C,
+        configuration: &Configuration,
+    ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
