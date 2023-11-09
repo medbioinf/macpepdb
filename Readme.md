@@ -2,7 +2,7 @@
 
 MaCPepDB creates and maintains a peptide database and provides a web API for accessing the database.
 
-Note: This is the next iteration of MaCPepDB, moving from the [previous Python-implementation](https://github.com/mpc-bioinformatics/macpepdb) to Rust and using ScyllaDB instead of PostgreSQL / Citus, in order to get better performance and make MaCPepDB ready to include more data.d
+Note: This is the next iteration of MaCPepDB, moving from the [previous Python-implementation](https://github.com/mpc-bioinformatics/macpepdb) to Rust and using ScyllaDB instead of PostgreSQL / Citus, in order to get better performance and make MaCPepDB ready to include more data.
 
 ## Ambiguous amino acids
 
