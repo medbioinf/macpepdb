@@ -16,7 +16,7 @@ use crate::database::scylla::schema::{DROP_KEYSPACE, UP};
 
 use self::schema::CREATE_KEYSPACE;
 
-pub const SCYLLA_KEYSPACE_NAME: &str = "macpep";
+pub const SCYLLA_KEYSPACE_NAME: &str = "macpep_";
 pub const DATABASE_URL: &str = "127.0.0.1:9042";
 
 pub async fn get_client(database_url: Option<&Vec<String>>) -> Result<Client> {

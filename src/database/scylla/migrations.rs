@@ -89,7 +89,7 @@ mod tests {
 
         let prepared = session
             .prepare(
-                "INSERT INTO macpep.migrations (pk, id, created, description) VALUES (?,?,?,?)",
+                "INSERT INTO macpep_.migrations (pk, id, created, description) VALUES (?,?,?,?)",
             )
             .await
             .unwrap();
