@@ -31,17 +31,26 @@ use macpepdb::{
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Builds a new MaCPepDB or updates an existing one
     Build {
+        /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
+        /// Number of threads to use for building the database
         num_threads: usize,
+        /// Number of partitions for distributing the database
         num_partitions: u64,
+        /// Allowed RAM usage in GB
         allowed_ram_usage: f64,
+        /// False positive probability for the partitioner
         partitioner_false_positive_probability: f64,
-        #[clap(value_delimiter = ',', num_args = 1..)]
-        protein_file_paths: Vec<String>,
+        /// Path to the log folder
         log_folder: String,
-        #[clap(long)]
-        only_metadata: bool,
+        /// If set, only the metadata will be included not domain/feature information
+        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        only_metadata: bool, // this is a flag now `--only-metadata`
+        /// Path protein files (dat or txt), comma separated
+        #[arg(value_delimiter = ',', num_args = 1..)]
+        protein_file_paths: Vec<String>,
     },
     QueryPerformance {
         database_url: String,
@@ -59,6 +68,8 @@ enum Commands {
     DomainTypes {
         database_url: String,
     },
+    /// Runs a test
+    Test,
 }
 
 #[derive(Debug, Parser)]
@@ -95,13 +106,13 @@ async fn main() -> Result<()> {
     match args.command {
         Commands::Build {
             database_url,
-            protein_file_paths,
             num_threads,
             num_partitions,
             allowed_ram_usage,
             partitioner_false_positive_probability,
             log_folder,
             only_metadata,
+            protein_file_paths,
         } => {
             let protein_file_paths = protein_file_paths
                 .into_iter()
@@ -240,6 +251,7 @@ async fn main() -> Result<()> {
                 error!("Unsupported database protocol: {}", database_url);
             }
         }
+        Commands::Test => {}
     };
 
     Ok(())
