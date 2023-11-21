@@ -60,7 +60,11 @@ impl TaxonomyTable {
 
     pub async fn delete_all(client: &Client) -> Result<()> {
         let statement = format!("TRUNCATE {}.{};", client.get_database(), Self::table_name());
-        client.get_session().query(statement, &[]).await?;
+        client
+            .get_session()
+            .query(statement, &[])
+            .await
+            .context("Error when emptying taxonomy table")?;
         Ok(())
     }
 

@@ -8,7 +8,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 // 3rd party imports
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use dihardts_omicstools::biology::io::taxonomy_reader::TaxonomyReader;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
@@ -986,10 +986,13 @@ impl DatabaseBuild {
     }
 
     async fn build_taxonomy_tree(client: &Client, taxonomy_file_path: &Path) -> Result<()> {
+        debug!("Build taxonomy tree");
         let taxonomy_tree = TaxonomyReader::new(taxonomy_file_path)?.read()?;
         TaxonomyTreeTable::insert(client, &taxonomy_tree).await?;
-        TaxonomyTable::bulk_insert(client, &taxonomy_tree.get_taxonomies()).await?;
-
+        TaxonomyTable::delete_all(client).await?;
+        TaxonomyTable::bulk_insert(client, &taxonomy_tree.get_taxonomies())
+            .await
+            .context("Error when inserting taxonomies")?;
         Ok(())
     }
 }

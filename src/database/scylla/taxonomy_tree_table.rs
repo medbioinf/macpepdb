@@ -1,5 +1,5 @@
 // 3rd party imports
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dihardts_omicstools::biology::taxonomy::TaxonomyTree;
 use serde_json;
 
@@ -24,8 +24,12 @@ impl TaxonomyTreeTable {
     ///
     pub async fn insert(client: &Client, taxonomy_tree: &TaxonomyTree) -> Result<()> {
         let json_str = serde_json::to_string(taxonomy_tree)?;
-        BlobTable::delete(client, KEY_PREFIX).await?;
-        BlobTable::insert_raw(client, KEY_PREFIX, json_str.as_bytes()).await?;
+        BlobTable::delete(client, KEY_PREFIX)
+            .await
+            .context("Error when deleting the old taxonomy tree chunks")?;
+        BlobTable::insert_raw(client, KEY_PREFIX, json_str.as_bytes())
+            .await
+            .context("Error when inserting the new taxonomy tree chunks")?;
         Ok(())
     }
 
