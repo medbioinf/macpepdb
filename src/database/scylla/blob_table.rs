@@ -115,15 +115,22 @@ impl BlobTable {
             TABLE_NAME,
             key_prefix
         );
+
+        // Using execute_iter plays nicer with smaller database clusters and avoids consistency issues
+        // although makes it complexer as results are streamed
+        let mut prep_statement = client.get_session().prepare(statement).await?;
+        prep_statement.set_page_size(1000);
         let keys: Vec<String> = client
             .get_session()
-            .query(statement, &[])
-            .await?
-            .rows
-            .unwrap_or(vec![])
-            .into_iter()
-            .map(|row| row.into_typed::<(String,)>().unwrap().0)
-            .collect();
+            .execute_iter(prep_statement, &[])
+            .await
+            .context("Error when selecting keys for deletion")?
+            .then(|row| async move {
+                Ok::<std::string::String, anyhow::Error>(row?.into_typed::<(String,)>()?.0)
+            })
+            .try_collect()
+            .await
+            .context("Error when collecting keys for deletion")?;
 
         let statement = format!(
             "DELETE FROM {}.{} WHERE key IN ?",
