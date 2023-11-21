@@ -1,22 +1,20 @@
-use std::path::Path;
 use std::thread::sleep;
-use tokio::spawn;
 // std imports
 use std::time::{Duration, Instant};
 
 // 3rd party imports
 use anyhow::Result;
+use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::{pin_mut, StreamExt};
 use indicatif::ProgressStyle;
 use scylla::frame::response::result::CqlValue;
 use scylla::transport::iterator::RowIterator;
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
 use crate::database::scylla::configuration_table::ConfigurationTable;
-use crate::database::scylla::{get_client, SCYLLA_KEYSPACE_NAME};
+use crate::database::scylla::SCYLLA_KEYSPACE_NAME;
 // internal imports
 use crate::database::scylla::client::{Client, GenericClient};
 use crate::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
@@ -24,7 +22,6 @@ use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
 use crate::functions::post_translational_modification::get_ptm_conditions;
-use crate::io::post_translational_modification_csv::reader::Reader as PtmReader;
 use crate::tools::mass_to_partition::mass_to_partition_index;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
@@ -34,53 +31,15 @@ pub async fn query_performance(
     lower_mass_tolerance: i64,
     upper_mass_tolerance: i64,
     max_variable_modifications: i16,
-    ptm_file: String,
+    ptms: Vec<PTM>,
 ) -> Result<()> {
-    let database_hosts: Vec<String> = hostnames.iter().map(|x| x.to_string()).collect();
-    let mass_chunks: Vec<Vec<i64>> = masses.chunks(16).map(|x| x.to_owned()).collect();
-    let mut handles: Vec<JoinHandle<Result<()>>> = Vec::new();
-    let client = get_client(Some(&database_hosts)).await.unwrap();
-    let config = ConfigurationTable::select(&client).await.unwrap();
-    let partition_limits = config.get_partition_limits();
-
-    for thread_id in 0..16 {
-        let hostnames_clone = database_hosts.clone();
-        let ptm_file_clone = ptm_file.clone();
-        let masses_clone = mass_chunks[thread_id].clone();
-        let partition_limits_clone = partition_limits.clone();
-
-        handles.push(spawn(async move {
-            query_performance_thread(
-                hostnames_clone,
-                masses_clone,
-                lower_mass_tolerance,
-                upper_mass_tolerance,
-                max_variable_modifications,
-                ptm_file_clone,
-                partition_limits_clone,
-            )
-            .await?;
-            Ok(())
-        }));
-    }
-
-    Ok(())
-}
-
-pub async fn query_performance_thread(
-    hostnames: Vec<String>,
-    masses: Vec<i64>,
-    lower_mass_tolerance: i64,
-    upper_mass_tolerance: i64,
-    max_variable_modifications: i16,
-    ptm_file: String,
-    partition_limits: Vec<i64>,
-) -> Result<()> {
-    let client = get_client(Some(&hostnames)).await.unwrap();
+    let client = Client::new(hostnames).await?;
     let session = (&client).get_session();
     let mut mass_stats: Vec<(i64, u64, u128)> = Vec::new();
 
-    let ptms = PtmReader::read(Path::new(&ptm_file)).unwrap();
+    let config = ConfigurationTable::select(&client).await?;
+
+    let partition_limits = config.get_partition_limits();
 
     let header_span = info_span!("Querying");
     header_span.pb_set_style(&ProgressStyle::default_bar());
@@ -94,7 +53,7 @@ pub async fn query_performance_thread(
         PeptideTable::table_name()
     );
 
-    let query_statement = session.prepare(query_statement_str).await.unwrap();
+    let query_statement = session.prepare(query_statement_str).await?;
 
     // Iterate masses
     for mass in masses.iter() {

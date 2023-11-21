@@ -15,6 +15,7 @@ use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 use macpepdb::functions::performance_measurement::{
     citus as citus_performance, scylla as scylla_performance,
 };
+use macpepdb::io::post_translational_modification_csv::reader::Reader as PtmReader;
 use macpepdb::mass::convert::to_int as mass_to_int;
 use macpepdb::{
     database::{
@@ -206,6 +207,8 @@ async fn main() -> Result<()> {
                 })
                 .collect();
 
+            let ptms = PtmReader::read(Path::new(&ptm_file))?;
+
             if database_url.starts_with("scylla://") {
                 // remove protocol
                 let plain_database_url = database_url[9..].to_string();
@@ -217,7 +220,7 @@ async fn main() -> Result<()> {
                     lower_mass_tolerance,
                     upper_mass_tolerance,
                     max_variable_modifications,
-                    ptm_file,
+                    ptms,
                 )
                 .await?;
             } else if database_url.starts_with("postgresql://") {
