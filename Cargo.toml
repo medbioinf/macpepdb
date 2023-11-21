@@ -28,7 +28,7 @@ chrono = "0.4.23"
 clap = { version = "4.3.0", features = ["derive"] }
 csv = "1.2.2"
 dihardts_cstools = "~1.0.0"
-dihardts_omicstools = "1.4.0"
+dihardts_omicstools = "1.8.0"
 env_logger = "0.10.0"
 fallible-iterator = "0.2.0"
 fancy-regex = "0.11.0"
@@ -50,4 +50,6 @@ tracing-subscriber =  { version = "0.3.17", features = ["env-filter"]}
 tracing-test = "0.2.4"
 
 [dev-dependencies]
+lipsum = "0.9.0"
+reqwest = { version = "0.11.22" }
 serial_test = "*"

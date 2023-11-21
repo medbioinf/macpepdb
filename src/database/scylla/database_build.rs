@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -9,6 +9,7 @@ use std::time::Duration;
 
 // 3rd party imports
 use anyhow::{bail, Result};
+use dihardts_omicstools::biology::io::taxonomy_reader::TaxonomyReader;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::stream::FuturesUnordered;
@@ -55,6 +56,8 @@ use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
 
 use super::peptide_table::{TABLE_NAME, UPDATE_SET_PLACEHOLDER};
+use super::taxonomy_table::TaxonomyTable;
+use super::taxonomy_tree_table::TaxonomyTreeTable;
 
 lazy_static! {
     static ref PROTEIN_QUEUE_WRITE_SLEEP_TIME: Duration = Duration::from_millis(100);
@@ -981,6 +984,14 @@ impl DatabaseBuild {
         debug!("Quitting thread");
         Ok(())
     }
+
+    async fn build_taxonomy_tree(client: &Client, taxonomy_file_path: &Path) -> Result<()> {
+        let taxonomy_tree = TaxonomyReader::new(taxonomy_file_path)?.read()?;
+        TaxonomyTreeTable::insert(client, &taxonomy_tree).await?;
+        TaxonomyTable::bulk_insert(client, &taxonomy_tree.get_taxonomies()).await?;
+
+        Ok(())
+    }
 }
 
 impl DatabaseBuildTrait for DatabaseBuild {
@@ -993,6 +1004,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
     async fn build(
         &self,
         protein_file_paths: &Vec<PathBuf>,
+        taxonomy_file_path: &PathBuf,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
@@ -1029,6 +1041,8 @@ impl DatabaseBuildTrait for DatabaseBuild {
             configuration.get_min_peptide_length(),
             configuration.get_max_peptide_length(),
         )?;
+
+        Self::build_taxonomy_tree(&client, taxonomy_file_path).await?;
 
         if !only_metadata_update {
             // read, digest and insert proteins and peptides
@@ -1097,6 +1111,7 @@ mod test {
     use crate::database::scylla::{peptide_table::PeptideTable, protein_table::ProteinTable};
     use crate::database::selectable_table::SelectableTable;
     use crate::io::uniprot_text::reader::Reader;
+    use crate::tools::tests::get_taxdmp_zip;
 
     lazy_static! {
         static ref CONFIGURATION: Configuration =
@@ -1114,6 +1129,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build_without_initial_config() {
+        let taxdmp_zip_path = get_taxdmp_zip().await.unwrap();
         let client = Client::new(DATABASE_URL).await.unwrap();
 
         drop_keyspace(&client).await;
@@ -1129,6 +1145,7 @@ mod test {
         let build_res = database_builder
             .build(
                 &protein_file_paths,
+                &taxdmp_zip_path,
                 2,
                 100,
                 0.5,
@@ -1146,6 +1163,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build() {
+        let taxdmp_zip_path = get_taxdmp_zip().await.unwrap();
         let client = Client::new(DATABASE_URL).await.unwrap();
 
         drop_keyspace(&client).await;
@@ -1165,6 +1183,7 @@ mod test {
         database_builder
             .build(
                 &protein_file_paths,
+                &taxdmp_zip_path,
                 2,
                 100,
                 0.5,

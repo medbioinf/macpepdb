@@ -1,3 +1,5 @@
+/// Table for storing binary data in the database
+pub mod blob_table;
 /// Trait definition for generic client to use with database API and a client struct keeping the session.
 pub mod client;
 pub mod configuration_table;
@@ -6,6 +8,12 @@ pub mod migrations;
 pub mod peptide_table;
 pub mod protein_table;
 pub mod schema;
+// /// Database API for serializing/deserializing the taxonomy tree
+// pub mod taxonomy_tree;
+/// Database API for fuzzy searching taxonomy names
+pub mod taxonomy_table;
+/// Database API for (de-)serializing the taxonomy tree
+pub mod taxonomy_tree_table;
 
 // internal imports
 use crate::database::scylla::client::{Client, GenericClient};

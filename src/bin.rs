@@ -45,6 +45,8 @@ enum Commands {
         partitioner_false_positive_probability: f64,
         /// Path to the log folder
         log_folder: String,
+        /// Path taxdmp.zip from [NCBI](https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdmp.zip)
+        taxonomy_file: String,
         /// If set, only the metadata will be included not domain/feature information
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         only_metadata: bool, // this is a flag now `--only-metadata`
@@ -68,8 +70,6 @@ enum Commands {
     DomainTypes {
         database_url: String,
     },
-    /// Runs a test
-    Test,
 }
 
 #[derive(Debug, Parser)]
@@ -111,6 +111,7 @@ async fn main() -> Result<()> {
             allowed_ram_usage,
             partitioner_false_positive_probability,
             log_folder,
+            taxonomy_file,
             only_metadata,
             protein_file_paths,
         } => {
@@ -127,6 +128,7 @@ async fn main() -> Result<()> {
                 match builder
                     .build(
                         &protein_file_paths,
+                        &Path::new(&taxonomy_file).to_path_buf(),
                         num_threads,
                         num_partitions,
                         allowed_ram_usage,
@@ -251,7 +253,6 @@ async fn main() -> Result<()> {
                 error!("Unsupported database protocol: {}", database_url);
             }
         }
-        Commands::Test => {}
     };
 
     Ok(())
