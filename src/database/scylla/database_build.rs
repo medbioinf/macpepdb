@@ -1024,7 +1024,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         debug!("applying database migrations...");
 
         // Run migrations
-        run_migrations(&client).await;
+        run_migrations(&client).await?;
         // migrations::runner().run_async(&mut client).await?;
 
         info!("Getting / Setting configuration");
