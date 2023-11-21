@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
                     .await
                 {
                     Ok(_) => info!("Database build completed successfully!"),
-                    Err(e) => info!("Database build failed: {}", e),
+                    Err(e) => error!("Database build failed: {:?}", e),
                 }
             } else {
                 error!("Unsupported database protocol: {}", database_url);
