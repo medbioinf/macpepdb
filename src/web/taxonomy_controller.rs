@@ -196,37 +196,4 @@ pub async fn search_taxonomies(
             })
             .collect::<Result<Vec<JsonValue>, WebError>>()?,
     ))
-
-    // Need to handle WebError manually, because we need to return a stream
-    // let id_stream =
-    //     match TaxonomyTable::search_taxonomy_by_name(db_client.clone(), payload.get_name_query())
-    //         .await
-    //     {
-    //         Ok(id_stream) => id_stream,
-    //         Err(err) => {
-    //             return StreamBodyAs::text(WebError::new_string_stream(
-    //                 StatusCode::BAD_REQUEST,
-    //                 format!("Error while parsing modifications: {:?}", err),
-    //             ));
-    //         }
-    //     };
-
-    // StreamBodyAs::json_array(stream! {
-    //     let local_taxonomy_tree = taxonomy_tree.clone();
-    //     for await id in id_stream {
-    //         if let Ok(id) = id {
-    //             match local_taxonomy_tree.get_taxonomy(id) {
-    //                 Some(taxonomy) => yield SerializableTaxonomy{
-    //                     id: taxonomy.get_id(),
-    //                     parent_id: taxonomy.get_parent_id(),
-    //                     scientific_name: taxonomy.get_scientific_name(),
-    //                     rank: taxonomy_tree.get_ranks().get(&taxonomy.get_rank_id()).unwrap_or(&"unknown".to_string())
-    //                 },
-    //                 None => error!("Could not find taxonomy with ID {}", id)
-    //             }
-    //             continue;
-    //         }
-    //         error!("{:?}", id.unwrap_err());
-    //     }
-    // })
 }
