@@ -283,7 +283,7 @@ impl PeptideTable {
         mass: i64,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
-        taxonomy_id: &'a Option<i64>,
+        taxonomy_ids: &'a Option<Vec<i64>>,
         proteome_id: &'a Option<String>,
         is_reviewed: &'a Option<bool>,
         matching_peptides: &'a mut BloomFilter,
@@ -335,8 +335,15 @@ impl PeptideTable {
                         }
                     }
 
-                    if let Some(taxonomy_id) = taxonomy_id {
-                        if !peptide.get_taxonomy_ids().contains(&taxonomy_id) {
+                    if let Some(taxonomy_ids) = taxonomy_ids {
+                        let mut matching_ids = false;
+                        for id in peptide.get_taxonomy_ids() {
+                            if taxonomy_ids.contains(id) {
+                                matching_ids = true;
+                                break;
+                            }
+                        }
+                        if !matching_ids {
                             continue;
                         }
                     }
@@ -386,7 +393,7 @@ impl PeptideTable {
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
         max_variable_modifications: i16,
-        taxonomy_id: Option<i64>,
+        taxonomy_ids: Option<Vec<i64>>,
         proteome_id: Option<String>,
         is_reviewed: Option<bool>,
         ptms: Vec<PTM>,
@@ -404,7 +411,7 @@ impl PeptideTable {
                     mass,
                     lower_mass_tolerance_ppm,
                     upper_mass_tolerance_ppm,
-                    &taxonomy_id,
+                    &taxonomy_ids,
                     &proteome_id,
                     &is_reviewed,
                     &mut matching_peptides,
@@ -426,7 +433,7 @@ impl PeptideTable {
                         mass,
                         lower_mass_tolerance_ppm,
                         upper_mass_tolerance_ppm,
-                        &taxonomy_id,
+                        &taxonomy_ids,
                         &proteome_id,
                         &is_reviewed,
                         &mut matching_peptides,

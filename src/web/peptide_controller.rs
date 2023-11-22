@@ -10,6 +10,7 @@ use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum_streams::*;
+use dihardts_omicstools::biology::taxonomy::TaxonomyTree;
 use dihardts_omicstools::chemistry::amino_acid::get_amino_acid_by_one_letter_code;
 use dihardts_omicstools::proteomics::post_translational_modifications::{
     ModificationType as PtmType, Position as PtmPosition, PostTranslationalModification as PTM,
@@ -165,6 +166,7 @@ impl SearchRequestBody {
 }
 
 /// Returns a stream of peptides matching the given parameters.
+/// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
 ///
 /// # Arguments
 /// * `db_client` - The database client
@@ -243,7 +245,11 @@ impl SearchRequestBody {
 /// ```
 ///
 pub async fn search(
-    State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,
+    State((db_client, configuration, taxonomy_tree)): State<(
+        Arc<Client>,
+        Arc<Configuration>,
+        Arc<TaxonomyTree>,
+    )>,
     headers: HeaderMap,
     Json(payload): Json<SearchRequestBody>,
 ) -> impl IntoResponse {
@@ -258,6 +264,24 @@ pub async fn search(
         }
     };
 
+    let mut taxonomy_ids: Option<Vec<i64>> = None;
+    if let Some(taxonomy_id) = payload.taxonomy_id {
+        // Check if taxonomy exists
+        if taxonomy_tree.get_taxonomy(taxonomy_id as u64).is_none() {
+            return StreamBodyAs::text(WebError::new_string_stream(
+                StatusCode::BAD_REQUEST,
+                format!("Taxonomy with id {} does not exist", taxonomy_id),
+            ));
+        }
+
+        let mut ids: Vec<i64> = match taxonomy_tree.get_sub_taxonomies(taxonomy_id as u64) {
+            Some(taxonomies) => taxonomies.iter().map(|tax| tax.get_id() as i64).collect(),
+            None => Vec::new(),
+        };
+        ids.push(taxonomy_id);
+        taxonomy_ids = Some(ids);
+    }
+
     let peptide_stream = match PeptideTable::search(
         db_client.clone(),
         configuration.clone(),
@@ -265,7 +289,7 @@ pub async fn search(
         payload.lower_mass_tolerance_ppm.clone(),
         payload.upper_mass_tolerance_ppm.clone(),
         payload.max_variable_modifications.clone(),
-        payload.taxonomy_id.clone(),
+        taxonomy_ids,
         payload.proteome_id.clone(),
         payload.is_reviewed.clone(),
         ptms,

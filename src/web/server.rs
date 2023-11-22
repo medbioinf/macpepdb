@@ -58,7 +58,11 @@ pub async fn start(database_url: &str, interface: String, port: u16) -> Result<(
     let app = Router::new()
         // Peptide routes
         .route("/api/peptides/search", post(peptide_search))
-        .with_state((db_client.clone(), configuration.clone()))
+        .with_state((
+            db_client.clone(),
+            configuration.clone(),
+            taxonomy_tree.clone(),
+        ))
         .route("/api/peptides/:sequence/exists", get(get_peptide_existence))
         .with_state((db_client.clone(), configuration.clone()))
         .route("/api/peptides/:sequence", get(get_peptide))
