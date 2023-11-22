@@ -31,7 +31,12 @@ use crate::web::tools_controller::{digest, get_mass};
 /// * `interface` - Interface to listen on
 /// * `port` - Port to listen on
 ///
-pub async fn start(database_url: &str, interface: String, port: u16) -> Result<()> {
+pub async fn start(
+    database_url: &str,
+    interface: String,
+    port: u16,
+    with_taxonomy_search: bool,
+) -> Result<()> {
     // Create a database client
     // Session maintains it own connection pool internally: https://github.com/scylladb/scylla-rust-driver/issues/724
     // A single client with a session should be sufficient for the entire application
@@ -44,9 +49,14 @@ pub async fn start(database_url: &str, interface: String, port: u16) -> Result<(
     let taxonomy_tree: TaxonomyTree = TaxonomyTreeTable::select(&db_client).await?;
 
     // Build search index for taxonomy scientific name
-    let mut taxonomy_search: SearchIndex<u64> = SearchIndex::default();
-    for tax in taxonomy_tree.get_taxonomies() {
-        taxonomy_search.insert(&tax.get_id(), &tax.get_scientific_name());
+    let mut taxonomy_search: Option<SearchIndex<u64>> = None;
+
+    if with_taxonomy_search {
+        let mut index = SearchIndex::default();
+        for tax in taxonomy_tree.get_taxonomies() {
+            index.insert(&tax.get_id(), &tax.get_scientific_name());
+        }
+        taxonomy_search = Some(index);
     }
 
     let app_state = Arc::new(AppState::new(

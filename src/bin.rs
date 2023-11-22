@@ -66,6 +66,11 @@ enum Commands {
         database_url: String,
         interface: String,
         port: u16,
+        /// Setting this flag disables the creation of the taxonomy name search index,
+        /// disables the taxonomy search end point and reduces the memory usage of the web server
+        /// by ~1GB
+        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        no_taxonomy_search: bool,
     },
     DomainTypes {
         database_url: String,
@@ -194,9 +199,10 @@ async fn main() -> Result<()> {
             database_url,
             interface,
             port,
+            no_taxonomy_search,
         } => {
             if database_url.starts_with("scylla://") {
-                start_web_server(&database_url, interface, port).await?;
+                start_web_server(&database_url, interface, port, !no_taxonomy_search).await?;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }

@@ -124,7 +124,9 @@ struct SerializableTaxonomy<'a> {
     rank: &'a String,
 }
 
-/// Searches a taxonomies by their names
+/// Searches a taxonomies by their names   
+/// **Attention:** This endpoint can be disabled on the server side. If it is disabled a `501` is returned with
+/// with a message explaining that the endpoint is disabled.
 ///
 /// # Arguments
 /// * `db_client` - The database client
@@ -169,7 +171,15 @@ pub async fn search_taxonomies(
     Json(payload): Json<SearchRequestBody>,
 ) -> Result<Json<Vec<JsonValue>>, WebError> {
     let taxonomy_tree = app_state.get_taxonomy_tree_as_ref();
-    let taxonomy_search_idx = app_state.get_taxonomy_index_as_ref();
+    let taxonomy_search_idx = match app_state.get_taxonomy_index_as_ref() {
+        Some(idx) => idx,
+        None => {
+            return Err(WebError::new(
+                StatusCode::NOT_IMPLEMENTED,
+                "Taxonomy search is disable on this instance of MaCPepDB".to_string(),
+            ))
+        }
+    };
     Ok(Json(
         taxonomy_search_idx
             .search(payload.get_name_query())

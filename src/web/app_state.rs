@@ -12,7 +12,7 @@ pub struct AppState {
     db_client: Arc<Client>,
     configuration: Arc<Configuration>,
     taxonomy_tree: Arc<TaxonomyTree>,
-    taxonomy_index: Arc<SearchIndex<u64>>,
+    taxonomy_index: Arc<Option<SearchIndex<u64>>>,
 }
 
 impl AppState {
@@ -20,7 +20,7 @@ impl AppState {
         db_client: Client,
         configuration: Configuration,
         taxonomy_tree: TaxonomyTree,
-        taxonomy_index: SearchIndex<u64>,
+        taxonomy_index: Option<SearchIndex<u64>>,
     ) -> Self {
         Self {
             db_client: Arc::new(db_client),
@@ -68,13 +68,13 @@ impl AppState {
 
     /// Returns a reference to the taxonomy tree
     ///
-    pub fn get_taxonomy_index(&self) -> Arc<SearchIndex<u64>> {
+    pub fn get_taxonomy_index(&self) -> Arc<Option<SearchIndex<u64>>> {
         self.taxonomy_index.clone()
     }
 
     /// Returns a reference to the taxonomy tree
     ///
-    pub fn get_taxonomy_index_as_ref(&self) -> &SearchIndex<u64> {
+    pub fn get_taxonomy_index_as_ref(&self) -> &Option<SearchIndex<u64>> {
         self.taxonomy_index.as_ref()
     }
 }
