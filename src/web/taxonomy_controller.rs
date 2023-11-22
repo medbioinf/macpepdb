@@ -7,12 +7,10 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use dihardts_omicstools::biology::taxonomy::{Taxonomy, TaxonomyTree};
-use futures::{StreamExt, TryStreamExt};
+use indicium::simple::SearchIndex;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 
-use crate::database::scylla::client::Client;
-use crate::database::scylla::taxonomy_table::TaxonomyTable;
 // internal imports
 use crate::web::web_error::WebError;
 
@@ -164,20 +162,15 @@ struct SerializableTaxonomy<'a> {
 /// ```
 ///
 pub async fn search_taxonomies(
-    State((db_client, taxonomy_tree)): State<(Arc<Client>, Arc<TaxonomyTree>)>,
+    State((taxonomy_tree, taxonomy_search_idx)): State<(Arc<TaxonomyTree>, Arc<SearchIndex<u64>>)>,
     Json(payload): Json<SearchRequestBody>,
 ) -> Result<Json<Vec<JsonValue>>, WebError> {
-    let ids: Vec<u64> =
-        TaxonomyTable::search_taxonomy_by_name(db_client.as_ref(), payload.get_name_query())
-            .await?
-            .then(|id| async move { Ok::<u64, anyhow::Error>(id?) })
-            .try_collect()
-            .await?;
-
     Ok(Json(
-        ids.into_iter()
+        taxonomy_search_idx
+            .search(payload.get_name_query())
+            .iter()
             .map(|id| {
-                let taxonomy = match taxonomy_tree.get_taxonomy(id) {
+                let taxonomy = match taxonomy_tree.get_taxonomy(**id) {
                     Some(taxonomy) => Ok(taxonomy),
                     None => Err(WebError::new(
                         StatusCode::NOT_FOUND,

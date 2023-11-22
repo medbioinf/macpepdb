@@ -7,6 +7,7 @@ use anyhow::Result;
 use axum::routing::{get, post};
 use axum::Router;
 use dihardts_omicstools::biology::taxonomy::TaxonomyTree;
+use indicium::simple::SearchIndex;
 
 // internal imports
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
@@ -44,6 +45,13 @@ pub async fn start(database_url: &str, interface: String, port: u16) -> Result<(
     let taxonomy_tree: TaxonomyTree = TaxonomyTreeTable::select(db_client.as_ref()).await?;
     let taxonomy_tree = Arc::new(taxonomy_tree);
 
+    // Build search index for taxonomy scientific name
+    let mut taxonomy_search: SearchIndex<u64> = SearchIndex::default();
+    for tax in taxonomy_tree.get_taxonomies() {
+        taxonomy_search.insert(&tax.get_id(), &tax.get_scientific_name());
+    }
+    let taxonomy_search = Arc::new(taxonomy_search);
+
     tracing::info!("Start MaCPepDB web server");
 
     // Build our application with route
@@ -67,7 +75,7 @@ pub async fn start(database_url: &str, interface: String, port: u16) -> Result<(
         .route("/api/tools/mass/:sequence", post(get_mass))
         // taxonomy
         .route("/api/taxonomies/search", post(search_taxonomies))
-        .with_state((db_client.clone(), taxonomy_tree.clone()))
+        .with_state((taxonomy_tree.clone(), taxonomy_search.clone()))
         .route("/api/taxonomies/:id/sub", get(get_sub_taxonomies))
         .with_state(taxonomy_tree.clone())
         .route("/api/taxonomies/:id", get(get_taxonomy))

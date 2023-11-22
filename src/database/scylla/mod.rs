@@ -8,10 +8,6 @@ pub mod migrations;
 pub mod peptide_table;
 pub mod protein_table;
 pub mod schema;
-// /// Database API for serializing/deserializing the taxonomy tree
-// pub mod taxonomy_tree;
-/// Database API for fuzzy searching taxonomy names
-pub mod taxonomy_table;
 /// Database API for (de-)serializing the taxonomy tree
 pub mod taxonomy_tree_table;
 

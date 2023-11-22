@@ -8,7 +8,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 // 3rd party imports
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use dihardts_omicstools::biology::io::taxonomy_reader::TaxonomyReader;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
@@ -56,7 +56,6 @@ use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
 
 use super::peptide_table::{TABLE_NAME, UPDATE_SET_PLACEHOLDER};
-use super::taxonomy_table::TaxonomyTable;
 use super::taxonomy_tree_table::TaxonomyTreeTable;
 
 lazy_static! {
@@ -989,10 +988,6 @@ impl DatabaseBuild {
         debug!("Build taxonomy tree");
         let taxonomy_tree = TaxonomyReader::new(taxonomy_file_path)?.read()?;
         TaxonomyTreeTable::insert(client, &taxonomy_tree).await?;
-        TaxonomyTable::delete_all(client).await?;
-        TaxonomyTable::bulk_insert(client, &taxonomy_tree.get_taxonomies())
-            .await
-            .context("Error when inserting taxonomies")?;
         Ok(())
     }
 }
