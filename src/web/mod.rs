@@ -1,3 +1,5 @@
+/// Module for handling the web application state
+pub mod app_state;
 /// Endpoints for getting information about the database, digestion enzymes, max missed cleavages, etc.
 pub mod configuration_controller;
 /// Endpoints for getting peptides by sequence, mass search, ...

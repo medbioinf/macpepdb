@@ -1,17 +1,18 @@
-use std::collections::HashMap;
 // std imports
+use std::collections::HashMap;
 use std::sync::Arc;
+
 // 3rd party imports
 use anyhow::Result;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
-use dihardts_omicstools::biology::taxonomy::{Taxonomy, TaxonomyTree};
-use indicium::simple::SearchIndex;
+use dihardts_omicstools::biology::taxonomy::Taxonomy;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
 
 // internal imports
+use crate::web::app_state::AppState;
 use crate::web::web_error::WebError;
 
 fn taxonomy_to_json(taxonomy: &Taxonomy, taxonomy_ranks: &HashMap<u64, String>) -> JsonValue {
@@ -45,9 +46,10 @@ fn taxonomy_to_json(taxonomy: &Taxonomy, taxonomy_ranks: &HashMap<u64, String>) 
 /// ```
 ///
 pub async fn get_taxonomy(
-    State(taxonomy_tree): State<Arc<TaxonomyTree>>,
+    State(app_state): State<Arc<AppState>>,
     Path(id): Path<u64>,
 ) -> Result<Json<JsonValue>, WebError> {
+    let taxonomy_tree = app_state.get_taxonomy_tree_as_ref();
     match taxonomy_tree.get_taxonomy(id) {
         Some(taxonomy) => Ok(Json(taxonomy_to_json(&taxonomy, taxonomy_tree.get_ranks()))),
         None => Err(WebError::new(
@@ -83,9 +85,10 @@ pub async fn get_taxonomy(
 /// ```
 ///
 pub async fn get_sub_taxonomies(
-    State(taxonomy_tree): State<Arc<TaxonomyTree>>,
+    State(app_state): State<Arc<AppState>>,
     Path(id): Path<u64>,
 ) -> Result<Json<JsonValue>, WebError> {
+    let taxonomy_tree = app_state.get_taxonomy_tree_as_ref();
     match taxonomy_tree.get_sub_taxonomies(id) {
         Some(taxonomies) => Ok(Json(
             taxonomies
@@ -162,9 +165,11 @@ struct SerializableTaxonomy<'a> {
 /// ```
 ///
 pub async fn search_taxonomies(
-    State((taxonomy_tree, taxonomy_search_idx)): State<(Arc<TaxonomyTree>, Arc<SearchIndex<u64>>)>,
+    State(app_state): State<Arc<AppState>>,
     Json(payload): Json<SearchRequestBody>,
 ) -> Result<Json<Vec<JsonValue>>, WebError> {
+    let taxonomy_tree = app_state.get_taxonomy_tree_as_ref();
+    let taxonomy_search_idx = app_state.get_taxonomy_index_as_ref();
     Ok(Json(
         taxonomy_search_idx
             .search(payload.get_name_query())
