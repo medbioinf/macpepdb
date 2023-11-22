@@ -101,7 +101,19 @@ This is a ScyllaDB user defined datatype.
 | protein             | text   | The protein accession of the protein that contains the peptide and domain that is within the peptide range (this column empty for the Protein table) |
 | start_index_protein | bigint | Start index of domain for the protein sequence (this column empty for the Protein table)                                                             |
 | end_index_protein   | bigint | End index of domain for the protein sequence (this column empty for the Protein table)                                                               |
-| peptide_offset      | bigint | Start index of the peptide sequence within the protein                                                                                               |
+| peptide_offset      | bigint | Start index of the peptide sequence within the protein           
+
+### Blobs
+
+Table to store several binary data. Scylla blob type has in practice a limit of < 1MB, therefore data is stored in multiple chunks of max 512KB. Each chunk has a prefix and chunk index as key.
+
+| Column               | Type                | Data                                    |
+| -------------------- | ------------------- | --------------------------------------- |
+| **key**              | string              | `prefix`_`<CHUNK_NUMBER>`               |
+| data                 | blob                | Chunk of binary data with max. 512 KB   |    
+
+
+\* primary key is bold
 
 ## Scylla Cluster Deployment
 
