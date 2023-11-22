@@ -1,5 +1,5 @@
 // 3rd party imports
-use anyhow::Result;
+use anyhow::{Context, Ok, Result};
 use chrono::Utc;
 use scylla::_macro_internal::CqlValue;
 use tracing::{debug, info};
@@ -12,7 +12,7 @@ use crate::{
 
 use super::client::{Client, GenericClient};
 
-pub async fn run_migrations(client: &Client) {
+pub async fn run_migrations(client: &Client) -> Result<()> {
     info!("Running Scylla migrations");
     let session = client.get_session();
 
@@ -43,8 +43,9 @@ pub async fn run_migrations(client: &Client) {
                 ),
             )
             .await
-            .unwrap();
+            .context(format!("Error on migration statement: {}", statement))?;
     }
+    Ok(())
 }
 
 pub async fn get_latest_migration_id(client: &Client) -> Result<i32> {
@@ -122,12 +123,12 @@ mod tests {
         let client = Client::new(DATABASE_URL).await.unwrap();
         drop_keyspace(&client).await;
 
-        run_migrations(&client).await;
+        run_migrations(&client).await.unwrap();
         assert_eq!(
             get_latest_migration_id(&client).await.unwrap(),
             UP.len() as i32
         );
-        run_migrations(&client).await;
+        run_migrations(&client).await.unwrap();
         assert_eq!(
             get_latest_migration_id(&client).await.unwrap(),
             UP.len() as i32

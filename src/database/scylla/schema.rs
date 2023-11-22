@@ -1,9 +1,10 @@
-pub const UP: [&str; 5] = [
+pub const UP: [&str; 6] = [
     CREATE_MIGRATIONS_TABLE,
     CREATE_CONFIG_TABLE,
     CREATE_DOMAINS_TYPE,
     CREATE_PROTEINS_TABLE,
     CREATE_PEPTIDES_TABLE,
+    CREATE_BLOBS_TABLE,
 ];
 
 pub const DROP_KEYSPACE: &str = "DROP KEYSPACE IF EXISTS :KEYSPACE:;";
@@ -52,3 +53,6 @@ const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS :KEYSPACE:.pepti
         is_metadata_updated boolean,
         PRIMARY KEY (partition, mass, sequence)
     );";
+
+const CREATE_BLOBS_TABLE: &str =
+    "CREATE TABLE IF NOT EXISTS :KEYSPACE:.blobs (key text PRIMARY KEY, data blob);";

@@ -53,7 +53,7 @@ impl IntoResponse for WebError {
 ///
 impl From<anyhow::Error> for WebError {
     fn from(err: anyhow::Error) -> Self {
-        Self::new(StatusCode::INTERNAL_SERVER_ERROR, format!("{}", err))
+        Self::new(StatusCode::INTERNAL_SERVER_ERROR, format!("{:?}", err))
     }
 }
 

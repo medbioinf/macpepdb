@@ -25,6 +25,7 @@ pub trait DatabaseBuild {
     ///
     /// # Arguments
     /// * `protein_file_paths` - Paths to the protein files.
+    /// * `taxonomy_file_path` - Path to the taxonomy file.
     /// * `num_threads` - Number of threads to use.
     /// * `num_partitions` - Number of partitions to use.
     /// * `allowed_ram_usage` - Allowed RAM usage in GB for the partitioner Bloom filter.
@@ -34,6 +35,7 @@ pub trait DatabaseBuild {
     fn build(
         &self,
         protein_file_paths: &Vec<PathBuf>,
+        taxonomy_file_path: &PathBuf,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,

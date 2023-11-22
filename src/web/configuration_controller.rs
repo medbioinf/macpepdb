@@ -6,6 +6,7 @@ use axum::extract::{Json, State};
 
 // internal imports
 use crate::entities::configuration::Configuration;
+use crate::web::app_state::AppState;
 
 /// Returns the configuration with which MaCPepDB was created.
 ///
@@ -39,8 +40,6 @@ use crate::entities::configuration::Configuration;
 /// }
 /// ```
 ///
-pub async fn get_configuration(
-    State(configuration): State<Arc<Configuration>>,
-) -> Json<Configuration> {
-    Json(configuration.as_ref().clone())
+pub async fn get_configuration(State(app_state): State<Arc<AppState>>) -> Json<Configuration> {
+    Json(app_state.get_configuration_as_ref().clone())
 }

@@ -14,13 +14,13 @@ use crate::biology::digestion_enzyme::functions::{
     create_peptides_entities_from_digest, get_enzyme_by_name,
 };
 use crate::chemistry::amino_acid::calc_sequence_mass;
-use crate::database::scylla::client::Client;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::selectable_table::SelectableTable;
-use crate::entities::configuration::Configuration;
 use crate::entities::peptide::Peptide;
 use crate::mass::convert::to_float as mass_to_float;
 use crate::web::web_error::WebError;
+
+use super::app_state::AppState;
 
 /// Request body for the digest endpoint
 ///
@@ -94,9 +94,10 @@ pub struct DigestionRequestBody {
 /// ```
 ///
 pub async fn digest(
-    State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,
+    State(app_state): State<Arc<AppState>>,
     Json(payload): Json<DigestionRequestBody>,
 ) -> Result<Json<JsonValue>, WebError> {
+    let configuration = app_state.get_configuration_as_ref();
     let enzyme = get_enzyme_by_name(
         &payload
             .digestion_enzyme
@@ -160,7 +161,7 @@ pub async fn digest(
             );
 
             let db_peptides_partition = PeptideTable::select_multiple(
-                db_client.as_ref(),
+                app_state.get_db_client_as_ref(),
                 &statement_addition,
                 select_params_ref.as_slice(),
             )

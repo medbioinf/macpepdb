@@ -20,13 +20,12 @@ use tracing::error;
 
 // internal imports
 use crate::chemistry::amino_acid::calc_sequence_mass;
-use crate::database::scylla::client::Client;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::selectable_table::SelectableTable;
-use crate::entities::configuration::Configuration;
 use crate::entities::peptide::Peptide;
 use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::peptide_partitioner::get_mass_partition;
+use crate::web::app_state::AppState;
 use crate::web::web_error::WebError;
 
 /// Returns the peptide for given sequence.
@@ -70,15 +69,18 @@ use crate::web::web_error::WebError;
 /// }
 ///
 pub async fn get_peptide(
-    State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,
+    State(app_state): State<Arc<AppState>>,
     Path(sequence): Path<String>,
 ) -> Result<Json<Peptide>, WebError> {
     let sequence = sequence.to_uppercase();
     let mass = calc_sequence_mass(sequence.as_str())?;
-    let partition = get_mass_partition(configuration.get_partition_limits(), mass)?;
+    let partition = get_mass_partition(
+        app_state.get_configuration_as_ref().get_partition_limits(),
+        mass,
+    )?;
 
     let peptide_opt = PeptideTable::select(
-        db_client.as_ref(),
+        app_state.get_db_client_as_ref(),
         "WHERE partition = ? AND mass = ? and sequence = ?",
         &[
             &CqlValue::BigInt(partition as i64),
@@ -115,13 +117,13 @@ pub async fn get_peptide(
 /// Statuscode 200 if peptide exists, otherwise 404
 ///
 pub async fn get_peptide_existence(
-    State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,
+    State(app_state): State<Arc<AppState>>,
     Path(sequence): Path<String>,
 ) -> Result<Response, WebError> {
     if PeptideTable::exists_by_sequence(
-        db_client.as_ref(),
+        app_state.get_db_client_as_ref(),
         sequence.as_str(),
-        configuration.as_ref(),
+        app_state.get_configuration_as_ref(),
     )
     .await?
     {
@@ -165,6 +167,7 @@ impl SearchRequestBody {
 }
 
 /// Returns a stream of peptides matching the given parameters.
+/// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
 ///
 /// # Arguments
 /// * `db_client` - The database client
@@ -243,7 +246,7 @@ impl SearchRequestBody {
 /// ```
 ///
 pub async fn search(
-    State((db_client, configuration)): State<(Arc<Client>, Arc<Configuration>)>,
+    State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<SearchRequestBody>,
 ) -> impl IntoResponse {
@@ -258,14 +261,39 @@ pub async fn search(
         }
     };
 
+    let mut taxonomy_ids: Option<Vec<i64>> = None;
+    if let Some(taxonomy_id) = payload.taxonomy_id {
+        // Check if taxonomy exists
+        if app_state
+            .get_taxonomy_tree_as_ref()
+            .get_taxonomy(taxonomy_id as u64)
+            .is_none()
+        {
+            return StreamBodyAs::text(WebError::new_string_stream(
+                StatusCode::BAD_REQUEST,
+                format!("Taxonomy with id {} does not exist", taxonomy_id),
+            ));
+        }
+
+        let mut ids: Vec<i64> = match app_state
+            .get_taxonomy_tree_as_ref()
+            .get_sub_taxonomies(taxonomy_id as u64)
+        {
+            Some(taxonomies) => taxonomies.iter().map(|tax| tax.get_id() as i64).collect(),
+            None => Vec::new(),
+        };
+        ids.push(taxonomy_id);
+        taxonomy_ids = Some(ids);
+    }
+
     let peptide_stream = match PeptideTable::search(
-        db_client.clone(),
-        configuration.clone(),
+        app_state.get_db_client(),
+        app_state.get_configuration(),
         mass_to_int(payload.mass),
         payload.lower_mass_tolerance_ppm.clone(),
         payload.upper_mass_tolerance_ppm.clone(),
         payload.max_variable_modifications.clone(),
-        payload.taxonomy_id.clone(),
+        taxonomy_ids,
         payload.proteome_id.clone(),
         payload.is_reviewed.clone(),
         ptms,

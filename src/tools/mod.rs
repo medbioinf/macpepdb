@@ -18,3 +18,7 @@ pub mod performance_logger;
 pub mod psql;
 /// Functions to create a protein partition for the database based on the protein files
 pub mod unprocessable_protein_logger;
+
+/// Tool for testing
+#[cfg(test)]
+pub mod tests;
