@@ -24,9 +24,7 @@ pub async fn get_taxdmp_zip() -> Result<PathBuf> {
     if let Some(taxdmp_zip_path) = env::var_os("TAXDMP_ZIP_PATH") {
         return Ok(Path::new(taxdmp_zip_path.to_str().unwrap()).to_path_buf());
     }
-    let taxdmp_zip_path = env::temp_dir()
-        .join("mcccoys_unit_tests")
-        .join("taxdmp.zip");
+    let taxdmp_zip_path = env::temp_dir().join("taxdmp_for_unit_tests.zip");
     // Create temp dir
     if !taxdmp_zip_path.parent().unwrap().is_dir() {
         create_dir(taxdmp_zip_path.parent().unwrap()).unwrap();
@@ -46,7 +44,7 @@ pub async fn get_taxdmp_zip() -> Result<PathBuf> {
                 env!("CARGO_PKG_REPOSITORY")
             ),
         )
-        .timeout(Duration::from_secs(300));
+        .timeout(Duration::from_secs(1200)); // 20 minutes
     let response = request.send().await?;
     let mut file = std::fs::File::create(&taxdmp_zip_path)?;
     let mut content = Cursor::new(response.bytes().await?);
