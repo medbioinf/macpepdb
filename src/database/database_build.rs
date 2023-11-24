@@ -17,9 +17,9 @@ pub trait DatabaseBuild {
     fn new(database_url: &str) -> Self;
 
     /// Builds / Maintains the database.
-    /// 1. Inserts / updates the proteins and peptides from the files
-    /// 2. TODO: Collects and updates peptide metadata like taxonomies, proteomes and review status
-    /// 3. TODO: Inserts / updates taxonomy tree
+    /// 1. Builds the deserializes the taxonomy tree and saves it to the database.
+    /// 2. Inserts / updates the proteins and peptides from the files
+    /// 3. Collects and updates peptide metadata like taxonomies, proteomes and review status
     ///
     /// Will panic if database contains not configuration and not initial configuration is provided.
     ///
@@ -31,6 +31,9 @@ pub trait DatabaseBuild {
     /// * `allowed_ram_usage` - Allowed RAM usage in GB for the partitioner Bloom filter.
     /// * `partitioner_false_positive_probability` - False positive probability of the partitioners Bloom filters.
     /// * `initial_configuration_opt` - Optional initial configuration.
+    /// * `log_folder` - Path to the log folder.
+    /// * `is_test_run` - Whether this is a test run.
+    /// * `only_metadata_update` - Whether to only update the metadata.
     ///
     fn build(
         &self,
