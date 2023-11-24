@@ -63,8 +63,11 @@ enum Commands {
         max_variable_modifications: i16,
     },
     Web {
+        /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
+        /// Interface (IP) to bind the web server to
         interface: String,
+        /// Port to bind the web server to
         port: u16,
         /// Setting this flag disables the creation of the taxonomy name search index,
         /// disables the taxonomy search end point and reduces the memory usage of the web server
@@ -73,6 +76,7 @@ enum Commands {
         no_taxonomy_search: bool,
     },
     DomainTypes {
+        /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
     },
 }
