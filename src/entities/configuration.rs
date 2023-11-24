@@ -4,28 +4,28 @@ use serde::{Deserialize, Serialize};
 /// Keeps the configuration parameters for MaCPepDB, e.g. digestion parameters, distribution ...
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Configuration {
-    enzyme_name: String,
-    max_number_of_missed_cleavages: usize,
-    min_peptide_length: usize,
-    max_peptide_length: usize,
+    protease_name: String,
+    max_number_of_missed_cleavages: Option<usize>,
+    min_peptide_length: Option<usize>,
+    max_peptide_length: Option<usize>,
     remove_peptides_containing_unknown: bool,
     partition_limits: Vec<i64>,
 }
 
 impl Configuration {
     pub fn new(
-        enzyme_name: String,
-        max_number_of_missed_cleavages: i16,
-        min_peptide_length: i16,
-        max_peptide_length: i16,
+        protease_name: String,
+        max_number_of_missed_cleavages: Option<usize>,
+        min_peptide_length: Option<usize>,
+        max_peptide_length: Option<usize>,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
     ) -> Self {
         Self {
-            enzyme_name,
-            max_number_of_missed_cleavages: max_number_of_missed_cleavages as usize,
-            min_peptide_length: min_peptide_length as usize,
-            max_peptide_length: max_peptide_length as usize,
+            protease_name,
+            max_number_of_missed_cleavages,
+            min_peptide_length,
+            max_peptide_length,
             remove_peptides_containing_unknown,
             partition_limits,
         }
@@ -33,25 +33,25 @@ impl Configuration {
 
     /// Returns enzyme name
     ///
-    pub fn get_enzyme_name(&self) -> &str {
-        self.enzyme_name.as_str()
+    pub fn get_protease_name(&self) -> &str {
+        self.protease_name.as_str()
     }
 
     /// Returns maximum number of missed cleavages
     ///
-    pub fn get_max_number_of_missed_cleavages(&self) -> usize {
+    pub fn get_max_number_of_missed_cleavages(&self) -> Option<usize> {
         self.max_number_of_missed_cleavages
     }
 
     /// Returns minimum peptide length
     ///
-    pub fn get_min_peptide_length(&self) -> usize {
+    pub fn get_min_peptide_length(&self) -> Option<usize> {
         self.min_peptide_length
     }
 
     /// Returns maximum peptide length
     ///
-    pub fn get_max_peptide_length(&self) -> usize {
+    pub fn get_max_peptide_length(&self) -> Option<usize> {
         self.max_peptide_length
     }
 

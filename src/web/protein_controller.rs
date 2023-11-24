@@ -5,11 +5,11 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
+use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use scylla::frame::response::result::CqlValue;
 use serde_json::Value as JsonValue;
 
 // internal imports
-use crate::biology::digestion_enzyme::functions::get_enzyme_by_name;
 use crate::database::scylla::protein_table::ProteinTable;
 use crate::database::selectable_table::SelectableTable;
 use crate::web::web_error::WebError;
@@ -74,22 +74,22 @@ pub async fn get_protein(
     .await?;
 
     if let Some(protein) = protein_opt {
-        // Enzymes are not saved in the database, so we have to create them
-        // therefore we need the enzyme from the configuration
-        let enzyme = get_enzyme_by_name(
-            app_state.get_configuration_as_ref().get_enzyme_name(),
-            app_state
-                .get_configuration_as_ref()
-                .get_max_number_of_missed_cleavages(),
+        // Proteases are not saved in the database, so we have to create them
+        // therefore we need the protease from the configuration
+        let protease = get_protease_by_name(
+            app_state.get_configuration_as_ref().get_protease_name(),
             app_state
                 .get_configuration_as_ref()
                 .get_min_peptide_length(),
             app_state
                 .get_configuration_as_ref()
                 .get_max_peptide_length(),
+            app_state
+                .get_configuration_as_ref()
+                .get_max_number_of_missed_cleavages(),
         )?;
         // Get the protein with the peptides as JSON value
-        return Ok(Json(protein.to_json_with_peptides(enzyme.as_ref())?));
+        return Ok(Json(protein.to_json_with_peptides(protease.as_ref())?));
     } else {
         return Err(WebError::new(
             StatusCode::NOT_FOUND,

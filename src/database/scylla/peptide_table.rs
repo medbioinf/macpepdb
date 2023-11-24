@@ -633,25 +633,22 @@ where
 #[cfg(test)]
 mod tests {
     // std imports
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     use std::fs;
     use std::path::Path;
 
     // external imports
+    use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
     use fallible_iterator::FallibleIterator;
     use serial_test::serial;
 
     // internal imports
-    use crate::biology::digestion_enzyme::functions::{
-        create_peptides_entities_from_digest, get_enzyme_by_name,
-    };
-    use crate::database::scylla::client::Client;
-    use crate::database::scylla::tests::DATABASE_URL;
-
     use super::*;
-
+    use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
+    use crate::database::scylla::tests::DATABASE_URL;
     use crate::io::uniprot_text::reader::Reader;
+    use crate::tools::omicstools::convert_to_internal_peptide;
 
     const CONFLICTING_PEPTIDE_PROTEIN_ACCESSION: &'static str = "P41159";
 
@@ -712,7 +709,7 @@ mod tests {
             "VQDDTK".to_string() => 0
         };
 
-        static ref PEPTIDE_LIMITS: Vec<i64> = fs::read_to_string("./test_files/partition_limits.txt")
+        static ref PARTITION_LIMITS: Vec<i64> = fs::read_to_string("./test_files/partition_limits.txt")
             .unwrap()
             .split("\n")
             .map(|element| element.trim().to_owned())
@@ -734,16 +731,17 @@ mod tests {
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();
 
-        let digestion_enzyme = get_enzyme_by_name("Trypsin", 3, 6, 50).unwrap();
+        let protease = get_protease_by_name("trypsin", Some(6), Some(50), Some(3)).unwrap();
 
-        let digest = digestion_enzyme.digest(leptin.get_sequence());
-
-        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>>(
-            &digest,
-            &PEPTIDE_LIMITS,
-            Some(&leptin),
-        )
-        .unwrap();
+        let peptides = Vec::from_iter(
+            convert_to_internal_peptide(
+                Box::new(protease.cleave(leptin.get_sequence()).unwrap()),
+                &PARTITION_LIMITS,
+                &leptin,
+            )
+            .collect::<HashSet<Peptide>>()
+            .unwrap(),
+        );
 
         assert_eq!(peptides.len(), EXPECTED_PEPTIDES.len());
 
@@ -860,15 +858,14 @@ mod tests {
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();
 
-        let digestion_enzyme = get_enzyme_by_name("Trypsin", 3, 6, 50).unwrap();
+        let protease = get_protease_by_name("Trypsin", Some(6), Some(50), Some(3)).unwrap();
 
-        let digest = digestion_enzyme.digest(leptin.get_sequence());
-
-        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>>(
-            &digest,
-            &PEPTIDE_LIMITS,
-            Some(&leptin),
+        let peptides = convert_to_internal_peptide(
+            Box::new(protease.cleave(leptin.get_sequence()).unwrap()),
+            &PARTITION_LIMITS,
+            &leptin,
         )
+        .collect::<HashSet<Peptide>>()
         .unwrap();
 
         assert_eq!(peptides.len(), EXPECTED_PEPTIDES.len());
@@ -950,15 +947,14 @@ mod tests {
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();
 
-        let digestion_enzyme = get_enzyme_by_name("Trypsin", 3, 6, 50).unwrap();
+        let protease = get_protease_by_name("Trypsin", Some(6), Some(50), Some(3)).unwrap();
 
-        let digest = digestion_enzyme.digest(leptin.get_sequence());
-
-        let peptides = create_peptides_entities_from_digest::<Vec<Peptide>>(
-            &digest,
-            &PEPTIDE_LIMITS,
-            Some(&leptin),
+        let peptides: HashSet<Peptide> = convert_to_internal_peptide(
+            Box::new(protease.cleave(leptin.get_sequence()).unwrap()),
+            &PARTITION_LIMITS,
+            &leptin,
         )
+        .collect()
         .unwrap();
 
         let statement = format!(

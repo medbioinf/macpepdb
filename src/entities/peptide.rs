@@ -11,7 +11,7 @@ use anyhow::Result;
 use scylla::frame::response::result::Row as ScyllaRow;
 
 // internal imports
-use crate::{biology::digestion_enzyme::enzyme::Enzyme, entities::protein::Protein};
+use crate::entities::protein::Protein;
 
 use super::domain::Domain;
 
@@ -184,7 +184,8 @@ impl Peptide {
     pub fn get_metadata_from_proteins(
         &self,
         proteins: &Vec<Protein>,
-        enzyme: &dyn Enzyme,
+        protease_cleavage_codes: &Vec<char>,
+        protease_cleavage_blocker_codes: &Vec<char>,
     ) -> (bool, bool, Vec<i64>, Vec<i64>, Vec<String>, Vec<Domain>) {
         let is_swiss_prot = proteins.iter().any(|protein| protein.get_is_reviewed());
         let is_trembl = proteins.iter().any(|protein| !protein.get_is_reviewed());
@@ -223,20 +224,19 @@ impl Peptide {
                     .map(|x| (x, x + i64::try_from(self.get_sequence().len()).unwrap() - 1))
                     .filter(|x| {
                         let is_valid_start = x.0 == 0
-                            || (!enzyme
-                                .get_cleavage_blocker_chars()
+                            || (!protease_cleavage_blocker_codes
                                 .contains(&self.get_sequence().chars().nth(0).unwrap())
-                                && enzyme.get_cleavage_chars().contains(
+                                && protease_cleavage_codes.contains(
                                     &p.get_sequence().chars().nth((x.0 - 1) as usize).unwrap(),
                                 ));
 
                         let is_valid_end = x.1 as usize == p.get_sequence().len() - 1
-                            || (!enzyme.get_cleavage_blocker_chars().contains(
+                            || (!protease_cleavage_blocker_codes.contains(
                                 &p.get_sequence()
                                     .chars()
                                     .nth(x.1 as usize + 1)
                                     .unwrap_or(' '),
-                            ) && enzyme.get_cleavage_chars().contains(
+                            ) && protease_cleavage_codes.contains(
                                 &self
                                     .get_sequence()
                                     .chars()

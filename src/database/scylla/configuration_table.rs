@@ -5,9 +5,9 @@ use serde_json::{from_value as from_json_value, json, Value as JsonValue};
 
 // internal imports
 use crate::database::configuration_table::{
-    ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait, ENZYME_NAME_KEY,
-    JSON_KEY, MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY, MAX_PEPTIDE_LENGTH_KEY, MIN_PEPTIDE_LENGTH_KEY,
-    PARTITION_LIMITS_KEY, REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY, TABLE_NAME,
+    ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait, JSON_KEY,
+    MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY, MAX_PEPTIDE_LENGTH_KEY, MIN_PEPTIDE_LENGTH_KEY,
+    PARTITION_LIMITS_KEY, PROTEASE_NAME_KEY, REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY, TABLE_NAME,
 };
 use crate::database::scylla::client::GenericClient;
 use crate::database::table::Table;
@@ -72,15 +72,15 @@ where
     }
 
     async fn select(client: &C) -> Result<Configuration> {
-        let enzyme_name = Self::get_setting::<String>(client, ENZYME_NAME_KEY)
+        let enzyme_name = Self::get_setting::<String>(client, PROTEASE_NAME_KEY)
             .await
             .map_err(|error| {
-                anyhow!(ConfigurationIncompleteError::new(ENZYME_NAME_KEY)).context(error)
+                anyhow!(ConfigurationIncompleteError::new(PROTEASE_NAME_KEY)).context(error)
             })?
-            .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(ENZYME_NAME_KEY)))?;
+            .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(PROTEASE_NAME_KEY)))?;
 
         let max_number_of_missed_cleavages =
-            Self::get_setting::<i16>(client, MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY)
+            Self::get_setting::<Option<usize>>(client, MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY)
                 .await
                 .map_err(|error| {
                     anyhow!(ConfigurationIncompleteError::new(
@@ -94,14 +94,14 @@ where
                     ))
                 })?;
 
-        let min_peptide_length = Self::get_setting::<i16>(client, MIN_PEPTIDE_LENGTH_KEY)
+        let min_peptide_length = Self::get_setting::<Option<usize>>(client, MIN_PEPTIDE_LENGTH_KEY)
             .await
             .map_err(|error| {
                 anyhow!(ConfigurationIncompleteError::new(MIN_PEPTIDE_LENGTH_KEY)).context(error)
             })?
             .ok_or_else(|| anyhow!(ConfigurationIncompleteError::new(MIN_PEPTIDE_LENGTH_KEY)))?;
 
-        let max_peptide_length = Self::get_setting::<i16>(client, MAX_PEPTIDE_LENGTH_KEY)
+        let max_peptide_length = Self::get_setting::<Option<usize>>(client, MAX_PEPTIDE_LENGTH_KEY)
             .await
             .map_err(|error| {
                 anyhow!(ConfigurationIncompleteError::new(MAX_PEPTIDE_LENGTH_KEY)).context(error)
@@ -143,29 +143,29 @@ where
     async fn insert(client: &mut C, configuration: &Configuration) -> Result<()> {
         ConfigurationTable::set_setting::<String>(
             client,
-            ENZYME_NAME_KEY,
-            &configuration.get_enzyme_name().to_owned(),
+            PROTEASE_NAME_KEY,
+            &configuration.get_protease_name().to_owned(),
         )
         .await?;
 
-        ConfigurationTable::set_setting::<i16>(
+        ConfigurationTable::set_setting::<Option<usize>>(
             client,
             MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY,
-            &(configuration.get_max_number_of_missed_cleavages() as i16),
+            &(configuration.get_max_number_of_missed_cleavages()),
         )
         .await?;
 
-        ConfigurationTable::set_setting::<i16>(
+        ConfigurationTable::set_setting::<Option<usize>>(
             client,
             MIN_PEPTIDE_LENGTH_KEY,
-            &(configuration.get_min_peptide_length() as i16),
+            &(configuration.get_min_peptide_length()),
         )
         .await?;
 
-        ConfigurationTable::set_setting::<i16>(
+        ConfigurationTable::set_setting::<Option<usize>>(
             client,
             MAX_PEPTIDE_LENGTH_KEY,
-            &(configuration.get_max_peptide_length() as i16),
+            &(configuration.get_max_peptide_length()),
         )
         .await?;
 
@@ -200,9 +200,9 @@ mod tests {
     use crate::database::scylla::tests::DATABASE_URL;
 
     const EXPECTED_ENZYME_NAME: &'static str = "Trypsin";
-    const EXPECTED_MAX_MISSED_CLEAVAGES: usize = 2;
-    const EXPECTED_MIN_PEPTIDE_LEN: usize = 6;
-    const EXPECTED_MAX_PEPTIDE_LEN: usize = 50;
+    const EXPECTED_MAX_MISSED_CLEAVAGES: Option<usize> = Some(2);
+    const EXPECTED_MIN_PEPTIDE_LEN: Option<usize> = Some(6);
+    const EXPECTED_MAX_PEPTIDE_LEN: Option<usize> = Some(50);
     const EXPECTED_REMOVE_PEPTIDES_CONTAINING_UNKNOWN: bool = true;
 
     lazy_static! {
@@ -239,9 +239,9 @@ mod tests {
 
         let configuration = Configuration::new(
             EXPECTED_ENZYME_NAME.to_owned(),
-            EXPECTED_MAX_MISSED_CLEAVAGES as i16,
-            EXPECTED_MIN_PEPTIDE_LEN as i16,
-            EXPECTED_MAX_PEPTIDE_LEN as i16,
+            EXPECTED_MAX_MISSED_CLEAVAGES,
+            EXPECTED_MIN_PEPTIDE_LEN,
+            EXPECTED_MAX_PEPTIDE_LEN,
             EXPECTED_REMOVE_PEPTIDES_CONTAINING_UNKNOWN,
             EXPECTED_PARTITION_LIMITS.clone(),
         );
@@ -261,9 +261,9 @@ mod tests {
 
         let expected_configuration = Configuration::new(
             EXPECTED_ENZYME_NAME.to_owned(),
-            EXPECTED_MAX_MISSED_CLEAVAGES as i16,
-            EXPECTED_MIN_PEPTIDE_LEN as i16,
-            EXPECTED_MAX_PEPTIDE_LEN as i16,
+            EXPECTED_MAX_MISSED_CLEAVAGES,
+            EXPECTED_MIN_PEPTIDE_LEN,
+            EXPECTED_MAX_PEPTIDE_LEN,
             EXPECTED_REMOVE_PEPTIDES_CONTAINING_UNKNOWN,
             EXPECTED_PARTITION_LIMITS.clone(),
         );

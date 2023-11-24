@@ -21,8 +21,6 @@ pub mod mass;
 #[macro_use]
 pub mod tools;
 
-/// Biology related functions, e.g. digestion enzymes
-pub mod biology;
 /// Chemistry related functions and information, e.g. molecule masses
 pub mod chemistry;
 /// Functions to maintain and access the database

@@ -1,15 +1,16 @@
 // std imports
-use std::cmp::min;
+use std::{cmp::min, collections::HashSet};
 
 // 3rd party imports
 use anyhow::{anyhow, Result};
 use chrono::NaiveDateTime;
+use dihardts_omicstools::proteomics::proteases::protease::Protease;
+use fallible_iterator::FallibleIterator;
 use scylla::frame::response::result::Row as ScyllaRow;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 // internal imports
-use crate::biology::digestion_enzyme::enzyme::Enzyme as DigestionEnzyme;
 use crate::entities::domain::Domain;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -242,17 +243,19 @@ impl Protein {
 
     /// Creates a JSON value of this protein including it's peptides
     /// As the peptides are not stored in the database, the protein sequence needs to be digested
-    /// using the given enzyme.
+    /// using the given protease.
     ///
     /// # Arguments
-    /// * `enzyme` - The enzyme used to generate the peptides
+    /// * `protease` - The protease used to generate the peptides
     ///
-    pub fn to_json_with_peptides(&self, enzyme: &dyn DigestionEnzyme) -> Result<JsonValue> {
-        let peptides: Vec<String> = enzyme
-            .digest(self.get_sequence())
-            .iter()
-            .map(|peptide| peptide.0.to_owned())
-            .collect();
+    pub fn to_json_with_peptides(&self, protease: &dyn Protease) -> Result<JsonValue> {
+        let peptides: Vec<String> = Vec::from_iter(
+            protease
+                .cleave(&self.sequence)?
+                .map(|peptide| Ok(peptide.get_sequence().to_string()))
+                .collect::<HashSet<String>>()
+                .unwrap(),
+        );
         let mut protein_json: JsonValue = serde_json::to_value(self)?;
         protein_json["peptides"] = serde_json::to_value(peptides)?;
         Ok(protein_json)

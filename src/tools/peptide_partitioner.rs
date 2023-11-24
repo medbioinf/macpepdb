@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 // std imports
 use std::mem::drop;
 use std::path::PathBuf;
@@ -5,6 +6,7 @@ use std::path::PathBuf;
 // 3rd party imports
 use anyhow::{bail, Result};
 use dihardts_cstools::bloom_filter::BloomFilter;
+use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use indicatif::ProgressStyle;
 use sysinfo::{System, SystemExt};
@@ -12,11 +14,11 @@ use tracing::{debug, info, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 // internal imports
-use crate::biology::digestion_enzyme::enzyme::Enzyme;
-use crate::chemistry::amino_acid::{calc_sequence_mass, TRYPTOPHAN, UNKNOWN};
+use crate::chemistry::amino_acid::{calc_sequence_mass, TRYPTOPHAN};
 use crate::io::uniprot_text::reader::Reader;
 // use crate::tools::bloom_filter::BloomFilter;
 use crate::tools::display::bytes_to_human_readable;
+use crate::tools::omicstools::remove_unknown_from_digest;
 
 lazy_static! {
     static ref MAX_MASS: i64 = TRYPTOPHAN.get_mono_mass() * 60;
@@ -33,7 +35,7 @@ pub fn get_mass_partition(partition_limits: &Vec<i64>, mass: i64) -> Result<usiz
 
 pub struct PeptidePartitioner<'a> {
     protein_file_paths: &'a Vec<PathBuf>,
-    enzyme: &'a dyn Enzyme,
+    protease: &'a dyn Protease,
     remove_peptides_containing_unknown: bool,
     false_positive_probability: f64,
     allowed_memory_usage: f64,
@@ -44,19 +46,19 @@ impl<'a> PeptidePartitioner<'a> {
     ///
     /// # Arguments
     /// * `protein_file_paths` - Paths to the protein files
-    /// * `enzyme` - Enzyme used for digestion
+    /// * `protease` - protease used for digestion
     /// * `remove_peptides_containing_unknown` - If true removes peptides containing unknown amino acids
     /// * `false_positive_probability` - False positive probability of the bloom filter
     pub fn new(
         protein_file_paths: &'a Vec<PathBuf>,
-        enzyme: &'a dyn Enzyme,
+        protease: &'a dyn Protease,
         remove_peptides_containing_unknown: bool,
         false_positive_probability: f64,
         allowed_memory_usage: f64,
     ) -> Result<Self> {
         Ok(Self {
             protein_file_paths,
-            enzyme,
+            protease,
             remove_peptides_containing_unknown,
             false_positive_probability,
             allowed_memory_usage,
@@ -255,12 +257,20 @@ impl<'a> PeptidePartitioner<'a> {
             debug!("... {}", protein_file_path.display());
             let mut reader = Reader::new(protein_file_path, 1024)?;
             while let Some(protein) = reader.next()? {
-                let mut peptide_sequences = self.enzyme.digest(protein.get_sequence());
-                if self.remove_peptides_containing_unknown {
-                    peptide_sequences
-                        .retain(|sequence, _| !sequence.contains(*UNKNOWN.get_one_letter_code()));
-                }
-                for (sequence, _) in peptide_sequences.into_iter() {
+                let peptide_sequences: HashSet<String> =
+                    match self.remove_peptides_containing_unknown {
+                        true => remove_unknown_from_digest(
+                            self.protease.cleave(&protein.get_sequence())?,
+                        )
+                        .map(|pep| Ok(pep.get_sequence().to_string()))
+                        .collect()?,
+                        false => self
+                            .protease
+                            .cleave(&protein.get_sequence())?
+                            .map(|pep| Ok(pep.get_sequence().to_string()))
+                            .collect()?,
+                    };
+                for sequence in peptide_sequences.into_iter() {
                     let mass = calc_sequence_mass(sequence.as_str())?;
                     let partition = get_mass_partition(&partition_limits, mass)?;
                     if !bloom_filters[partition].contains(sequence.as_str())? {
@@ -295,11 +305,12 @@ mod test {
     use std::path::PathBuf;
 
     // 3rd party imports
+    use dihardts_omicstools::proteomics::proteases::protease::Protease;
+    use dihardts_omicstools::proteomics::proteases::trypsin::Trypsin;
     use tracing_test::traced_test;
 
     // internal imports
     use super::*;
-    use crate::biology::digestion_enzyme::trypsin::Trypsin;
     use crate::io::uniprot_text::reader::Reader;
 
     const NUM_PARTITIONS: u64 = 100;
@@ -308,13 +319,18 @@ mod test {
     #[test]
     fn test_partitioning() {
         let protein_file_paths = PathBuf::from("test_files/mouse.txt");
-        let trypsin = Trypsin::new(2, 6, 50);
+        let trypsin = Trypsin::new(Some(2), Some(6), Some(50)).unwrap();
         let mut reader = Reader::new(&protein_file_paths, 4096).unwrap();
         let mut peptides: HashSet<String> = HashSet::new();
 
         while let Some(protein) = reader.next().unwrap() {
-            let peptide_sequences = trypsin.digest(protein.get_sequence());
-            for (sequence, _) in peptide_sequences {
+            let peptide_sequences: HashSet<String> = trypsin
+                .cleave(&protein.get_sequence())
+                .unwrap()
+                .map(|pep| Ok(pep.get_sequence().to_string()))
+                .collect()
+                .unwrap();
+            for sequence in peptide_sequences {
                 peptides.insert(sequence);
             }
         }
