@@ -5,7 +5,9 @@ use std::sync::Arc;
 // 3rd party imports
 use axum::extract::{Path, State};
 use axum::Json;
-use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
+use dihardts_omicstools::proteomics::proteases::functions::{
+    get_by_name as get_protease_by_name, ALL as AVAILABLE_PROTEASES,
+};
 use fallible_iterator::FallibleIterator;
 use scylla::frame::response::result::CqlValue;
 use serde::Deserialize;
@@ -201,4 +203,28 @@ pub async fn get_mass(Path(sequence): Path<String>) -> Result<Json<JsonValue>, W
     Ok(Json(json!({
         "mass": mass_to_float(mass),
     })))
+}
+
+/// Lists all available proteases
+///
+/// # API
+/// ## Request
+/// * Path: `/api/tools/proteases`
+/// * Method: `GET`
+///
+/// ## Response
+/// List of name of all available proteases
+/// ```json
+/// [
+///    "trypsin",
+///    "unspecific",
+///   ...
+/// ]
+/// ```
+///
+///
+pub async fn get_proteases() -> Result<Json<JsonValue>, WebError> {
+    let mut protease_names: Vec<&str> = Vec::from(AVAILABLE_PROTEASES);
+    protease_names.sort();
+    Ok(Json(json!(protease_names)))
 }
