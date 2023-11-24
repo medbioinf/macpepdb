@@ -140,9 +140,9 @@ async fn main() -> Result<()> {
                         partitioner_false_positive_probability,
                         Some(Configuration::new(
                             "trypsin".to_owned(),
-                            2,
-                            5,
-                            60,
+                            Some(2),
+                            Some(5),
+                            Some(60),
                             true,
                             Vec::with_capacity(0),
                         )),

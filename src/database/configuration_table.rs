@@ -8,7 +8,7 @@ use crate::entities::configuration::Configuration;
 
 pub const TABLE_NAME: &'static str = "config";
 pub const JSON_KEY: &'static str = "wrapper";
-pub const ENZYME_NAME_KEY: &'static str = "enzyme_name";
+pub const PROTEASE_NAME_KEY: &'static str = "enzyme_name";
 pub const MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY: &'static str = "max_number_of_missed_cleavages";
 pub const MIN_PEPTIDE_LENGTH_KEY: &'static str = "min_peptide_length";
 pub const MAX_PEPTIDE_LENGTH_KEY: &'static str = "max_peptide_length";

@@ -11,6 +11,7 @@ pub mod server;
 /// Controller for accessing the taxonomy tree
 pub mod taxonomy_controller;
 /// Endpoint for different tools and functions which comes along the MaCPepDB, e.g. mass calculation, digestion, ...
+/// and also has endpoints for some capabilities, e.g. the available proteases
 pub mod tools_controller;
 /// Module for error handling
 pub mod web_error;

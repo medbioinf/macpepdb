@@ -5,19 +5,21 @@ use std::sync::Arc;
 // 3rd party imports
 use axum::extract::{Path, State};
 use axum::Json;
+use dihardts_omicstools::proteomics::proteases::functions::{
+    get_by_name as get_protease_by_name, ALL as AVAILABLE_PROTEASES,
+};
+use fallible_iterator::FallibleIterator;
 use scylla::frame::response::result::CqlValue;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
 // internal imports
-use crate::biology::digestion_enzyme::functions::{
-    create_peptides_entities_from_digest, get_enzyme_by_name,
-};
 use crate::chemistry::amino_acid::calc_sequence_mass;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::selectable_table::SelectableTable;
 use crate::entities::peptide::Peptide;
 use crate::mass::convert::to_float as mass_to_float;
+use crate::tools::omicstools::convert_to_internal_dummy_peptide;
 use crate::web::web_error::WebError;
 
 use super::app_state::AppState;
@@ -32,8 +34,8 @@ pub struct DigestionRequestBody {
     /// And the result will include a list `db_peptides` with all of the peptides which are in the database
     #[serde(default = "bool::default")]
     db_match: bool,
-    /// The enzyme to use for digestion, default the enzyme specified during MaCPepDB creation is used
-    digestion_enzyme: Option<String>,
+    /// The protease to use for digestion, default the enzyme specified during MaCPepDB creation is used
+    protease: Option<String>,
     /// The `max_number_of_missed_cleavages` to use for digestion, default the enzyme specified during MaCPepDB creation is used
     max_number_of_missed_cleavages: Option<usize>,
     /// The `min_peptide_length` to use for digestion, default the enzyme specified during MaCPepDB creation is used
@@ -64,8 +66,8 @@ pub struct DigestionRequestBody {
 ///         # the default value from the MaCPeDB configuration is used
 ///         # If true the resulting peptides will be matched against the database    
 ///         "db_match": false,
-///         # The enzyme to use for digestion
-///         "digestion_enzyme": "trypsin",
+///         # The protease to use for digestion
+///         "protease": "trypsin",
 ///         # The `max_number_of_missed_cleavages` to use for digestion
 ///         "max_number_of_missed_cleavages": "2"
 ///         # The `min_peptide_length` to use for digestion
@@ -98,26 +100,30 @@ pub async fn digest(
     Json(payload): Json<DigestionRequestBody>,
 ) -> Result<Json<JsonValue>, WebError> {
     let configuration = app_state.get_configuration_as_ref();
-    let enzyme = get_enzyme_by_name(
-        &payload
-            .digestion_enzyme
-            .unwrap_or(configuration.get_enzyme_name().to_owned()),
-        payload
-            .max_number_of_missed_cleavages
-            .unwrap_or(configuration.get_max_number_of_missed_cleavages()),
-        payload
-            .min_peptide_length
-            .unwrap_or(configuration.get_min_peptide_length()),
-        payload
-            .max_peptide_length
-            .unwrap_or(configuration.get_max_peptide_length()),
+    let protease = get_protease_by_name(
+        match &payload.protease {
+            Some(protease) => protease,
+            None => configuration.get_protease_name(),
+        },
+        match &payload.min_peptide_length {
+            Some(min_len) => Some(*min_len),
+            None => configuration.get_min_peptide_length(),
+        },
+        match &payload.max_peptide_length {
+            Some(max_len) => Some(*max_len),
+            None => configuration.get_max_peptide_length(),
+        },
+        match &payload.max_number_of_missed_cleavages {
+            Some(max_missed_cleavages) => Some(*max_missed_cleavages),
+            None => configuration.get_max_number_of_missed_cleavages(),
+        },
     )?;
 
-    let peptides: HashSet<Peptide> = create_peptides_entities_from_digest(
-        &enzyme.digest(&payload.sequence),
-        configuration.get_partition_limits(),
-        None,
-    )?;
+    let peptides: HashSet<Peptide> = convert_to_internal_dummy_peptide(
+        Box::new(protease.cleave(&payload.sequence)?),
+        app_state.get_configuration_as_ref().get_partition_limits(),
+    )
+    .collect()?;
 
     if payload.db_match {
         let mut select_params_by_partition: Vec<Vec<(CqlValue, CqlValue)>> =
@@ -197,4 +203,28 @@ pub async fn get_mass(Path(sequence): Path<String>) -> Result<Json<JsonValue>, W
     Ok(Json(json!({
         "mass": mass_to_float(mass),
     })))
+}
+
+/// Lists all available proteases
+///
+/// # API
+/// ## Request
+/// * Path: `/api/tools/proteases`
+/// * Method: `GET`
+///
+/// ## Response
+/// List of name of all available proteases
+/// ```json
+/// [
+///    "trypsin",
+///    "unspecific",
+///   ...
+/// ]
+/// ```
+///
+///
+pub async fn get_proteases() -> Result<Json<JsonValue>, WebError> {
+    let mut protease_names: Vec<&str> = Vec::from(AVAILABLE_PROTEASES);
+    protease_names.sort();
+    Ok(Json(json!(protease_names)))
 }
