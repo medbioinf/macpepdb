@@ -84,14 +84,32 @@ enum Commands {
 #[derive(Debug, Parser)]
 #[command(name = "macpepdb")]
 struct Cli {
+    /// Verbosity level
+    /// 0 - Error
+    /// 1 - Warn
+    /// 2 - Info
+    /// 3 - Debug
+    /// > 3 - Trace
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
     #[command(subcommand)]
     command: Commands,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Cli::parse();
+
+    let verbosity = match args.verbose {
+        0 => Level::ERROR,
+        1 => Level::WARN,
+        2 => Level::INFO,
+        3 => Level::DEBUG,
+        _ => Level::TRACE,
+    };
+
     let filter = EnvFilter::from_default_env()
-        .add_directive(Level::DEBUG.into())
+        .add_directive(verbosity.into())
         .add_directive("scylla=info".parse().unwrap())
         .add_directive("tokio_postgres=info".parse().unwrap());
 
@@ -109,8 +127,6 @@ async fn main() -> Result<()> {
         .init();
 
     info!("Welcome to MaCPepDB!");
-
-    let args = Cli::parse();
 
     match args.command {
         Commands::Build {
