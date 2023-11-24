@@ -702,50 +702,6 @@ impl DatabaseBuild {
         Ok(())
     }
 
-    // async fn _digest_protein(
-    //     protein: &Protein,
-    //     protease: &Box<dyn Protease>,
-    //     remove_peptides_containing_unknown: bool,
-    //     partition_limits: &Vec<i64>,
-    // ) -> Result<Vec<Peptide>> {
-    //     // Digest protein
-    //     let mut peptide_sequences = protease.digest(&protein.get_sequence());
-    //     if remove_peptides_containing_unknown {
-    //         remove_unknown_from_digest(&mut peptide_sequences);
-    //     }
-    //     Ok(create_peptides_entities_from_digest::<Vec<Peptide>>(
-    //         &peptide_sequences,
-    //         partition_limits,
-    //         Some(&protein),
-    //     )?)
-    // }
-
-    // async fn insert_peptides<'a>(
-    //     client: &mut Client,
-    //     peptide_buckets: &HashMap<i64, Vec<&'a Peptide>>,
-    //     batch: &Batch,
-    // ) -> Result<HashMap<i64, Vec<&'a Peptide>>> {
-    //     let full_buckets = peptide_buckets.iter().filter(|x| x.1.len() >= 100);
-    //     let peptides_to_insert: Vec<&Vec<&Peptide>> = full_buckets.clone().map(|x| x.1).collect();
-
-    //     for peptides in peptides_to_insert {
-    //         PeptideTable::batch_insert(
-    //             client,
-    //             ,
-    //             batch,
-    //         )
-    //         .await?;
-    //     }
-
-    //     let mut res = peptide_buckets.clone();
-
-    //     full_buckets.for_each(|(partition, peptide)| {
-    //         res.remove(partition);
-    //     });
-
-    //     Ok(res)
-    // }
-
     /// Handles the insertion of a new protein.
     ///
     /// # Arguments
@@ -1038,7 +994,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
 
         // Run migrations
         run_migrations(&client).await?;
-        // migrations::runner().run_async(&mut client).await?;
 
         info!("Getting / Setting configuration");
         // get or set configuration
