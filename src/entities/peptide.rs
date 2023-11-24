@@ -9,15 +9,20 @@ use std::{
 // 3rd party imports
 use anyhow::Result;
 use scylla::frame::response::result::Row as ScyllaRow;
+use serde;
 
 // internal imports
-use crate::entities::protein::Protein;
-
 use super::domain::Domain;
+use crate::entities::protein::Protein;
+use crate::tools::serde::{deserialize_mass_from_int, serialize_mass_to_float};
 
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct Peptide {
     partition: i64,
+    #[serde(
+        serialize_with = "serialize_mass_to_float",
+        deserialize_with = "deserialize_mass_from_int"
+    )]
     mass: i64,
     sequence: String,
     missed_cleavages: i16,
