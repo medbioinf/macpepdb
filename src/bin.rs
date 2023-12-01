@@ -13,7 +13,8 @@ use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use macpepdb::database::table::Table;
 use macpepdb::entities::domain::Domain;
 use macpepdb::entities::peptide::Peptide;
-use tracing::{debug, error, info, info_span, Level};
+use tracing::{debug, error, info, info_span, Level, Span};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 use tracing_indicatif::IndicatifLayer;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -195,6 +196,8 @@ async fn main() -> Result<()> {
                 let session = client.get_session();
 
                 let peptide_domains_span = info_span!("peptide_domains");
+                peptide_domains_span.pb_set_style(&ProgressStyle::default_bar());
+                peptide_domains_span.pb_set_length(100);
                 let peptide_domains_enter = peptide_domains_span.enter();
 
                 let mut domain_counts = HashMap::new();
@@ -233,7 +236,10 @@ async fn main() -> Result<()> {
                         for domain in peptide_domains {
                             let name = domain.get_name();
                             let protein_accession = domain.clone().get_protein_opt().unwrap();
-                            info!("Domain {:?} Protein {:?}", name, protein_accession);
+                            if name == "" {
+                                info!("Domain {:?} Protein {:?}", name, protein_accession);
+                            }
+                            // info!("Domain {:?} Protein {:?}", name, protein_accession);
 
                             match domain_counts.get(name) {
                                 Some(count) => {
@@ -245,6 +251,7 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
+                    Span::current().pb_inc(1);
                 }
 
                 info!("Domain Counts {:?}", domain_counts);
