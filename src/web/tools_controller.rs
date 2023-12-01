@@ -197,6 +197,13 @@ pub async fn digest(
 /// * Path: `/api/tools/mass/:sequence`
 /// * Method: `GET`
 ///
+/// ## Response
+/// ```json
+/// {
+///     "mass": 2006.981002959
+/// }
+/// ```
+///
 pub async fn get_mass(Path(sequence): Path<String>) -> Result<Json<JsonValue>, WebError> {
     let mass = calc_sequence_mass(&sequence)?;
 

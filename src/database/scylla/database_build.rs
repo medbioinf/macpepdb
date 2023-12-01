@@ -161,6 +161,8 @@ impl DatabaseBuild {
     /// * `protease` - The digestion protease
     /// * `remove_peptides_containing_unknown` - Remove peptides containing unknown amino acids
     /// * `partition_limits` - The partition limits
+    /// * `log_folder` - The folder where build logs are saved
+    /// * `is_test_run` - If true, no performance logs are created
     ///
     async fn protein_digestion(
         database_url: &str,
@@ -215,7 +217,7 @@ impl DatabaseBuild {
         }
 
         // Start digestion threads
-        for thread_id in 0..num_threads {
+        for _ in 0..num_threads {
             // Clone necessary variables
             let protein_queue_arc_clone = protein_queue_arc.clone();
             let partition_limits_arc_clone = partition_limits_arc.clone();
@@ -236,7 +238,6 @@ impl DatabaseBuild {
             // Start digestion thread
             digestion_thread_handles.push(spawn(async move {
                 Self::digestion_thread(
-                    thread_id,
                     database_url_clone,
                     protein_queue_arc_clone,
                     partition_limits_arc_clone,
@@ -378,9 +379,12 @@ impl DatabaseBuild {
     /// * `stop_flag` - The flag which indicates if the digestion should stop
     /// * `protease` - The protease which is used for digestion
     /// * `remove_peptides_containing_unknown` - If true, peptides containing unknown amino acids are removed
+    /// * `protein_sender` - The sender which is used to send the number of processed proteins to the logger
+    /// * `peptide_sender` - The sender which is used to send the number of processed peptides to the logger
+    /// * `unprocessable_proteins_sender` - The sender which is used to send unprocessable proteins to the logger
+    /// * `error_sender` - The sender which is used to send general errors to the logger
     ///
     async fn digestion_thread(
-        _thread_id: usize,
         database_url: String,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         partition_limits_arc: Arc<Vec<i64>>,
@@ -526,6 +530,8 @@ impl DatabaseBuild {
     /// * `protease` - The protease which is used for digestion
     /// * `remove_peptides_containing_unknown` - If true, peptides containing unknown amino acids are removed
     /// * `partition_limits` - The partition limits
+    /// * `prepared` - The prepared statement for updating the peptides
+    /// * `peptide_sender` - The sender which is used to send the number of processed peptides to the logger
     ///
     async fn update_protein(
         client: &mut Client,
@@ -681,6 +687,7 @@ impl DatabaseBuild {
     /// * `client` - The database client
     /// * `peptides_from_stored_protein` - The peptides from the existing protein
     /// * `peptides_from_updated_protein` - The peptides from the updated protein
+    /// * `prepared` - The prepared statement for updating the peptides
     ///
     async fn create_protein_peptide_difference<C>(
         client: &C,
@@ -702,50 +709,6 @@ impl DatabaseBuild {
         Ok(())
     }
 
-    // async fn _digest_protein(
-    //     protein: &Protein,
-    //     protease: &Box<dyn Protease>,
-    //     remove_peptides_containing_unknown: bool,
-    //     partition_limits: &Vec<i64>,
-    // ) -> Result<Vec<Peptide>> {
-    //     // Digest protein
-    //     let mut peptide_sequences = protease.digest(&protein.get_sequence());
-    //     if remove_peptides_containing_unknown {
-    //         remove_unknown_from_digest(&mut peptide_sequences);
-    //     }
-    //     Ok(create_peptides_entities_from_digest::<Vec<Peptide>>(
-    //         &peptide_sequences,
-    //         partition_limits,
-    //         Some(&protein),
-    //     )?)
-    // }
-
-    // async fn insert_peptides<'a>(
-    //     client: &mut Client,
-    //     peptide_buckets: &HashMap<i64, Vec<&'a Peptide>>,
-    //     batch: &Batch,
-    // ) -> Result<HashMap<i64, Vec<&'a Peptide>>> {
-    //     let full_buckets = peptide_buckets.iter().filter(|x| x.1.len() >= 100);
-    //     let peptides_to_insert: Vec<&Vec<&Peptide>> = full_buckets.clone().map(|x| x.1).collect();
-
-    //     for peptides in peptides_to_insert {
-    //         PeptideTable::batch_insert(
-    //             client,
-    //             ,
-    //             batch,
-    //         )
-    //         .await?;
-    //     }
-
-    //     let mut res = peptide_buckets.clone();
-
-    //     full_buckets.for_each(|(partition, peptide)| {
-    //         res.remove(partition);
-    //     });
-
-    //     Ok(res)
-    // }
-
     /// Handles the insertion of a new protein.
     ///
     /// # Arguments
@@ -754,6 +717,8 @@ impl DatabaseBuild {
     /// * `protease` - The protease which is used for digestion
     /// * `remove_peptides_containing_unknown` - If true, peptides containing unknown amino acids are removed
     /// * `partition_limits` - The partition limits
+    /// * `prepared` - The prepared statement for 'upserting' the peptides
+    /// * `peptide_sender` - The sender which is used to send the number of processed peptides to the logger
     ///
     async fn insert_protein(
         client: &mut Client,
@@ -787,6 +752,15 @@ impl DatabaseBuild {
         return Ok(());
     }
 
+    /// Collecting peptide metadata from the proteins of origin
+    ///
+    /// # Arguments
+    /// * `num_threads` - The number of threads
+    /// * `database_url` - The database url
+    /// * `configuration` - The configuration
+    /// * `is_test_run` - If true, no performance logs are created
+    /// * `protease` - The digestion protease
+    ///
     async fn collect_peptide_metadata(
         num_threads: usize,
         database_url: &str,
@@ -840,7 +814,6 @@ impl DatabaseBuild {
             // Start digestion thread
             metadata_collector_thread_handles.push(spawn(async move {
                 Self::collect_peptide_metadata_thread(
-                    thread_id,
                     database_url_clone,
                     partitions,
                     thread_peptide_sender,
@@ -880,11 +853,21 @@ impl DatabaseBuild {
         Ok(())
     }
 
-    async fn yo(client: &Client, chunk: CqlValue) -> Vec<Protein> {
+    /// Getting the proteins of origin for a peptide
+    /// TODO: Use ProteinTable::stream which should resolve the timeout issue also this then obsolete
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `accession_list` - The list of accessions
+    ///
+    async fn get_associated_proteins(client: &Client, accession_list: CqlValue) -> Vec<Protein> {
         loop {
             let associated_proteins_res =
-                ProteinTable::select_multiple(client, "WHERE accession IN ?", &[&chunk]).await;
+                ProteinTable::select_multiple(client, "WHERE accession IN ?", &[&accession_list])
+                    .await;
 
+            // Some times there is a small error with the database connection
+            // if this happens we just wait a bit and try again which resolves everything
             if associated_proteins_res.is_err() {
                 debug!("Protein err");
                 sleep(Duration::from_millis(100));
@@ -895,8 +878,15 @@ impl DatabaseBuild {
         }
     }
 
+    /// Collecting peptide metadata from the proteins of origin
+    ///
+    /// # Arguments
+    /// * `database_url` - The database url
+    /// * `partitions` - The partitions
+    /// * `peptide_sender` - The sender which is used to send the number of processed peptides to the logger
+    /// * `protease` - The digestion protease
+    ///
     async fn collect_peptide_metadata_thread(
-        _thread_id: usize,
         database_url: String,
         partitions: Vec<i64>,
         peptide_sender: Sender<u64>,
@@ -905,10 +895,10 @@ impl DatabaseBuild {
         let client = Client::new(&database_url).await?;
         let session = client.get_session();
         let update_query = format!(
-                        "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
-                        client.get_database(),
-                        PeptideTable::table_name()
-                    );
+            "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
+            client.get_database(),
+            PeptideTable::table_name()
+        );
 
         let protease_cleavage_codes: Vec<char> = protease
             .get_cleavage_amino_acids()
@@ -950,8 +940,9 @@ impl DatabaseBuild {
                 });
                 let mut associated_proteins = vec![];
 
-                let mut tasks: FuturesUnordered<_> =
-                    protein_chunks.map(|x| Self::yo(&client, x)).collect();
+                let mut tasks: FuturesUnordered<_> = protein_chunks
+                    .map(|x| Self::get_associated_proteins(&client, x))
+                    .collect();
 
                 while let Some(result) = tasks.next().await {
                     associated_proteins.extend(result);
@@ -1010,6 +1001,8 @@ impl DatabaseBuild {
     }
 }
 
+/// TODO: Trait and this struct should be merged as they only existed separately when
+/// another database engine was supported.
 impl DatabaseBuildTrait for DatabaseBuild {
     fn new(database_url: &str) -> Self {
         return Self {
@@ -1038,7 +1031,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
 
         // Run migrations
         run_migrations(&client).await?;
-        // migrations::runner().run_async(&mut client).await?;
 
         info!("Getting / Setting configuration");
         // get or set configuration
@@ -1261,31 +1253,7 @@ mod test {
 
                     assert_eq!(peptides.len(), 1);
 
-                    if protein.get_accession() == "P07477" {
-                        // Sequence of the only domain in this protein
-                        // let a = "IVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIA".find(peptide.get_sequence());
-                        // if a.is_some() {
-                        //     assert_eq!(peptides[0].get_domains().len(), 2);
-                        // }
-
-                        // if peptide.get_sequence() == "SRIQVR" {
-                        //     assert_eq!(
-                        //         peptides[0].get_domains()[1],
-                        //         Domain::new(
-                        //             0,
-                        //             5,
-                        //             "Peptidase S1".to_string(),
-                        //             "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
-                        //             Some("P07477".to_string()),
-                        //             Some(23),
-                        //             Some(243),
-                        //             Some(66),
-                        //         )
-                        //     );
-                        // }
-                    }
-
-                    // See if domains are there
+                    // TODO: See if domains are there
                 }
             }
         }

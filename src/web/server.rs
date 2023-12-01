@@ -86,7 +86,7 @@ pub async fn start(
         // tools
         .route("/api/tools/digest", post(digest))
         .with_state(app_state.clone())
-        .route("/api/tools/mass/:sequence", post(get_mass))
+        .route("/api/tools/mass/:sequence", get(get_mass))
         .route("/api/tools/proteases", get(get_proteases))
         // taxonomy
         .route("/api/taxonomies/search", post(search_taxonomies))

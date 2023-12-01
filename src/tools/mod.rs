@@ -18,6 +18,8 @@ pub mod omicstools;
 pub mod performance_logger;
 /// Functions to deal with PostgreSQL queries
 pub mod psql;
+/// Custom serde (de-) serializer
+pub mod serde;
 /// Functions to create a protein partition for the database based on the protein files
 pub mod unprocessable_protein_logger;
 
