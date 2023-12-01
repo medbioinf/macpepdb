@@ -193,8 +193,8 @@ async fn main() -> Result<()> {
                 let client = Client::new(&database_url).await?;
                 let session = client.get_session();
 
-                let not_updated_peptides = info_span!("not_updated_peptides");
-                let not_updated_peptides_enter = not_updated_peptides.enter();
+                let peptide_domains_span = info_span!("peptide_domains");
+                let peptide_domains_enter = peptide_domains_span.enter();
 
                 let mut domains: HashSet<String> = HashSet::new();
 
@@ -222,20 +222,22 @@ async fn main() -> Result<()> {
                         let row = row_opt.unwrap();
                         let peptide = Peptide::from(row);
 
-                        let a = peptide.get_domains().iter().map(|x| x.get_name());
+                        let domains = peptide.get_domains().iter();
 
-                        for name in a {
-                            if name == "" {
-                                info!("{:?}", peptide.get_proteins());
-                            }
-                            domains.insert(name.to_string());
+                        for domain in domains {
+                            info!(
+                                "Domain {:?} Protein {:?}",
+                                domain.get_name(),
+                                domain.get_protein_opt().unwrap().get_accession()
+                            );
+                            domains.insert(domain.get_name().to_string());
                         }
                     }
                 }
 
                 info!("{:?}", domains);
-                std::mem::drop(not_updated_peptides_enter);
-                std::mem::drop(not_updated_peptides);
+                std::mem::drop(peptide_domains_enter);
+                std::mem::drop(peptide_domains_span);
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
