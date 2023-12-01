@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 // std imports
 use std::fs::read_to_string;
 use std::{path::Path, thread::sleep, time::Duration};
@@ -11,6 +11,7 @@ use indicatif::ProgressStyle;
 use macpepdb::database::scylla::client::{Client, GenericClient};
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use macpepdb::database::table::Table;
+use macpepdb::entities::domain::Domain;
 use macpepdb::entities::peptide::Peptide;
 use tracing::{debug, error, info, info_span, Level};
 use tracing_indicatif::IndicatifLayer;
@@ -196,7 +197,8 @@ async fn main() -> Result<()> {
                 let peptide_domains_span = info_span!("peptide_domains");
                 let peptide_domains_enter = peptide_domains_span.enter();
 
-                let mut domains: HashSet<String> = HashSet::new();
+                let mut domain_counts = HashMap::new();
+                let mut peptide_count = 0;
 
                 for partition in 0_i64..100_i64 {
                     let query_statement = format!(
@@ -222,20 +224,31 @@ async fn main() -> Result<()> {
                         let row = row_opt.unwrap();
                         let peptide = Peptide::from(row);
 
-                        let domains = peptide.get_domains().iter();
+                        let peptide_domains = peptide.get_domains();
 
-                        for domain in domains {
-                            info!(
-                                "Domain {:?} Protein {:?}",
-                                domain.get_name(),
-                                domain.get_protein_opt().unwrap().get_accession()
-                            );
-                            domains.insert(domain.get_name().to_string());
+                        if peptide_domains.len() > 0 {
+                            peptide_count += 1;
+                        }
+
+                        for domain in peptide_domains {
+                            let name = domain.get_name();
+                            let protein_accession = domain.clone().get_protein_opt().unwrap();
+                            info!("Domain {:?} Protein {:?}", name, protein_accession);
+
+                            match domain_counts.get(name) {
+                                Some(count) => {
+                                    domain_counts.insert(name.clone(), count + 1);
+                                }
+                                None => {
+                                    domain_counts.insert(name.clone(), 1);
+                                }
+                            }
                         }
                     }
                 }
 
-                info!("{:?}", domains);
+                info!("Domain Counts {:?}", domain_counts);
+                info!("Peptides with domains {:?}", peptide_count);
                 std::mem::drop(peptide_domains_enter);
                 std::mem::drop(peptide_domains_span);
             } else {
