@@ -8,6 +8,7 @@ use anyhow::Result;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use indicatif::ProgressStyle;
+use itertools::Itertools;
 use macpepdb::database::scylla::client::{Client, GenericClient};
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use macpepdb::database::scylla::protein_table::{ProteinTable, SELECT_COLS as PROTEIN_SELECT_COLS};
@@ -232,7 +233,11 @@ async fn main() -> Result<()> {
                         let row = row_opt.unwrap();
                         let peptide = Peptide::from(row);
 
-                        let peptide_domains = peptide.get_domains();
+                        let peptide_domains = peptide
+                            .get_domains()
+                            .iter()
+                            .unique_by(|x| (x.get_start_index(), x.get_end_index(), x.get_name()))
+                            .collect::<Vec<_>>();
 
                         if peptide_domains.len() > 0 {
                             peptide_count += 1;
@@ -244,7 +249,6 @@ async fn main() -> Result<()> {
                             if name == "" {
                                 info!("Domain {:?} Protein {:?}", name, protein_accession);
                             }
-                            // info!("Domain {:?} Protein {:?}", name, protein_accession);
 
                             match domain_counts.get(name) {
                                 Some(count) => {
