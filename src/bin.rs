@@ -10,7 +10,7 @@ use futures::StreamExt;
 use indicatif::ProgressStyle;
 use macpepdb::database::scylla::client::{Client, GenericClient};
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
-use macpepdb::database::scylla::protein_table::ProteinTable;
+use macpepdb::database::scylla::protein_table::{ProteinTable, SELECT_COLS as PROTEIN_SELECT_COLS};
 use macpepdb::database::table::Table;
 use macpepdb::entities::domain::Domain;
 use macpepdb::entities::peptide::Peptide;
@@ -280,7 +280,7 @@ async fn main() -> Result<()> {
 
                 let query_statement = format!(
                     "SELECT {} FROM {}.{} ALLOW FILTERING",
-                    SELECT_COLS,
+                    PROTEIN_SELECT_COLS,
                     client.get_database(),
                     ProteinTable::table_name()
                 );

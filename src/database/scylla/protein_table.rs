@@ -17,7 +17,7 @@ use super::client::GenericClient;
 
 const TABLE_NAME: &'static str = "proteins";
 
-const SELECT_COLS: &'static str = "accession, secondary_accessions, entry_name, name, \
+pub const SELECT_COLS: &'static str = "accession, secondary_accessions, entry_name, name, \
     genes, taxonomy_id, proteome_id, is_reviewed, sequence, updated_at, domains";
 
 const INSERT_COLS: &'static str = SELECT_COLS;
