@@ -273,6 +273,8 @@ async fn main() -> Result<()> {
                 let session = client.get_session();
 
                 let protein_domains_span = info_span!("protein_domains");
+                protein_domains_span.pb_set_style(&ProgressStyle::default_bar());
+                protein_domains_span.pb_set_length(20086523);
                 let protein_domains_enter = protein_domains_span.enter();
 
                 let mut domain_counts = HashMap::new();
@@ -319,6 +321,7 @@ async fn main() -> Result<()> {
                             }
                         }
                     }
+                    Span::current().pb_inc(1);
                 }
 
                 info!("Domain Counts {:?}", domain_counts);
