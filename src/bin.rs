@@ -10,9 +10,11 @@ use futures::StreamExt;
 use indicatif::ProgressStyle;
 use macpepdb::database::scylla::client::{Client, GenericClient};
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
+use macpepdb::database::scylla::protein_table::ProteinTable;
 use macpepdb::database::table::Table;
 use macpepdb::entities::domain::Domain;
 use macpepdb::entities::peptide::Peptide;
+use macpepdb::entities::protein::Protein;
 use tracing::{debug, error, info, info_span, Level, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 use tracing_indicatif::IndicatifLayer;
@@ -58,7 +60,10 @@ enum Commands {
         interface: String,
         port: u16,
     },
-    DomainTypes {
+    DomainTypesPeptides {
+        database_url: String,
+    },
+    DomainTypesProteins {
         database_url: String,
     },
 }
@@ -190,7 +195,7 @@ async fn main() -> Result<()> {
                 error!("Unsupported database protocol: {}", database_url);
             }
         }
-        Commands::DomainTypes { database_url } => {
+        Commands::DomainTypesPeptides { database_url } => {
             if database_url.starts_with("scylla://") {
                 let client = Client::new(&database_url).await?;
                 let session = client.get_session();
@@ -258,6 +263,78 @@ async fn main() -> Result<()> {
                 info!("Peptides with domains {:?}", peptide_count);
                 std::mem::drop(peptide_domains_enter);
                 std::mem::drop(peptide_domains_span);
+            } else {
+                error!("Unsupported database protocol: {}", database_url);
+            }
+        }
+        Commands::DomainTypesProteins { database_url } => {
+            if database_url.starts_with("scylla://") {
+                let client = Client::new(&database_url).await?;
+                let session = client.get_session();
+
+                let protein_domains_span = info_span!("protein_domains");
+                protein_domains_span.pb_set_style(&ProgressStyle::default_bar());
+                protein_domains_span.pb_set_length(100);
+                let protein_domains_enter = protein_domains_span.enter();
+
+                let mut domain_counts = HashMap::new();
+                let mut protein_count = 0;
+
+                for partition in 0_i64..100_i64 {
+                    let query_statement = format!(
+                        "SELECT {} FROM {}.{} WHERE partition = ?",
+                        SELECT_COLS,
+                        client.get_database(),
+                        ProteinTable::table_name()
+                    );
+
+                    debug!("Streaming rows of partition {}", partition);
+
+                    let mut rows_stream = session
+                        .query_iter(query_statement, (partition,))
+                        .await
+                        .unwrap();
+
+                    while let Some(row_opt) = rows_stream.next().await {
+                        if row_opt.is_err() {
+                            debug!("Row opt err");
+                            sleep(Duration::from_millis(100));
+                            continue;
+                        }
+                        let row = row_opt.unwrap();
+                        let protein = Protein::from(row);
+
+                        let protein_domains = protein.get_domains();
+
+                        if protein_domains.len() > 0 {
+                            protein_count += 1;
+                        }
+
+                        for domain in protein_domains {
+                            let name = domain.get_name();
+                            let protein_accession = protein.get_accession();
+                            if name == "" {
+                                info!("Domain {:?} Protein {:?}", name, protein_accession);
+                            }
+                            // info!("Domain {:?} Protein {:?}", name, protein_accession);
+
+                            match domain_counts.get(name) {
+                                Some(count) => {
+                                    domain_counts.insert(name.clone(), count + 1);
+                                }
+                                None => {
+                                    domain_counts.insert(name.clone(), 1);
+                                }
+                            }
+                        }
+                    }
+                    Span::current().pb_inc(1);
+                }
+
+                info!("Domain Counts {:?}", domain_counts);
+                info!("Proteins with domains {:?}", protein_count);
+                std::mem::drop(protein_domains_enter);
+                std::mem::drop(protein_domains_span);
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
