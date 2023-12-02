@@ -273,62 +273,52 @@ async fn main() -> Result<()> {
                 let session = client.get_session();
 
                 let protein_domains_span = info_span!("protein_domains");
-                protein_domains_span.pb_set_style(&ProgressStyle::default_bar());
-                protein_domains_span.pb_set_length(100);
                 let protein_domains_enter = protein_domains_span.enter();
 
                 let mut domain_counts = HashMap::new();
                 let mut protein_count = 0;
 
-                for partition in 0_i64..100_i64 {
-                    let query_statement = format!(
-                        "SELECT {} FROM {}.{} WHERE partition = ?",
-                        SELECT_COLS,
-                        client.get_database(),
-                        ProteinTable::table_name()
-                    );
+                let query_statement = format!(
+                    "SELECT {} FROM {}.{} ALLOW FILTERING",
+                    SELECT_COLS,
+                    client.get_database(),
+                    ProteinTable::table_name()
+                );
 
-                    debug!("Streaming rows of partition {}", partition);
+                let mut rows_stream = session.query_iter(query_statement, ()).await.unwrap();
 
-                    let mut rows_stream = session
-                        .query_iter(query_statement, (partition,))
-                        .await
-                        .unwrap();
+                while let Some(row_opt) = rows_stream.next().await {
+                    if row_opt.is_err() {
+                        debug!("Row opt err");
+                        sleep(Duration::from_millis(100));
+                        continue;
+                    }
+                    let row = row_opt.unwrap();
+                    let protein = Protein::from(row);
 
-                    while let Some(row_opt) = rows_stream.next().await {
-                        if row_opt.is_err() {
-                            debug!("Row opt err");
-                            sleep(Duration::from_millis(100));
-                            continue;
+                    let protein_domains = protein.get_domains();
+
+                    if protein_domains.len() > 0 {
+                        protein_count += 1;
+                    }
+
+                    for domain in protein_domains {
+                        let name = domain.get_name();
+                        let protein_accession = protein.get_accession();
+                        if name == "" {
+                            info!("Domain {:?} Protein {:?}", name, protein_accession);
                         }
-                        let row = row_opt.unwrap();
-                        let protein = Protein::from(row);
+                        // info!("Domain {:?} Protein {:?}", name, protein_accession);
 
-                        let protein_domains = protein.get_domains();
-
-                        if protein_domains.len() > 0 {
-                            protein_count += 1;
-                        }
-
-                        for domain in protein_domains {
-                            let name = domain.get_name();
-                            let protein_accession = protein.get_accession();
-                            if name == "" {
-                                info!("Domain {:?} Protein {:?}", name, protein_accession);
+                        match domain_counts.get(name) {
+                            Some(count) => {
+                                domain_counts.insert(name.clone(), count + 1);
                             }
-                            // info!("Domain {:?} Protein {:?}", name, protein_accession);
-
-                            match domain_counts.get(name) {
-                                Some(count) => {
-                                    domain_counts.insert(name.clone(), count + 1);
-                                }
-                                None => {
-                                    domain_counts.insert(name.clone(), 1);
-                                }
+                            None => {
+                                domain_counts.insert(name.clone(), 1);
                             }
                         }
                     }
-                    Span::current().pb_inc(1);
                 }
 
                 info!("Domain Counts {:?}", domain_counts);
