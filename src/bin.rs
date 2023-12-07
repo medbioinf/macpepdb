@@ -50,6 +50,9 @@ enum Commands {
         /// If set, only the metadata will be included not domain/feature information
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         only_metadata: bool, // this is a flag now `--only-metadata`
+        /// If set, domains will be added to the database
+        #[arg(long, default_value_t = true, action = clap::ArgAction::SetFalse)]
+        include_domains: bool, // this is a flag now `--include-domains`
         /// Path protein files (dat or txt), comma separated
         #[arg(value_delimiter = ',', num_args = 1..)]
         protein_file_paths: Vec<String>,
@@ -138,6 +141,7 @@ async fn main() -> Result<()> {
             log_folder,
             taxonomy_file,
             only_metadata,
+            include_domains,
             protein_file_paths,
         } => {
             let protein_file_paths = protein_file_paths
@@ -169,6 +173,7 @@ async fn main() -> Result<()> {
                         &log_folder,
                         false,
                         only_metadata,
+                        include_domains,
                     )
                     .await
                 {

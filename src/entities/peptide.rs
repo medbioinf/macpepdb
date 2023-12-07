@@ -186,11 +186,16 @@ impl Peptide {
     ///
     /// # Arguments
     /// * `proteins` - The proteins
+    /// * `protease_cleavage_codes` - The protease cleavage codes
+    /// * `protease_cleavage_blocker_codes` - The protease cleavage blocker codes
+    /// * `include_domains` - True if domains should not be extracted
+    ///
     pub fn get_metadata_from_proteins(
         &self,
         proteins: &Vec<Protein>,
         protease_cleavage_codes: &Vec<char>,
         protease_cleavage_blocker_codes: &Vec<char>,
+        include_domains: bool,
     ) -> (bool, bool, Vec<i64>, Vec<i64>, Vec<String>, Vec<Domain>) {
         let is_swiss_prot = proteins.iter().any(|protein| protein.get_is_reviewed());
         let is_trembl = proteins.iter().any(|protein| !protein.get_is_reviewed());
@@ -218,73 +223,77 @@ impl Peptide {
             .map(|protein| protein.get_proteome_id().to_owned())
             .collect();
 
-        let domains: Vec<Domain> = proteins
-            .iter()
-            .flat_map(|p| {
-                let dom = p.get_domains();
-                let occurence_indices: Vec<(i64, i64)> = p
-                    .get_sequence()
-                    .match_indices(&self.get_sequence().as_str())
-                    .map(|x| i64::try_from(x.0).unwrap())
-                    .map(|x| (x, x + i64::try_from(self.get_sequence().len()).unwrap() - 1))
-                    .filter(|x| {
-                        let is_valid_start = x.0 == 0
-                            || (!protease_cleavage_blocker_codes
-                                .contains(&self.get_sequence().chars().nth(0).unwrap())
-                                && protease_cleavage_codes.contains(
-                                    &p.get_sequence().chars().nth((x.0 - 1) as usize).unwrap(),
+        let mut domains: Vec<Domain> = Vec::new();
+        if include_domains {
+            domains = proteins
+                .iter()
+                .flat_map(|p| {
+                    let dom = p.get_domains();
+                    let occurence_indices: Vec<(i64, i64)> = p
+                        .get_sequence()
+                        .match_indices(&self.get_sequence().as_str())
+                        .map(|x| i64::try_from(x.0).unwrap())
+                        .map(|x| (x, x + i64::try_from(self.get_sequence().len()).unwrap() - 1))
+                        .filter(|x| {
+                            let is_valid_start = x.0 == 0
+                                || (!protease_cleavage_blocker_codes
+                                    .contains(&self.get_sequence().chars().nth(0).unwrap())
+                                    && protease_cleavage_codes.contains(
+                                        &p.get_sequence().chars().nth((x.0 - 1) as usize).unwrap(),
+                                    ));
+
+                            let is_valid_end = x.1 as usize == p.get_sequence().len() - 1
+                                || (!protease_cleavage_blocker_codes.contains(
+                                    &p.get_sequence()
+                                        .chars()
+                                        .nth(x.1 as usize + 1)
+                                        .unwrap_or(' '),
+                                ) && protease_cleavage_codes.contains(
+                                    &self
+                                        .get_sequence()
+                                        .chars()
+                                        .nth(&self.get_sequence().len() - 1)
+                                        .unwrap(),
                                 ));
 
-                        let is_valid_end = x.1 as usize == p.get_sequence().len() - 1
-                            || (!protease_cleavage_blocker_codes.contains(
-                                &p.get_sequence()
-                                    .chars()
-                                    .nth(x.1 as usize + 1)
-                                    .unwrap_or(' '),
-                            ) && protease_cleavage_codes.contains(
-                                &self
-                                    .get_sequence()
-                                    .chars()
-                                    .nth(&self.get_sequence().len() - 1)
-                                    .unwrap(),
-                            ));
+                            is_valid_start && is_valid_end
+                        })
+                        .collect();
 
-                        is_valid_start && is_valid_end
-                    })
-                    .collect();
+                    let mut domains: Vec<Domain> = vec![];
 
-                let mut domains: Vec<Domain> = vec![];
+                    for (start_idx, end_idx) in occurence_indices {
+                        for d in dom {
+                            let start_idx_in_domain_range = d.get_start_index() <= &start_idx
+                                && &start_idx <= d.get_end_index();
+                            let end_idx_in_domain_range =
+                                d.get_start_index() <= &end_idx && &end_idx <= d.get_end_index();
 
-                for (start_idx, end_idx) in occurence_indices {
-                    for d in dom {
-                        let start_idx_in_domain_range =
-                            d.get_start_index() <= &start_idx && &start_idx <= d.get_end_index();
-                        let end_idx_in_domain_range =
-                            d.get_start_index() <= &end_idx && &end_idx <= d.get_end_index();
-
-                        if start_idx_in_domain_range || end_idx_in_domain_range {
-                            let relative_start_idx = cmp::max(d.get_start_index() - start_idx, 0);
-                            let relative_end_idx = i64::try_from(self.get_sequence().len())
-                                .unwrap()
-                                - 1
-                                - cmp::max(end_idx - d.get_end_index(), 0);
-                            domains.push(Domain::new(
-                                relative_start_idx,
-                                relative_end_idx,
-                                d.get_name().clone(),
-                                d.get_evidence().clone(),
-                                Some(p.get_accession().to_string()),
-                                Some(d.get_start_index().clone()),
-                                Some(d.get_end_index().clone()),
-                                Some(start_idx),
-                            ));
+                            if start_idx_in_domain_range || end_idx_in_domain_range {
+                                let relative_start_idx =
+                                    cmp::max(d.get_start_index() - start_idx, 0);
+                                let relative_end_idx = i64::try_from(self.get_sequence().len())
+                                    .unwrap()
+                                    - 1
+                                    - cmp::max(end_idx - d.get_end_index(), 0);
+                                domains.push(Domain::new(
+                                    relative_start_idx,
+                                    relative_end_idx,
+                                    d.get_name().clone(),
+                                    d.get_evidence().clone(),
+                                    Some(p.get_accession().to_string()),
+                                    Some(d.get_start_index().clone()),
+                                    Some(d.get_end_index().clone()),
+                                    Some(start_idx),
+                                ));
+                            }
                         }
                     }
-                }
 
-                return domains;
-            })
-            .collect();
+                    return domains;
+                })
+                .collect();
+        }
 
         taxonomy_ids.sort();
         taxonomy_ids.dedup();

@@ -767,6 +767,7 @@ impl DatabaseBuild {
         configuration: &Configuration,
         is_test_run: bool,
         protease: &dyn Protease,
+        include_domains: bool,
     ) -> Result<()> {
         debug!("Collecting peptide metadata...");
         debug!("Chunking partitions for {} threads...", num_threads);
@@ -818,6 +819,7 @@ impl DatabaseBuild {
                     partitions,
                     thread_peptide_sender,
                     protease_box,
+                    include_domains,
                 )
                 .await?;
                 Ok(())
@@ -891,6 +893,7 @@ impl DatabaseBuild {
         partitions: Vec<i64>,
         peptide_sender: Sender<u64>,
         protease: Box<dyn Protease>,
+        include_domains: bool,
     ) -> Result<()> {
         let client = Client::new(&database_url).await?;
         let session = client.get_session();
@@ -959,6 +962,7 @@ impl DatabaseBuild {
                     &associated_proteins,
                     &protease_cleavage_codes,
                     &protease_cleavage_blocker_codes,
+                    include_domains,
                 );
 
                 let insert_result = session
@@ -1022,6 +1026,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
         log_folder: &PathBuf,
         is_test_run: bool,
         only_metadata_update: bool,
+        include_domains: bool,
     ) -> Result<()> {
         info!("Starting database build");
 
@@ -1090,6 +1095,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             &configuration,
             is_test_run,
             protease.as_ref(),
+            include_domains,
         )
         .await?;
         // count peptides per partition
@@ -1165,6 +1171,7 @@ mod test {
                 &log_folder,
                 true,
                 false,
+                true,
             )
             .await;
         assert!(build_res.is_err());
@@ -1203,6 +1210,7 @@ mod test {
                 &log_folder,
                 true,
                 false,
+                true,
             )
             .await
             .unwrap();

@@ -34,6 +34,7 @@ pub trait DatabaseBuild {
     /// * `log_folder` - Path to the log folder.
     /// * `is_test_run` - Whether this is a test run.
     /// * `only_metadata_update` - Whether to only update the metadata.
+    /// * `include_domains` - Whether to include domain parsing.
     ///
     fn build(
         &self,
@@ -47,5 +48,6 @@ pub trait DatabaseBuild {
         log_folder: &PathBuf,
         is_test_run: bool,
         only_metadata_update: bool,
+        include_domains: bool,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
