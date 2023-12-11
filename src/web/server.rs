@@ -1,5 +1,4 @@
 // std imports
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 // 3rd party imports
@@ -99,13 +98,9 @@ pub async fn start(
 
     app = app.fallback(page_not_found);
 
-    // Run our app with hyper
-    // `axum::Server` is a re-export of `hyper::Server`
-    let addr: SocketAddr = format!("{}:{}", interface, port).parse()?;
-    tracing::info!("ready for connections, listening on {}", addr);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await?;
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", interface, port)).await?;
+    tracing::info!("ready for connections, listening on {}:{}", interface, port);
+    axum::serve(listener, app).await.unwrap();
 
     Ok(())
 }
