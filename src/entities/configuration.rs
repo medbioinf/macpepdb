@@ -1,6 +1,9 @@
 // 3rd party imports
 use serde::{Deserialize, Serialize};
 
+// internal imports
+use crate::tools::serde::{deserialize_mass_vec_from_int_vec, serialize_mass_vec_to_float_vec};
+
 /// Keeps the configuration parameters for MaCPepDB, e.g. digestion parameters, distribution ...
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Configuration {
@@ -9,6 +12,10 @@ pub struct Configuration {
     min_peptide_length: Option<usize>,
     max_peptide_length: Option<usize>,
     remove_peptides_containing_unknown: bool,
+    #[serde(
+        serialize_with = "serialize_mass_vec_to_float_vec",
+        deserialize_with = "deserialize_mass_vec_from_int_vec"
+    )]
     partition_limits: Vec<i64>,
 }
 
