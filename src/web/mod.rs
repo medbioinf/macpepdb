@@ -2,6 +2,8 @@
 pub mod app_state;
 /// Endpoints for getting information about the database, digestion enzymes, max missed cleavages, etc.
 pub mod configuration_controller;
+/// Controller for error handling
+pub mod error_controller;
 /// Endpoints for getting peptides by sequence, mass search, ...
 pub mod peptide_controller;
 /// Endpoints for getting proteins by accession, ...

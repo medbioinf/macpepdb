@@ -17,6 +17,7 @@ use crate::database::scylla::taxonomy_tree_table::TaxonomyTreeTable;
 use crate::entities::configuration::Configuration;
 use crate::web::app_state::AppState;
 use crate::web::configuration_controller::get_configuration;
+use crate::web::error_controller::page_not_found;
 use crate::web::peptide_controller::{
     get_peptide, get_peptide_existence, search as peptide_search,
 };
@@ -69,7 +70,7 @@ pub async fn start(
     tracing::info!("Start MaCPepDB web server");
 
     // Build our application with route
-    let app = Router::new()
+    let mut app = Router::new()
         // Peptide routes
         .route("/api/peptides/search", post(peptide_search))
         .with_state(app_state.clone())
@@ -95,6 +96,8 @@ pub async fn start(
         .with_state(app_state.clone())
         .route("/api/taxonomies/:id", get(get_taxonomy))
         .with_state(app_state.clone());
+
+    app = app.fallback(page_not_found);
 
     // Run our app with hyper
     // `axum::Server` is a re-export of `hyper::Server`
