@@ -69,34 +69,25 @@ pub async fn start(
     tracing::info!("Start MaCPepDB web server");
 
     // Build our application with route
-    let mut app = Router::new()
+    let app = Router::new()
         // Peptide routes
         .route("/api/peptides/search", post(peptide_search))
-        .with_state(app_state.clone())
         .route("/api/peptides/:sequence/exists", get(get_peptide_existence))
-        .with_state(app_state.clone())
         .route("/api/peptides/:sequence", get(get_peptide))
-        .with_state(app_state.clone())
         // Protein routes
         .route("/api/proteins/:accession", get(get_protein))
-        .with_state(app_state.clone())
         // Configuration routes
         .route("/api/configuration", get(get_configuration))
-        .with_state(app_state.clone())
         // tools
         .route("/api/tools/digest", post(digest))
-        .with_state(app_state.clone())
         .route("/api/tools/mass/:sequence", get(get_mass))
         .route("/api/tools/proteases", get(get_proteases))
         // taxonomy
         .route("/api/taxonomies/search", post(search_taxonomies))
-        .with_state(app_state.clone())
         .route("/api/taxonomies/:id/sub", get(get_sub_taxonomies))
-        .with_state(app_state.clone())
         .route("/api/taxonomies/:id", get(get_taxonomy))
-        .with_state(app_state.clone());
-
-    app = app.fallback(page_not_found);
+        .with_state(app_state.clone())
+        .fallback(page_not_found);
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", interface, port)).await?;
     tracing::info!("ready for connections, listening on {}:{}", interface, port);
