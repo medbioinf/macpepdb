@@ -33,6 +33,7 @@ env_logger = "0.10.0"
 fallible-iterator = "0.3.0"
 fancy-regex = "0.11.0"
 futures = "0.3.28"
+http = "1.0.0"
 indicatif = "0.17.6"
 indicium = "0.6.0"
 lazy_static = "1.4.0"
@@ -46,6 +47,8 @@ serde = "1.0.160"
 serde_json = "1.0.95"
 sysinfo = "0.28.2"
 tokio = { version = "1.28.2", features = ["full"] }
+tower = "0.4.13"
+tower-http = { version = "0.5.0", features = ["cors", "trace"] }
 tracing = "0.1.37"
 tracing-indicatif = "0.3.4"
 tracing-subscriber =  { version = "0.3.17", features = ["env-filter"]}

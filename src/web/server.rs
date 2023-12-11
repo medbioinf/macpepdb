@@ -6,7 +6,9 @@ use anyhow::Result;
 use axum::routing::{get, post};
 use axum::Router;
 use dihardts_omicstools::biology::taxonomy::TaxonomyTree;
+use http::Method;
 use indicium::simple::SearchIndex;
+use tower_http::cors::{Any, CorsLayer};
 
 // internal imports
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
@@ -66,6 +68,12 @@ pub async fn start(
         taxonomy_search,
     ));
 
+    // Add CORS layer
+    let cors = CorsLayer::new()
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers(vec![http::header::ACCEPT, http::header::CONTENT_TYPE])
+        .allow_origin(Any);
+
     tracing::info!("Start MaCPepDB web server");
 
     // Build our application with route
@@ -87,7 +95,8 @@ pub async fn start(
         .route("/api/taxonomies/:id/sub", get(get_sub_taxonomies))
         .route("/api/taxonomies/:id", get(get_taxonomy))
         .with_state(app_state.clone())
-        .fallback(page_not_found);
+        .fallback(page_not_found)
+        .layer(cors);
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", interface, port)).await?;
     tracing::info!("ready for connections, listening on {}:{}", interface, port);
