@@ -1075,6 +1075,7 @@ dependencies = [
  "dioxus",
  "dioxus-router",
  "dioxus-web",
+ "log",
  "reqwest",
  "serde",
  "toml",
