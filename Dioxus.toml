@@ -10,7 +10,7 @@ default_platform = "web"
 out_dir = "dist"
 
 # The static resource path
-asset_dir = "assets"
+asset_dir = "public"
 
 [web.app]
 
@@ -23,7 +23,7 @@ title = "MaCPepDB"
 reload_html = true
 
 # Which files or dirs will be monitored
-watch_path = ["src", "assets"]
+watch_path = ["src", "public"]
 
 index_on_404 = true
 
@@ -31,7 +31,7 @@ index_on_404 = true
 [web.resource]
 
 # CSS style file
-style = []
+style = ["/index.css"]
 
 # Javascript code file
 script = []

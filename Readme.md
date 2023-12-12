@@ -12,9 +12,10 @@ Another benefit of Dioxus is also the possibility to build an Electron Desktop A
 ## Installation
 1. Clone the repositry
 2. Install rustup
-3. Install Dioxus: `cargo install dioxus-cli`
-3. Install WASM toolchain: `rustup target add wasm32-unknown-unknown`
-4. `dx serve`
+3. Install [sass](https://sass-lang.com/install/), make sure it is available in your `PATH` as `sass`
+4. Install Dioxus: `cargo install dioxus-cli`
+5. Install WASM toolchain: `rustup target add wasm32-unknown-unknown`
+6. `dx serve`
 
 Per default the application uses the configuration `frontend.config.toml`. If your wat to adjust it:
 1. Make a copy of `frontend.config.toml` and adjust it
