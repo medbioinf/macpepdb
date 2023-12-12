@@ -1,3 +1,6 @@
+// std imports
+use std::sync::Arc;
+
 // 3rd party imports
 use anyhow::Result;
 use async_stream::try_stream;
@@ -135,6 +138,56 @@ impl ProteinTable {
             .await?;
 
         return Ok(());
+    }
+
+    /// Searches for a protein by accession or gene name. Gene name needs to be exact,
+    /// attribute is wrapped in a like-query.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `attribute` - Accession or gene name, will be wrapped in a like-query
+    pub async fn search<'a, C>(
+        client: Arc<C>,
+        attribute: String,
+    ) -> Result<impl Stream<Item = Result<Protein>> + 'a>
+    where
+        C: GenericClient + Unpin + 'a,
+    {
+        Ok(try_stream! {
+
+
+            let like_attribute = format!("%{}%", &attribute);
+            let attr_cql_value = CqlValue::Text(like_attribute);
+            let param = vec![
+                &attr_cql_value
+            ];
+
+
+            for await protein in ProteinTable::stream(
+                client.as_ref(),
+                "WHERE accession LIKE ? ALLOW FILTERING",
+                param.as_slice(),
+                10000,
+            )
+            .await? {
+                yield protein?;
+            }
+
+            let attr_cql_value = CqlValue::Text(attribute);
+            let param = vec![
+                &attr_cql_value
+            ];
+
+            for await protein in ProteinTable::stream(
+                client.as_ref(),
+                "WHERE genes CONTAINS ? ALLOW FILTERING",
+                param.as_slice(),
+                10000,
+            )
+            .await? {
+                yield protein?;
+            }
+        })
     }
 }
 

@@ -22,7 +22,7 @@ use crate::web::error_controller::page_not_found;
 use crate::web::peptide_controller::{
     get_peptide, get_peptide_existence, search as peptide_search,
 };
-use crate::web::protein_controller::get_protein;
+use crate::web::protein_controller::{get_protein, search_protein};
 use crate::web::taxonomy_controller::{get_sub_taxonomies, get_taxonomy, search_taxonomies};
 use crate::web::tools_controller::{digest, get_mass, get_proteases};
 
@@ -83,6 +83,7 @@ pub async fn start(
         .route("/api/peptides/:sequence/exists", get(get_peptide_existence))
         .route("/api/peptides/:sequence", get(get_peptide))
         // Protein routes
+        .route("/api/proteins/search/:attribute", get(search_protein))
         .route("/api/proteins/:accession", get(get_protein))
         // Configuration routes
         .route("/api/configuration", get(get_configuration))

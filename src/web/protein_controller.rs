@@ -3,11 +3,15 @@ use std::sync::Arc;
 
 // 3rd party imports
 use anyhow::Result;
+use async_stream::stream;
 use axum::extract::{Json, Path, State};
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
+use axum_streams::StreamBodyAs;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use scylla::frame::response::result::CqlValue;
 use serde_json::Value as JsonValue;
+use tracing::error;
 
 // internal imports
 use crate::database::scylla::protein_table::ProteinTable;
@@ -96,4 +100,111 @@ pub async fn get_protein(
             "Protein not found".to_string(),
         ));
     }
+}
+
+/// Search protein for given accession or gene name.
+///
+/// # Arguments
+/// * `db_client` - The database client
+/// * `configuration` - MaCPepDB configuration
+/// * `attribute` - Accession or gene name, will be wrapped in a like-query
+///
+/// # API
+/// ## Request
+/// * Path: `/api/proteins/search/:attribute`
+/// * Method: `GET`
+///
+/// ## Response
+/// ```json
+/// [
+///     {
+///         "accession": "Q9WTP6",
+///         "domains": [],
+///         "entry_name": "KAD2_MOUSE",
+///         "genes": [
+///             "Ak2"
+///         ],
+///         "is_reviewed": true,
+///         "name": "Adenylate kinase 2, mitochondrial {ECO:0000255|HAMAP-Rule:MF_03168}",
+///         # List of peptide sequences as stored in the database
+///         "peptides": [
+///             "SYHEEFNPPK",
+///             ...,
+///             "KLKATMDAGK"
+///         ],
+///         "proteome_id": "UP000000589",
+///         "secondary_accessions": [
+///             "A2A820",
+///             "Q3THT3",
+///             "Q3TI11",
+///             "Q3TKI6",
+///             "Q8C7I9",
+///             "Q9CY37"
+///         ],
+///         "sequence": "MAPNVLASEPEIPKGIRAVLLGPPG...DLVMFI",
+///         "taxonomy_id": 10090,
+///         "updated_at": 1687910400
+///     },
+///    ...
+/// ]
+/// ```
+///
+pub async fn search_protein(
+    State(app_state): State<Arc<AppState>>,
+    Path(attribute): Path<String>,
+) -> impl IntoResponse {
+    if attribute.len() < 3 {
+        return StreamBodyAs::text(WebError::new_string_stream(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Attribute must be at least 3 characters long".to_string(),
+        ));
+    }
+
+    let attribute = attribute.replace("%", "\\%);").replace("_", "\\_");
+
+    let protease = match get_protease_by_name(
+        app_state.get_configuration_as_ref().get_protease_name(),
+        app_state
+            .get_configuration_as_ref()
+            .get_min_peptide_length(),
+        app_state
+            .get_configuration_as_ref()
+            .get_max_peptide_length(),
+        app_state
+            .get_configuration_as_ref()
+            .get_max_number_of_missed_cleavages(),
+    ) {
+        Ok(protease) => protease,
+        Err(err) => {
+            return StreamBodyAs::text(WebError::new_string_stream(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error when creating protease: {}", err),
+            ));
+        }
+    };
+
+    let proteins = match ProteinTable::search(app_state.get_db_client(), attribute.clone()).await {
+        Ok(proteins) => proteins,
+        Err(err) => {
+            return StreamBodyAs::text(WebError::new_string_stream(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error when selecting proteins: {}", err),
+            ));
+        }
+    };
+
+    StreamBodyAs::json_array(stream! {
+        for await protein in proteins {
+            match protein {
+                Ok(protein) => yield match protein.to_json_with_peptides(protease.as_ref()){
+                    Ok(json) => json,
+                    Err(err) => {
+                        error!("{:?}", err);
+                        continue;
+                    }
+                },
+                Err(err) => error!("{:?}", err)
+            }
+        }
+    })
 }
