@@ -9,6 +9,8 @@ mod components;
 mod configuration;
 /// Simplified copies of MaCPepDBs entities for easy deserialization
 mod entities;
+/// Layouts for different pages
+mod layouts;
 /// Pages (render multiple compontents) used by the web app
 mod pages;
 /// Routes used by the web app

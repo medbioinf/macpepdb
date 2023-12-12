@@ -3,15 +3,16 @@ use dioxus::prelude::*;
 use dioxus_router::prelude::*;
 
 // internal imports
+use crate::layouts::two_panes::TwoPanes;
 use crate::pages::*;
 
-#[rustfmt::skip]
 #[derive(Routable, Clone)]
+#[rustfmt::skip]
 pub enum Routes {
-    #[route("/")]
-    Status {},
-    #[route("/proteins")]
-    ProteinSearch {},
+    #[layout(TwoPanes)]
+        #[route("/")]
+        Status {},
+    #[end_layout]
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },
 }
