@@ -11,6 +11,8 @@ mod configuration;
 mod entities;
 /// Pages (render multiple compontents) used by the web app
 mod pages;
+/// Routes used by the web app
+mod routes;
 
 // 3rd party imports
 use dioxus_web::Config;

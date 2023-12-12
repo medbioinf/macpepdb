@@ -4,13 +4,7 @@ use dioxus_router::prelude::*;
 
 // internal imports
 use crate::configuration::Configuration as AppConfiguration;
-use crate::pages::*;
-
-#[derive(Routable, Clone)]
-enum Route {
-    #[route("/")]
-    Status {},
-}
+use crate::routes::Routes;
 
 /// The root component of the web app
 #[derive(PartialEq, Props)]
@@ -25,6 +19,6 @@ pub fn App(cx: Scope<'_, RootProps>) -> Element {
     use_shared_state_provider(cx, || cx.props.configuration.clone());
 
     render! {
-        Router::<Route> {}
+        Router::<Routes> {}
     }
 }
