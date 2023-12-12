@@ -12,6 +12,8 @@ pub enum Routes {
     #[layout(TwoPanes)]
         #[route("/")]
         Status {},
+        #[route("/proteins/:protein_id")]
+        Protein { protein_id: String },
         #[route("/proteins")]
         ProteinSearch {},
     #[end_layout]

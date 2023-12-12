@@ -2,12 +2,14 @@
 use anyhow::Result;
 use dioxus::html::input_data::keyboard_types::Code;
 use dioxus::prelude::*;
+use dioxus_router::components::Link;
 use log;
 use reqwest;
 
 // internal imports
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::protein::Protein as MaCPepDBProtein;
+use crate::routes::Routes;
 
 /// Fetch MaCPepDB configuration from the servers
 ///
@@ -97,7 +99,12 @@ pub fn ProteinSearch(cx: Scope) -> Element {
                             for protein in proteins {
                                 render!{
                                     li {
-                                        "{protein.get_accession()}"
+                                        Link{
+                                            to: Routes::Protein{
+                                                protein_id: protein.get_accession().to_string()
+                                            },
+                                            "{protein.get_accession()}"
+                                        }
                                     }
                                 }
                             }
