@@ -9,6 +9,8 @@ mod components;
 mod configuration;
 /// Simplified copies of MaCPepDBs entities for easy deserialization
 mod entities;
+/// Pages (render multiple compontents) used by the web app
+mod pages;
 
 // 3rd party imports
 use dioxus_web::Config;

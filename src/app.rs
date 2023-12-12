@@ -1,9 +1,16 @@
 // 3rd party imports
 use dioxus::prelude::*;
+use dioxus_router::prelude::*;
 
 // internal imports
-use crate::components::*;
 use crate::configuration::Configuration as AppConfiguration;
+use crate::pages::*;
+
+#[derive(Routable, Clone)]
+enum Route {
+    #[route("/")]
+    Status {},
+}
 
 /// The root component of the web app
 #[derive(PartialEq, Props)]
@@ -18,14 +25,6 @@ pub fn App(cx: Scope<'_, RootProps>) -> Element {
     use_shared_state_provider(cx, || cx.props.configuration.clone());
 
     render! {
-        div {
-            h1 { "Welcome to MaCPepDB - Mass Centric Peptide Database" }
-            div {
-                p {
-                    "Quickly build and access a digest of the a large proteome."
-                }
-            }
-        }
-        configuration::Configuration {}
+        Router::<Route> {}
     }
 }
