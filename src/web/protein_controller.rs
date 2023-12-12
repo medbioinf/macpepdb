@@ -93,7 +93,15 @@ pub async fn get_protein(
                 .get_max_number_of_missed_cleavages(),
         )?;
         // Get the protein with the peptides as JSON value
-        return Ok(Json(protein.to_json_with_peptides(protease.as_ref())?));
+        return Ok(Json(
+            protein
+                .to_json_with_peptides(
+                    app_state.get_db_client_as_ref(),
+                    app_state.get_configuration_as_ref().get_partition_limits(),
+                    protease.as_ref(),
+                )
+                .await?,
+        ));
     } else {
         return Err(WebError::new(
             StatusCode::NOT_FOUND,
@@ -102,7 +110,8 @@ pub async fn get_protein(
     }
 }
 
-/// Search protein for given accession or gene name.
+/// Search protein for given accession or gene name. Gene name needs to be exact, while accession
+/// will be wrapped in a like-query.
 ///
 /// # Arguments
 /// * `db_client` - The database client
@@ -196,7 +205,11 @@ pub async fn search_protein(
     StreamBodyAs::json_array(stream! {
         for await protein in proteins {
             match protein {
-                Ok(protein) => yield match protein.to_json_with_peptides(protease.as_ref()){
+                Ok(protein) => yield match protein.to_json_with_peptides(
+                    app_state.get_db_client_as_ref(),
+                    app_state.get_configuration_as_ref().get_partition_limits(),
+                    protease.as_ref(),
+                ).await {
                     Ok(json) => json,
                     Err(err) => {
                         error!("{:?}", err);
