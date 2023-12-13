@@ -1,6 +1,9 @@
 // 3rd party imports
 use serde::Deserialize;
 
+// internal imports
+use crate::entities::protein::Protein;
+
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Peptide<T> {
     partition: i64,
@@ -77,5 +80,29 @@ impl<T> Peptide<T> {
     ///
     pub fn get_proteome_ids(&self) -> &Vec<String> {
         return &self.proteome_ids;
+    }
+}
+
+/// Peptides with full protein records
+///
+impl<T> Peptide<Protein<T>> {
+    /// Returns a vector of reviewed proteins
+    ///
+    pub fn get_reviewed_proteins(&self) -> Vec<&Protein<T>> {
+        return self
+            .proteins
+            .iter()
+            .filter(|p| p.get_is_reviewed())
+            .collect();
+    }
+
+    /// Returns a vector of unreviewed proteins
+    ///
+    pub fn get_unreviewed_proteins(&self) -> Vec<&Protein<T>> {
+        return self
+            .proteins
+            .iter()
+            .filter(|p| !p.get_is_reviewed())
+            .collect();
     }
 }

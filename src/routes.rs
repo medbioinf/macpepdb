@@ -16,6 +16,8 @@ pub enum Routes {
         Protein { protein_id: String },
         #[route("/proteins")]
         ProteinSearch {},
+        #[route("/peptides/:peptide_sequence")]
+        Peptide { peptide_sequence: String },
     #[end_layout]
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },

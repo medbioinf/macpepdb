@@ -1,12 +1,14 @@
 // 3rd party imports
 use anyhow::Result;
 use dioxus::prelude::*;
+use dioxus_router::components::Link;
 use reqwest;
 
 // internal imports
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
+use crate::routes::Routes;
 
 /// As peptides contain their protein of origin and proteins contain their peptides, MaCPepDB
 /// stops the recursion on third level by only adding the protein accession to the peptides
@@ -86,7 +88,14 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                         for peptide in protein.get_peptides() {
                             tr {
                                 td { "{peptide.get_mass()}" }
-                                td { "{peptide.get_sequence()}" }
+                                td {
+                                    Link {
+                                        to: Routes::Peptide{
+                                            peptide_sequence: peptide.get_sequence().to_owned()
+                                        },
+                                        "{peptide.get_sequence()}"
+                                    }
+                                }
                             }
                         }
                     }
