@@ -30,7 +30,7 @@ pub fn Status(cx: Scope) -> Element {
             h1 { "Welcome to MaCPepDB - Mass Centric Peptide Database" }
             div {
                 p {
-                    "Quickly build and access a digest of the a large proteome."
+                    "Quickly build and access the digest of a large proteome."
                 }
             }
         }
