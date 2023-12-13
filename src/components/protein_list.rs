@@ -6,20 +6,17 @@ use dioxus_router::components::Link;
 use crate::entities::protein::Protein as MaCPepDBProtein;
 use crate::routes::Routes;
 
-/// Proteins with peptide sequences
-type ProteinEntity = MaCPepDBProtein<String>;
-
 /// Properties for protein list
 ///
 #[derive(Props)]
-pub struct ProteinListProps<'a> {
+pub struct ProteinListProps<'a, T> {
     /// List of proteins to render
-    pub proteins: Vec<&'a ProteinEntity>,
+    pub proteins: Vec<&'a MaCPepDBProtein<T>>,
 }
 
 /// Renders a list of proteins with most common attributes: accession, entry name, name, genes.
 ///
-pub fn ProteinList<'a>(cx: Scope<'a, ProteinListProps<'a>>) -> Element {
+pub fn ProteinList<'a, T>(cx: Scope<'a, ProteinListProps<'a, T>>) -> Element {
     if cx.props.proteins.is_empty() {
         return render! {
             div { "No proteins" }
