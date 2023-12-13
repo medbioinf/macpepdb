@@ -1,11 +1,16 @@
+// std imports
+use std::collections::HashMap;
+
 // 3rd party imports
 use anyhow::Result;
 use dioxus::prelude::*;
 use reqwest;
 
+use crate::components::peptide::amino_acid_composition_header_cell::AminoAcidCompositionHeaderCell;
 // internal imports
 use crate::components::protein_list::ProteinList;
 use crate::configuration::Configuration as AppConfiguration;
+use crate::entities::amino_acid::{self, AminoAcid};
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProteins;
 
@@ -28,6 +33,21 @@ pub async fn get_peptide(
     Ok(reqwest::get(&url).await?.json().await?)
 }
 
+/// Fetches amino acids and returns them as map of code => amino acid
+///
+/// # Arguments
+/// * `macpepdb_base_url` - Base URL of MaCPepDB
+/// * `peptide_id` - peptide accession or gene name
+///
+pub async fn get_amino_acid_map(macpepdb_base_url: String) -> Result<HashMap<char, AminoAcid>> {
+    let url = format!("{}/api/chemistry/amino_acids", macpepdb_base_url);
+    let amino_acids: Vec<AminoAcid> = reqwest::get(&url).await?.json().await?;
+    Ok(amino_acids
+        .into_iter()
+        .map(|aa| (aa.get_code().to_owned(), aa))
+        .collect())
+}
+
 /// Properties for peptide page
 #[derive(PartialEq, Props)]
 pub struct PeptideProps {
@@ -45,6 +65,9 @@ pub fn Peptide(cx: Scope<PeptideProps>) -> Element {
             cx.props.peptide_sequence.clone(),
         )
     });
+    let amino_acid_map = use_future(cx, (), |_| {
+        get_amino_acid_map(app_config.clone().read().get_macpepdb_base_url().to_owned())
+    });
 
     render! {
         div {
@@ -61,7 +84,7 @@ pub fn Peptide(cx: Scope<PeptideProps>) -> Element {
                             td { "{peptide.get_sequence().to_owned()}" }
                         }
                         tr {
-                            "dataPartition": "{peptide.get_partition()}",
+                            "data-partition": "{peptide.get_partition()}",
                             td { "Theoretical mass (Da)" }
                             td { "{peptide.get_mass()}" }
                         }
@@ -104,6 +127,32 @@ pub fn Peptide(cx: Scope<PeptideProps>) -> Element {
                         tr {
                             td { "SwissProt/TrEMBL " }
                             td { "{peptide.get_is_swiss_prot()} / {peptide.get_is_trembl()}" }
+                        }
+                    }
+                    h3 { "Amino acid composition" }
+                    match amino_acid_map.clone().value() {
+                        Some(Ok(amino_acid_map)) => render! {
+                            table {
+                                tr {
+                                    for (idx, _) in peptide.get_aa_counts().iter().enumerate() {
+                                        AminoAcidCompositionHeaderCell{
+                                            index: idx,
+                                            amino_acid_map: amino_acid_map.clone(),
+                                        }
+                                    }
+                                }
+                                tr {
+                                    for count in peptide.get_aa_counts() {
+                                        td { "{count}" }
+                                    }
+                                }
+                            }
+                        },
+                        Some(Err(e)) => render! {
+                            div { "Error loading the amino acid map {e}" }
+                        },
+                        None => render! {
+                            div { "Loading ..." }
                         }
                     }
                     h3 { "Reviewed proteins" }
