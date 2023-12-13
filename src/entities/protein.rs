@@ -1,13 +1,10 @@
 // 3rd party import
 use serde::Deserialize;
 
-// internal imports
-use crate::entities::peptide::Peptide;
-
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
 ///
-pub struct Protein {
+pub struct Protein<T> {
     accession: String,
     secondary_accessions: Vec<String>,
     entry_name: String,
@@ -18,10 +15,10 @@ pub struct Protein {
     is_reviewed: bool,
     sequence: String,
     updated_at: i64,
-    peptides: Vec<Peptide>,
+    peptides: Vec<T>,
 }
 
-impl Protein {
+impl<T> Protein<T> {
     /// Returns the primary accession
     ///
     pub fn get_accession(&self) -> &String {
@@ -84,7 +81,7 @@ impl Protein {
 
     /// Returns the peptides
     ///
-    pub fn get_peptides(&self) -> &Vec<Peptide> {
+    pub fn get_peptides(&self) -> &Vec<T> {
         &self.peptides
     }
 }

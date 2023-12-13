@@ -5,7 +5,13 @@ use reqwest;
 
 // internal imports
 use crate::configuration::Configuration as AppConfiguration;
+use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
+
+/// As peptides contain their protein of origin and proteins contain their peptides, MaCPepDB
+/// stops the recursion on third level by only adding the protein accession to the peptides
+/// instead of the whole protein.
+type PeptideEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 
 /// Fetch protein from MaCPepDB
 ///
@@ -13,7 +19,7 @@ use crate::entities::protein::Protein as MaCPepDBProtein;
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 /// * `protein_id` - Protein accession or gene name
 ///
-pub async fn get_protein(macpepdb_base_url: String, protein_id: String) -> Result<MaCPepDBProtein> {
+pub async fn get_protein(macpepdb_base_url: String, protein_id: String) -> Result<PeptideEntity> {
     let url = format!("{}/api/proteins/{}", macpepdb_base_url, protein_id);
     Ok(reqwest::get(&url).await?.json().await?)
 }

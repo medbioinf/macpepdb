@@ -2,13 +2,13 @@
 use serde::Deserialize;
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct Peptide {
+pub struct Peptide<T> {
     partition: i64,
     mass: f64,
     sequence: String,
     missed_cleavages: i16,
     aa_counts: Vec<i16>,
-    proteins: Vec<String>,
+    proteins: Vec<T>,
     is_swiss_prot: bool,
     is_trembl: bool,
     taxonomy_ids: Vec<i64>,
@@ -16,7 +16,7 @@ pub struct Peptide {
     proteome_ids: Vec<String>,
 }
 
-impl Peptide {
+impl<T> Peptide<T> {
     /// Returns the mass partition
     ///
     pub fn get_partition(&self) -> i64 {
@@ -50,7 +50,7 @@ impl Peptide {
     }
 
     /// Returns the containing proteins
-    pub fn get_proteins(&self) -> &Vec<String> {
+    pub fn get_proteins(&self) -> &Vec<T> {
         return &self.proteins;
     }
 
