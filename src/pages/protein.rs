@@ -5,6 +5,7 @@ use dioxus_router::components::Link;
 use reqwest;
 
 // internal imports
+use crate::components::rounded_mass::RoundedMass;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
@@ -102,10 +103,19 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                             td { "{protein.get_is_reviewed()}" }
                         }
                     }
+                    h3 { "Peptides" }
                     table {
+                        tr {
+                            th { "Mass (Da)" }
+                            th { "Sequence" }
+                        }
                         for peptide in protein.get_peptides() {
                             tr {
-                                td { "{peptide.get_mass()}" }
+                                td {
+                                    RoundedMass {
+                                        mass: peptide.get_mass(),
+                                    }
+                                }
                                 td {
                                     Link {
                                         to: Routes::Peptide{
