@@ -14,7 +14,7 @@ use crate::routes::Routes;
 
 /// Proteins downloaded via the proteins endpoint contains full peptide entries instead of sequences,
 /// but the peptide's proteins only contain protein accession.
-type PeptideEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
+type ProteinEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 
 /// Fetch MaCPepDB configuration from the servers
 ///
@@ -25,7 +25,7 @@ type PeptideEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 pub async fn get_proteins(
     macpepdb_base_url: String,
     protein_id: UseState<String>,
-    proteins: UseRef<Option<Vec<PeptideEntity>>>,
+    proteins: UseRef<Option<Vec<ProteinEntity>>>,
     is_searching_protein: UseState<bool>,
 ) -> Result<()> {
     if *is_searching_protein.get() {
@@ -48,7 +48,7 @@ pub fn ProteinSearch(cx: Scope) -> Element {
 
     let protein_id: &UseState<String> = use_state(cx, || "".to_string());
     let is_searching_protein = use_state(cx, || false);
-    let proteins: &UseRef<Option<Vec<PeptideEntity>>> = use_ref(cx, || None);
+    let proteins: &UseRef<Option<Vec<ProteinEntity>>> = use_ref(cx, || None);
 
     render! {
         input {
