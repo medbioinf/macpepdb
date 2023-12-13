@@ -1,6 +1,8 @@
 // Purpose: main entry point for the web app
 #![allow(non_snake_case)]
 
+/// Helpers for dealing with API access
+mod api_helpers;
 /// Main entry point for the web app
 mod app;
 /// Components used by the web app
