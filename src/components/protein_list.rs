@@ -27,25 +27,30 @@ pub fn ProteinList<'a>(cx: Scope<'a, ProteinListProps<'a>>) -> Element {
     }
     render! {
         table {
-            tr {
-                th { "Accession" }
-                th { "Entry name" }
-                th { "Name" }
-                th { "Genes" }
-                th { "Is reviewed" }
-            }
-            for protein in cx.props.proteins.iter() {
+            class: "table table-striped table-hover",
+            thead {
                 tr {
-                    td {
-                        Link {
-                            to: Routes::Protein{protein_id: protein.get_accession().to_owned()},
-                            "{protein.get_accession()}"
+                    th { "Accession" }
+                    th { "Entry name" }
+                    th { "Name" }
+                    th { "Genes" }
+                    th { "Is reviewed" }
+                }
+            }
+            tbody {
+                for protein in cx.props.proteins.iter() {
+                    tr {
+                        td {
+                            Link {
+                                to: Routes::Protein{protein_id: protein.get_accession().to_owned()},
+                                "{protein.get_accession()}"
+                            }
                         }
+                        td { "{protein.get_entry_name()}" }
+                        td { "{protein.get_name()}" }
+                        td { "{protein.get_genes().join(\", \")}" }
+                        td { "{protein.get_is_reviewed()}" }
                     }
-                    td { "{protein.get_entry_name()}" }
-                    td { "{protein.get_name()}" }
-                    td { "{protein.get_genes().join(\", \")}" }
-                    td { "{protein.get_is_reviewed()}" }
                 }
             }
         }

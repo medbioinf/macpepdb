@@ -76,79 +76,89 @@ pub fn Peptide(cx: Scope<PeptideProps>) -> Element {
             match peptide.value() {
                 Some(Ok(peptide)) => render! {
                     table {
-                        tr {
-                            th { "Attributes" }
-                            th { "Value" }
-                        }
-                        tr {
-                            td { "Sequence" }
-                            td { "{peptide.get_sequence().to_owned()}" }
-                        }
-                        tr {
-                            "data-partition": "{peptide.get_partition()}",
-                            td { "Theoretical mass (Da)" }
-                            td {
-                                RoundedMass {
-                                    mass: peptide.get_mass(),
-                                }
+                        class: "table table-striped",
+                        thead{
+                            tr {
+                                th { "Attributes" }
+                                th { "Value" }
                             }
                         }
-                        tr {
-                            td { "length" }
-                            td { "{peptide.get_sequence().len()}" }
-                        }
-                        tr {
-                            td { "# missed cleavages" }
-                            td { "{peptide.get_missed_cleavages()}" }
-                        }
-                        tr {
-                            td { "Proteome IDs" }
+                        tbody{
+                            tr {
+                                td { "Sequence" }
+                                td { "{peptide.get_sequence().to_owned()}" }
+                            }
+                            tr {
+                                "data-partition": "{peptide.get_partition()}",
+                                td { "Theoretical mass (Da)" }
+                                td {
+                                    RoundedMass {
+                                        mass: peptide.get_mass(),
+                                    }
+                                }
+                            }
+                            tr {
+                                td { "length" }
+                                td { "{peptide.get_sequence().len()}" }
+                            }
+                            tr {
+                                td { "# missed cleavages" }
+                                td { "{peptide.get_missed_cleavages()}" }
+                            }
+                            tr {
+                                td { "Proteome IDs" }
+                                td {
+                                    ul {
+                                        for id in peptide.get_proteome_ids().iter() {
+                                            li { "{id}" }
+                                        }
+                                    }
+                                }
+                            }
+                            tr {
+                                td { "Taxonomy IDs" }
+                                td {
+                                    ul {
+                                        for id in peptide.get_taxonomy_ids().iter() {
+                                            li { "{id}" }
+                                        }
+                                    }
+                                }
+                            }
+                            td { "Unique taxonomy IDs (Taxonomies where this peptide is only present in one protein)" }
                             td {
                                 ul {
-                                    for id in peptide.get_proteome_ids().iter() {
+                                    for id in peptide.get_unique_taxonomy_ids().iter() {
                                         li { "{id}" }
                                     }
                                 }
                             }
-                        }
-                        tr {
-                            td { "Taxonomy IDs" }
-                            td {
-                                ul {
-                                    for id in peptide.get_taxonomy_ids().iter() {
-                                        li { "{id}" }
-                                    }
-                                }
+                            tr {
+                                td { "SwissProt/TrEMBL " }
+                                td { "{peptide.get_is_swiss_prot()} / {peptide.get_is_trembl()}" }
                             }
-                        }
-                        td { "Unique taxonomy IDs (Taxonomies where this peptide is only present in one protein)" }
-                        td {
-                            ul {
-                                for id in peptide.get_unique_taxonomy_ids().iter() {
-                                    li { "{id}" }
-                                }
-                            }
-                        }
-                        tr {
-                            td { "SwissProt/TrEMBL " }
-                            td { "{peptide.get_is_swiss_prot()} / {peptide.get_is_trembl()}" }
                         }
                     }
                     h3 { "Amino acid composition" }
                     match amino_acid_map.clone().value() {
                         Some(Ok(amino_acid_map)) => render! {
                             table {
-                                tr {
-                                    for (idx, _) in peptide.get_aa_counts().iter().enumerate() {
-                                        AminoAcidCompositionHeaderCell{
-                                            index: idx,
-                                            amino_acid_map: amino_acid_map.clone(),
+                                class: "table table-sm",
+                                thead {
+                                    tr {
+                                        for (idx, _) in peptide.get_aa_counts().iter().enumerate() {
+                                            AminoAcidCompositionHeaderCell{
+                                                index: idx,
+                                                amino_acid_map: amino_acid_map.clone(),
+                                            }
                                         }
                                     }
                                 }
-                                tr {
-                                    for count in peptide.get_aa_counts() {
-                                        td { "{count}" }
+                                tbody {
+                                    tr {
+                                        for count in peptide.get_aa_counts() {
+                                            td { "{count}" }
+                                        }
                                     }
                                 }
                             }

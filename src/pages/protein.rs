@@ -1,5 +1,6 @@
 // 3rd party imports
 use anyhow::Result;
+use dioxus::html::{tbody, thead};
 use dioxus::prelude::*;
 use dioxus_router::components::Link;
 use reqwest;
@@ -50,78 +51,92 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
             match protein.value() {
                 Some(Ok(protein)) => render! {
                     table {
-                        tr {
-                            td { "Accession" }
-                            td { "{protein.get_accession()}" }
+                        class: "table table-striped",
+                        thead {
+                            tr {
+                                th { "Attribute" }
+                                th { "Value" }
+                            }
                         }
-                        tr {
-                            td { "Secondary accession" }
-                            td {
-                                if !protein.get_secondary_accessions().is_empty() {
-                                    render! {
-                                        ul {
-                                            for sec_accession in protein.get_secondary_accessions() {
-                                                li { "{sec_accession}" }
+                        tbody {
+                            tr {
+                                td { "Accession" }
+                                td { "{protein.get_accession()}" }
+                            }
+                            tr {
+                                td { "Secondary accession" }
+                                td {
+                                    if !protein.get_secondary_accessions().is_empty() {
+                                        render! {
+                                            ul {
+                                                for sec_accession in protein.get_secondary_accessions() {
+                                                    li { "{sec_accession}" }
+                                                }
                                             }
                                         }
-                                    }
-                                } else {
-                                    render! {
-                                        "None"
-                                    }
-                                }
-                            }
-                        }
-                        tr {
-                            td { "Entry name" }
-                            td { "{protein.get_entry_name()}" }
-                        }
-                        tr {
-                            td { "Name" }
-                            td { "{protein.get_name()}" }
-                        }
-                        tr {
-                            td { "Genes" }
-                            td {
-                                ul {
-                                    for gene in protein.get_genes() {
-                                        li { "{gene}" }
+                                    } else {
+                                        render! {
+                                            "None"
+                                        }
                                     }
                                 }
                             }
-                        }
-                        tr {
-                            td { "Taxonomy ID" }
-                            td { "{protein.get_taxonomy_id()}" }
-                        }
-                        tr {
-                            td { "Proteome ID" }
-                            td { "{protein.get_proteome_id()}" }
-                        }
-                        tr {
-                            td { "Is reviewed" }
-                            td { "{protein.get_is_reviewed()}" }
+                            tr {
+                                td { "Entry name" }
+                                td { "{protein.get_entry_name()}" }
+                            }
+                            tr {
+                                td { "Name" }
+                                td { "{protein.get_name()}" }
+                            }
+                            tr {
+                                td { "Genes" }
+                                td {
+                                    ul {
+                                        for gene in protein.get_genes() {
+                                            li { "{gene}" }
+                                        }
+                                    }
+                                }
+                            }
+                            tr {
+                                td { "Taxonomy ID" }
+                                td { "{protein.get_taxonomy_id()}" }
+                            }
+                            tr {
+                                td { "Proteome ID" }
+                                td { "{protein.get_proteome_id()}" }
+                            }
+                            tr {
+                                td { "Is reviewed" }
+                                td { "{protein.get_is_reviewed()}" }
+                            }
                         }
                     }
                     h3 { "Peptides" }
                     table {
-                        tr {
-                            th { "Mass (Da)" }
-                            th { "Sequence" }
-                        }
-                        for peptide in protein.get_peptides() {
+                        class: "table table-striped table-hover",
+                        thead {
                             tr {
-                                td {
-                                    RoundedMass {
-                                        mass: peptide.get_mass(),
+                                th { "Mass (Da)" }
+                                th { "Sequence" }
+                            }
+                        }
+                        tbody {
+                            for peptide in protein.get_peptides() {
+                                tr {
+                                    td {
+                                        RoundedMass {
+                                            mass: peptide.get_mass(),
+                                        }
                                     }
-                                }
-                                td {
-                                    Link {
-                                        to: Routes::Peptide{
-                                            peptide_sequence: peptide.get_sequence().to_owned()
-                                        },
-                                        "{peptide.get_sequence()}"
+                                    td {
+                                        Link {
+                                            to: Routes::Peptide{
+                                                peptide_sequence: peptide.get_sequence().to_owned()
+                                            },
+                                            "{peptide.get_sequence()}"
+                                        }
                                     }
                                 }
                             }
