@@ -9,7 +9,7 @@ use crate::routes::Routes;
 pub fn TwoPanes(cx: Scope) -> Element {
     render! {
         div {
-            class: "layout-two-panes",
+            class: "layout-two-panes container-fluid",
             nav {
                 class: "pane-menu",
                 ul {
@@ -28,7 +28,7 @@ pub fn TwoPanes(cx: Scope) -> Element {
                 }
             }
             div {
-                class: "pane-content",
+                class: "pane-content container-fluid",
                 Outlet::<Routes> {}
             }
         }
