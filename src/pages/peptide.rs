@@ -72,7 +72,7 @@ pub fn Peptide(cx: Scope<PeptideProps>) -> Element {
 
     render! {
         div {
-            h2 { "peptide: {cx.props.peptide_sequence}" }
+            h2 { "Peptide: {cx.props.peptide_sequence}" }
             match peptide.value() {
                 Some(Ok(peptide)) => render! {
                     table {
