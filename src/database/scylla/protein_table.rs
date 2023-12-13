@@ -14,6 +14,7 @@ use scylla::transport::query_result::FirstRowError;
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
+use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
 
 use super::client::GenericClient;
@@ -185,6 +186,42 @@ impl ProteinTable {
                 10000,
             )
             .await? {
+                yield protein?;
+            }
+        })
+    }
+
+    /// get proteins of peptide
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `peptide` - The peptide
+    pub async fn get_proteins_of_peptide<'a, C>(
+        client: &'a C,
+        peptide: &'a Peptide,
+    ) -> Result<impl Stream<Item = Result<Protein>> + 'a>
+    where
+        C: GenericClient + Unpin + 'a,
+    {
+        Ok(try_stream! {
+            let accession_placeholder = peptide
+                .get_proteins()
+                .iter()
+                .map(|_| "?")
+                .collect::<Vec<&str>>()
+                .join(",");
+
+            let statement_addition = format!("WHERE accession IN ({})", accession_placeholder.as_str());
+
+            let params: Vec<CqlValue> = peptide.get_proteins().iter().map(|accession| CqlValue::Text(accession.to_owned())).collect();
+            let param_refs: Vec<&CqlValue> = params.iter().collect();
+
+            for await protein in Self::stream(
+                client,
+                &statement_addition,
+                param_refs.as_slice(),
+                10000
+            ).await? {
                 yield protein?;
             }
         })

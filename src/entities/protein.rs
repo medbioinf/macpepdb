@@ -1,5 +1,5 @@
 // std imports
-use std::{cmp::min, collections::HashSet};
+use std::cmp::min;
 
 // 3rd party imports
 use anyhow::{anyhow, Result};
@@ -7,16 +7,13 @@ use chrono::NaiveDateTime;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
-use scylla::frame::response::result::{CqlValue, Row as ScyllaRow};
+use scylla::frame::response::result::Row as ScyllaRow;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
 // internal imports
 use crate::database::scylla::client::Client;
-use crate::{
-    database::{scylla::peptide_table::PeptideTable, selectable_table::SelectableTable},
-    entities::domain::Domain,
-};
+use crate::{database::scylla::peptide_table::PeptideTable, entities::domain::Domain};
 
 use super::peptide::Peptide;
 
@@ -268,6 +265,24 @@ impl Protein {
                 .await?
                 .try_collect()
                 .await?;
+
+        let mut protein_json: JsonValue = serde_json::to_value(self)?;
+        protein_json["peptides"] = serde_json::to_value(peptides)?;
+        Ok(protein_json)
+    }
+
+    /// Creates a JSON value of this protein including it's peptides sequences
+    /// As the peptides are not stored in the database, the protein sequence needs to be digested
+    /// using the given protease.
+    ///
+    /// # Arguments
+    /// * `protease` - The protease used to generate the peptides
+    ///
+    pub fn to_json_with_peptide_sequences(&self, protease: &dyn Protease) -> Result<JsonValue> {
+        let peptides: Vec<String> = protease
+            .cleave(&self.get_sequence())?
+            .map(|pep| Ok(pep.get_sequence().to_owned()))
+            .collect()?;
 
         let mut protein_json: JsonValue = serde_json::to_value(self)?;
         protein_json["peptides"] = serde_json::to_value(peptides)?;

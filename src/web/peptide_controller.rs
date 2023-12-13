@@ -14,6 +14,8 @@ use dihardts_omicstools::chemistry::amino_acid::get_amino_acid_by_one_letter_cod
 use dihardts_omicstools::proteomics::post_translational_modifications::{
     ModificationType as PtmType, Position as PtmPosition, PostTranslationalModification as PTM,
 };
+use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
+use futures::TryStreamExt;
 use scylla::frame::response::result::CqlValue;
 use serde::Deserialize;
 use tracing::error;
@@ -21,8 +23,9 @@ use tracing::error;
 // internal imports
 use crate::chemistry::amino_acid::calc_sequence_mass;
 use crate::database::scylla::peptide_table::PeptideTable;
+use crate::database::scylla::protein_table::ProteinTable;
 use crate::database::selectable_table::SelectableTable;
-use crate::entities::peptide::Peptide;
+use crate::entities::protein::Protein;
 use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::web::app_state::AppState;
@@ -71,7 +74,7 @@ use crate::web::web_error::WebError;
 pub async fn get_peptide(
     State(app_state): State<Arc<AppState>>,
     Path(sequence): Path<String>,
-) -> Result<Json<Peptide>, WebError> {
+) -> Result<Json<serde_json::Value>, WebError> {
     let sequence = sequence.to_uppercase();
     let mass = calc_sequence_mass(sequence.as_str())?;
     let partition = get_mass_partition(
@@ -90,14 +93,58 @@ pub async fn get_peptide(
     )
     .await?;
 
-    if let Some(peptide) = peptide_opt {
-        return Ok(Json(peptide));
-    } else {
+    if peptide_opt.is_none() {
         return Err(WebError::new(
             StatusCode::NOT_FOUND,
             "Peptide not found".to_string(),
         ));
     }
+
+    let protease = get_protease_by_name(
+        app_state.get_configuration_as_ref().get_protease_name(),
+        app_state
+            .get_configuration_as_ref()
+            .get_min_peptide_length(),
+        app_state
+            .get_configuration_as_ref()
+            .get_max_peptide_length(),
+        app_state
+            .get_configuration_as_ref()
+            .get_max_number_of_missed_cleavages(),
+    )?;
+
+    let peptide = peptide_opt.unwrap();
+
+    let proteins: Vec<Protein> =
+        ProteinTable::get_proteins_of_peptide(app_state.get_db_client_as_ref(), &peptide)
+            .await?
+            .try_collect()
+            .await?;
+
+    let protein_jsons = proteins
+        .into_iter()
+        .map(|protein| protein.to_json_with_peptide_sequences(protease.as_ref()))
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut peptide_json = match serde_json::to_value(peptide) {
+        Ok(json) => json,
+        Err(err) => {
+            return Err(WebError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error while serializing peptide: {:?}", err),
+            ))
+        }
+    };
+    peptide_json["proteins"] = match serde_json::to_value(protein_jsons) {
+        Ok(json) => json,
+        Err(err) => {
+            return Err(WebError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Error while serializing proteins: {:?}", err),
+            ))
+        }
+    };
+    return Ok(Json(peptide_json));
 }
 
 /// Returns if a peptide exists.
