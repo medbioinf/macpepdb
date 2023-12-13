@@ -32,6 +32,7 @@ use crate::web::app_state::AppState;
 use crate::web::web_error::WebError;
 
 /// Returns the peptide for given sequence.
+/// Important: This endpoint will return the the peptide inclduing a list of full records of the proteins of origin. The proteins will include only the contained peptide sequences. Not the entire peptide records.
 ///
 /// # Arguments
 /// * `db_client` - The database client
@@ -55,7 +56,28 @@ use crate::web::web_error::WebError;
 ///         0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 2, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
 ///     ],
 ///     "proteins": [
-///         "Q924W6"
+///          {
+///             "accession": "Q924W6",
+///             "domains": [],
+///             "entry_name": "TRI66_MOUSE",
+///             "genes": [
+///                 ...
+///             ],
+///             "is_reviewed": true,
+///             "name": "Tripartite motif-containing protein 66",
+///             "peptides": [
+///                 "MSPGLPVSIPSQPHCSTDERVEALAPTCSMCGRDLQAEGSR",
+///                 ...
+///             ],
+///             "proteome_id": "UP000000589",
+///             "secondary_accessions": [
+///                 ...
+///             ],
+///             "sequence": "...",
+///             "taxonomy_id": 10090,
+///             "updated_at": 1687910400
+///         },
+///         ...
 ///     ],
 ///     "is_swiss_prot": true,
 ///     "is_trembl": false,
@@ -215,6 +237,7 @@ impl SearchRequestBody {
 
 /// Returns a stream of peptides matching the given parameters.
 /// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
+/// Importnant: Peptides only contain the accession of the proteins of origin.
 ///
 /// # Arguments
 /// * `db_client` - The database client

@@ -21,6 +21,7 @@ use crate::web::web_error::WebError;
 use super::app_state::AppState;
 
 /// Returns the protein for given accession.
+/// Important: This endpoint will return the the protein including a list of full records of the contained peptides. The peptides will contain just the protein accession. Not the entire protein record.
 ///
 /// # Arguments
 /// * `db_client` - The database client
@@ -45,18 +46,36 @@ use super::app_state::AppState;
 ///     "name": "Adenylate kinase 2, mitochondrial {ECO:0000255|HAMAP-Rule:MF_03168}",
 ///     # List of peptide sequences as stored in the database
 ///     "peptides": [
-///         "SYHEEFNPPK",
-///         ...,
-///         "KLKATMDAGK"
+///         {
+///             "aa_counts": [
+///                 ...
+///             ],
+///             "domains": [],
+///             "is_swiss_prot": true,
+///             "is_trembl": false,
+///             "mass": 587.375495125,
+///             "missed_cleavages": 1,
+///             "partition": 1,
+///             "proteins": [
+///             	"Q9WTP6"
+///             ],
+///             "proteome_ids": [
+///             	"UP000000589"
+///             ],
+///             "sequence": "ALKTR",
+///             "taxonomy_ids": [
+///             	10090
+///             ],
+///             "unique_taxonomy_ids": [
+///             	10090
+///             ]
+///         },
+///         ...
 ///     ],
 ///     "proteome_id": "UP000000589",
 ///     "secondary_accessions": [
 ///         "A2A820",
-///         "Q3THT3",
-///         "Q3TI11",
-///         "Q3TKI6",
-///         "Q8C7I9",
-///         "Q9CY37"
+///         ...
 ///     ],
 ///     "sequence": "MAPNVLASEPEIPKGIRAVLLGPPG...DLVMFI",
 ///     "taxonomy_id": 10090,
