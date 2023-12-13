@@ -54,6 +54,24 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                             td { "{protein.get_accession()}" }
                         }
                         tr {
+                            td { "Secondary accession" }
+                            td {
+                                if !protein.get_secondary_accessions().is_empty() {
+                                    render! {
+                                        ul {
+                                            for sec_accession in protein.get_secondary_accessions() {
+                                                li { "{sec_accession}" }
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    render! {
+                                        "None"
+                                    }
+                                }
+                            }
+                        }
+                        tr {
                             td { "Entry name" }
                             td { "{protein.get_entry_name()}" }
                         }
