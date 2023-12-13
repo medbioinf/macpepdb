@@ -38,11 +38,6 @@ impl<T> Peptide<T> {
         return self.missed_cleavages;
     }
 
-    /// Returns the number of missed cleavages as ref
-    pub fn get_missed_cleavages_as_ref(&self) -> &i16 {
-        return &self.missed_cleavages;
-    }
-
     /// Returns the amino acid counts
     ///
     pub fn get_aa_counts(&self) -> &Vec<i16> {
