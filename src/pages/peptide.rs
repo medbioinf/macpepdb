@@ -11,7 +11,7 @@ use crate::components::peptide::amino_acid_composition_header_cell::AminoAcidCom
 use crate::components::protein_list::ProteinList;
 use crate::components::rounded_mass::RoundedMass;
 use crate::configuration::Configuration as AppConfiguration;
-use crate::entities::amino_acid::{self, AminoAcid};
+use crate::entities::amino_acid::AminoAcid;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProteins;
 
