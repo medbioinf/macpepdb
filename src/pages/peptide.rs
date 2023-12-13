@@ -9,6 +9,7 @@ use reqwest;
 use crate::components::peptide::amino_acid_composition_header_cell::AminoAcidCompositionHeaderCell;
 // internal imports
 use crate::components::protein_list::ProteinList;
+use crate::components::rounded_mass::RoundedMass;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::amino_acid::{self, AminoAcid};
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
@@ -86,7 +87,11 @@ pub fn Peptide(cx: Scope<PeptideProps>) -> Element {
                         tr {
                             "data-partition": "{peptide.get_partition()}",
                             td { "Theoretical mass (Da)" }
-                            td { "{peptide.get_mass()}" }
+                            td {
+                                RoundedMass {
+                                    mass: peptide.get_mass(),
+                                }
+                            }
                         }
                         tr {
                             td { "length" }

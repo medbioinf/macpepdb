@@ -4,3 +4,5 @@ pub mod configuration;
 pub mod peptide;
 /// List of proteins
 pub mod protein_list;
+/// Component for rendering rounded mass
+pub mod rounded_mass;
