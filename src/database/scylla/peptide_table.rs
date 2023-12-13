@@ -1,3 +1,5 @@
+// std imports
+use std::collections::HashSet;
 use std::sync::Arc;
 
 // 3rd party imports
@@ -5,6 +7,8 @@ use anyhow::Result;
 use async_stream::try_stream;
 use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
+use dihardts_omicstools::proteomics::proteases::protease::Protease;
+use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{pin_mut, Stream, StreamExt};
 use scylla::frame::response::result::{CqlValue, Row};
@@ -21,7 +25,9 @@ use crate::entities::configuration::Configuration;
 use crate::entities::peptide::Peptide;
 
 use crate::database::scylla::client::GenericClient;
+use crate::entities::protein::Protein;
 use crate::functions::post_translational_modification::{get_ptm_conditions, PTMCondition};
+use crate::tools::omicstools::convert_to_internal_dummy_peptide;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
 pub const TABLE_NAME: &'static str = "peptides";
@@ -477,6 +483,73 @@ impl PeptideTable {
         .await?;
 
         Ok(peptide_opt.is_some())
+    }
+
+    /// Returns peptides of protein
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `protein` - The protein
+    ///
+    pub async fn get_peptides_of_proteins<'a, C>(
+        client: &'a C,
+        protein: &'a Protein,
+        protease: &'a dyn Protease,
+        partition_limits: &'a Vec<i64>,
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a>
+    where
+        C: GenericClient + Unpin,
+    {
+        Ok(try_stream! {
+            // First digest the protein
+            let dummy_peptides: HashSet<Peptide> = convert_to_internal_dummy_peptide(
+                Box::new(protease.cleave(protein.get_sequence())?),
+                &partition_limits,
+            )
+            .collect()?;
+
+            // Sort the peptides by partition as Scylla do not allow a IN statement with multiple columns on the
+            // partition key
+            let mut peptides_by_partition: Vec<Vec<&Peptide>> = vec![vec![]; partition_limits.len()];
+
+            for dummy_pep in dummy_peptides.iter() {
+                let partition = get_mass_partition(&partition_limits, dummy_pep.get_mass())?;
+                peptides_by_partition[partition].push(dummy_pep);
+            }
+
+            // Query each partition separately
+            for (partition, dummy_peptides) in peptides_by_partition.iter().enumerate() {
+                if dummy_peptides.is_empty() {
+                    continue;
+                }
+
+                // Create a flat array with all the partition key and pairs of mass and sequence
+                let mut params: Vec<CqlValue> = Vec::with_capacity(dummy_peptides.len() * 2 + 1);
+                params.push(CqlValue::BigInt(partition as i64));
+                for dummy_pep in dummy_peptides.iter() {
+                    params.push(CqlValue::BigInt(dummy_pep.get_mass()));
+                    params.push(CqlValue::Text(dummy_pep.get_sequence().to_owned()));
+                }
+                // Make it an array of references
+                let params_refs: Vec<&CqlValue> = params.iter().collect();
+
+                // Create placeholder for mass and sequence pairs
+                let mass_seq_placeholders = (0..dummy_peptides.len())
+                    .map(|_| "(?, ?)".to_owned())
+                    .collect::<Vec<String>>()
+                    .join(", ");
+
+                // Create statement addition
+                let statement_addition = &format!(
+                    "WHERE partition = ? AND (mass, sequence) IN ({})",
+                    mass_seq_placeholders
+                );
+
+                for await peptide in PeptideTable::stream(client, &statement_addition, params_refs.as_slice(), 10000).await? {
+                    yield peptide?
+                }
+            }
+        })
     }
 }
 

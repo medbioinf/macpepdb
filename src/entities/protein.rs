@@ -13,8 +13,6 @@ use serde_json::Value as JsonValue;
 
 // internal imports
 use crate::database::scylla::client::Client;
-use crate::tools::omicstools::convert_to_internal_dummy_peptide;
-use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::{
     database::{scylla::peptide_table::PeptideTable, selectable_table::SelectableTable},
     entities::domain::Domain,
@@ -255,6 +253,8 @@ impl Protein {
     /// using the given protease.
     ///
     /// # Arguments
+    /// * `client` - The database client
+    /// * `partition_limits` - The mass partition limits
     /// * `protease` - The protease used to generate the peptides
     ///
     pub async fn to_json_with_peptides(
@@ -263,53 +263,12 @@ impl Protein {
         partition_limits: &Vec<i64>,
         protease: &dyn Protease,
     ) -> Result<JsonValue> {
-        let dummy_peptides: HashSet<Peptide> = convert_to_internal_dummy_peptide(
-            Box::new(protease.cleave(&self.sequence)?),
-            &partition_limits,
-        )
-        .collect()?;
+        let peptides: Vec<Peptide> =
+            PeptideTable::get_peptides_of_proteins(client, &self, protease, partition_limits)
+                .await?
+                .try_collect()
+                .await?;
 
-        let mut peptides_by_partition: Vec<Vec<&Peptide>> = vec![vec![]; partition_limits.len()];
-
-        for dummy_pep in dummy_peptides.iter() {
-            let partition = get_mass_partition(&partition_limits, dummy_pep.get_mass())?;
-            peptides_by_partition[partition].push(dummy_pep);
-        }
-
-        let mut peptides: Vec<Peptide> = Vec::with_capacity(dummy_peptides.len());
-
-        for (partition, dummy_peptides) in peptides_by_partition.iter().enumerate() {
-            if dummy_peptides.is_empty() {
-                continue;
-            }
-
-            let mut params: Vec<CqlValue> = Vec::with_capacity(dummy_peptides.len() * 2 + 1);
-            params.push(CqlValue::BigInt(partition as i64));
-            for dummy_pep in dummy_peptides.iter() {
-                params.push(CqlValue::BigInt(dummy_pep.get_mass()));
-                params.push(CqlValue::Text(dummy_pep.get_sequence().to_owned()));
-            }
-            let params_refs: Vec<&CqlValue> = params.iter().collect();
-
-            let mass_seq_placeholders = (0..dummy_peptides.len())
-                .map(|_| "(?, ?)".to_owned())
-                .collect::<Vec<String>>()
-                .join(", ");
-
-            let statement = &format!(
-                "WHERE partition = ? AND (mass, sequence) IN ({})",
-                mass_seq_placeholders
-            );
-
-            let peptide_stream =
-                PeptideTable::stream(client, &statement, params_refs.as_slice(), 10000).await?;
-            peptides.extend(
-                peptide_stream
-                    .try_collect::<Vec<Peptide>>()
-                    .await?
-                    .into_iter(),
-            );
-        }
         let mut protein_json: JsonValue = serde_json::to_value(self)?;
         protein_json["peptides"] = serde_json::to_value(peptides)?;
         Ok(protein_json)
