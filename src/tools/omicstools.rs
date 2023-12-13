@@ -4,6 +4,7 @@ use dihardts_omicstools::{
     proteomics::peptide::Peptide as CleavedPeptide,
 };
 use fallible_iterator::FallibleIterator;
+use serde_json::{json, Value};
 
 // internal imports
 use crate::tools::peptide_partitioner::get_mass_partition;
@@ -83,5 +84,20 @@ pub fn convert_to_internal_dummy_peptide<'a>(
             Vec::new(),
             Vec::new(),
         )
+    })
+}
+
+/// Returns something which implements amino acid from `omicstools` crate to json
+///
+/// # Arguments
+/// * `amino_acid` - Amino acid
+///
+pub fn amino_acid_to_json(amino_acid: &dyn AminoAcid) -> Value {
+    json!({
+        "name": amino_acid.get_name(),
+        "code": amino_acid.get_code(),
+        "abbreviation": amino_acid.get_abbreviation(),
+        "mono_mass": amino_acid.get_mono_mass(),
+        "average_mass": amino_acid.get_average_mass(),
     })
 }

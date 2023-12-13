@@ -1,5 +1,7 @@
 /// Module for handling the web application state
 pub mod app_state;
+/// Controller for serving chemistry related information, e.g. amino acids
+pub mod chemistry_controller;
 /// Endpoints for getting information about the database, digestion enzymes, max missed cleavages, etc.
 pub mod configuration_controller;
 /// Controller for error handling

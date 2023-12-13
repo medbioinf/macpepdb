@@ -17,6 +17,7 @@ use crate::database::scylla::configuration_table::ConfigurationTable;
 use crate::database::scylla::taxonomy_tree_table::TaxonomyTreeTable;
 use crate::entities::configuration::Configuration;
 use crate::web::app_state::AppState;
+use crate::web::chemistry_controller::{get_all_amino_acids, get_amino_acid};
 use crate::web::configuration_controller::get_configuration;
 use crate::web::error_controller::page_not_found;
 use crate::web::peptide_controller::{
@@ -95,6 +96,9 @@ pub async fn start(
         .route("/api/taxonomies/search", post(search_taxonomies))
         .route("/api/taxonomies/:id/sub", get(get_sub_taxonomies))
         .route("/api/taxonomies/:id", get(get_taxonomy))
+        // chemistry
+        .route("/api/chemistry/amino_acids", get(get_all_amino_acids))
+        .route("/api/chemistry/amino_acids/:code", get(get_amino_acid))
         .with_state(app_state.clone())
         .fallback(page_not_found)
         .layer(cors);
