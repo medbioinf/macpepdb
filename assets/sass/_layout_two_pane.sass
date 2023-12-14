@@ -1,0 +1,78 @@
+.layout-two-panes
+    display: flex
+    padding: 0
+    display: flex
+    flex-direction: column
+
+
+    &.menu-open
+        overflow: hidden
+        .pane-menu
+            position: fixed !important
+            top: 0
+            left: 0
+            z-index: 1000
+
+    &.menu-close
+        overflow: hidden
+
+        .pane-menu
+            height: 95px !important
+
+            .application-menu
+                display: none !important
+
+    .pane-menu
+        background-color: $rub-gray
+
+        .navbar-brand
+            display: flex
+            align-items: center
+
+            img
+                height: auto
+                width: 20%
+                margin-right: .5rem
+
+                @media (min-width: 992px)
+                    width: 50%
+
+            span
+                display: inline
+                font-size: 1.7rem
+
+        .separator
+            width: 100%
+            margin-top: 1rem
+            border-top: 3px solid $rub-green
+
+        .external-pages
+            background-color: $rub-dark-gray
+
+    .pane-content
+        height: calc(100vh - 95px)
+        overflow-y: scroll
+
+// lg or larger
+@media (min-width: 992px)
+    .layout-two-panes
+        flex-direction: row
+
+        &.menu-open, &.menu-close
+            .pane-menu
+                height: 100vh !important
+
+                .application-menu
+                    display: flex !important
+
+        .pane-menu
+            .navbar-brand
+                img
+                    width: 35%
+                    margin-right: .5rem
+                span
+                    writing-mode: vertical-lr
+
+        .pane-content
+            height: 100vh
+            overflow-y: scroll

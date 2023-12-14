@@ -58,19 +58,27 @@ pub fn ProteinSearch(cx: Scope) -> Element {
     };
 
     render! {
-        input {
-            value: "{protein_id}",
-            oninput: move |evt| protein_id.set(evt.value.clone()),
-            onkeyup: move |evt| {
-                if evt.code() == Code::Enter || evt.code() == Code::NumpadEnter {
-                    fetch_proteins()
+        h3 { "Search for proteins" }
+        div {
+            class: "input-group mb-3",
+            input {
+                class: "form-control",
+                r#type: "text",
+                placeholder: "Partial protein accession or full gene name",
+                value: "{protein_id}",
+                oninput: move |evt| protein_id.set(evt.value.clone()),
+                onkeyup: move |evt| {
+                    if evt.code() == Code::Enter || evt.code() == Code::NumpadEnter {
+                        fetch_proteins()
+                    }
                 }
             }
-        }
-        button {
-            r#type: "button",
-            onclick: move |_| fetch_proteins(),
-            "Search"
+            button {
+                class: "btn btn-primary",
+                r#type: "button",
+                onclick: move |_| fetch_proteins(),
+                "Search"
+            }
         }
 
         match proteins.get() {
