@@ -1,6 +1,5 @@
 // 3rd party imports
 use anyhow::Result;
-use dioxus::html::{tbody, thead};
 use dioxus::prelude::*;
 use dioxus_router::components::Link;
 use reqwest;
