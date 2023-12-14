@@ -206,7 +206,13 @@ impl FallibleIterator for Reader {
                                     .ok_or(anyhow::anyhow!("no name"))?
                                     .trim()
                                     .to_string();
-                                name.pop();
+                                if let Some(pos) = name.find('{') {
+                                    // remove evidence
+                                    name = name[..pos].trim().to_string();
+                                } else {
+                                    // remove trailing semicolon
+                                    name.pop();
+                                }
                             }
                         }
                     }
@@ -227,10 +233,15 @@ impl FallibleIterator for Reader {
                          */
                         if let Some(mut name_start) = line.find(GN_NAME_ATTRIBUTE) {
                             name_start += GN_NAME_ATTRIBUTE.len();
-                            let name_end = match line[name_start..].find(';') {
+                            let name_end_semicolon = match line[name_start..].find(';') {
                                 Some(match_idx) => match_idx + name_start,
                                 None => line.len() - 1,
                             };
+                            let name_end_bracket = match line[name_start..].find('{') {
+                                Some(match_idx) => match_idx + name_start,
+                                None => line.len() - 1,
+                            };
+                            let name_end = std::cmp::min(name_end_semicolon, name_end_bracket);
                             genes.push(line[name_start..name_end].trim().to_string());
                         }
                         if let Some(mut synonyms_start) = line.find(GN_SYNONYMS_ATTRIBUTE) {
@@ -239,12 +250,16 @@ impl FallibleIterator for Reader {
                                 Some(match_idx) => match_idx + synonyms_start,
                                 None => line.len() - 1,
                             };
-                            genes.extend(
-                                line[synonyms_start..synonyms_end]
-                                    .trim()
-                                    .split(",")
-                                    .map(|s| s.trim().to_string()),
-                            );
+                            let synonyms = line[synonyms_start..synonyms_end]
+                                .trim()
+                                .split(",")
+                                // filter evidence from name
+                                .map(|s| match s.find('{') {
+                                    Some(match_idx) => s[..match_idx].trim().to_string(),
+                                    None => s.trim().to_string(),
+                                });
+
+                            genes.extend(synonyms);
                         }
                     }
                     "FT" => {
@@ -354,7 +369,7 @@ mod tests {
     const EXPECTED_ACCESSION: [&str; 3] = ["P07477", "P41160", "P78562"];
 
     const EXPECTED_NAMES: [&str; 3] = [
-        "Serine protease 1 {ECO:0000312|HGNC:HGNC:9475}",
+        "Serine protease 1",
         "Leptin",
         "Phosphate-regulating neutral endopeptidase PHEX",
     ];
@@ -389,12 +404,7 @@ mod tests {
             vec!["O00678", "Q13646", "Q2M325", "Q93032", "Q99827"],
         ];
         static ref EXPECTED_GENES: Vec<Vec<&'static str>> = vec![
-            vec![
-                "PRSS1 {ECO:0000312|HGNC:HGNC:9475}",
-                "TRP1",
-                "TRY1 {ECO:0000312|HGNC:HGNC:9475}",
-                "TRYP1"
-            ],
+            vec!["PRSS1", "TRP1", "TRY1", "TRYP1"],
             vec!["Lep", "Ob"],
             vec!["PHEX", "PEX"],
         ];
