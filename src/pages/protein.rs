@@ -115,7 +115,7 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                     }
                     h3 { "Peptides" }
                     table {
-                        class: "table table-striped table-hover",
+                        class: "table table-striped table-hover table-sm table-responsive",
                         thead {
                             tr {
                                 th { "Mass (Da)" }
@@ -131,6 +131,7 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                                         }
                                     }
                                     td {
+                                        class: "text-break",
                                         Link {
                                             to: Routes::Peptide{
                                                 peptide_sequence: peptide.get_sequence().to_owned()
