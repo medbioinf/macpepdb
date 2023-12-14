@@ -416,11 +416,11 @@ mod tests {
                 "Q9HAN7"
             ].iter().map(|s| s.to_string()).collect(),
             "TRY1_HUMAN".to_string(),
-            "Serine protease 1 {ECO:0000312|HGNC:HGNC:9475}".to_string(),
+            "Serine protease 1".to_string(),
             [
-                "PRSS1 {ECO:0000312|HGNC:HGNC:9475}",
+                "PRSS1",
                 "TRP1",
-                "TRY1 {ECO:0000312|HGNC:HGNC:9475}",
+                "TRY1",
                 "TRYP1"
             ].iter().map(|s| s.to_string()).collect(),
             9606,
@@ -452,9 +452,9 @@ mod tests {
             "Some strange stuff which destroys other stuff".to_string(),
             [
                 "SOME NEW UNDISCOVERED GENE",
-                "PRSS1 {ECO:0000312|HGNC:HGNC:9475}",
+                "PRSS1",
                 "TRP1",
-                "TRY1 {ECO:0000312|HGNC:HGNC:9475}",
+                "TRY1",
                 "TRYP1"
             ].iter().map(|s| s.to_string()).collect(),
             0,

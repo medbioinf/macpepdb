@@ -17,6 +17,8 @@ pub fn to_int(mass: f64) -> i64 {
 /// Makro for mass to integer conversion. The `to_int`-method is intentionally not used, so the macro can be used in assignments of constants.
 /// Attention: It is not possible to limit the the macros argument to a specific type. Be careful to pass only  
 ///
+// used in build.rs
+#[allow(unused_macros)]
 macro_rules! mass_to_int {
     ($mass:expr) => {{
         ($mass as f64 * crate::mass::convert::MASS_CONVERT_FACTOR) as i64

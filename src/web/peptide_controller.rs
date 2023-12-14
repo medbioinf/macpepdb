@@ -21,7 +21,7 @@ use serde::Deserialize;
 use tracing::error;
 
 // internal imports
-use crate::chemistry::amino_acid::calc_sequence_mass;
+use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::scylla::protein_table::ProteinTable;
 use crate::database::selectable_table::SelectableTable;
@@ -98,7 +98,7 @@ pub async fn get_peptide(
     Path(sequence): Path<String>,
 ) -> Result<Json<serde_json::Value>, WebError> {
     let sequence = sequence.to_uppercase();
-    let mass = calc_sequence_mass(sequence.as_str())?;
+    let mass = calc_sequence_mass_int(sequence.as_str())?;
     let partition = get_mass_partition(
         app_state.get_configuration_as_ref().get_partition_limits(),
         mass,

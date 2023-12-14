@@ -8,7 +8,7 @@ use anyhow::{bail, Result};
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 
 // internal imports
-use crate::chemistry::amino_acid::AminoAcid as InternalAminoAcid;
+use crate::chemistry::amino_acid::{get_internal_amino_acid_by_one_letter_code, InternalAminoAcid};
 use crate::entities::peptide::Peptide;
 use crate::mass::convert::{to_float as mass_to_float, to_int as mass_to_int};
 
@@ -111,11 +111,11 @@ impl PTMCondition {
                 .increment_by(counter.count);
             mass_delta += counter.count as f64 * counter.ptm.get_mass_delta();
             if counter.ptm.is_n_terminus() {
-                n_terminus_amino_acid = Some(InternalAminoAcid::get_by_one_letter_code(
+                n_terminus_amino_acid = Some(get_internal_amino_acid_by_one_letter_code(
                     *counter.ptm.get_amino_acid().get_code(),
                 )?);
             } else if counter.ptm.is_c_terminus() {
-                c_terminus_amino_acid = Some(InternalAminoAcid::get_by_one_letter_code(
+                c_terminus_amino_acid = Some(get_internal_amino_acid_by_one_letter_code(
                     *counter.ptm.get_amino_acid().get_code(),
                 )?);
             }

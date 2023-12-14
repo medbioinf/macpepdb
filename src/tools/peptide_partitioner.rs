@@ -14,14 +14,13 @@ use tracing::{debug, info, info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 // internal imports
-use crate::chemistry::amino_acid::{calc_sequence_mass, TRYPTOPHAN};
+use crate::chemistry::amino_acid::{calc_sequence_mass_int, INTERNAL_TRYPTOPHAN};
 use crate::io::uniprot_text::reader::Reader;
-// use crate::tools::bloom_filter::BloomFilter;
 use crate::tools::display::bytes_to_human_readable;
 use crate::tools::omicstools::remove_unknown_from_digest;
 
 lazy_static! {
-    static ref MAX_MASS: i64 = TRYPTOPHAN.get_mono_mass() * 60;
+    static ref MAX_MASS: i64 = INTERNAL_TRYPTOPHAN.get_mono_mass_int() * 60;
 }
 
 pub fn get_mass_partition(partition_limits: &Vec<i64>, mass: i64) -> Result<usize> {
@@ -176,7 +175,7 @@ impl<'a> PeptidePartitioner<'a> {
 
         // Calculate the average partition windows (60 is the max number of amino acids per peptide ,
         // so 60 times tryptophan is the heaviest peptide possible)
-        let average_partition_windows = TRYPTOPHAN.get_mono_mass() * 60 / num_partitions as i64;
+        let average_partition_windows = *MAX_MASS / num_partitions as i64;
 
         let mut partition_contents: Vec<u64> = Vec::with_capacity(num_partitions as usize);
         let mut partition_limits: Vec<i64> = Vec::with_capacity(num_partitions as usize);
@@ -271,7 +270,7 @@ impl<'a> PeptidePartitioner<'a> {
                             .collect()?,
                     };
                 for sequence in peptide_sequences.into_iter() {
-                    let mass = calc_sequence_mass(sequence.as_str())?;
+                    let mass = calc_sequence_mass_int(sequence.as_str())?;
                     let partition = get_mass_partition(&partition_limits, mass)?;
                     if !bloom_filters[partition].contains(sequence.as_str())? {
                         bloom_filters[partition].add(sequence.as_str())?;

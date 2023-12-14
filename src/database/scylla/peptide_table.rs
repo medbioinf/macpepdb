@@ -6,6 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_stream::try_stream;
 use dihardts_cstools::bloom_filter::BloomFilter;
+use dihardts_omicstools::proteomics::peptide::calculate_mass_of_peptide_sequence;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
@@ -17,16 +18,15 @@ use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 use scylla::transport::query_result::FirstRowError;
 
-use crate::chemistry::amino_acid::calc_sequence_mass;
 // internal imports
+use crate::database::scylla::client::GenericClient;
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
 use crate::entities::peptide::Peptide;
-
-use crate::database::scylla::client::GenericClient;
 use crate::entities::protein::Protein;
 use crate::functions::post_translational_modification::{get_ptm_conditions, PTMCondition};
+use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::omicstools::convert_to_internal_dummy_peptide;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
@@ -468,7 +468,7 @@ impl PeptideTable {
         C: GenericClient + Unpin,
     {
         let sequence = sequence.to_uppercase();
-        let mass = calc_sequence_mass(sequence.as_str())?;
+        let mass = mass_to_int(calculate_mass_of_peptide_sequence(sequence.as_str())?);
         let partition = get_mass_partition(configuration.get_partition_limits(), mass)?;
 
         let peptide_opt = PeptideTable::select(

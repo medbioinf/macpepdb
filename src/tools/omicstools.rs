@@ -7,11 +7,9 @@ use fallible_iterator::FallibleIterator;
 use serde_json::{json, Value};
 
 // internal imports
+use crate::chemistry::amino_acid::calc_sequence_mass_int;
+use crate::entities::{peptide::Peptide, protein::Protein};
 use crate::tools::peptide_partitioner::get_mass_partition;
-use crate::{
-    entities::{peptide::Peptide, protein::Protein},
-    mass::convert::to_int as mass_to_int,
-};
 
 /// Removes amino acid sequences containing Unknown (`X`) from digest,
 /// acquired by Enzyme.digest()
@@ -39,7 +37,7 @@ pub fn convert_to_internal_peptide<'a>(
     protein: &'a Protein,
 ) -> impl FallibleIterator<Item = Peptide, Error = anyhow::Error> + 'a {
     peptides.map(|pep| {
-        let mass = mass_to_int(pep.get_mass());
+        let mass = calc_sequence_mass_int(pep.get_sequence())?;
         let partition = get_mass_partition(partition_limits, mass)?;
         Peptide::new(
             partition as i64,
@@ -69,7 +67,7 @@ pub fn convert_to_internal_dummy_peptide<'a>(
     partition_limits: &'a Vec<i64>,
 ) -> impl FallibleIterator<Item = Peptide, Error = anyhow::Error> + 'a {
     peptides.map(|pep| {
-        let mass = mass_to_int(pep.get_mass());
+        let mass = calc_sequence_mass_int(pep.get_sequence())?;
         let partition = get_mass_partition(partition_limits, mass)?;
         Peptide::new(
             partition as i64,

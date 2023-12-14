@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
 // internal imports
-use crate::chemistry::amino_acid::calc_sequence_mass;
+use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::selectable_table::SelectableTable;
 use crate::entities::peptide::Peptide;
@@ -205,7 +205,7 @@ pub async fn digest(
 /// ```
 ///
 pub async fn get_mass(Path(sequence): Path<String>) -> Result<Json<JsonValue>, WebError> {
-    let mass = calc_sequence_mass(&sequence)?;
+    let mass = calc_sequence_mass_int(&sequence)?;
 
     Ok(Json(json!({
         "mass": mass_to_float(mass),

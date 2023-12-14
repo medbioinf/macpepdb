@@ -1,4 +1,6 @@
 // Copied from https://stackoverflow.com/a/27582993
+// used in tests
+#[allow(unused_macros)]
 macro_rules! collection {
     // map-like
     ($($k:expr => $v:expr),* $(,)?) => {
