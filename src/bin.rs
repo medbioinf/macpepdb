@@ -4,7 +4,7 @@ use std::fs::read_to_string;
 use std::{path::Path, thread::sleep, time::Duration};
 
 // 3rd party imports
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use indicatif::ProgressStyle;
@@ -47,11 +47,24 @@ enum Commands {
         log_folder: String,
         /// Path taxdmp.zip from [NCBI](https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdmp.zip)
         taxonomy_file: String,
-        /// If set, only the metadata will be included not domain/feature information
+        /// Min peptide length, default: 6
+        /// Can be skipped once the database is built the first time
+        #[arg(long, default_value_t = 6)]
+        min_peptide_length: usize,
+        /// Maximum peptide length, default: 50, max: 60
+        /// Can be skipped once the database is built the first time
+        #[arg(long, default_value_t = 50)]
+        max_peptide_length: usize,
+        /// Maximum number of missed cleavages
+        /// Can be skipped once the database is built the first time
+        #[arg(long, default_value_t = 2)]
+        max_number_of_missed_cleavages: usize,
+        /// If set, peptides containing unknown amino acids will be kept. Keep in mind that X's mass is
+        /// 0 and searches might be incorrect
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
-        only_metadata: bool, // this is a flag now `--only-metadata`
+        keep_peptides_containing_unknown: bool,
         /// If set, domains will be added to the database
-        #[arg(long, default_value_t = true, action = clap::ArgAction::SetFalse)]
+        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         include_domains: bool, // this is a flag now `--include-domains`
         /// Path protein files (dat or txt), comma separated
         #[arg(value_delimiter = ',', num_args = 1..)]
@@ -140,10 +153,17 @@ async fn main() -> Result<()> {
             partitioner_false_positive_probability,
             log_folder,
             taxonomy_file,
-            only_metadata,
+            min_peptide_length,
+            max_peptide_length,
+            max_number_of_missed_cleavages,
+            keep_peptides_containing_unknown,
             include_domains,
             protein_file_paths,
         } => {
+            if max_peptide_length > 60 {
+                bail!("Max peptide lengths cannot be greater than 60");
+            }
+
             let protein_file_paths = protein_file_paths
                 .into_iter()
                 .map(|x| Path::new(&x).to_path_buf())
@@ -164,15 +184,13 @@ async fn main() -> Result<()> {
                         partitioner_false_positive_probability,
                         Some(Configuration::new(
                             "trypsin".to_owned(),
-                            Some(2),
-                            Some(5),
-                            Some(60),
-                            true,
+                            Some(max_number_of_missed_cleavages),
+                            Some(min_peptide_length),
+                            Some(max_peptide_length),
+                            !keep_peptides_containing_unknown,
                             Vec::with_capacity(0),
                         )),
                         &log_folder,
-                        false,
-                        only_metadata,
                         include_domains,
                     )
                     .await

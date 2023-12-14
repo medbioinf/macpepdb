@@ -32,8 +32,6 @@ pub trait DatabaseBuild {
     /// * `partitioner_false_positive_probability` - False positive probability of the partitioners Bloom filters.
     /// * `initial_configuration_opt` - Optional initial configuration.
     /// * `log_folder` - Path to the log folder.
-    /// * `is_test_run` - Whether this is a test run.
-    /// * `only_metadata_update` - Whether to only update the metadata.
     /// * `include_domains` - Whether to include domain parsing.
     ///
     fn build(
@@ -46,8 +44,6 @@ pub trait DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
-        is_test_run: bool,
-        only_metadata_update: bool,
         include_domains: bool,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
