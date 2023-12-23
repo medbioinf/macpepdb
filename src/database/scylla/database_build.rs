@@ -1103,7 +1103,7 @@ mod test {
         ["UP000005640", "UP000291000"];
 
     // Test the database building
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     #[serial]
     async fn test_database_build_without_initial_config() {
@@ -1136,7 +1136,7 @@ mod test {
         assert!(build_res.is_err());
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     #[serial]
     async fn test_database_build() {
