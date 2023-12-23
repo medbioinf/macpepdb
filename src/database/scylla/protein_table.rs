@@ -350,9 +350,9 @@ where
             statement += " ";
             statement += additional;
         }
+        let mut prepared_statement = client.get_session().prepare(statement).await?;
+        prepared_statement.set_page_size(num_rows);
         Ok(try_stream! {
-            let mut prepared_statement = client.get_session().prepare(statement).await?;
-            prepared_statement.set_page_size(num_rows);
             let row_stream = client.get_session().execute_iter(prepared_statement, params).await?;
             for await row in row_stream {
                 yield row?;
@@ -366,14 +366,16 @@ where
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
     ) -> Result<impl Stream<Item = Result<Self::Entity>>> {
+        let raw_stream = Self::raw_stream(
+            client,
+            <Self as SelectableTableTrait<C>>::select_cols(),
+            additional,
+            params,
+            num_rows,
+        )
+        .await?;
         Ok(try_stream! {
-            for await row in Self::raw_stream(
-                client,
-                <Self as SelectableTableTrait<C>>::select_cols(),
-                additional,
-                params,
-                num_rows,
-            ).await? {
+            for await row in raw_stream  {
                 yield Self::Entity::from(row?);
             }
         })
