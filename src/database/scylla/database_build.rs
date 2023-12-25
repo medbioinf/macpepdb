@@ -38,6 +38,7 @@ use crate::database::scylla::{
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
 use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_digest};
+use crate::tools::peptide_mass_counter::PeptideMassCounter;
 use crate::tools::performance_logger::{
     metadata_update_performance_log_thread, performance_csv_logger, performance_log_receiver,
 };
@@ -79,7 +80,7 @@ impl DatabaseBuild {
     /// * `client` - The postgres client
     /// * `protein_file_paths` - The paths to the protein files
     /// * `num_partitions` - The number of partitions
-    /// * `allowed_ram_usage` - The allowed ram usage in GB
+    /// * `allowed_ram_fraction` - The allowed fraction of available memory for the bloom filter during counting
     /// * `partitioner_false_positive_probability` - The false positive probability of the partitioner
     /// * `initial_configuration_opt` - The initial configuration
     ///
@@ -87,7 +88,7 @@ impl DatabaseBuild {
         client: &mut Client,
         protein_file_paths: &Vec<PathBuf>,
         num_partitions: u64,
-        allowed_ram_usage: f64,
+        allowed_ram_fraction: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
     ) -> Result<Configuration> {
@@ -120,16 +121,19 @@ impl DatabaseBuild {
                 initial_configuration.get_max_peptide_length(),
                 initial_configuration.get_max_number_of_missed_cleavages(),
             )?;
-            // create partitioner
-            let partitioner = PeptidePartitioner::new(
+            // create partition limits
+            let mass_counts = PeptideMassCounter::count(
                 protein_file_paths,
                 protease.as_ref(),
                 initial_configuration.get_remove_peptides_containing_unknown(),
                 partitioner_false_positive_probability,
-                allowed_ram_usage,
-            )?;
-            // create partition limits
-            let partition_limits = partitioner.partition(num_partitions, None)?;
+                allowed_ram_fraction,
+                10,
+            )
+            .await?;
+            let partition_limits =
+                PeptidePartitioner::create_partition_limits(&mass_counts, num_partitions, None)?;
+
             // create new configuration with partition limits
             Configuration::new(
                 initial_configuration.get_protease_name().to_owned(),

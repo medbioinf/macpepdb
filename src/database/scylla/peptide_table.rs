@@ -709,7 +709,6 @@ where
 mod tests {
     // std imports
     use std::collections::{HashMap, HashSet};
-    use std::fs;
     use std::path::Path;
 
     // external imports
@@ -784,14 +783,13 @@ mod tests {
             "VQDDTK".to_string() => 0
         };
 
-        static ref PARTITION_LIMITS: Vec<i64> = fs::read_to_string("./test_files/partition_limits.txt")
+        static ref PARTITION_LIMITS: Vec<i64> = csv::ReaderBuilder::new()
+            .delimiter(b'\t')
+            .has_headers(true)
+            .from_path("test_files/mouse_partitioning.tsv")
             .unwrap()
-            .split("\n")
-            .map(|element| element.trim().to_owned())
-            .filter(|element| !element.is_empty())
-            .map(|element| element.parse::<i64>())
-            .collect::<Result<Vec<i64>, _>>()
-            .unwrap();
+            .deserialize().map(|line| line.unwrap())
+            .collect();
 
     }
 
