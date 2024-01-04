@@ -1,17 +1,20 @@
-use std::collections::HashSet;
 // std imports
+use std::collections::HashSet;
 use std::fs::read_to_string;
 use std::{path::Path, thread::sleep, time::Duration};
 
 // 3rd party imports
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
+use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::StreamExt;
 use indicatif::ProgressStyle;
 use macpepdb::database::scylla::client::{Client, GenericClient};
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
+use macpepdb::tools::peptide_mass_counter::PeptideMassCounter;
+use macpepdb::tools::peptide_partitioner::PeptidePartitioner;
 use tracing::{debug, error, info, info_span, Level};
 use tracing_indicatif::IndicatifLayer;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -94,6 +97,36 @@ enum Commands {
     DomainTypes {
         /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
+    },
+    MassCounter {
+        /// Min peptide length
+        min_peptide_length: usize,
+        /// Max peptide length
+        max_peptide_length: usize,
+        /// Maximum numbers of missed cleavages
+        max_number_of_missed_cleavages: usize,
+        /// Number of threads for counting the masses (10-20 recommended, as there are some mutexes involved which introduce some wait times)
+        num_threads: usize,
+        /// Fraction of usable memory
+        usable_memory_fraction: f64,
+        /// Bloom filter false positive probability
+        false_positive_probability: f64,
+        /// Optional path to store the peptide per mass table
+        out_file: String,
+        /// Number of partitions
+        #[arg(value_delimiter = ' ', num_args = 1..)]
+        protein_file_paths: Vec<String>,
+    },
+    Partitioning {
+        /// Number of partitions
+        num_partitions: u64,
+        /// Mass counts file
+        mass_counts_file: String,
+        /// Path to the partitioning file
+        out_file: String,
+        /// Optional partition tolerance (default: 0.01)
+        #[arg(long)]
+        partition_tolerance: Option<f64>,
     },
 }
 
@@ -300,6 +333,81 @@ async fn main() -> Result<()> {
                 std::mem::drop(not_updated_peptides);
             } else {
                 error!("Unsupported database protocol: {}", database_url);
+            }
+        }
+        Commands::MassCounter {
+            min_peptide_length,
+            max_peptide_length,
+            max_number_of_missed_cleavages,
+            num_threads,
+            usable_memory_fraction,
+            false_positive_probability,
+            out_file,
+            protein_file_paths,
+        } => {
+            let protease = get_protease_by_name(
+                "trypsin",
+                Some(min_peptide_length),
+                Some(max_peptide_length),
+                Some(max_number_of_missed_cleavages),
+            )?;
+            let protein_file_paths = protein_file_paths
+                .into_iter()
+                .map(|x| Path::new(&x).to_path_buf())
+                .collect();
+
+            let mass_counts = PeptideMassCounter::count(
+                &protein_file_paths,
+                protease.as_ref(),
+                true,
+                false_positive_probability,
+                usable_memory_fraction,
+                num_threads,
+            )
+            .await?;
+
+            let num_peptides: u64 = mass_counts.iter().map(|x| x.1).sum();
+            info!("Total number of peptides: {}", num_peptides);
+            info!("Total number of masses: {}", mass_counts.len());
+
+            let mut writer = csv::WriterBuilder::new()
+                .delimiter(b'\t')
+                .from_path(Path::new(&out_file))?;
+
+            writer.serialize(("mass", "count"))?;
+            for (mass, count) in mass_counts {
+                writer.serialize((mass, count))?;
+            }
+        }
+        Commands::Partitioning {
+            num_partitions,
+            mass_counts_file,
+            out_file,
+            partition_tolerance,
+        } => {
+            let mut reader = csv::ReaderBuilder::new()
+                .delimiter(b'\t')
+                .has_headers(true)
+                .from_path(Path::new(&mass_counts_file))?;
+
+            let mass_counts: Vec<(i64, u64)> = reader
+                .deserialize()
+                .map(|line| Ok(line?))
+                .collect::<Result<Vec<(i64, u64)>>>()?;
+
+            let partition_limits = PeptidePartitioner::create_partition_limits(
+                &mass_counts,
+                num_partitions,
+                partition_tolerance,
+            )?;
+
+            let mut writer = csv::WriterBuilder::new()
+                .delimiter(b'\t')
+                .from_path(Path::new(&out_file))?;
+
+            writer.serialize("partition_limit")?;
+            for limit in partition_limits.iter() {
+                writer.serialize(limit)?;
             }
         }
     };

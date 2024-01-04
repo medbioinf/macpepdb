@@ -14,8 +14,7 @@ use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_pr
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
+use futures::{pin_mut, StreamExt, TryStreamExt};
 use scylla::prepared_statement::PreparedStatement;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
@@ -30,7 +29,6 @@ use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
 use crate::database::scylla::client::Client;
 use crate::database::scylla::client::GenericClient;
 use crate::database::scylla::migrations::run_migrations;
-use crate::database::scylla::peptide_table::SELECT_COLS;
 use crate::database::scylla::{
     configuration_table::ConfigurationTable, peptide_table::PeptideTable,
     protein_table::ProteinTable,
@@ -38,6 +36,7 @@ use crate::database::scylla::{
 use crate::database::selectable_table::SelectableTable;
 use crate::database::table::Table;
 use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_digest};
+use crate::tools::peptide_mass_counter::PeptideMassCounter;
 use crate::tools::performance_logger::{
     metadata_update_performance_log_thread, performance_csv_logger, performance_log_receiver,
 };
@@ -79,7 +78,7 @@ impl DatabaseBuild {
     /// * `client` - The postgres client
     /// * `protein_file_paths` - The paths to the protein files
     /// * `num_partitions` - The number of partitions
-    /// * `allowed_ram_usage` - The allowed ram usage in GB
+    /// * `allowed_ram_fraction` - The allowed fraction of available memory for the bloom filter during counting
     /// * `partitioner_false_positive_probability` - The false positive probability of the partitioner
     /// * `initial_configuration_opt` - The initial configuration
     ///
@@ -87,7 +86,7 @@ impl DatabaseBuild {
         client: &mut Client,
         protein_file_paths: &Vec<PathBuf>,
         num_partitions: u64,
-        allowed_ram_usage: f64,
+        allowed_ram_fraction: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
     ) -> Result<Configuration> {
@@ -120,16 +119,19 @@ impl DatabaseBuild {
                 initial_configuration.get_max_peptide_length(),
                 initial_configuration.get_max_number_of_missed_cleavages(),
             )?;
-            // create partitioner
-            let partitioner = PeptidePartitioner::new(
+            // create partition limits
+            let mass_counts = PeptideMassCounter::count(
                 protein_file_paths,
                 protease.as_ref(),
                 initial_configuration.get_remove_peptides_containing_unknown(),
                 partitioner_false_positive_probability,
-                allowed_ram_usage,
-            )?;
-            // create partition limits
-            let partition_limits = partitioner.partition(num_partitions, None)?;
+                allowed_ram_fraction,
+                10,
+            )
+            .await?;
+            let partition_limits =
+                PeptidePartitioner::create_partition_limits(&mass_counts, num_partitions, None)?;
+
             // create new configuration with partition limits
             Configuration::new(
                 initial_configuration.get_protease_name().to_owned(),
@@ -822,31 +824,6 @@ impl DatabaseBuild {
         Ok(())
     }
 
-    /// Getting the proteins of origin for a peptide
-    /// TODO: Use ProteinTable::stream which should resolve the timeout issue also this then obsolete
-    ///
-    /// # Arguments
-    /// * `client` - The database client
-    /// * `accession_list` - The list of accessions
-    ///
-    async fn get_associated_proteins(client: &Client, accession_list: CqlValue) -> Vec<Protein> {
-        loop {
-            let associated_proteins_res =
-                ProteinTable::select_multiple(client, "WHERE accession IN ?", &[&accession_list])
-                    .await;
-
-            // Some times there is a small error with the database connection
-            // if this happens we just wait a bit and try again which resolves everything
-            if associated_proteins_res.is_err() {
-                debug!("Protein err");
-                sleep(Duration::from_millis(100));
-                continue;
-            }
-
-            return associated_proteins_res.unwrap();
-        }
-    }
-
     /// Collecting peptide metadata from the proteins of origin
     ///
     /// # Arguments
@@ -883,40 +860,25 @@ impl DatabaseBuild {
         let update_query_prepared_statement = session.prepare(update_query).await?;
 
         for partition in partitions.iter() {
-            let query_statement = format!(
-                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
-                SELECT_COLS,
-                client.get_database(),
-                PeptideTable::table_name()
-            );
+            let partition_cql = CqlValue::BigInt(*partition);
+            let select_args_refs = vec![&partition_cql];
 
-            let mut rows_stream = session
-                .query_iter(query_statement, (partition,))
-                .await
-                .unwrap();
+            let peptide_stream = PeptideTable::stream(
+                &client,
+                "WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
+                &select_args_refs,
+                10000,
+            )
+            .await?;
 
-            while let Some(row_opt) = rows_stream.next().await {
-                if row_opt.is_err() {
-                    debug!("Row opt err");
-                    sleep(Duration::from_millis(100));
-                    continue;
-                }
-                let row = row_opt.unwrap();
-                // ToDo: This might be bad performance wise
-                let peptide = Peptide::from(row);
+            pin_mut!(peptide_stream);
 
-                let protein_chunks = peptide.get_proteins().chunks(100).map(|x| {
-                    CqlValue::List(x.iter().map(|y| CqlValue::Text(y.to_owned())).collect())
-                });
-                let mut associated_proteins = vec![];
-
-                let mut tasks: FuturesUnordered<_> = protein_chunks
-                    .map(|x| Self::get_associated_proteins(&client, x))
-                    .collect();
-
-                while let Some(result) = tasks.next().await {
-                    associated_proteins.extend(result);
-                }
+            while let Some(peptide) = peptide_stream.next().await {
+                let peptide = peptide?;
+                let associated_proteins = ProteinTable::get_proteins_of_peptide(&client, &peptide)
+                    .await?
+                    .try_collect()
+                    .await?;
 
                 let (
                     is_swiss_prot,
