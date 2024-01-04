@@ -743,6 +743,7 @@ impl DatabaseBuild {
     /// * `database_url` - The database url
     /// * `configuration` - The configuration
     /// * `protease` - The digestion protease
+    /// * `include_domains` - If true, domains are collected
     ///
     async fn collect_peptide_metadata(
         num_threads: usize,
@@ -831,6 +832,7 @@ impl DatabaseBuild {
     /// * `partitions` - The partitions
     /// * `peptide_sender` - The sender which is used to send the number of processed peptides to the logger
     /// * `protease` - The digestion protease
+    /// * `include_domains` - If true, domains are collected
     ///
     async fn collect_peptide_metadata_thread(
         database_url: String,
