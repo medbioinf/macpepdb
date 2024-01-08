@@ -70,6 +70,9 @@ enum Commands {
         /// If set, domains will be added to the database
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         include_domains: bool, // this is a flag now `--include-domains`
+        /// Interval in seconds at which the metrics are logged to file
+        #[arg(long, default_value_t = 900)]
+        metrics_log_interval: u64,
         /// Path protein files (dat or txt), comma separated
         #[arg(value_delimiter = ' ', num_args = 0..)]
         protein_file_paths: Vec<String>,
@@ -163,12 +166,15 @@ async fn main() -> Result<()> {
         .add_directive("scylla=info".parse().unwrap())
         .add_directive("tokio_postgres=info".parse().unwrap());
 
-    let indicatif_layer = IndicatifLayer::new().with_progress_style(
-        ProgressStyle::with_template(
-            "{spinner:.cyan} {span_child_prefix}{span_name}{{{span_fields}}} {wide_msg} {elapsed}",
+    let indicatif_layer = IndicatifLayer::new()
+        .with_progress_style(
+            ProgressStyle::with_template(
+                "{spinner:.cyan} {span_child_prefix} {span_name} {span_fields} {wide_msg} {elapsed}",
+            )
+            .unwrap(),
         )
-        .unwrap()
-    ).with_span_child_prefix_symbol("↳ ").with_span_child_prefix_indent(" ");
+        .with_span_child_prefix_symbol("↳ ")
+        .with_span_child_prefix_indent(" ");
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
@@ -192,6 +198,7 @@ async fn main() -> Result<()> {
             max_number_of_missed_cleavages,
             keep_peptides_containing_unknown,
             include_domains,
+            metrics_log_interval,
             protein_file_paths,
         } => {
             if max_peptide_length > 60 {
@@ -231,6 +238,7 @@ async fn main() -> Result<()> {
                         )),
                         &log_folder,
                         include_domains,
+                        metrics_log_interval,
                     )
                     .await
                 {

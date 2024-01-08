@@ -13,6 +13,7 @@ use serde_json::Value as JsonValue;
 
 // internal imports
 use crate::database::scylla::client::Client;
+use crate::tools::message_logger::ToLogMessage;
 use crate::{database::scylla::peptide_table::PeptideTable, entities::domain::Domain};
 
 use super::peptide::Peptide;
@@ -156,6 +157,7 @@ impl Protein {
     }
 
     /// Creates UniProt-txt-file entry of this protein
+    /// See https://web.expasy.org/docs/userman.html for more information
     ///
     pub fn to_uniprot_txt_entry(&self) -> Result<String> {
         let mut entry = String::new();
@@ -332,6 +334,12 @@ impl From<ScyllaRow> for Protein {
             updated_at,
             domains,
         }
+    }
+}
+
+impl ToLogMessage for Protein {
+    fn to_message(&self) -> Result<Vec<u8>> {
+        Ok(self.to_uniprot_txt_entry()?.as_bytes().to_vec())
     }
 }
 

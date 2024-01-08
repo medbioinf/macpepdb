@@ -33,6 +33,7 @@ pub trait DatabaseBuild {
     /// * `initial_configuration_opt` - Optional initial configuration.
     /// * `log_folder` - Path to the log folder.
     /// * `include_domains` - Whether to include domain parsing.
+    /// * `metrics_log_interval` - Intervals in seconds for logging metrics
     ///
     fn build(
         &self,
@@ -45,5 +46,6 @@ pub trait DatabaseBuild {
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
         include_domains: bool,
+        metrics_log_interval: u64,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }
