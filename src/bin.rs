@@ -71,7 +71,7 @@ enum Commands {
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         include_domains: bool, // this is a flag now `--include-domains`
         /// Path protein files (dat or txt), comma separated
-        #[arg(value_delimiter = ',', num_args = 0..)]
+        #[arg(value_delimiter = ' ', num_args = 0..)]
         protein_file_paths: Vec<String>,
     },
     QueryPerformance {
