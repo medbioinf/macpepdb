@@ -752,20 +752,20 @@ impl DatabaseBuild {
         protease: &dyn Protease,
         include_domains: bool,
     ) -> Result<()> {
+        // Process num_threads but max 2/3 of the partitions in parallel
+        // Seems to work fine for smaller and larger installation.
+        let num_threads = std::cmp::min(
+            num_threads,
+            configuration.get_partition_limits().len() / 3 * 2,
+        );
         debug!("Collecting peptide metadata...");
-        debug!("Chunking partitions for {} threads...", num_threads);
         let num_peptides_processed: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
         let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
         let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
 
-        let chunk_size = (configuration.get_partition_limits().len() as f64 / num_threads as f64)
-            .ceil() as usize;
-        let chunked_partitions: Vec<Vec<i64>> = (0..(configuration.get_partition_limits().len()
-            as i64))
-            .collect::<Vec<i64>>()
-            .chunks(chunk_size)
-            .map(|chunk| chunk.to_vec())
-            .collect();
+        let partitions: Vec<i64> =
+            (0..(configuration.get_partition_limits().len() as i64)).collect();
+        let partitions = Arc::new(Mutex::new(partitions));
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -779,10 +779,10 @@ impl DatabaseBuild {
 
         debug!("Starting {} threads...", num_threads);
         // Start digestion threads
-        for thread_id in 0..chunked_partitions.len() {
+        for thread_id in 0..num_threads {
+            debug!("Thread {} partitions", thread_id);
             // Clone necessary variables
-            let partitions = chunked_partitions[thread_id].clone();
-            debug!("Thread {} partitions {:?}", thread_id, partitions);
+            let thread_partitions = partitions.clone();
             let database_url_clone = database_url.to_string();
             let thread_peptide_sender = peptide_sender.clone();
             let protease_box = get_protease_by_name(
@@ -796,7 +796,7 @@ impl DatabaseBuild {
             metadata_collector_thread_handles.push(spawn(async move {
                 Self::collect_peptide_metadata_thread(
                     database_url_clone,
-                    partitions,
+                    thread_partitions,
                     thread_peptide_sender,
                     protease_box,
                     include_domains,
@@ -836,7 +836,7 @@ impl DatabaseBuild {
     ///
     async fn collect_peptide_metadata_thread(
         database_url: String,
-        partitions: Vec<i64>,
+        partition_queue: Arc<Mutex<Vec<i64>>>,
         peptide_sender: Sender<u64>,
         protease: Box<dyn Protease>,
         include_domains: bool,
@@ -848,6 +848,7 @@ impl DatabaseBuild {
             client.get_database(),
             PeptideTable::table_name()
         );
+        let update_query_prepared_statement = session.prepare(update_query).await?;
 
         let protease_cleavage_codes: Vec<char> = protease
             .get_cleavage_amino_acids()
@@ -859,10 +860,20 @@ impl DatabaseBuild {
             .iter()
             .map(|aa| *aa.get_code())
             .collect();
-        let update_query_prepared_statement = session.prepare(update_query).await?;
 
-        for partition in partitions.iter() {
-            let partition_cql = CqlValue::BigInt(*partition);
+        loop {
+            let partition = {
+                let mut partition_queue = match partition_queue.lock() {
+                    Ok(partition_queue) => partition_queue,
+                    Err(err) => bail!(format!("Could not lock partition queue: {}", err)),
+                };
+                match partition_queue.pop() {
+                    Some(partition) => partition,
+                    None => break,
+                }
+            };
+
+            let partition_cql = CqlValue::BigInt(partition);
             let select_args_refs = vec![&partition_cql];
 
             let peptide_stream = PeptideTable::stream(
