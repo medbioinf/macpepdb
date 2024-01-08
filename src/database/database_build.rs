@@ -37,7 +37,7 @@ pub trait DatabaseBuild {
     fn build(
         &self,
         protein_file_paths: &Vec<PathBuf>,
-        taxonomy_file_path: &PathBuf,
+        taxonomy_file_path: &Option<PathBuf>,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,

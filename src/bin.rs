@@ -49,7 +49,8 @@ enum Commands {
         /// Path to the log folder
         log_folder: String,
         /// Path taxdmp.zip from [NCBI](https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdmp.zip)
-        taxonomy_file: String,
+        #[arg(long)]
+        taxonomy_file: Option<String>,
         /// Min peptide length, default: 6
         /// Can be skipped once the database is built the first time
         #[arg(long, default_value_t = 6)]
@@ -70,7 +71,7 @@ enum Commands {
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         include_domains: bool, // this is a flag now `--include-domains`
         /// Path protein files (dat or txt), comma separated
-        #[arg(value_delimiter = ',', num_args = 1..)]
+        #[arg(value_delimiter = ',', num_args = 0..)]
         protein_file_paths: Vec<String>,
     },
     QueryPerformance {
@@ -202,6 +203,11 @@ async fn main() -> Result<()> {
                 .map(|x| Path::new(&x).to_path_buf())
                 .collect();
 
+            let taxonomy_file_path = match taxonomy_file {
+                Some(taxonomy_file) => Some(Path::new(&taxonomy_file).to_path_buf()),
+                None => None,
+            };
+
             let log_folder = Path::new(&log_folder).to_path_buf();
 
             if database_url.starts_with("scylla://") {
@@ -210,7 +216,7 @@ async fn main() -> Result<()> {
                 match builder
                     .build(
                         &protein_file_paths,
-                        &Path::new(&taxonomy_file).to_path_buf(),
+                        &taxonomy_file_path,
                         num_threads,
                         num_partitions,
                         allowed_ram_usage,

@@ -763,9 +763,9 @@ impl DatabaseBuild {
         let (peptide_sender, peptide_receiver): (Sender<u64>, Receiver<u64>) = channel(1000);
         let performance_log_stop_flag = Arc::new(AtomicBool::new(false));
 
-        let partitions: Vec<i64> =
+        let partition_queue: Vec<i64> =
             (0..(configuration.get_partition_limits().len() as i64)).collect();
-        let partitions = Arc::new(Mutex::new(partitions));
+        let partition_queue = Arc::new(Mutex::new(partition_queue));
 
         let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
 
@@ -780,9 +780,9 @@ impl DatabaseBuild {
         debug!("Starting {} threads...", num_threads);
         // Start digestion threads
         for thread_id in 0..num_threads {
-            debug!("Thread {} partitions", thread_id);
+            debug!("Thread {}", thread_id);
             // Clone necessary variables
-            let thread_partitions = partitions.clone();
+            let thread_partition_queue = partition_queue.clone();
             let database_url_clone = database_url.to_string();
             let thread_peptide_sender = peptide_sender.clone();
             let protease_box = get_protease_by_name(
@@ -796,7 +796,7 @@ impl DatabaseBuild {
             metadata_collector_thread_handles.push(spawn(async move {
                 Self::collect_peptide_metadata_thread(
                     database_url_clone,
-                    thread_partitions,
+                    thread_partition_queue,
                     thread_peptide_sender,
                     protease_box,
                     include_domains,
@@ -940,7 +940,7 @@ impl DatabaseBuild {
     }
 
     async fn build_taxonomy_tree(client: &Client, taxonomy_file_path: &Path) -> Result<()> {
-        debug!("Build taxonomy tree");
+        debug!("Build taxonomy tree...");
         let taxonomy_tree = TaxonomyReader::new(taxonomy_file_path)?.read()?;
         TaxonomyTreeTable::insert(client, &taxonomy_tree).await?;
         Ok(())
@@ -959,7 +959,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
     async fn build(
         &self,
         protein_file_paths: &Vec<PathBuf>,
-        taxonomy_file_path: &PathBuf,
+        taxonomy_file_path: &Option<PathBuf>,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
@@ -995,32 +995,35 @@ impl DatabaseBuildTrait for DatabaseBuild {
             configuration.get_max_number_of_missed_cleavages(),
         )?;
 
-        Self::build_taxonomy_tree(&client, taxonomy_file_path).await?;
-
-        // read, digest and insert proteins and peptides
-        info!("Starting digest and insert");
+        if let Some(taxonomy_file_path) = taxonomy_file_path {
+            Self::build_taxonomy_tree(&client, taxonomy_file_path).await?;
+        }
 
         let mut protein_ctr: usize = 0;
 
-        debug!("Counting proteins");
+        if !protein_file_paths.is_empty() {
+            // read, digest and insert proteins and peptides
+            info!("Starting digest and insert");
 
-        for path in protein_file_paths.iter() {
-            debug!("... {}", path.display());
-            protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
+            info!("Counting proteins ...");
+            for path in protein_file_paths.iter() {
+                debug!("... {}", path.display());
+                protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
+            }
+
+            info!("... {} proteins", protein_ctr);
+
+            Self::protein_digestion(
+                &self.database_url,
+                num_threads,
+                protein_file_paths,
+                protease.as_ref(),
+                configuration.get_remove_peptides_containing_unknown(),
+                configuration.get_partition_limits().to_vec(),
+                log_folder,
+            )
+            .await?;
         }
-
-        info!("{} proteins counted", protein_ctr);
-
-        Self::protein_digestion(
-            &self.database_url,
-            num_threads,
-            protein_file_paths,
-            protease.as_ref(),
-            configuration.get_remove_peptides_containing_unknown(),
-            configuration.get_partition_limits().to_vec(),
-            log_folder,
-        )
-        .await?;
 
         // collect metadata
         let span = span!(Level::INFO, "metadata_updates");
@@ -1082,7 +1085,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build_without_initial_config() {
-        let taxdmp_zip_path = get_taxdmp_zip().await.unwrap();
+        let taxdmp_zip_path = Some(get_taxdmp_zip().await.unwrap());
         let client = Client::new(DATABASE_URL).await.unwrap();
 
         drop_keyspace(&client).await;
@@ -1115,7 +1118,7 @@ mod test {
     #[traced_test]
     #[serial]
     async fn test_database_build() {
-        let taxdmp_zip_path = get_taxdmp_zip().await.unwrap();
+        let taxdmp_zip_path = Some(get_taxdmp_zip().await.unwrap());
         let client = Client::new(DATABASE_URL).await.unwrap();
 
         drop_keyspace(&client).await;
