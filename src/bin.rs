@@ -32,6 +32,13 @@ use macpepdb::{
     entities::configuration::Configuration,
 };
 
+const DEFAULT_MIN_PEPTIDE_LENGTH: usize = 6;
+const DEFAULT_MAX_PEPTIDE_LENGTH: usize = 50;
+const DEFAULT_MAX_NUMBER_OF_MISSED_CLEAVAGES: usize = 2;
+/// Default false positive probability for bloom filters
+///
+const DEFAULT_FALSE_POSITIVE_PROBABILITY: f64 = 0.01;
+
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Builds a new MaCPepDB or updates an existing one
@@ -42,27 +49,29 @@ enum Commands {
         num_threads: usize,
         /// Number of partitions for distributing the database
         num_partitions: u64,
-        /// Allowed RAM usage in GB
-        allowed_ram_usage: f64,
-        /// False positive probability for the partitioner
-        partitioner_false_positive_probability: f64,
+        /// Fraction of usable memory for the bloom filter for counting peptides
+        /// For a tryptic digest of the complete Uniprot database 16 GB is recommended
+        usable_memory_fraction: f64,
         /// Path to the log folder
         log_folder: String,
         /// Path taxdmp.zip from [NCBI](https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdmp.zip)
         #[arg(long)]
         taxonomy_file: Option<String>,
-        /// Min peptide length, default: 6
+        /// Min peptide length
         /// Can be skipped once the database is built the first time
-        #[arg(long, default_value_t = 6)]
+        #[arg(long, default_value_t = DEFAULT_MIN_PEPTIDE_LENGTH)]
         min_peptide_length: usize,
-        /// Maximum peptide length, default: 50, max: 60
+        /// Maximum peptide length, max: 60
         /// Can be skipped once the database is built the first time
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = DEFAULT_MAX_PEPTIDE_LENGTH)]
         max_peptide_length: usize,
         /// Maximum number of missed cleavages
         /// Can be skipped once the database is built the first time
-        #[arg(long, default_value_t = 2)]
+        #[arg(long, default_value_t = DEFAULT_MAX_NUMBER_OF_MISSED_CLEAVAGES)]
         max_number_of_missed_cleavages: usize,
+        /// False positive probability for the bloom filter used for partitioning
+        #[arg(long, default_value_t = DEFAULT_FALSE_POSITIVE_PROBABILITY)]
+        partitioner_false_positive_probability: f64,
         /// If set, peptides containing unknown amino acids will be kept. Keep in mind that X's mass is
         /// 0 and searches might be incorrect
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
@@ -78,11 +87,17 @@ enum Commands {
         protein_file_paths: Vec<String>,
     },
     QueryPerformance {
+        /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
+        /// Input file with masses to query
         masses_file: String,
+        /// PTM file
         ptm_file: String,
+        /// Lower mass tolerance (ppm)
         lower_mass_tolerance: i64,
+        /// Upper mass tolerance (ppm)
         upper_mass_tolerance: i64,
+        /// Maximum number of variable modifications
         max_variable_modifications: i16,
     },
     Web {
@@ -103,20 +118,27 @@ enum Commands {
         database_url: String,
     },
     MassCounter {
-        /// Min peptide length
-        min_peptide_length: usize,
-        /// Max peptide length
-        max_peptide_length: usize,
-        /// Maximum numbers of missed cleavages
-        max_number_of_missed_cleavages: usize,
         /// Number of threads for counting the masses (10-20 recommended, as there are some mutexes involved which introduce some wait times)
         num_threads: usize,
-        /// Fraction of usable memory
+        /// Fraction of usable memory for the bloom filter for counting peptides
+        /// For a tryptic digest of the complete Uniprot database 16 GB is recommended
         usable_memory_fraction: f64,
-        /// Bloom filter false positive probability
-        false_positive_probability: f64,
         /// Optional path to store the peptide per mass table
         out_file: String,
+        /// Can be skipped once the database is built the first time
+        #[arg(long, default_value_t = DEFAULT_MIN_PEPTIDE_LENGTH)]
+        min_peptide_length: usize,
+        /// Maximum peptide length, max: 60
+        /// Can be skipped once the database is built the first time
+        #[arg(long, default_value_t = DEFAULT_MAX_PEPTIDE_LENGTH)]
+        max_peptide_length: usize,
+        /// Maximum number of missed cleavages
+        /// Can be skipped once the database is built the first time
+        #[arg(long, default_value_t = DEFAULT_MAX_NUMBER_OF_MISSED_CLEAVAGES)]
+        max_number_of_missed_cleavages: usize,
+        /// False positive probability for the bloom filter for counting peptides
+        #[arg(long, default_value_t = DEFAULT_FALSE_POSITIVE_PROBABILITY)]
+        false_positive_probability: f64,
         /// Number of partitions
         #[arg(value_delimiter = ' ', num_args = 1..)]
         protein_file_paths: Vec<String>,
@@ -126,7 +148,7 @@ enum Commands {
         num_partitions: u64,
         /// Mass counts file
         mass_counts_file: String,
-        /// Path to the partitioning file
+        /// Path to store the partitioning TSV file
         out_file: String,
         /// Optional partition tolerance (default: 0.01)
         #[arg(long)]
@@ -189,13 +211,13 @@ async fn main() -> Result<()> {
             database_url,
             num_threads,
             num_partitions,
-            allowed_ram_usage,
-            partitioner_false_positive_probability,
+            usable_memory_fraction,
             log_folder,
             taxonomy_file,
             min_peptide_length,
             max_peptide_length,
             max_number_of_missed_cleavages,
+            partitioner_false_positive_probability,
             keep_peptides_containing_unknown,
             include_domains,
             metrics_log_interval,
@@ -226,7 +248,7 @@ async fn main() -> Result<()> {
                         &taxonomy_file_path,
                         num_threads,
                         num_partitions,
-                        allowed_ram_usage,
+                        usable_memory_fraction,
                         partitioner_false_positive_probability,
                         Some(Configuration::new(
                             "trypsin".to_owned(),
@@ -350,13 +372,13 @@ async fn main() -> Result<()> {
             }
         }
         Commands::MassCounter {
+            num_threads,
+            usable_memory_fraction,
+            out_file,
             min_peptide_length,
             max_peptide_length,
             max_number_of_missed_cleavages,
-            num_threads,
-            usable_memory_fraction,
             false_positive_probability,
-            out_file,
             protein_file_paths,
         } => {
             let protease = get_protease_by_name(
