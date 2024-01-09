@@ -155,6 +155,7 @@ enum Commands {
         #[arg(long)]
         partition_tolerance: Option<f64>,
     },
+    Version {},
 }
 
 #[derive(Debug, Parser)]
@@ -473,6 +474,15 @@ async fn main() -> Result<()> {
             for limit in partition_limits.iter() {
                 writer.serialize(limit)?;
             }
+        }
+        Commands::Version {} => {
+            println!(
+                "{}",
+                include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/logo.txt"))
+            );
+            println!("-- Mass Centric Peptide Database --");
+            println!("Version: {}", env!("CARGO_PKG_VERSION"));
+            println!("Repository: {}", env!("CARGO_PKG_REPOSITORY"));
         }
     };
 
