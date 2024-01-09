@@ -1,3 +1,5 @@
+// std imports
+use std::cmp::max;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicUsize;
@@ -17,12 +19,14 @@ use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{pin_mut, StreamExt, TryStreamExt};
 use scylla::prepared_statement::PreparedStatement;
+use tokio::fs::create_dir_all;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tracing::{debug, error, info};
 
+// internal imports
 use crate::database::configuration_table::{
     ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait,
 };
@@ -55,6 +59,10 @@ lazy_static! {
 }
 
 const MAX_INSERT_TRIES: u64 = 5;
+
+/// Name for unprocessable proteins log file
+///
+const UNPROCESSABLE_PROTEINS_LOG_FILE_NAME: &str = "unprocessable_proteins.txt";
 
 /// Struct which maintains the database content.
 /// * Inserts and updates proteins from given files
@@ -170,7 +178,7 @@ impl DatabaseBuild {
         partition_limits: Vec<i64>,
         log_folder: &PathBuf,
         metrics_log_intervals: u64,
-    ) -> Result<()> {
+    ) -> Result<usize> {
         debug!("Digesting proteins and inserting peptides");
 
         let protein_queue_size = num_threads * 300;
@@ -193,7 +201,8 @@ impl DatabaseBuild {
         ];
         let log_stop_flag = Arc::new(AtomicBool::new(false));
         let metrics_log_file_path = log_folder.join("digestion.metrics.tsv");
-        let unprocessable_proteins_log_file_path = log_folder.join("unprocessable_proteins.txt");
+        let unprocessable_proteins_log_file_path =
+            log_folder.join(UNPROCESSABLE_PROTEINS_LOG_FILE_NAME);
         let error_log_file_path = log_folder.join("digestion.errors.log");
 
         // Thread communication
@@ -208,14 +217,14 @@ impl DatabaseBuild {
         });
 
         // Unprocessable proteins logger
-        let unprocessable_proteins_logger: JoinHandle<Result<()>> = spawn(async move {
-            MessageLogger::start_logging(
+        let unprocessable_proteins_logger: JoinHandle<Result<usize>> = spawn(async move {
+            let num_unprocessable_proteins = MessageLogger::start_logging(
                 unprocessable_proteins_log_file_path,
                 unprocessable_proteins_receiver,
                 1, // Important to save each and every protein which fails
             )
             .await?;
-            Ok(())
+            Ok(num_unprocessable_proteins)
         });
 
         // Metrics logger
@@ -318,11 +327,11 @@ impl DatabaseBuild {
         debug!("Digestion threads joined");
 
         log_stop_flag.store(true, Ordering::Relaxed);
-        unprocessable_proteins_logger.await??;
+        let num_unprocessable_proteins = unprocessable_proteins_logger.await??;
         error_log_thread_handle.await??;
         metrics_logger_thread_handle.await??;
 
-        Ok(())
+        Ok(num_unprocessable_proteins)
     }
 
     /// Function to which digests protein, provided by a queue
@@ -1014,18 +1023,44 @@ impl DatabaseBuildTrait for DatabaseBuild {
             }
 
             info!("... {} proteins", protein_ctr);
+            let mut attempt_protein_file_path = protein_file_paths.clone();
+            // Insert proteins/peptides until no error occurred
+            for attempt in 1.. {
+                info!("Proteins digestion attempt {}", attempt);
+                // set variable for this digestion attempt
+                let try_log_folder = log_folder.join(attempt.to_string());
+                if !try_log_folder.is_dir() {
+                    create_dir_all(&try_log_folder).await?;
+                }
+                // Reduce threads for each attempt until 1 thread is reached
+                let attempt_num_threads = max(num_threads / attempt, 1);
 
-            Self::protein_digestion(
-                &self.database_url,
-                num_threads,
-                protein_file_paths,
-                protease.as_ref(),
-                configuration.get_remove_peptides_containing_unknown(),
-                configuration.get_partition_limits().to_vec(),
-                log_folder,
-                metrics_log_interval,
-            )
-            .await?;
+                // Start protein digestion
+                let num_unprocessable_proteins = Self::protein_digestion(
+                    &self.database_url,
+                    attempt_num_threads,
+                    &attempt_protein_file_path,
+                    protease.as_ref(),
+                    configuration.get_remove_peptides_containing_unknown(),
+                    configuration.get_partition_limits().to_vec(),
+                    log_folder,
+                    metrics_log_interval,
+                )
+                .await?;
+
+                // If no errors occurred, break
+                if num_unprocessable_proteins == 0 {
+                    info!("Digestion finished");
+                    break;
+                } else {
+                    attempt_protein_file_path =
+                        vec![try_log_folder.join(UNPROCESSABLE_PROTEINS_LOG_FILE_NAME)];
+                    info!(
+                        "Digestion failed for {} proteins. Retrying with less threads.",
+                        num_unprocessable_proteins
+                    );
+                }
+            }
         }
 
         Self::collect_peptide_metadata(
