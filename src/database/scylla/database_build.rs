@@ -94,6 +94,7 @@ impl DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
     ) -> Result<Configuration> {
+        info!("Getting or setting configuration..");
         let config_res = ConfigurationTable::select(client).await;
         // return if configuration is ok or if it is not a ConfigurationIncompleteError
         if config_res.as_ref().is_ok()
@@ -103,7 +104,7 @@ impl DatabaseBuild {
                 .is::<ConfigurationIncompleteError>()
         {
             if config_res.as_ref().is_ok() {
-                debug!("Found previous config");
+                info!("... configuration found in database");
             }
             return config_res;
         }
@@ -114,8 +115,12 @@ impl DatabaseBuild {
         // unwrap is safe because of `if` above
         let initial_configuration = initial_configuration_opt.unwrap();
 
+        if num_partitions == 0 && initial_configuration.get_partition_limits().is_empty() {
+            bail!("Number partition is 0 and initial configuration has no partition limits. Without any partitions the database cannot be built.");
+        }
+
         let new_configuration = if initial_configuration.get_partition_limits().len() == 0 {
-            info!("initial configuration has no partition limits list, creating one ...");
+            info!("... initial configuration has no partition limits list, creating one.");
             // create digestion protease
             let protease = get_protease_by_name(
                 initial_configuration.get_protease_name(),
@@ -146,13 +151,14 @@ impl DatabaseBuild {
                 partition_limits,
             )
         } else {
+            info!("... initial configuration has partition limits list, using it");
             // if partition limits were given just clone the initial configuration
             initial_configuration.clone()
         };
 
         // insert new_configuration
         ConfigurationTable::insert(client, &new_configuration).await?;
-        info!("new configuration saved ...");
+        info!("... new configuration saved");
 
         Ok(new_configuration)
     }
@@ -988,7 +994,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
         // Run migrations
         run_migrations(&client).await?;
 
-        info!("Getting / Setting configuration");
         // get or set configuration
         let configuration = Self::get_or_set_configuration(
             &mut client,

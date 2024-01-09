@@ -47,8 +47,9 @@ enum Commands {
         database_url: String,
         /// Number of threads to use for building the database
         num_threads: usize,
-        /// Number of partitions for distributing the database
-        num_partitions: u64,
+        /// Number of partitions or a pre generated partition limits file (see mass-counter and partitioning)
+        ///
+        partitions: String,
         /// Fraction of usable memory for the bloom filter for counting peptides
         /// For a tryptic digest of the complete Uniprot database 16 GB is recommended
         usable_memory_fraction: f64,
@@ -210,7 +211,7 @@ async fn main() -> Result<()> {
         Commands::Build {
             database_url,
             num_threads,
-            num_partitions,
+            partitions,
             usable_memory_fraction,
             log_folder,
             taxonomy_file,
@@ -239,6 +240,33 @@ async fn main() -> Result<()> {
 
             let log_folder = Path::new(&log_folder).to_path_buf();
 
+            let num_partitions = match partitions.parse::<u64>() {
+                Ok(num_partitions) => Some(num_partitions),
+                Err(_) => None,
+            };
+
+            // Default partition limits (empty if created)
+            let mut partition_limits: Vec<i64> = Vec::with_capacity(0);
+
+            // Try to read partition limits from file
+            let partition_limits_file_path = Path::new(&partitions).to_path_buf();
+            if partition_limits_file_path.is_file() {
+                // TSV reader
+                let mut reader = csv::ReaderBuilder::new()
+                    .delimiter(b'\t')
+                    .has_headers(true)
+                    .from_path(partition_limits_file_path)?;
+                // Deserialize each line
+                partition_limits = reader
+                    .deserialize()
+                    .map(|line| Ok(line?))
+                    .collect::<Result<Vec<i64>>>()?;
+            }
+
+            if num_partitions.is_none() && partition_limits.is_empty() {
+                bail!("Partitions was no number or a file. Without any partitions the database cannot be built.");
+            }
+
             if database_url.starts_with("scylla://") {
                 let builder = ScyllaBuild::new(&database_url);
 
@@ -247,7 +275,7 @@ async fn main() -> Result<()> {
                         &protein_file_paths,
                         &taxonomy_file_path,
                         num_threads,
-                        num_partitions,
+                        num_partitions.unwrap_or(0),
                         usable_memory_fraction,
                         partitioner_false_positive_probability,
                         Some(Configuration::new(
@@ -256,7 +284,7 @@ async fn main() -> Result<()> {
                             Some(min_peptide_length),
                             Some(max_peptide_length),
                             !keep_peptides_containing_unknown,
-                            Vec::with_capacity(0),
+                            partition_limits,
                         )),
                         &log_folder,
                         include_domains,
