@@ -1034,9 +1034,9 @@ impl DatabaseBuildTrait for DatabaseBuild {
             for attempt in 1.. {
                 info!("Proteins digestion attempt {}", attempt);
                 // set variable for this digestion attempt
-                let try_log_folder = log_folder.join(attempt.to_string());
-                if !try_log_folder.is_dir() {
-                    create_dir_all(&try_log_folder).await?;
+                let attempt_log_folder = log_folder.join(attempt.to_string());
+                if !attempt_log_folder.is_dir() {
+                    create_dir_all(&attempt_log_folder).await?;
                 }
                 // Reduce threads for each attempt until 1 thread is reached
                 let attempt_num_threads = max(num_threads / attempt, 1);
@@ -1049,7 +1049,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
                     protease.as_ref(),
                     configuration.get_remove_peptides_containing_unknown(),
                     configuration.get_partition_limits().to_vec(),
-                    log_folder,
+                    &attempt_log_folder,
                     metrics_log_interval,
                 )
                 .await?;
@@ -1060,7 +1060,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
                     break;
                 } else {
                     attempt_protein_file_path =
-                        vec![try_log_folder.join(UNPROCESSABLE_PROTEINS_LOG_FILE_NAME)];
+                        vec![attempt_log_folder.join(UNPROCESSABLE_PROTEINS_LOG_FILE_NAME)];
                     info!(
                         "Digestion failed for {} proteins. Retrying with less threads.",
                         num_unprocessable_proteins
