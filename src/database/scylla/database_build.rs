@@ -469,7 +469,8 @@ impl DatabaseBuild {
                         error!("Upsert failed for {}", protein.get_accession());
                         error_sender
                             .send(format!(
-                                "Upsert failed `{}`\n{:?}\n",
+                                "Attempt {}: Upsert failed `{}`\n{:?}\n",
+                                tries,
                                 protein.get_accession(),
                                 err
                             ))
