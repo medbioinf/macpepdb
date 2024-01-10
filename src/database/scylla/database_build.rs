@@ -1079,7 +1079,6 @@ impl DatabaseBuildTrait for DatabaseBuild {
             metrics_log_interval,
         )
         .await?;
-        // count peptides per partition
 
         Ok(())
     }
