@@ -1,6 +1,7 @@
 // std imports
 use std::collections::HashSet;
 use std::fs::read_to_string;
+use std::path::PathBuf;
 use std::{path::Path, thread::sleep, time::Duration};
 
 // 3rd party imports
@@ -8,6 +9,7 @@ use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::StreamExt;
+use glob::glob;
 use indicatif::ProgressStyle;
 use macpepdb::database::scylla::client::{Client, GenericClient};
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
@@ -83,7 +85,7 @@ enum Commands {
         /// Interval in seconds at which the metrics are logged to file
         #[arg(long, default_value_t = 900)]
         metrics_log_interval: u64,
-        /// Path protein files (dat or txt), comma separated
+        /// Protein files in UniProt text format (txt or dat). Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
         #[arg(value_delimiter = ' ', num_args = 0..)]
         protein_file_paths: Vec<String>,
     },
@@ -140,7 +142,7 @@ enum Commands {
         /// False positive probability for the bloom filter for counting peptides
         #[arg(long, default_value_t = DEFAULT_FALSE_POSITIVE_PROBABILITY)]
         false_positive_probability: f64,
-        /// Number of partitions
+        /// Protein files in UniProt text format (txt or dat). Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
         #[arg(value_delimiter = ' ', num_args = 1..)]
         protein_file_paths: Vec<String>,
     },
@@ -229,10 +231,7 @@ async fn main() -> Result<()> {
                 bail!("Max peptide lengths cannot be greater than 60");
             }
 
-            let protein_file_paths = protein_file_paths
-                .into_iter()
-                .map(|x| Path::new(&x).to_path_buf())
-                .collect();
+            let protein_file_paths = convert_str_paths_and_resolve_globs(protein_file_paths)?;
 
             let taxonomy_file_path = match taxonomy_file {
                 Some(taxonomy_file) => Some(Path::new(&taxonomy_file).to_path_buf()),
@@ -416,10 +415,7 @@ async fn main() -> Result<()> {
                 Some(max_peptide_length),
                 Some(max_number_of_missed_cleavages),
             )?;
-            let protein_file_paths = protein_file_paths
-                .into_iter()
-                .map(|x| Path::new(&x).to_path_buf())
-                .collect();
+            let protein_file_paths = convert_str_paths_and_resolve_globs(protein_file_paths)?;
 
             let mass_counts = PeptideMassCounter::count(
                 &protein_file_paths,
@@ -487,4 +483,29 @@ async fn main() -> Result<()> {
     };
 
     Ok(())
+}
+
+/// Converts a vector of strings to a vector of paths and resolves glob patterns.
+///
+/// # Arguments
+/// * `paths` - Vector of paths as strings
+///
+fn convert_str_paths_and_resolve_globs(paths: Vec<String>) -> Result<Vec<PathBuf>> {
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            if !path.contains("*") {
+                // Return plain path in vecotor if no glob pattern is found
+                Ok(vec![Path::new(&path).to_path_buf()])
+            } else {
+                // Resolve glob pattern and return array of paths
+                Ok(glob(&path)?
+                    .map(|x| Ok(x?))
+                    .collect::<Result<Vec<PathBuf>>>()?)
+            }
+        })
+        .collect::<Result<Vec<_>>>()? // Collect and resolve errors from parsing/resolving
+        .into_iter()
+        .flatten() // flatten the vectors which
+        .collect())
 }
