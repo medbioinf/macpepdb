@@ -112,7 +112,7 @@ impl PeptideMassCounter {
 
         // Start threads
         let mut ctr_thread_handlers: Vec<JoinHandle<Result<()>>> = Vec::with_capacity(num_threads);
-        for _ in 0..num_threads {
+        for tid in 0..num_threads {
             // Make copies of shared resources to move into thread
             let thread_protein_queue_arc = protein_queue_arc.clone();
             let thread_stop_flag = stop_flag.clone();
@@ -128,6 +128,7 @@ impl PeptideMassCounter {
             let thread_partitions_counters = partitions_counters.clone();
             let ctr_thread_handler = tokio::spawn(async move {
                 Self::count_thread(
+                    tid,
                     thread_protein_queue_arc,
                     thread_stop_flag,
                     thread_protease,
@@ -184,16 +185,31 @@ impl PeptideMassCounter {
         }
         debug!("All proteins read, waiting for threads to finish");
 
-        // Drop the progress bar
-        std::mem::drop(header_span_enter);
-        std::mem::drop(header_span);
-
         // Set stop flag to true
         stop_flag.store(true, Ordering::Relaxed);
+
+        let reimaining_proteins = protein_queue_arc.lock().unwrap().len();
+        header_span.pb_set_message("Remaining proteins");
+        header_span.pb_set_length(reimaining_proteins as u64);
+        header_span.pb_set_position(0);
+
+        loop {
+            let current_remaining_proteins = protein_queue_arc.lock().unwrap().len();
+            if current_remaining_proteins == 0 {
+                break;
+            }
+            header_span.pb_set_position((reimaining_proteins - current_remaining_proteins) as u64);
+            sleep(Duration::from_secs(1));
+        }
 
         debug!("Waiting for threads to finish");
         join_all(ctr_thread_handlers).await;
 
+        // Drop the progress bar
+        std::mem::drop(header_span_enter);
+        std::mem::drop(header_span);
+
+        debug!("Accumulate results");
         let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(partitions_counters)
             .unwrap()
             .into_iter()
@@ -212,6 +228,7 @@ impl PeptideMassCounter {
     }
 
     async fn count_thread(
+        tid: usize,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         stop_flag: Arc<AtomicBool>,
         protease: Box<dyn Protease>,
@@ -241,6 +258,8 @@ impl PeptideMassCounter {
                     }
                 }
             };
+            debug!("Thread {} got protein {}", tid, protein.get_accession());
+
             // Digest protein, keep only sequences
             let peptides: Vec<String> = match remove_peptides_containing_unknown {
                 true => remove_unknown_from_digest(protease.cleave(&protein.get_sequence())?)
@@ -279,6 +298,7 @@ impl PeptideMassCounter {
                 }
             }
         }
+        debug!("Thread finished {}", tid);
         Ok(())
     }
 }

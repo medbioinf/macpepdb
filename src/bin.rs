@@ -34,12 +34,20 @@ use macpepdb::{
     entities::configuration::Configuration,
 };
 
+// Protease choices depends on dihardts_omicstools::proteomics::proteases::functions::ALL which is a str-vector.
+// In order to use it with clap it needs to be an enum which is created via a template and build rs
+include!(concat!(env!("OUT_DIR"), "/protease_choice.rs"));
+
 const DEFAULT_MIN_PEPTIDE_LENGTH: usize = 6;
 const DEFAULT_MAX_PEPTIDE_LENGTH: usize = 50;
 const DEFAULT_MAX_NUMBER_OF_MISSED_CLEAVAGES: usize = 2;
 /// Default false positive probability for bloom filters
 ///
 const DEFAULT_FALSE_POSITIVE_PROBABILITY: f64 = 0.01;
+
+/// Default protease
+///
+const DEFAULT_PROTEASE: ProteaseChoice = ProteaseChoice::Trypsin;
 
 #[derive(Debug, Subcommand)]
 enum Commands {
@@ -68,8 +76,7 @@ enum Commands {
         /// Can be skipped once the database is built the first time
         #[arg(long, default_value_t = DEFAULT_MAX_PEPTIDE_LENGTH)]
         max_peptide_length: usize,
-        /// Maximum number of missed cleavages
-        /// Can be skipped once the database is built the first time
+        /// Maximum number of missed cleavages (ignored for unspecific proteases)
         #[arg(long, default_value_t = DEFAULT_MAX_NUMBER_OF_MISSED_CLEAVAGES)]
         max_number_of_missed_cleavages: usize,
         /// False positive probability for the bloom filter used for partitioning
@@ -85,6 +92,9 @@ enum Commands {
         /// Interval in seconds at which the metrics are logged to file
         #[arg(long, default_value_t = 900)]
         metrics_log_interval: u64,
+        /// Protease used for digestion
+        #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
+        protease: ProteaseChoice,
         /// Protein files in UniProt text format (txt or dat). Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
         #[arg(value_delimiter = ' ', num_args = 0..)]
         protein_file_paths: Vec<String>,
@@ -135,13 +145,15 @@ enum Commands {
         /// Can be skipped once the database is built the first time
         #[arg(long, default_value_t = DEFAULT_MAX_PEPTIDE_LENGTH)]
         max_peptide_length: usize,
-        /// Maximum number of missed cleavages
-        /// Can be skipped once the database is built the first time
+        /// Maximum number of missed cleavages (ignored for unspecific proteases)
         #[arg(long, default_value_t = DEFAULT_MAX_NUMBER_OF_MISSED_CLEAVAGES)]
         max_number_of_missed_cleavages: usize,
         /// False positive probability for the bloom filter for counting peptides
         #[arg(long, default_value_t = DEFAULT_FALSE_POSITIVE_PROBABILITY)]
         false_positive_probability: f64,
+        /// Protease used for digestion
+        #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
+        protease: ProteaseChoice,
         /// Protein files in UniProt text format (txt or dat). Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
         #[arg(value_delimiter = ' ', num_args = 1..)]
         protein_file_paths: Vec<String>,
@@ -225,6 +237,7 @@ async fn main() -> Result<()> {
             keep_peptides_containing_unknown,
             include_domains,
             metrics_log_interval,
+            protease,
             protein_file_paths,
         } => {
             if max_peptide_length > 60 {
@@ -279,7 +292,7 @@ async fn main() -> Result<()> {
                         usable_memory_fraction,
                         partitioner_false_positive_probability,
                         Some(Configuration::new(
-                            "trypsin".to_owned(),
+                            protease.to_str().to_lowercase(),
                             Some(max_number_of_missed_cleavages),
                             Some(min_peptide_length),
                             Some(max_peptide_length),
@@ -407,10 +420,11 @@ async fn main() -> Result<()> {
             max_peptide_length,
             max_number_of_missed_cleavages,
             false_positive_probability,
+            protease,
             protein_file_paths,
         } => {
             let protease = get_protease_by_name(
-                "trypsin",
+                protease.to_str(),
                 Some(min_peptide_length),
                 Some(max_peptide_length),
                 Some(max_number_of_missed_cleavages),
