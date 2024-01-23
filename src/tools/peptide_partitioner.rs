@@ -147,7 +147,7 @@ mod test {
     use super::*;
     use crate::tools::peptide_mass_counter::PeptideMassCounter;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[traced_test]
     async fn test_partitioning() {
         let protease = get_protease_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();

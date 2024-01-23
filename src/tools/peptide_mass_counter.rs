@@ -314,7 +314,7 @@ mod test {
     // internal imports
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     async fn test_counting() {
         let protease = get_protease_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
 
