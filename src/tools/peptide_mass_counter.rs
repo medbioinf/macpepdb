@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread::sleep,
@@ -72,10 +72,12 @@ impl PeptideMassCounter {
         let mut protein_ctr: usize = 0;
 
         let protein_file_path_queue = Arc::new(Mutex::new(protein_file_paths.clone()));
+        let processed_files = Arc::new(AtomicUsize::new(0));
         let thread_handles: Vec<JoinHandle<Result<usize>>> = (0..num_threads)
             .into_iter()
             .map(|_| {
                 let thread_protein_file_path_queue = protein_file_path_queue.clone();
+                let thread_processed_files = processed_files.clone();
                 tokio::spawn(async move {
                     let mut protein_ctr: usize = 0;
                     loop {
@@ -91,14 +93,24 @@ impl PeptideMassCounter {
                                 None => break,
                             }
                         };
+                        info!("... {}", path.display());
                         let mut reader = Reader::new(&path, 1024)?;
                         protein_ctr += reader.count_proteins()?;
-                        Span::current().pb_inc(1);
+                        thread_processed_files.fetch_add(1, Ordering::Relaxed);
                     }
                     Ok(protein_ctr)
                 })
             })
             .collect::<Vec<_>>();
+
+        loop {
+            let current_processed_files = processed_files.load(Ordering::Relaxed);
+            if current_processed_files == protein_file_paths.len() {
+                break;
+            }
+            header_span.pb_set_position(processed_files.load(Ordering::Relaxed) as u64);
+            sleep(Duration::from_secs(1));
+        }
 
         for thread_handle in thread_handles.into_iter() {
             protein_ctr += thread_handle.await??;
