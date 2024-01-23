@@ -149,6 +149,21 @@ You can try using io tuner for your disk, however in some cases the performance 
 
 ## Usage
 
+### Build
+To build the database use `cargo run -r -- build ...`. Use `--help` for all options.
+
+#### Recommendations
+1. Use MaCPepDB's sub commands `mass-count` and `partitioning` to generate balanced peptide partitions before building the database. Once the masses are counted you can use the resulting file to generate different peptide partitions you can use with the build command to find an optimum. E.g. for complete Uniprot a couple million peptides per partitions were the optimum. Depending on your hardware and protein collection it will change.
+
+
+#### Impact of protease
+Most metrics you encounter are obtained using Trypsin for digestion. Be aware that a different protease will generate other metrics. E.g. digesting the Mus Musculus proteome using Trypsin and Unspecific produce (obviously) very different results. Better hardware and much more disc space is required for an unspecific digest as on can imagine.
+
+| protease | peptides | distinct masses |
+| --- | --- | --- |
+| trypsin | 421062 | 359760 |
+| unspecific | 84759305 | 37876354 |
+
 ### Web API
 
 `cargo run -r web scylla://<COMMA_SEPARATED_SCYLLA_NODES_LIST>/<KEYSPACE/DATABASE> <IP> <PORT>`
