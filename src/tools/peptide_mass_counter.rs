@@ -62,10 +62,10 @@ impl PeptideMassCounter {
         // Count number of proteins in files
 
         // Create progress bars
-        let header_span = info_span!("counting");
-        header_span.pb_set_style(&ProgressStyle::default_bar());
-        header_span.pb_set_length(protein_file_paths.len() as u64);
-        let header_span_enter = header_span.enter();
+        let progress_bar = info_span!("counting");
+        progress_bar.pb_set_style(&ProgressStyle::default_bar());
+        progress_bar.pb_set_length(protein_file_paths.len() as u64);
+        let progress_bar_enter = progress_bar.enter();
 
         info!("Counting proteins ...");
 
@@ -108,7 +108,7 @@ impl PeptideMassCounter {
             if current_processed_files == protein_file_paths.len() {
                 break;
             }
-            header_span.pb_set_position(processed_files.load(Ordering::Relaxed) as u64);
+            progress_bar.pb_set_position(processed_files.load(Ordering::Relaxed) as u64);
             sleep(Duration::from_secs(1));
         }
 
@@ -118,9 +118,9 @@ impl PeptideMassCounter {
 
         info!("... {} proteins in total", protein_ctr);
 
-        header_span.pb_set_message("Proteins");
-        header_span.pb_set_length(protein_ctr as u64);
-        header_span.pb_set_position(0);
+        progress_bar.pb_set_message("Proteins");
+        progress_bar.pb_set_length(protein_ctr as u64);
+        progress_bar.pb_set_position(0);
 
         // Calculate the max mass and width of each partition
         let max_mass = INTERNAL_TRYPTOPHAN.get_mono_mass_int() * 60;
@@ -237,16 +237,16 @@ impl PeptideMassCounter {
         stop_flag.store(true, Ordering::Relaxed);
 
         let reimaining_proteins = protein_queue_arc.lock().unwrap().len();
-        header_span.pb_set_message("Remaining proteins");
-        header_span.pb_set_length(reimaining_proteins as u64);
-        header_span.pb_set_position(0);
+        progress_bar.pb_set_message("Remaining proteins");
+        progress_bar.pb_set_length(reimaining_proteins as u64);
+        progress_bar.pb_set_position(0);
 
         loop {
             let current_remaining_proteins = protein_queue_arc.lock().unwrap().len();
             if current_remaining_proteins == 0 {
                 break;
             }
-            header_span.pb_set_position((reimaining_proteins - current_remaining_proteins) as u64);
+            progress_bar.pb_set_position((reimaining_proteins - current_remaining_proteins) as u64);
             sleep(Duration::from_secs(1));
         }
 
@@ -254,8 +254,8 @@ impl PeptideMassCounter {
         join_all(ctr_thread_handlers).await;
 
         // Drop the progress bar
-        std::mem::drop(header_span_enter);
-        std::mem::drop(header_span);
+        std::mem::drop(progress_bar_enter);
+        std::mem::drop(progress_bar);
 
         debug!("Accumulate results");
         let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(partitions_counters)
