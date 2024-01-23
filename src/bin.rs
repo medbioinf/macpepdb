@@ -95,7 +95,9 @@ enum Commands {
         /// Protease used for digestion
         #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
         protease: ProteaseChoice,
-        /// Protein files in UniProt text format (txt or dat). Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
+        /// Protein files in UniProt text format (txt or dat).
+        /// Each file can be compressed with gzip (has last extension `.gz` e.g. `txt.gz``).
+        /// Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
         #[arg(value_delimiter = ' ', num_args = 0..)]
         protein_file_paths: Vec<String>,
     },
@@ -154,7 +156,9 @@ enum Commands {
         /// Protease used for digestion
         #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
         protease: ProteaseChoice,
-        /// Protein files in UniProt text format (txt or dat). Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
+        /// Protein files in UniProt text format (txt or dat).
+        /// Each file can be compressed with gzip (has last extension `.gz` e.g. `txt.gz``).
+        /// Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
         #[arg(value_delimiter = ' ', num_args = 1..)]
         protein_file_paths: Vec<String>,
     },

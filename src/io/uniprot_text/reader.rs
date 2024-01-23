@@ -1,14 +1,14 @@
 /// Contains reader for UniProt text files.
 // std imports
 use std::fs::File;
-use std::io::prelude::*;
-use std::io::{BufReader, SeekFrom};
-use std::path::Path;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
 
 // 3rd party imports
 use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use fallible_iterator::FallibleIterator;
+use flate2::read::GzDecoder;
 use log::error;
 use tracing::warn;
 
@@ -33,10 +33,16 @@ const GN_NAME_ATTRIBUTE: &'static str = "Name=";
 /// Attribute for synonyms in gene line
 const GN_SYNONYMS_ATTRIBUTE: &'static str = "Synonyms=";
 
+/// Empty str
+///
+const EMPTY_STR: &'static str = "";
+
 /// Reader for Uniprot text files
 /// <https://web.expasy.org/docs/userman.html>
 pub struct Reader {
-    internal_reader: BufReader<File>,
+    uniprot_txt_file_path: PathBuf,
+    buffer_size: usize,
+    internal_reader: Box<dyn BufRead>,
 }
 
 impl Reader {
@@ -47,16 +53,41 @@ impl Reader {
     /// * `uniprot_txt_file_path` - Path to UniProt text file
     ///
     pub fn new(uniprot_txt_file_path: &Path, buffer_size: usize) -> Result<Self> {
-        let uniprot_txt_file: File = File::open(uniprot_txt_file_path)?;
         Ok(Self {
-            internal_reader: BufReader::with_capacity(buffer_size, uniprot_txt_file),
+            buffer_size,
+            uniprot_txt_file_path: uniprot_txt_file_path.to_owned(),
+            internal_reader: Self::create_internal_reader(uniprot_txt_file_path, buffer_size)?,
+        })
+    }
+
+    fn create_internal_reader(
+        uniprot_txt_file_path: &Path,
+        buffer_size: usize,
+    ) -> Result<Box<dyn BufRead>> {
+        let uniprot_txt_file: File = File::open(uniprot_txt_file_path)?;
+        let extension: String = match uniprot_txt_file_path.extension() {
+            Some(extension) => extension
+                .to_ascii_lowercase()
+                .to_str()
+                .unwrap_or(EMPTY_STR)
+                .to_owned(),
+            None => EMPTY_STR.to_owned(),
+        };
+
+        Ok(match extension.as_str() {
+            "gz" => Box::new(BufReader::with_capacity(
+                buffer_size,
+                GzDecoder::new(uniprot_txt_file),
+            )),
+            _ => Box::new(BufReader::with_capacity(buffer_size, uniprot_txt_file)),
         })
     }
 
     /// Resets the reader to the beginning of the file
     ///
     pub fn reset(&mut self) -> Result<()> {
-        self.internal_reader.seek(SeekFrom::Start(0))?;
+        self.internal_reader =
+            Self::create_internal_reader(&self.uniprot_txt_file_path, self.buffer_size)?;
         return Ok(());
     }
 
@@ -408,90 +439,98 @@ mod tests {
             vec!["Lep", "Ob"],
             vec!["PHEX", "PEX"],
         ];
+        static ref TEST_FILE_PATHS: Vec<PathBuf> = vec![
+            Path::new("test_files/uniprot.txt").to_path_buf(),
+            Path::new("test_files/uniprot.txt.gz").to_path_buf(),
+        ];
     }
 
     #[test]
     fn test_reader() {
-        let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
-        let mut ctr = 0;
+        for test_file_path in TEST_FILE_PATHS.iter() {
+            let mut reader = Reader::new(test_file_path, 1024).unwrap();
+            let mut ctr = 0;
 
-        // let expected_domain: Domain = Domain::new(
-        //     23,
-        //     243,
-        //     "Peptidase S1".to_string(),
-        //     "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
-        //     None,
-        //     None,
-        //     None,
-        //     None,
-        // );
+            // let expected_domain: Domain = Domain::new(
+            //     23,
+            //     243,
+            //     "Peptidase S1".to_string(),
+            //     "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(),
+            //     None,
+            //     None,
+            //     None,
+            //     None,
+            // );
 
-        while let Some(protein) = reader.next().unwrap() {
-            assert_eq!(
-                protein.get_accession(),
-                EXPECTED_ACCESSION.get(ctr).unwrap()
-            );
-            assert_eq!(
-                protein.get_secondary_accessions().len(),
-                EXPECTED_SECONDARY_ACCESSION.get(ctr).unwrap().len()
-            );
-            for exp_sec_acc in EXPECTED_SECONDARY_ACCESSION.get(ctr).unwrap() {
-                assert!(
-                    protein
-                        .get_secondary_accessions()
-                        .contains(&exp_sec_acc.to_string()),
-                    "Secondary accession \"{}\" not found in protein {:?}",
-                    exp_sec_acc,
-                    protein.get_secondary_accessions()
+            while let Some(protein) = reader.next().unwrap() {
+                assert_eq!(
+                    protein.get_accession(),
+                    EXPECTED_ACCESSION.get(ctr).unwrap()
                 );
-            }
-            assert_eq!(
-                protein.get_entry_name(),
-                EXPECTED_ENTRY_NAMES.get(ctr).unwrap()
-            );
-            assert_eq!(protein.get_name(), EXPECTED_NAMES.get(ctr).unwrap());
-            assert_eq!(
-                protein.get_genes().len(),
-                EXPECTED_GENES.get(ctr).unwrap().len()
-            );
-            for exp_gene in EXPECTED_GENES.get(ctr).unwrap() {
-                assert!(
-                    protein.get_genes().contains(&exp_gene.to_string()),
-                    "Gene \"{}\" not found in protein {:?}",
-                    exp_gene,
-                    protein.get_genes()
+                assert_eq!(
+                    protein.get_secondary_accessions().len(),
+                    EXPECTED_SECONDARY_ACCESSION.get(ctr).unwrap().len()
                 );
+                for exp_sec_acc in EXPECTED_SECONDARY_ACCESSION.get(ctr).unwrap() {
+                    assert!(
+                        protein
+                            .get_secondary_accessions()
+                            .contains(&exp_sec_acc.to_string()),
+                        "Secondary accession \"{}\" not found in protein {:?}",
+                        exp_sec_acc,
+                        protein.get_secondary_accessions()
+                    );
+                }
+                assert_eq!(
+                    protein.get_entry_name(),
+                    EXPECTED_ENTRY_NAMES.get(ctr).unwrap()
+                );
+                assert_eq!(protein.get_name(), EXPECTED_NAMES.get(ctr).unwrap());
+                assert_eq!(
+                    protein.get_genes().len(),
+                    EXPECTED_GENES.get(ctr).unwrap().len()
+                );
+                for exp_gene in EXPECTED_GENES.get(ctr).unwrap() {
+                    assert!(
+                        protein.get_genes().contains(&exp_gene.to_string()),
+                        "Gene \"{}\" not found in protein {:?}",
+                        exp_gene,
+                        protein.get_genes()
+                    );
+                }
+                assert_eq!(
+                    protein.get_taxonomy_id(),
+                    EXPECTED_TAXONOMY_IDS.get(ctr).unwrap()
+                );
+                assert_eq!(
+                    protein.get_proteome_id(),
+                    EXPECTED_PROTEOME_IDS.get(ctr).unwrap()
+                );
+                assert_eq!(
+                    protein.get_is_reviewed(),
+                    *EXPECTED_REVIEW_STATUS.get(ctr).unwrap()
+                );
+                assert_eq!(protein.get_sequence(), EXPECTED_SEQUENCES.get(ctr).unwrap());
+                assert_eq!(
+                    protein.get_updated_at(),
+                    *EXPECTED_UPDATED_AT.get(ctr).unwrap()
+                );
+
+                // if ctr == 0 {
+                //     assert_eq!(protein.get_domains(), &vec![expected_domain.to_owned()])
+                // }
+
+                ctr += 1;
             }
-            assert_eq!(
-                protein.get_taxonomy_id(),
-                EXPECTED_TAXONOMY_IDS.get(ctr).unwrap()
-            );
-            assert_eq!(
-                protein.get_proteome_id(),
-                EXPECTED_PROTEOME_IDS.get(ctr).unwrap()
-            );
-            assert_eq!(
-                protein.get_is_reviewed(),
-                *EXPECTED_REVIEW_STATUS.get(ctr).unwrap()
-            );
-            assert_eq!(protein.get_sequence(), EXPECTED_SEQUENCES.get(ctr).unwrap());
-            assert_eq!(
-                protein.get_updated_at(),
-                *EXPECTED_UPDATED_AT.get(ctr).unwrap()
-            );
-
-            // if ctr == 0 {
-            //     assert_eq!(protein.get_domains(), &vec![expected_domain.to_owned()])
-            // }
-
-            ctr += 1;
+            assert_eq!(ctr, 3);
         }
-        assert_eq!(ctr, 3);
     }
 
     #[test]
     fn test_count_proteins() {
-        let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
-        assert_eq!(reader.count_proteins().unwrap(), 3);
+        for test_file_path in TEST_FILE_PATHS.iter() {
+            let mut reader = Reader::new(test_file_path, 1024).unwrap();
+            assert_eq!(reader.count_proteins().unwrap(), 3);
+        }
     }
 }
