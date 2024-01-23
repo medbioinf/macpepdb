@@ -30,10 +30,11 @@ chrono = "0.4.23"
 clap = { version = "4.3.0", features = ["derive"] }
 csv = "1.2.2"
 dihardts_cstools = "~1.0.0"
-dihardts_omicstools = "1.10.0"
+dihardts_omicstools = "1.11.0"
 env_logger = "0.10.0"
 fallible-iterator = "0.3.0"
 fancy-regex = "0.11.0"
+flate2 = "1.0.28"
 futures = "0.3.28"
 glob = "0.3.1"
 http = "1.0.0"
@@ -64,4 +65,4 @@ reqwest = { version = "0.11.22" }
 serial_test = "*"
 
 [build-dependencies]
-dihardts_omicstools = "1.10.0"
+dihardts_omicstools = "1.11.0"

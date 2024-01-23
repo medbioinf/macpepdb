@@ -5,6 +5,9 @@
 # Rust / Cargo
 /target
 
+# Tests
+taxdmp_for_unit_tests.zip
+
 /experiment
 performance.csv
 logs
