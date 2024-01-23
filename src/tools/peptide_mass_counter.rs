@@ -60,13 +60,55 @@ impl PeptideMassCounter {
         num_threads: usize,
     ) -> Result<Vec<(i64, u64)>> {
         // Count number of proteins in files
-        debug!("Counting proteins ...");
+
+        // Create progress bars
+        let header_span = info_span!("counting");
+        header_span.pb_set_style(&ProgressStyle::default_bar());
+        header_span.pb_set_length(protein_file_paths.len() as u64);
+        let header_span_enter = header_span.enter();
+
+        info!("Counting proteins ...");
+
         let mut protein_ctr: usize = 0;
-        for path in protein_file_paths.iter() {
-            debug!("... {}", path.display());
-            protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
+
+        let protein_file_path_queue = Arc::new(Mutex::new(protein_file_paths.clone()));
+        let thread_handles: Vec<JoinHandle<Result<usize>>> = (0..num_threads)
+            .into_iter()
+            .map(|_| {
+                let thread_protein_file_path_queue = protein_file_path_queue.clone();
+                tokio::spawn(async move {
+                    let mut protein_ctr: usize = 0;
+                    loop {
+                        let path = {
+                            let mut path_queue = match thread_protein_file_path_queue.lock() {
+                                Ok(path_queue) => path_queue,
+                                Err(err) => {
+                                    bail!(format!("Could not lock protein path queue: {}", err))
+                                }
+                            };
+                            match path_queue.pop() {
+                                Some(path) => path,
+                                None => break,
+                            }
+                        };
+                        let mut reader = Reader::new(&path, 1024)?;
+                        protein_ctr += reader.count_proteins()?;
+                        Span::current().pb_inc(1);
+                    }
+                    Ok(protein_ctr)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        for thread_handle in thread_handles.into_iter() {
+            protein_ctr += thread_handle.await??;
         }
-        debug!("... {} proteins in total", protein_ctr);
+
+        info!("... {} proteins in total", protein_ctr);
+
+        header_span.pb_set_message("Proteins");
+        header_span.pb_set_length(protein_ctr as u64);
+        header_span.pb_set_position(0);
 
         // Calculate the max mass and width of each partition
         let max_mass = INTERNAL_TRYPTOPHAN.get_mono_mass_int() * 60;
@@ -141,12 +183,6 @@ impl PeptideMassCounter {
             });
             ctr_thread_handlers.push(ctr_thread_handler);
         }
-
-        // Create progress bars
-        let header_span = info_span!("counting masses");
-        header_span.pb_set_style(&ProgressStyle::default_bar());
-        header_span.pb_set_length(protein_ctr as u64);
-        let header_span_enter = header_span.enter();
 
         let mut last_wait_instant: Option<Instant> = None;
 
