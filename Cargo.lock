@@ -692,9 +692,9 @@ dependencies = [
 
 [[package]]
 name = "dihardts_omicstools"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b86aafc49908040f1487d13a6e5ab2c8332ac1126b6765c45ef63475cc5c571"
+checksum = "1b97642f61f43e2cd6384cedd4c8c0d0b75e4accd417fc1f38e88fff0fb22753"
 dependencies = [
  "anyhow",
  "askama",
