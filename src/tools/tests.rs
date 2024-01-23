@@ -17,6 +17,7 @@ pub const TAXDMP_URL: &'static str = "https://ruhr-uni-bochum.sciebo.de/s/dUPkrK
 
 /// Downloads the latest taxdmp.zip if not given by env var
 /// `TAXDMP_ZIP_PATH` or already downloaded.
+/// Every test using this function should be marked as `#[serial]` to avoid concurrent downloads.
 ///
 /// Copied from di_hardts_omicstools::biology::io::taxonomy_reader::tests
 ///
@@ -24,7 +25,7 @@ pub async fn get_taxdmp_zip() -> Result<PathBuf> {
     if let Some(taxdmp_zip_path) = env::var_os("TAXDMP_ZIP_PATH") {
         return Ok(Path::new(taxdmp_zip_path.to_str().unwrap()).to_path_buf());
     }
-    let taxdmp_zip_path = env::temp_dir().join("taxdmp_for_unit_tests.zip");
+    let taxdmp_zip_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("taxdmp_for_unit_tests.zip");
     // Create temp dir
     if !taxdmp_zip_path.parent().unwrap().is_dir() {
         create_dir(taxdmp_zip_path.parent().unwrap()).unwrap();
