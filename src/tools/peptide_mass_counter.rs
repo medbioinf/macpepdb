@@ -16,17 +16,19 @@ use dihardts_omicstools::proteomics::proteases::{
 };
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
-use indicatif::ProgressStyle;
 use sysinfo::{System, SystemExt};
 use tokio::task::JoinHandle;
-use tracing::{debug, info, info_span, Span};
+use tracing::{debug, info, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::{
     chemistry::amino_acid::{calc_sequence_mass_int, INTERNAL_TRYPTOPHAN},
     entities::protein::Protein,
     io::uniprot_text::reader::Reader,
-    tools::{omicstools::remove_unknown_from_digest, peptide_partitioner::get_mass_partition},
+    tools::{
+        omicstools::remove_unknown_from_digest, peptide_partitioner::get_mass_partition,
+        progress_view::ProgressView,
+    },
 };
 
 lazy_static! {
@@ -60,19 +62,23 @@ impl PeptideMassCounter {
         num_threads: usize,
     ) -> Result<Vec<(i64, u64)>> {
         // Count number of proteins in files
-
-        // Create progress bars
-        let progress_bar = info_span!("counting");
-        progress_bar.pb_set_style(&ProgressStyle::default_bar());
-        progress_bar.pb_set_length(protein_file_paths.len() as u64);
-        let progress_bar_enter = progress_bar.enter();
-
         info!("Counting proteins ...");
 
         let mut protein_ctr: usize = 0;
 
         let protein_file_path_queue = Arc::new(Mutex::new(protein_file_paths.clone()));
         let processed_files = Arc::new(AtomicUsize::new(0));
+        let stop_flag = Arc::new(AtomicBool::new(false));
+
+        let progress_bar = ProgressView::create(
+            "protein counting",
+            vec![processed_files.clone()],
+            vec![Some(protein_file_paths.len() as u64)],
+            vec!["files".to_string()],
+            stop_flag.clone(),
+            None,
+        );
+
         let thread_handles: Vec<JoinHandle<Result<usize>>> = (0..num_threads)
             .into_iter()
             .map(|_| {
@@ -103,24 +109,16 @@ impl PeptideMassCounter {
             })
             .collect::<Vec<_>>();
 
-        loop {
-            let current_processed_files = processed_files.load(Ordering::Relaxed);
-            if current_processed_files == protein_file_paths.len() {
-                break;
-            }
-            progress_bar.pb_set_position(processed_files.load(Ordering::Relaxed) as u64);
-            sleep(Duration::from_secs(1));
-        }
-
+        // wait for counting to finish
         for thread_handle in thread_handles.into_iter() {
             protein_ctr += thread_handle.await??;
         }
 
-        info!("... {} proteins in total", protein_ctr);
+        // Stop progress bar
+        stop_flag.store(true, Ordering::Relaxed);
+        progress_bar.await?;
 
-        progress_bar.pb_set_message("Proteins");
-        progress_bar.pb_set_length(protein_ctr as u64);
-        progress_bar.pb_set_position(0);
+        info!("... {} proteins in total", protein_ctr);
 
         // Calculate the max mass and width of each partition
         let max_mass = INTERNAL_TRYPTOPHAN.get_mono_mass_int() * 60;
@@ -161,40 +159,73 @@ impl PeptideMassCounter {
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> =
             Arc::new(Mutex::new(Vec::with_capacity(protein_queue_size)));
 
-        // Stop flag for signaling threads to stop once the protein queue is emptied
-        let stop_flag = Arc::new(AtomicBool::new(false));
+        // Stop flags for threadss
+        let progress_stop_flag = Arc::new(AtomicBool::new(false));
+        stop_flag.store(false, Ordering::Relaxed);
+
+        let processed_proteins = Arc::new(AtomicUsize::new(0));
+
+        // Create progress bar
+        let progress_bar = ProgressView::create(
+            "digesting and counting masses",
+            vec![processed_proteins.clone()],
+            vec![Some(protein_ctr as u64)],
+            vec!["files".to_string()],
+            progress_stop_flag.clone(),
+            None,
+        );
 
         // Start threads
-        let mut ctr_thread_handlers: Vec<JoinHandle<Result<()>>> = Vec::with_capacity(num_threads);
-        for tid in 0..num_threads {
-            // Make copies of shared resources to move into thread
-            let thread_protein_queue_arc = protein_queue_arc.clone();
-            let thread_stop_flag = stop_flag.clone();
-            let thread_protease = get_protease_by_name(
-                protease.get_name(),
-                protease.get_min_length(),
-                protease.get_max_length(),
-                protease.get_max_missed_cleavages(),
-            )?;
-            let thread_bloom_filter_arc = bloom_filter_arc.clone();
-            let remove_peptides_containing_unknown = remove_peptides_containing_unknown.clone();
-            let thread_partition_limits = partition_limits.clone();
-            let thread_partitions_counters = partitions_counters.clone();
-            let ctr_thread_handler = tokio::spawn(async move {
-                Self::count_thread(
-                    tid,
-                    thread_protein_queue_arc,
-                    thread_stop_flag,
-                    thread_protease,
-                    remove_peptides_containing_unknown,
-                    thread_bloom_filter_arc,
-                    thread_partition_limits,
-                    thread_partitions_counters,
-                )
-                .await
-            });
-            ctr_thread_handlers.push(ctr_thread_handler);
-        }
+        // let mut ctr_thread_handles: Vec<std::thread::JoinHandle<Result<()>>> =
+        //     Vec::with_capacity(num_threads);
+        let ctr_thread_handles: Vec<std::thread::JoinHandle<Result<()>>> = (0..num_threads)
+            // let ctr_thread_handles: Vec<JoinHandle<Result<()>>> = (0..num_threads)
+            .map(|tid| {
+                // Make copies of shared resources to move into thread
+                let thread_protein_queue_arc = protein_queue_arc.clone();
+                let thread_stop_flag = stop_flag.clone();
+                let thread_protease = get_protease_by_name(
+                    protease.get_name(),
+                    protease.get_min_length(),
+                    protease.get_max_length(),
+                    protease.get_max_missed_cleavages(),
+                )?;
+                let thread_bloom_filter_arc = bloom_filter_arc.clone();
+                let remove_peptides_containing_unknown = remove_peptides_containing_unknown.clone();
+                let thread_partition_limits = partition_limits.clone();
+                let thread_partitions_counters = partitions_counters.clone();
+                let thread_processed_proteins = processed_proteins.clone();
+                // Ok(tokio::spawn(async move {
+                //     Self::count_thread(
+                //         tid,
+                //         thread_protein_queue_arc,
+                //         thread_stop_flag,
+                //         thread_protease,
+                //         remove_peptides_containing_unknown,
+                //         thread_bloom_filter_arc,
+                //         thread_partition_limits,
+                //         thread_partitions_counters,
+                //         thread_processed_proteins,
+                //     )
+                //     .await
+                // }))
+                Ok(std::thread::spawn(move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+                    runtime.block_on(Self::count_thread(
+                        tid,
+                        thread_protein_queue_arc,
+                        thread_stop_flag,
+                        thread_protease,
+                        remove_peptides_containing_unknown,
+                        thread_bloom_filter_arc,
+                        thread_partition_limits,
+                        thread_partitions_counters,
+                        thread_processed_proteins,
+                    ))?;
+                    Ok(())
+                }))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let mut last_wait_instant: Option<Instant> = None;
 
@@ -236,26 +267,18 @@ impl PeptideMassCounter {
         // Set stop flag to true
         stop_flag.store(true, Ordering::Relaxed);
 
-        let reimaining_proteins = protein_queue_arc.lock().unwrap().len();
-        progress_bar.pb_set_message("Remaining proteins");
-        progress_bar.pb_set_length(reimaining_proteins as u64);
-        progress_bar.pb_set_position(0);
-
-        loop {
-            let current_remaining_proteins = protein_queue_arc.lock().unwrap().len();
-            if current_remaining_proteins == 0 {
-                break;
-            }
-            progress_bar.pb_set_position((reimaining_proteins - current_remaining_proteins) as u64);
-            sleep(Duration::from_secs(1));
+        // Wait for threads to finish
+        for thread_handle in ctr_thread_handles.into_iter() {
+            match thread_handle.join() {
+                Ok(_) => (),
+                Err(err) => bail!(format!("Error in thread: {:?}", err)),
+            };
         }
+        // join_all(ctr_thread_handles).await;
 
-        debug!("Waiting for threads to finish");
-        join_all(ctr_thread_handlers).await;
-
-        // Drop the progress bar
-        std::mem::drop(progress_bar_enter);
-        std::mem::drop(progress_bar);
+        // Stop progress bar
+        progress_stop_flag.store(true, Ordering::Relaxed);
+        progress_bar.await?;
 
         debug!("Accumulate results");
         let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(partitions_counters)
@@ -284,6 +307,7 @@ impl PeptideMassCounter {
         bloom_filter_arc: Arc<Mutex<BloomFilter>>,
         partition_limits: Arc<Vec<i64>>,
         partitions_counters: Arc<Vec<Arc<Mutex<HashMap<i64, u64>>>>>,
+        processed_proteins: Arc<AtomicUsize>,
     ) -> Result<()> {
         let mut wait_for_queue = false;
         loop {
@@ -345,6 +369,7 @@ impl PeptideMassCounter {
                     *partition_ctr_map.entry(mass).or_insert(0) += 1;
                 }
             }
+            processed_proteins.fetch_add(1, Ordering::Relaxed);
         }
         debug!("Thread finished {}", tid);
         Ok(())

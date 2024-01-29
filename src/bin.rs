@@ -17,7 +17,7 @@ use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
 use macpepdb::tools::peptide_mass_counter::PeptideMassCounter;
 use macpepdb::tools::peptide_partitioner::PeptidePartitioner;
-use tracing::{debug, error, info, info_span, Level};
+use tracing::{debug, error, info, info_span, Instrument, Level};
 use tracing_indicatif::IndicatifLayer;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -427,6 +427,9 @@ async fn main() -> Result<()> {
             protease,
             protein_file_paths,
         } => {
+            // Create span for this function
+            let info_span = info_span!("counting peptide masses");
+
             let protease = get_protease_by_name(
                 protease.to_str(),
                 Some(min_peptide_length),
@@ -443,6 +446,7 @@ async fn main() -> Result<()> {
                 usable_memory_fraction,
                 num_threads,
             )
+            .instrument(info_span)
             .await?;
 
             let num_peptides: u64 = mass_counts.iter().map(|x| x.1).sum();
