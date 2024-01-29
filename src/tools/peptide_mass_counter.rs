@@ -15,11 +15,8 @@ use dihardts_omicstools::proteomics::proteases::{
     functions::get_by_name as get_protease_by_name, protease::Protease,
 };
 use fallible_iterator::FallibleIterator;
-use futures::future::join_all;
 use sysinfo::{System, SystemExt};
-use tokio::task::JoinHandle;
-use tracing::{debug, info, Span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing::{debug, info};
 
 use crate::{
     chemistry::amino_acid::{calc_sequence_mass_int, INTERNAL_TRYPTOPHAN},
@@ -79,12 +76,12 @@ impl PeptideMassCounter {
             None,
         );
 
-        let thread_handles: Vec<JoinHandle<Result<usize>>> = (0..num_threads)
+        let thread_handles: Vec<std::thread::JoinHandle<Result<usize>>> = (0..num_threads)
             .into_iter()
             .map(|_| {
                 let thread_protein_file_path_queue = protein_file_path_queue.clone();
                 let thread_processed_files = processed_files.clone();
-                tokio::spawn(async move {
+                std::thread::spawn(move || {
                     let mut protein_ctr: usize = 0;
                     loop {
                         let path = {
@@ -111,7 +108,10 @@ impl PeptideMassCounter {
 
         // wait for counting to finish
         for thread_handle in thread_handles.into_iter() {
-            protein_ctr += thread_handle.await??;
+            protein_ctr += match thread_handle.join() {
+                Ok(protein_ctr) => protein_ctr?,
+                Err(err) => bail!(format!("Error in protein counting thread: {:?}", err)),
+            };
         }
 
         // Stop progress bar
@@ -176,10 +176,7 @@ impl PeptideMassCounter {
         );
 
         // Start threads
-        // let mut ctr_thread_handles: Vec<std::thread::JoinHandle<Result<()>>> =
-        //     Vec::with_capacity(num_threads);
         let ctr_thread_handles: Vec<std::thread::JoinHandle<Result<()>>> = (0..num_threads)
-            // let ctr_thread_handles: Vec<JoinHandle<Result<()>>> = (0..num_threads)
             .map(|tid| {
                 // Make copies of shared resources to move into thread
                 let thread_protein_queue_arc = protein_queue_arc.clone();
@@ -195,23 +192,8 @@ impl PeptideMassCounter {
                 let thread_partition_limits = partition_limits.clone();
                 let thread_partitions_counters = partitions_counters.clone();
                 let thread_processed_proteins = processed_proteins.clone();
-                // Ok(tokio::spawn(async move {
-                //     Self::count_thread(
-                //         tid,
-                //         thread_protein_queue_arc,
-                //         thread_stop_flag,
-                //         thread_protease,
-                //         remove_peptides_containing_unknown,
-                //         thread_bloom_filter_arc,
-                //         thread_partition_limits,
-                //         thread_partitions_counters,
-                //         thread_processed_proteins,
-                //     )
-                //     .await
-                // }))
                 Ok(std::thread::spawn(move || {
-                    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
-                    runtime.block_on(Self::count_thread(
+                    Self::count_thread(
                         tid,
                         thread_protein_queue_arc,
                         thread_stop_flag,
@@ -221,7 +203,7 @@ impl PeptideMassCounter {
                         thread_partition_limits,
                         thread_partitions_counters,
                         thread_processed_proteins,
-                    ))?;
+                    )?;
                     Ok(())
                 }))
             })
@@ -256,8 +238,6 @@ impl PeptideMassCounter {
                     }
                     last_wait_instant = None;
                     protein_queue.push(protein);
-                    // Increase progress bar
-                    Span::current().pb_inc(1);
                     break;
                 }
             }
@@ -298,7 +278,7 @@ impl PeptideMassCounter {
         Ok(partitions_counters)
     }
 
-    async fn count_thread(
+    fn count_thread(
         tid: usize,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         stop_flag: Arc<AtomicBool>,
