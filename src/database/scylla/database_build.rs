@@ -31,8 +31,8 @@ use crate::database::configuration_table::{
     ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait,
 };
 use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
+use crate::database::generic_client::GenericClient;
 use crate::database::scylla::client::Client;
-use crate::database::scylla::client::GenericClient;
 use crate::database::scylla::migrations::run_migrations;
 use crate::database::scylla::{
     configuration_table::ConfigurationTable, peptide_table::PeptideTable,
@@ -189,6 +189,9 @@ impl DatabaseBuild {
 
         let protein_queue_size = num_threads * 300;
 
+        // Database client
+        let client = Arc::new(Client::new(database_url).await?);
+
         // Digestion variables
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
@@ -248,43 +251,29 @@ impl DatabaseBuild {
             Ok(())
         });
 
-        let mut digestion_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
-
-        // Start digestion threads
-        for _ in 0..num_threads {
-            // Clone necessary variables
-            let protein_queue_arc_clone = protein_queue_arc.clone();
-            let partition_limits_arc_clone = partition_limits_arc.clone();
-            let stop_flag_clone = stop_flag.clone();
-            let thread_unprocessable_proteins_sender = unprocessable_proteins_sender.clone();
-            let thread_error_sender = error_sender.clone();
-            let thread_metrics = metrics.clone();
-            // Create a boxed protease
-            let protease_box = get_protease_by_name(
-                protease.get_name(),
-                protease.get_min_length(),
-                protease.get_max_length(),
-                protease.get_max_missed_cleavages(),
-            )?;
-            let database_url_clone = database_url.to_string();
-            // TODO: Add logging thread
-            // Start digestion thread
-            digestion_thread_handles.push(spawn(async move {
-                Self::digestion_thread(
-                    database_url_clone,
-                    protein_queue_arc_clone,
-                    partition_limits_arc_clone,
-                    stop_flag_clone,
+        let digestion_thread_handles = (0..num_threads)
+            .map(|_| {
+                // Create a boxed protease
+                let protease_box = get_protease_by_name(
+                    protease.get_name(),
+                    protease.get_min_length(),
+                    protease.get_max_length(),
+                    protease.get_max_missed_cleavages(),
+                )?;
+                // Start digestion thread
+                Ok(spawn(Self::digestion_thread(
+                    client.clone(),
+                    protein_queue_arc.clone(),
+                    partition_limits_arc.clone(),
+                    stop_flag.clone(),
                     protease_box,
                     remove_peptides_containing_unknown,
-                    thread_unprocessable_proteins_sender,
-                    thread_error_sender,
-                    thread_metrics,
-                )
-                .await?;
-                Ok(())
-            }));
-        }
+                    unprocessable_proteins_sender.clone(),
+                    error_sender.clone(),
+                    metrics.clone(),
+                )))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // Drop the original sender its not needed anymore
         drop(unprocessable_proteins_sender);
@@ -355,7 +344,7 @@ impl DatabaseBuild {
     /// * `metrics` - The metrics
     ///
     async fn digestion_thread(
-        database_url: String,
+        client: Arc<Client>,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         partition_limits_arc: Arc<Vec<i64>>,
         stop_flag: Arc<AtomicBool>,
@@ -365,8 +354,6 @@ impl DatabaseBuild {
         error_sender: Sender<String>,
         metrics: Arc<Vec<AtomicUsize>>,
     ) -> Result<()> {
-        let mut client = Client::new(&database_url).await?;
-
         let mut wait_for_queue = false;
 
         let statement = format!(
@@ -375,7 +362,7 @@ impl DatabaseBuild {
             TABLE_NAME,
             UPDATE_SET_PLACEHOLDER.as_str()
         );
-        let prepared = client.get_session().prepare(statement).await?;
+        let prepared = client.prepare(statement).await?;
 
         loop {
             if wait_for_queue {
@@ -406,7 +393,7 @@ impl DatabaseBuild {
             accession_list.push(protein.get_accession().to_owned());
 
             let existing_protein = ProteinTable::select(
-                &client,
+                client.as_ref(),
                 "WHERE accession IN ?",
                 &[&CqlValue::List(
                     accession_list
@@ -434,7 +421,7 @@ impl DatabaseBuild {
                             return Ok(());
                         }
                         return Self::update_protein(
-                            &mut client,
+                            client.as_ref(),
                             &protein,
                             &existing_protein,
                             &protease,
@@ -446,7 +433,7 @@ impl DatabaseBuild {
                         .await;
                     } else {
                         return Self::insert_protein(
-                            &mut client,
+                            client.as_ref(),
                             &protein,
                             &protease,
                             remove_peptides_containing_unknown,
@@ -507,7 +494,7 @@ impl DatabaseBuild {
     /// * `peptide_sender` - The sender which is used to send the number of processed peptides to the logger
     ///
     async fn update_protein(
-        client: &mut Client,
+        client: &Client,
         updated_protein: &Protein,
         stored_protein: &Protein,
         protease: &Box<dyn Protease>,
@@ -626,15 +613,12 @@ impl DatabaseBuild {
     /// * `peptides_from_stored_protein` - The peptides from the existing protein
     /// * `peptides_from_updated_protein` - The peptides from the updated protein
     ///
-    async fn deassociate_protein_peptides_difference<C>(
-        client: &C,
+    async fn deassociate_protein_peptides_difference(
+        client: &Client,
         stored_protein: &Protein,
         peptides_from_stored_protein: &HashSet<Peptide>,
         peptides_from_updated_protein: &HashSet<Peptide>,
-    ) -> Result<()>
-    where
-        C: GenericClient,
-    {
+    ) -> Result<()> {
         // Disassociate all peptides from existing protein which are not contained by the new protein
         let peptides_to_deassociate = peptides_from_stored_protein
             .difference(&peptides_from_updated_protein)
@@ -660,15 +644,12 @@ impl DatabaseBuild {
     /// * `peptides_from_updated_protein` - The peptides from the updated protein
     /// * `prepared` - The prepared statement for updating the peptides
     ///
-    async fn create_protein_peptide_difference<C>(
-        client: &C,
+    async fn create_protein_peptide_difference(
+        client: &Client,
         peptides_from_stored_protein: &HashSet<Peptide>,
         peptides_from_updated_protein: &HashSet<Peptide>,
         prepared: &PreparedStatement,
-    ) -> Result<()>
-    where
-        C: GenericClient,
-    {
+    ) -> Result<()> {
         // Disassociate all peptides from existing protein which are not contained by the new protein
         let peptides_to_create: Vec<&Peptide> = peptides_from_updated_protein
             .difference(peptides_from_stored_protein)
@@ -692,7 +673,7 @@ impl DatabaseBuild {
     /// * `peptide_sender` - The sender which is used to send the number of processed peptides to the logger
     ///
     async fn insert_protein(
-        client: &mut Client,
+        client: &Client,
         protein: &Protein,
         protease: &Box<dyn Protease>,
         remove_peptides_containing_unknown: bool,
@@ -787,36 +768,27 @@ impl DatabaseBuild {
             Ok(())
         });
 
-        let mut metadata_collector_thread_handles: Vec<JoinHandle<Result<()>>> = Vec::new();
-
         debug!("Starting {} metadata update threads", num_threads);
-        // Start digestion threads
-        for _ in 0..num_threads {
-            // Clone necessary variables
-            let thread_partition_queue = partition_queue.clone();
-            let database_url_clone = database_url.to_string();
-            let thread_metric_values = metric_values.clone();
-            let protease_box = get_protease_by_name(
-                protease.get_name(),
-                protease.get_min_length(),
-                protease.get_max_length(),
-                protease.get_max_missed_cleavages(),
-            )?;
-            let thread_error_sender = error_sender.clone();
-            // Start digestion thread
-            metadata_collector_thread_handles.push(spawn(async move {
-                Self::collect_peptide_metadata_thread(
-                    database_url_clone,
-                    thread_partition_queue,
-                    protease_box,
+        let client = Arc::new(Client::new(database_url).await?);
+        let metadata_collector_thread_handles: Vec<_> = (0..num_threads * 2)
+            .map(|_| {
+                let protease = get_protease_by_name(
+                    protease.get_name(),
+                    protease.get_min_length(),
+                    protease.get_max_length(),
+                    protease.get_max_missed_cleavages(),
+                )?;
+                // Start digestion thread
+                Ok(spawn(Self::collect_peptide_metadata_thread(
+                    client.clone(),
+                    partition_queue.clone(),
+                    protease,
                     include_domains,
-                    thread_metric_values,
-                    thread_error_sender,
-                )
-                .await?;
-                Ok(())
-            }));
-        }
+                    metric_values.clone(),
+                    error_sender.clone(),
+                )))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // Drop the original sender its not needed anymore and would block the error logging thread
         drop(error_sender);
@@ -846,21 +818,19 @@ impl DatabaseBuild {
     /// * `error_sender` - The sender which is used to send general errors to the logger
     ///
     async fn collect_peptide_metadata_thread(
-        database_url: String,
+        client: Arc<Client>,
         partition_queue: Arc<Mutex<Vec<i64>>>,
         protease: Box<dyn Protease>,
         include_domains: bool,
         metrics: Arc<Vec<AtomicUsize>>,
         error_sender: Sender<String>,
     ) -> Result<()> {
-        let client = Client::new(&database_url).await?;
-        let session = client.get_session();
         let update_query = format!(
             "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
             client.get_database(),
             PeptideTable::table_name()
         );
-        let update_query_prepared_statement = session.prepare(update_query).await?;
+        let update_query_prepared_statement = client.prepare(update_query).await?;
 
         let protease_cleavage_codes: Vec<char> = protease
             .get_cleavage_amino_acids()
@@ -889,7 +859,7 @@ impl DatabaseBuild {
             let select_args_refs = vec![&partition_cql];
 
             let peptide_stream = PeptideTable::stream(
-                &client,
+                client.as_ref(),
                 "WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
                 &select_args_refs,
                 10000,
@@ -900,10 +870,11 @@ impl DatabaseBuild {
 
             while let Some(peptide) = peptide_stream.next().await {
                 let peptide = peptide?;
-                let associated_proteins = ProteinTable::get_proteins_of_peptide(&client, &peptide)
-                    .await?
-                    .try_collect()
-                    .await?;
+                let associated_proteins =
+                    ProteinTable::get_proteins_of_peptide(client.as_ref(), &peptide)
+                        .await?
+                        .try_collect()
+                        .await?;
 
                 let (
                     is_swiss_prot,
@@ -919,7 +890,7 @@ impl DatabaseBuild {
                     include_domains,
                 );
 
-                let update_result = session
+                let update_result = client
                     .execute(
                         &update_query_prepared_statement,
                         (

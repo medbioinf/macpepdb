@@ -11,9 +11,10 @@ use tracing::{info_span, Span};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
+use crate::database::generic_client::GenericClient;
 use crate::database::scylla::configuration_table::ConfigurationTable;
 // internal imports
-use crate::database::scylla::client::{Client, GenericClient};
+use crate::database::scylla::client::Client;
 use crate::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
@@ -29,7 +30,6 @@ pub async fn query_performance(
     ptms: Vec<PTM>,
 ) -> Result<()> {
     let client = Client::new(database_url).await?;
-    let session = (&client).get_session();
     let mut mass_stats: Vec<(i64, u64, u128)> = Vec::new();
 
     let config = ConfigurationTable::select(&client).await?;
@@ -48,7 +48,7 @@ pub async fn query_performance(
         PeptideTable::table_name()
     );
 
-    let query_statement = session.prepare(query_statement_str).await?;
+    let query_statement = client.prepare(query_statement_str).await?;
 
     // Iterate masses
     for mass in masses.iter() {
@@ -82,7 +82,7 @@ pub async fn query_performance(
                 // let params: Vec<&CqlValue> =
                 //     vec![&partition_cql_value, &lower_mass_limit, &upper_mass_limit];
 
-                let mut rows_stream = session
+                let mut rows_stream = client
                     .execute_iter(
                         query_statement.to_owned(),
                         (&partition_cql_value, &lower_mass_limit, &upper_mass_limit),

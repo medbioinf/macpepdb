@@ -11,7 +11,8 @@ use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_pr
 use futures::StreamExt;
 use glob::glob;
 use indicatif::ProgressStyle;
-use macpepdb::database::scylla::client::{Client, GenericClient};
+use macpepdb::database::generic_client::GenericClient;
+use macpepdb::database::scylla::client::Client;
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
@@ -285,6 +286,7 @@ async fn main() -> Result<()> {
             }
 
             if database_url.starts_with("scylla://") {
+                let start = std::time::Instant::now();
                 let builder = ScyllaBuild::new(&database_url);
 
                 match builder
@@ -312,6 +314,7 @@ async fn main() -> Result<()> {
                     Ok(_) => info!("Database build completed successfully!"),
                     Err(e) => error!("Database build failed: {:?}", e),
                 }
+                info!("Database build took: {:?}", start.elapsed());
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
@@ -367,7 +370,6 @@ async fn main() -> Result<()> {
         Commands::DomainTypes { database_url } => {
             if database_url.starts_with("scylla://") {
                 let client = Client::new(&database_url).await?;
-                let session = client.get_session();
 
                 let not_updated_peptides = info_span!("not_updated_peptides");
                 let not_updated_peptides_enter = not_updated_peptides.enter();
@@ -384,7 +386,7 @@ async fn main() -> Result<()> {
 
                     debug!("Streaming rows of partition {}", partition);
 
-                    let mut rows_stream = session
+                    let mut rows_stream = client
                         .query_iter(query_statement, (partition,))
                         .await
                         .unwrap();

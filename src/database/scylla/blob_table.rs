@@ -3,7 +3,7 @@ use anyhow::{Context, Result};
 use futures::{StreamExt, TryStreamExt};
 
 // internal imports
-use crate::database::scylla::client::{Client, GenericClient};
+use crate::database::{generic_client::GenericClient, scylla::client::Client};
 
 /// Max size of a blob in bytes (512 kB)
 ///
@@ -44,11 +44,10 @@ impl BlobTable {
             TABLE_NAME,
             COLUMNS
         );
-        let prepared_statement = client.get_session().prepare(statement).await?;
+        let prepared_statement = client.prepare(statement).await?;
 
         for (i, chunk) in data.chunks(num_chunks).enumerate() {
             client
-                .get_session()
                 .execute(
                     &prepared_statement,
                     (format!("{}_{}", key_prefix, i), Vec::from(chunk)),
@@ -74,12 +73,11 @@ impl BlobTable {
             TABLE_NAME,
             key_prefix
         );
-        let mut prepared_statement = client.get_session().prepare(statement).await?;
+        let mut prepared_statement = client.prepare(statement).await?;
         prepared_statement.set_page_size(MAX_PAGES_PER_SELECT);
 
         // Get chunks
         let mut chunks: Vec<(usize, Vec<u8>)> = client
-            .get_session()
             .execute_iter(prepared_statement, &[])
             .await?
             // Use `then` and try_collect to be able to handle errors using `?`
@@ -118,10 +116,9 @@ impl BlobTable {
 
         // Using execute_iter plays nicer with smaller database clusters and avoids consistency issues
         // although makes it complexer as results are streamed
-        let mut prep_statement = client.get_session().prepare(statement).await?;
+        let mut prep_statement = client.prepare(statement).await?;
         prep_statement.set_page_size(1000);
         let keys: Vec<String> = client
-            .get_session()
             .execute_iter(prep_statement, &[])
             .await
             .context("Error when selecting keys for deletion")?
@@ -137,13 +134,10 @@ impl BlobTable {
             client.get_database(),
             TABLE_NAME,
         );
-        let prepared_statement = client.get_session().prepare(statement).await?;
+        let prepared_statement = client.prepare(statement).await?;
         // Delete in chunks of 10 to avoid overcome scylla partitioning limits
         for chunk in keys.chunks(10) {
-            client
-                .get_session()
-                .execute(&prepared_statement, (chunk,))
-                .await?;
+            client.execute(&prepared_statement, (chunk,)).await?;
         }
         Ok(())
     }
@@ -157,8 +151,8 @@ mod tests {
 
     // internal imports
     use super::*;
+    use crate::database::scylla::prepare_database_for_tests;
     use crate::database::scylla::tests::DATABASE_URL;
-    use crate::database::scylla::{client::GenericClient, prepare_database_for_tests};
 
     #[tokio::test]
     #[serial]
@@ -203,7 +197,7 @@ mod tests {
             client.get_database(),
             TABLE_NAME
         );
-        let res = client.get_session().query(statement, &[]).await.unwrap();
+        let res = client.query(statement, &[]).await.unwrap();
         assert_eq!(res.rows_num().unwrap(), 1);
 
         assert_eq!(res.first_row_typed::<(i64,)>().unwrap(), (0,));

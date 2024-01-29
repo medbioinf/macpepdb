@@ -53,8 +53,9 @@ mod tests {
 
     // internal imports
     use super::*;
+    use crate::database::generic_client::GenericClient;
+    use crate::database::scylla::prepare_database_for_tests;
     use crate::database::scylla::{client::Client, tests::DATABASE_URL};
-    use crate::database::scylla::{client::GenericClient, prepare_database_for_tests};
     use crate::tools::tests::get_taxdmp_zip;
 
     #[tokio::test]

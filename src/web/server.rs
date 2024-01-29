@@ -12,7 +12,8 @@ use tower_http::cors::{Any, CorsLayer};
 
 // internal imports
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
-use crate::database::scylla::client::{Client, GenericClient};
+use crate::database::generic_client::GenericClient;
+use crate::database::scylla::client::Client;
 use crate::database::scylla::configuration_table::ConfigurationTable;
 use crate::database::scylla::taxonomy_tree_table::TaxonomyTreeTable;
 use crate::entities::configuration::Configuration;
