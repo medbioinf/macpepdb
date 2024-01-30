@@ -253,6 +253,14 @@ impl DatabaseBuild {
             metrics_log_intervals,
         )?;
 
+        let mut queue_monitor = QueueMonitor::new(
+            "",
+            vec![protein_queue_arc.clone()],
+            vec![protein_queue_size as u64],
+            vec!["protein queue".to_string()],
+            None,
+        )?;
+
         let digestion_thread_handles = (0..num_threads)
             .map(|_| {
                 // Create a boxed protease
@@ -330,6 +338,7 @@ impl DatabaseBuild {
         let _ = error_logger.stop().await?;
         throughput_monitor.stop().await?;
         metrics_logger.stop().await?;
+        queue_monitor.stop().await?;
 
         Ok(num_unprocessable_proteins)
     }
