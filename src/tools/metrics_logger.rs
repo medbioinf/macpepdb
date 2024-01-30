@@ -169,10 +169,7 @@ impl MetricsLogger {
         // Message logger variable
         let (message_sender, message_receiver) = channel::<String>(10);
         // Start message logger
-        let message_logger: JoinHandle<Result<()>> = spawn(async move {
-            MessageLogger::start_logging(log_file_path, message_receiver, 1).await?;
-            Ok(())
-        });
+        let mut message_logger = MessageLogger::new(log_file_path, message_receiver, 1).await;
 
         // Create TSV header: `time\tmetric_1\tmetric_1_rate\tmetric_2\tmetric_2_rate\t...`
         let mut tsv_header = vec!["time".to_owned()];
@@ -223,7 +220,7 @@ impl MetricsLogger {
 
         drop(message_sender);
 
-        message_logger.await??;
+        let _ = message_logger.stop().await?;
 
         Ok(())
     }

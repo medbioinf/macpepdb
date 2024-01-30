@@ -44,6 +44,7 @@ use crate::tools::message_logger::MessageLogger;
 use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_digest};
 use crate::tools::peptide_mass_counter::PeptideMassCounter;
+use crate::tools::queue_monitor::QueueMonitor;
 use scylla::frame::response::result::CqlValue;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
@@ -220,21 +221,16 @@ impl DatabaseBuild {
         let (error_sender, error_receiver) = channel::<String>(1000);
 
         // Error logger
-        let error_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            MessageLogger::start_logging(error_log_file_path, error_receiver, 10).await?;
-            Ok(())
-        });
+        let mut error_logger =
+            MessageLogger::new(error_log_file_path.clone(), error_receiver, 10).await;
 
         // Unprocessable proteins logger
-        let unprocessable_proteins_logger: JoinHandle<Result<usize>> = spawn(async move {
-            let num_unprocessable_proteins = MessageLogger::start_logging(
-                unprocessable_proteins_log_file_path,
-                unprocessable_proteins_receiver,
-                1, // Important to save each and every protein which fails
-            )
-            .await?;
-            Ok(num_unprocessable_proteins)
-        });
+        let mut unprocessable_proteins_logger = MessageLogger::new(
+            unprocessable_proteins_log_file_path.clone(),
+            unprocessable_proteins_receiver,
+            1, // Important to save each and every protein which fails
+        )
+        .await;
 
         // Metrics logger
         let thread_metrics = metrics.clone();
@@ -322,8 +318,8 @@ impl DatabaseBuild {
         debug!("Digestion threads joined");
 
         log_stop_flag.store(true, Ordering::Relaxed);
-        let num_unprocessable_proteins = unprocessable_proteins_logger.await??;
-        error_log_thread_handle.await??;
+        let num_unprocessable_proteins = unprocessable_proteins_logger.stop().await?;
+        let _ = error_logger.stop().await?;
         metrics_logger_thread_handle.await??;
 
         Ok(num_unprocessable_proteins)
@@ -748,10 +744,8 @@ impl DatabaseBuild {
         let partition_queue = Arc::new(Mutex::new(partition_queue));
 
         // Error log
-        let error_log_thread_handle: JoinHandle<Result<()>> = spawn(async move {
-            MessageLogger::start_logging(log_file_path.to_path_buf(), error_receiver, 10).await?;
-            Ok(())
-        });
+        let mut error_logger =
+            MessageLogger::new(log_file_path.to_path_buf(), error_receiver, 10).await;
 
         // Metic logging
         let thread_metrics_value = metric_values.clone();
@@ -801,7 +795,7 @@ impl DatabaseBuild {
         debug!("Waiting for logging threads to stop ...");
         log_stop_flag.store(true, Ordering::Relaxed);
         metrics_logger.await??;
-        error_log_thread_handle.await??;
+        let _ = error_logger.stop().await?;
         debug!("... all logging threads stopped");
 
         Ok(())
