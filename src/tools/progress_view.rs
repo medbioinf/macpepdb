@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 
 // 3rd party imports
+use anyhow::Result;
 use indicatif::ProgressStyle;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
@@ -12,6 +13,14 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 /// update interval for the progress bar in ms
 ///
 const UPDATE_INTERVAL: u64 = 300;
+
+/// Progress bar style. Used when a maximum value is given
+///
+const PROGRESS_BAR_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len}";
+
+/// Progress style, used when no maximum value is given
+///
+const PROGRESS_PLAIN_STYLE: &'static str = "        {msg} {pos}";
 
 pub struct ProgressView;
 
@@ -33,7 +42,7 @@ impl ProgressView {
         labels: Vec<String>,
         stop_flag: Arc<AtomicBool>,
         update_interval_override: Option<u64>,
-    ) -> JoinHandle<()> {
+    ) -> JoinHandle<Result<()>> {
         let progress_span = info_span!("");
         progress_span.pb_set_message(title);
         tokio::spawn(
@@ -64,41 +73,36 @@ impl ProgressView {
         labels: Vec<String>,
         stop_flag: Arc<AtomicBool>,
         update_interval_override: Option<u64>,
-    ) {
+    ) -> Result<()> {
         let _ = Span::current().enter();
 
         let update_interval = update_interval_override.unwrap_or(UPDATE_INTERVAL);
-        let progress_spans: Vec<Span> = progresses
+        let progress_spans = progresses
             .iter()
             .enumerate()
             .map(|(progress_idx, _)| {
                 let progress_bar = info_span!("");
                 progress_bar.pb_set_message(&labels[progress_idx]);
+                progress_bar.pb_set_position(0);
                 if let Some(max) = progresses_max[progress_idx] {
-                    progress_bar.pb_set_style(&ProgressStyle::default_bar());
+                    progress_bar.pb_set_style(&ProgressStyle::with_template(PROGRESS_BAR_STYLE)?);
                     progress_bar.pb_set_length(max);
-                    progress_bar.pb_set_position(0);
+                } else {
+                    progress_bar.pb_set_style(&ProgressStyle::with_template(PROGRESS_PLAIN_STYLE)?);
                 }
-                progress_bar
+                Ok(progress_bar)
             })
-            .collect();
+            .collect::<Result<Vec<Span>>>()?;
 
         while stop_flag.load(std::sync::atomic::Ordering::Relaxed) == false {
             for (progress_idx, progress) in progresses.iter().enumerate() {
                 let progress_span = &progress_spans[progress_idx];
                 let _ = progress_span.enter();
-                if let Some(_) = progresses_max[progress_idx] {
-                    progress_span
-                        .pb_set_position(progress.load(std::sync::atomic::Ordering::Relaxed) as u64);
-                } else {
-                    progress_span.pb_set_message(&format!(
-                        "{} {}",
-                        progress.load(std::sync::atomic::Ordering::Relaxed),
-                        labels[progress_idx]
-                    ));
-                }
+                progress_span
+                    .pb_set_position(progress.load(std::sync::atomic::Ordering::Relaxed) as u64);
             }
             tokio::time::sleep(Duration::from_millis(update_interval)).await;
         }
+        Ok(())
     }
 }
