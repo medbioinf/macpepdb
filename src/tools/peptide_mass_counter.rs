@@ -170,7 +170,7 @@ impl PeptideMassCounter {
             "digesting and counting masses",
             vec![processed_proteins.clone()],
             vec![Some(protein_ctr as u64)],
-            vec!["files".to_string()],
+            vec!["proteins".to_string()],
             progress_stop_flag.clone(),
             None,
         );
