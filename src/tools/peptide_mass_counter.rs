@@ -24,7 +24,7 @@ use crate::{
     io::uniprot_text::reader::Reader,
     tools::{
         omicstools::remove_unknown_from_digest, peptide_partitioner::get_mass_partition,
-        progress_view::ProgressView,
+        progress_view::ProgressView, queue_monitor::QueueMonitor,
     },
 };
 
@@ -173,6 +173,14 @@ impl PeptideMassCounter {
             None,
         )?;
 
+        let mut queue_monitor = QueueMonitor::new(
+            "",
+            vec![protein_queue_arc.clone()],
+            vec![protein_queue_size as u64],
+            vec!["protein queue".to_string()],
+            None,
+        )?;
+
         // Start threads
         let ctr_thread_handles: Vec<std::thread::JoinHandle<Result<()>>> = (0..num_threads)
             .map(|tid| {
@@ -257,6 +265,7 @@ impl PeptideMassCounter {
         // Stop progress bar
         progress_stop_flag.store(true, Ordering::Relaxed);
         progress_view.stop().await?;
+        queue_monitor.stop().await?;
 
         debug!("Accumulate results");
         let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(partitions_counters)
