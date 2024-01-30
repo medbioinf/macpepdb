@@ -8,169 +8,64 @@ use std::sync::{
 
 // 3rd party imports
 use anyhow::{bail, Result};
-use tokio::spawn;
-use tokio::sync::mpsc::{channel, Sender};
-use tokio::task::JoinHandle;
+use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::time::Duration;
 use tokio::time::{sleep, Instant};
-use tracing::info_span;
-use tracing_indicatif::span_ext::IndicatifSpanExt;
-
-// internal imports
-use crate::tools::message_logger::MessageLogger;
 
 /// Struct for logging metrics to a file and/or console
-pub struct MetricsLogger;
+pub struct MetricsLogger {
+    thread_handle: Option<tokio::task::JoinHandle<Result<()>>>,
+    stop_flag: Arc<AtomicBool>,
+}
 
 impl MetricsLogger {
-    /// Checks if the number of labels and values are equal
+    /// Creates a new instance of MetricsLogger
     ///
     /// # Arguments
-    /// * `metrics_labels` - Vector of metric labels
-    /// * `metrics_values` - Vector of metric values
-    ///
-    fn are_labels_and_values_valid(
-        metrics_labels: &Vec<String>,
-        metrics_values: &Vec<AtomicUsize>,
-    ) -> Result<()> {
-        if metrics_labels.len() != metrics_values.len() {
-            bail!("Number of metrics and metric values must be equal")
-        }
-
-        Ok(())
-    }
-
-    /// Takes a snapshot of the current metric values
-    ///
-    /// # Arguments
-    /// * `metrics_values` - Vector of metric values
-    ///
-    fn snapshot_metric_values(metrics_values: &Vec<AtomicUsize>) -> Vec<usize> {
-        metrics_values
-            .iter()
-            .map(|metric| metric.load(Ordering::Relaxed))
-            .collect()
-    }
-
-    /// Calculate the delta between two metric snapshots
-    ///
-    /// # Arguments
-    /// * `current_metrics` - Vector of current metric values
-    /// * `previous_metrics` - Vector of previous metric values
-    ///
-    fn calculate_metrics_delta(
-        current_metrics: &Vec<usize>,
-        previous_metrics: &Vec<usize>,
-    ) -> Vec<usize> {
-        current_metrics
-            .iter()
-            .zip(previous_metrics.iter())
-            .map(|(current, previous)| current - previous)
-            .collect::<Vec<usize>>()
-    }
-
-    /// Logs metrics each `log_interval` to file and console each second
-    /// Stops when `stop_flag` is set to true
-    ///
-    /// # Arguments
-    /// * `metrics_values` - Vector of metric values
-    /// * `metrics_labels` - Vector of metric labels
+    /// * `metric_values` - Vector of metric values
+    /// * `metric_labels` - Vector of metric labels
     /// * `log_file_path` - Path to log file
-    /// * `log_interval` - Number of seconds between each log (seconds)
-    /// * `stop_flag` - Flag to stop logging
+    /// * `log_interval` - Interval in seconds for logging
     ///
-    pub async fn start_logging_to_both(
-        metrics_values: Arc<Vec<AtomicUsize>>,
+    pub fn new(
+        metric_values: Vec<Arc<AtomicUsize>>,
         metrics_labels: Vec<String>,
         log_file_path: PathBuf,
         log_interval: u64,
-        stop_flag: Arc<AtomicBool>,
-    ) -> Result<()> {
-        Self::are_labels_and_values_valid(&metrics_labels, metrics_values.as_ref())?;
-
-        // Start file logging in separate thread
-        let thread_metrics_values = metrics_values.clone();
-        let thread_metrics_name = metrics_labels.clone();
-        let thread_stop_flag = stop_flag.clone();
-        // Start message logger
-        let metric_file_logger: JoinHandle<Result<()>> = spawn(async move {
-            Self::start_logging_to_file(
-                thread_metrics_values,
-                thread_metrics_name,
-                log_file_path,
-                log_interval,
-                thread_stop_flag,
-            )
-            .await?;
-
-            Ok(())
-        });
-
-        // Start console logging
-        Self::start_logging_to_console(metrics_values, metrics_labels, stop_flag).await?;
-
-        // Stop file logging
-        metric_file_logger.await??;
-
-        Ok(())
-    }
-
-    /// Logs metrics to console each second
-    ///
-    /// # Arguments
-    /// * `metrics_values` - Vector of metric values
-    /// * `metrics_labels` - Vector of metric labels
-    /// * `stop_flag` - Flag to stop logging
-    pub async fn start_logging_to_console(
-        metrics_values: Arc<Vec<AtomicUsize>>,
-        metrics_labels: Vec<String>,
-        stop_flag: Arc<AtomicBool>,
-    ) -> Result<()> {
-        Self::are_labels_and_values_valid(&metrics_labels, metrics_values.as_ref())?;
-
-        let mut previous_metrics = Self::snapshot_metric_values(metrics_values.as_ref());
-
-        let spans: Vec<_> = metrics_labels
-            .iter()
-            .map(|metric_name| info_span!("{}", metric_name))
-            .collect();
-
-        while !stop_flag.load(Ordering::Relaxed) {
-            sleep(Duration::from_secs(1)).await;
-            let current_metrics = Self::snapshot_metric_values(metrics_values.as_ref());
-
-            let delta_metrics = Self::calculate_metrics_delta(&current_metrics, &previous_metrics);
-
-            for (metric_idx, span) in spans.iter().enumerate() {
-                // Enter span
-                let _e = span.enter();
-                // Update span
-                span.pb_set_message(&format!(
-                    "{} {} total, {} processed/s",
-                    metrics_labels[metric_idx],
-                    current_metrics[metric_idx],
-                    delta_metrics[metric_idx],
-                ));
-            }
-
-            previous_metrics = current_metrics;
+    ) -> Result<Self> {
+        if metrics_labels.len() != metric_values.len() {
+            bail!("Number of metrics and metric labels must be equal")
         }
 
-        Ok(())
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let thread_handle = tokio::spawn(Self::log(
+            metric_values,
+            metrics_labels,
+            log_file_path,
+            log_interval,
+            stop_flag.clone(),
+        ));
+
+        Ok(Self {
+            thread_handle: Some(thread_handle),
+            stop_flag,
+        })
     }
 
-    async fn start_logging_to_file(
-        metric_values: Arc<Vec<AtomicUsize>>,
+    pub async fn log(
+        metric_values: Vec<Arc<AtomicUsize>>,
         metric_labels: Vec<String>,
         log_file_path: PathBuf,
         log_interval: u64,
         stop_flag: Arc<AtomicBool>,
     ) -> Result<()> {
-        // Message logger variable
-        let (message_sender, message_receiver) = channel::<String>(10);
-        // Start message logger
-        let mut message_logger = MessageLogger::new(log_file_path, message_receiver, 1).await;
-
+        let mut log_counter: u64 = 0;
+        let mut next_log_time = Instant::now() + Duration::from_secs(log_interval);
+        let mut previous_metrics = metric_values
+            .iter()
+            .map(|metric| metric.load(Ordering::Relaxed))
+            .collect::<Vec<usize>>();
+        let mut file_writer = BufWriter::new(tokio::fs::File::create(log_file_path).await?);
         // Create TSV header: `time\tmetric_1\tmetric_1_rate\tmetric_2\tmetric_2_rate\t...`
         let mut tsv_header = vec!["time".to_owned()];
         tsv_header.extend(
@@ -179,12 +74,7 @@ impl MetricsLogger {
                 .flat_map(|metric| vec![metric.clone(), format!("{}_rate", metric)]),
         );
 
-        // Send header to file
-        message_sender.send(tsv_header.join("\t")).await?;
-
-        let mut log_counter: u64 = 0;
-        let mut next_log_time = Instant::now() + Duration::from_secs(log_interval);
-        let mut previous_metrics = Self::snapshot_metric_values(metric_values.as_ref());
+        file_writer.write(tsv_header.join("\t").as_bytes()).await?;
 
         // Wait for stop flag
         while !stop_flag.load(Ordering::Relaxed) {
@@ -194,61 +84,58 @@ impl MetricsLogger {
             if Instant::now() < next_log_time {
                 continue;
             }
+            // Set next log time
             next_log_time = Instant::now() + Duration::from_secs(log_interval);
+
+            // Increment log counter
             log_counter += 1;
 
-            let current_metrics = Self::snapshot_metric_values(metric_values.as_ref());
-            let delta_metrics = Self::calculate_metrics_delta(&current_metrics, &previous_metrics);
-            Self::send_metrics_to_file(
-                &current_metrics,
-                &delta_metrics,
-                (log_counter * log_interval) as usize,
-                &message_sender,
-            )
-            .await?;
+            // Collect current metrics and calculate delta
+            let current_metrics = metric_values
+                .iter()
+                .map(|metric| metric.load(Ordering::Relaxed))
+                .collect::<Vec<usize>>();
+            // Calculate delta
+            let delta = current_metrics
+                .iter()
+                .zip(previous_metrics.iter())
+                .map(|(current, previous)| current - previous)
+                .collect::<Vec<usize>>();
+
+            // Current timepoint
+            let timepoint = (log_counter * log_interval) as usize;
+
+            // Start new line ...
+            let mut tsv_line: Vec<u8> = Vec::from(b"\n");
+            // ... and write timepoint
+            tsv_line.extend(timepoint.to_string().as_bytes());
+            // ... write metrics and delta
+            current_metrics
+                .iter()
+                .zip(delta.iter())
+                .for_each(|(current, delta)| {
+                    tsv_line.extend(b"\t");
+                    tsv_line.extend(current.to_string().as_bytes());
+                    tsv_line.extend(b"\t");
+                    tsv_line.extend(delta.to_string().as_bytes());
+                });
+            file_writer.write(&tsv_line).await?;
+            file_writer.flush().await?;
+            // Update previous metrics
             previous_metrics = current_metrics;
         }
-        let current_metrics = Self::snapshot_metric_values(metric_values.as_ref());
-        let delta_metrics = Self::calculate_metrics_delta(&current_metrics, &previous_metrics);
-        Self::send_metrics_to_file(
-            &current_metrics,
-            &delta_metrics,
-            (log_counter * log_interval) as usize,
-            &message_sender,
-        )
-        .await?;
-
-        drop(message_sender);
-
-        let _ = message_logger.stop().await?;
 
         Ok(())
     }
 
-    /// Creates TSV string from metric values and send it to message logger
+    /// Stops the logger
     ///
-    /// # Arguments
-    /// * `current_metrics` - Vector of current metric values
-    /// * `delta_metrics` - Vector of metric deltas
-    /// * `timepoint` - Timepoint of metric values
-    /// * `message_sender` - Sender for sending messages to message logger
-    ///
-    async fn send_metrics_to_file(
-        current_metrics: &Vec<usize>,
-        delta_metrics: &Vec<usize>,
-        timepoint: usize,
-        message_sender: &Sender<String>,
-    ) -> Result<()> {
-        let mut metrics_log: Vec<String> = vec![timepoint.to_string()];
-        metrics_log.extend(
-            current_metrics
-                .iter()
-                .zip(delta_metrics.iter())
-                .flat_map(|(current, delta)| vec![current.to_string(), delta.to_string()]),
-        );
-
-        message_sender.send(metrics_log.join("\t")).await?;
-
-        Ok(())
+    pub async fn stop(&mut self) -> Result<()> {
+        self.stop_flag
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        match self.thread_handle.take() {
+            Some(handle) => handle.await?,
+            None => Ok(()),
+        }
     }
 }
