@@ -67,14 +67,13 @@ impl PeptideMassCounter {
         let processed_files = Arc::new(AtomicUsize::new(0));
         let stop_flag = Arc::new(AtomicBool::new(false));
 
-        let progress_bar = ProgressView::create(
+        let mut progress_view = ProgressView::new(
             "protein counting",
             vec![processed_files.clone()],
             vec![Some(protein_file_paths.len() as u64)],
             vec!["files".to_string()],
-            stop_flag.clone(),
             None,
-        );
+        )?;
 
         let thread_handles: Vec<std::thread::JoinHandle<Result<usize>>> = (0..num_threads)
             .into_iter()
@@ -116,7 +115,7 @@ impl PeptideMassCounter {
 
         // Stop progress bar
         stop_flag.store(true, Ordering::Relaxed);
-        progress_bar.await?;
+        progress_view.stop().await?;
 
         info!("... {} proteins in total", protein_ctr);
 
@@ -166,14 +165,13 @@ impl PeptideMassCounter {
         let processed_proteins = Arc::new(AtomicUsize::new(0));
 
         // Create progress bar
-        let progress_bar = ProgressView::create(
+        let mut progress_view = ProgressView::new(
             "digesting and counting masses",
             vec![processed_proteins.clone()],
             vec![Some(protein_ctr as u64)],
             vec!["proteins".to_string()],
-            progress_stop_flag.clone(),
             None,
-        );
+        )?;
 
         // Start threads
         let ctr_thread_handles: Vec<std::thread::JoinHandle<Result<()>>> = (0..num_threads)
@@ -258,7 +256,7 @@ impl PeptideMassCounter {
 
         // Stop progress bar
         progress_stop_flag.store(true, Ordering::Relaxed);
-        progress_bar.await?;
+        progress_view.stop().await?;
 
         debug!("Accumulate results");
         let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(partitions_counters)
