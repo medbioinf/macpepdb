@@ -25,6 +25,7 @@ use crate::{
     tools::{
         omicstools::remove_unknown_from_digest, peptide_partitioner::get_mass_partition,
         progress_view::ProgressView, queue_monitor::QueueMonitor,
+        throughput_monitor::ThroughputMonitor,
     },
 };
 
@@ -166,11 +167,17 @@ impl PeptideMassCounter {
 
         // Create progress bar
         let mut progress_view = ProgressView::new(
-            "digesting and counting masses",
+            "",
             vec![processed_proteins.clone()],
             vec![Some(protein_ctr as u64)],
             vec!["proteins".to_string()],
             None,
+        )?;
+
+        let mut throughput_monitor = ThroughputMonitor::new(
+            "",
+            vec![processed_proteins.clone()],
+            vec!["proteins".to_string()],
         )?;
 
         let mut queue_monitor = QueueMonitor::new(
@@ -266,6 +273,7 @@ impl PeptideMassCounter {
         progress_stop_flag.store(true, Ordering::Relaxed);
         progress_view.stop().await?;
         queue_monitor.stop().await?;
+        throughput_monitor.stop().await?;
 
         debug!("Accumulate results");
         let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(partitions_counters)
