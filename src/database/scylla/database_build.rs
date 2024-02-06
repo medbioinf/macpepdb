@@ -43,7 +43,7 @@ use crate::tools::message_logger::MessageLogger;
 use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_digest};
 use crate::tools::peptide_mass_counter::PeptideMassCounter;
-use crate::tools::progress_view::ProgressView;
+use crate::tools::progress_monitor::ProgressMonitor;
 use crate::tools::queue_monitor::QueueMonitor;
 use scylla::frame::response::result::CqlValue;
 
@@ -231,7 +231,7 @@ impl DatabaseBuild {
         )
         .await;
 
-        let mut progress_monitor = ProgressView::new(
+        let mut progress_monitor = ProgressMonitor::new(
             "",
             vec![
                 processed_proteins.clone(),
@@ -772,7 +772,7 @@ impl DatabaseBuild {
         let mut error_logger =
             MessageLogger::new(log_file_path.to_path_buf(), error_receiver, 10).await;
 
-        let mut progress_monitor = ProgressView::new(
+        let mut progress_monitor = ProgressMonitor::new(
             "",
             vec![processed_peptides.clone(), occurred_errors.clone()],
             vec![None, None],

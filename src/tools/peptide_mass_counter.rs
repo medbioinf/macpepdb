@@ -24,7 +24,7 @@ use crate::{
     io::uniprot_text::reader::Reader,
     tools::{
         omicstools::remove_unknown_from_digest, peptide_partitioner::get_mass_partition,
-        progress_view::ProgressView, queue_monitor::QueueMonitor,
+        progress_monitor::ProgressMonitor, queue_monitor::QueueMonitor,
     },
 };
 
@@ -67,7 +67,7 @@ impl PeptideMassCounter {
         let processed_files = Arc::new(AtomicUsize::new(0));
         let stop_flag = Arc::new(AtomicBool::new(false));
 
-        let mut progress_view = ProgressView::new(
+        let mut progress_view = ProgressMonitor::new(
             "protein counting",
             vec![processed_files.clone()],
             vec![Some(protein_file_paths.len() as u64)],
@@ -165,7 +165,7 @@ impl PeptideMassCounter {
         let processed_proteins = Arc::new(AtomicUsize::new(0));
 
         // Create progress bar
-        let mut progress_view = ProgressView::new(
+        let mut progress_view = ProgressMonitor::new(
             "",
             vec![processed_proteins.clone()],
             vec![Some(protein_ctr as u64)],

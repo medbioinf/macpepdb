@@ -23,12 +23,12 @@ const PROGRESS_BAR_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len} {
 const PROGRESS_PLAIN_STYLE: &'static str = "        {msg} {pos} {per_sec} ";
 
 /// Creats a tracing span with multiple progress (bars)
-pub struct ProgressView {
+pub struct ProgressMonitor {
     thread_handle: Option<JoinHandle<Result<()>>>, // Wrapped in Option to be able to take it when await join
     stop_flag: Arc<AtomicBool>,
 }
 
-impl ProgressView {
+impl ProgressMonitor {
     /// Creates a progress view for the given progress values
     /// Make sure to call it with '.instrument(<span>)' to make sure the progress bar is displayed
     ///
