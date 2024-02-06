@@ -330,29 +330,36 @@ impl PeptideMassCounter {
                     .collect()?,
             };
 
-            // Sort peptides by mass
-            let mut peptides_sorted_by_partitions: Vec<Vec<String>> =
-                vec![Vec::new(); partition_limits.len()];
-            // Acquire lock on bloom filter to check peptide existence
-            let mut bloom_filter = bloom_filter_arc.lock().unwrap();
-            // Iterate over peptides, if they do not already exists, add them to the bloom filter and partition
-            for sequence in peptides.into_iter() {
-                if bloom_filter.contains(sequence.as_str())? {
-                    continue;
+            let filtered_peptides: Result<Vec<String>> = {
+                let mut filtered_peptides = Vec::with_capacity(peptides.len());
+                let mut bloom_filter = match bloom_filter_arc.lock() {
+                    Ok(bloom_filter) => bloom_filter,
+                    Err(err) => bail!(format!("Could not lock bloom filter: {}", err)),
+                };
+                for pep in peptides.into_iter() {
+                    if bloom_filter.contains(pep.as_str())? {
+                        continue;
+                    }
+                    bloom_filter.add(pep.as_str())?;
+                    filtered_peptides.push(pep);
                 }
-                bloom_filter.add(sequence.as_str())?;
+                Ok(filtered_peptides)
+            };
+
+            let mut masses_sorted_by_partitions = vec![Vec::new(); partition_limits.len()];
+
+            for sequence in filtered_peptides?.into_iter() {
                 let mass = calc_sequence_mass_int(sequence.as_str())?;
                 let partition = get_mass_partition(&partition_limits, mass)?;
-                peptides_sorted_by_partitions[partition].push(sequence);
+                masses_sorted_by_partitions[partition].push(mass);
             }
 
-            for (partition, peptides) in peptides_sorted_by_partitions.into_iter().enumerate() {
-                if peptides.is_empty() {
+            for (partition, masses) in masses_sorted_by_partitions.into_iter().enumerate() {
+                if masses.is_empty() {
                     continue;
                 }
                 let mut partition_ctr_map = partitions_counters[partition].lock().unwrap();
-                for sequence in peptides.into_iter() {
-                    let mass = calc_sequence_mass_int(sequence.as_str())?;
+                for mass in masses.into_iter() {
                     *partition_ctr_map.entry(mass).or_insert(0) += 1;
                 }
             }
