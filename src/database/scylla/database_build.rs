@@ -43,8 +43,8 @@ use crate::tools::message_logger::MessageLogger;
 use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_digest};
 use crate::tools::peptide_mass_counter::PeptideMassCounter;
+use crate::tools::progress_view::ProgressView;
 use crate::tools::queue_monitor::QueueMonitor;
-use crate::tools::throughput_monitor::ThroughputMonitor;
 use scylla::frame::response::result::CqlValue;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
@@ -231,14 +231,20 @@ impl DatabaseBuild {
         )
         .await;
 
-        let mut throughput_monitor = ThroughputMonitor::new(
+        let mut progress_monitor = ProgressView::new(
             "",
             vec![
                 processed_proteins.clone(),
                 processed_peptides.clone(),
                 occurred_errors.clone(),
             ],
-            metric_names.clone(),
+            vec![None, None, None],
+            vec![
+                "proteins".to_string(),
+                "peptides".to_string(),
+                "errors".to_string(),
+            ],
+            None,
         )?;
 
         // Metrics logger
@@ -336,7 +342,7 @@ impl DatabaseBuild {
         log_stop_flag.store(true, Ordering::Relaxed);
         let num_unprocessable_proteins = unprocessable_proteins_logger.stop().await?;
         let _ = error_logger.stop().await?;
-        throughput_monitor.stop().await?;
+        progress_monitor.stop().await?;
         metrics_logger.stop().await?;
         queue_monitor.stop().await?;
 
@@ -766,10 +772,12 @@ impl DatabaseBuild {
         let mut error_logger =
             MessageLogger::new(log_file_path.to_path_buf(), error_receiver, 10).await;
 
-        let mut throughput_monitor = ThroughputMonitor::new(
+        let mut progress_monitor = ProgressView::new(
             "",
             vec![processed_peptides.clone(), occurred_errors.clone()],
+            vec![None, None],
             metric_names.clone(),
+            None,
         )?;
 
         // Metrics logger
@@ -813,7 +821,7 @@ impl DatabaseBuild {
 
         debug!("Waiting for logging threads to stop ...");
         let _ = error_logger.stop().await?;
-        throughput_monitor.stop().await?;
+        progress_monitor.stop().await?;
         metrics_logger.stop().await?;
         debug!("... all logging threads stopped");
 

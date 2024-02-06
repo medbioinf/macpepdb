@@ -28,5 +28,3 @@ pub mod serde;
 /// Tool for testing
 #[cfg(test)]
 pub mod tests;
-/// Monitor for metric throughput
-pub mod throughput_monitor;

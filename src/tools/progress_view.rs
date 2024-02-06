@@ -12,15 +12,15 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 /// update interval for the progress bar in ms
 ///
-const UPDATE_INTERVAL: u64 = 300;
+const UPDATE_INTERVAL: u64 = 1000;
 
 /// Progress bar style. Used when a maximum value is given
 ///
-const PROGRESS_BAR_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len}";
+const PROGRESS_BAR_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len} {per_sec} ";
 
 /// Progress style, used when no maximum value is given
 ///
-const PROGRESS_PLAIN_STYLE: &'static str = "        {msg} {pos}";
+const PROGRESS_PLAIN_STYLE: &'static str = "        {msg} {pos} {per_sec} ";
 
 /// Creats a tracing span with multiple progress (bars)
 pub struct ProgressView {
