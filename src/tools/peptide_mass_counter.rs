@@ -34,6 +34,132 @@ lazy_static! {
     static ref PROTEIN_QUEUE_READ_SLEEP_TIME: Duration = Duration::from_secs(2);
 }
 
+struct MassCountThread {
+    thread: Option<std::thread::JoinHandle<Result<()>>>,
+    stop_flag: Arc<AtomicBool>,
+}
+
+impl MassCountThread {
+    pub fn new(
+        tid: usize,
+        protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
+        protease: Box<dyn Protease>,
+        remove_peptides_containing_unknown: bool,
+        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter>>>,
+        partition_limits: Arc<Vec<i64>>,
+        partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
+        processed_proteins: Arc<AtomicUsize>,
+        stop_flag: Option<Arc<AtomicBool>>,
+    ) -> Self {
+        let stop_flag = match stop_flag {
+            Some(stop_flag) => stop_flag,
+            None => Arc::new(AtomicBool::new(false)),
+        };
+        let thread_stop = stop_flag.clone();
+        let thread = Some(std::thread::spawn(move || {
+            Self::work(
+                tid,
+                protein_queue_arc,
+                protease,
+                remove_peptides_containing_unknown,
+                bloom_filter_arc,
+                partition_limits,
+                partitions_counters,
+                processed_proteins,
+                thread_stop,
+            )
+        }));
+
+        Self { thread, stop_flag }
+    }
+
+    fn join(&mut self) -> Result<()> {
+        if self.thread.is_none() {
+            return Ok(());
+        }
+        self.stop_flag.store(true, Ordering::Relaxed);
+        match self.thread.take().unwrap().join() {
+            Ok(_) => Ok(()),
+            Err(err) => bail!(format!("Error in count thread: {:?}", err)),
+        }
+    }
+
+    fn work(
+        tid: usize,
+        protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
+        protease: Box<dyn Protease>,
+        remove_peptides_containing_unknown: bool,
+        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter>>>,
+        partition_limits: Arc<Vec<i64>>,
+        partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
+        processed_proteins: Arc<AtomicUsize>,
+        stop_flag: Arc<AtomicBool>,
+    ) -> Result<()> {
+        let mut wait_for_queue = false;
+        loop {
+            // Wait for protein queue to fill up
+            if wait_for_queue {
+                sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
+                wait_for_queue = false;
+            }
+            // Try to get protein from queue
+            // if queue is empty wait for queue to fill up
+            // if also stop flag is set, break
+            let protein = match protein_queue_arc.lock().unwrap().pop() {
+                Some(protein) => protein,
+                None => {
+                    if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    } else {
+                        wait_for_queue = true;
+                        continue;
+                    }
+                }
+            };
+            debug!("Thread {} got protein {}", tid, protein.get_accession());
+
+            // Digest protein, keep only sequences
+            let peptides: Vec<String> = match remove_peptides_containing_unknown {
+                true => remove_unknown_from_digest(protease.cleave(&protein.get_sequence())?)
+                    .map(|pep| Ok(pep.get_sequence().to_string()))
+                    .collect()?,
+                false => protease
+                    .cleave(&protein.get_sequence())?
+                    .map(|pep| Ok(pep.get_sequence().to_string()))
+                    .collect()?,
+            };
+
+            // Calc mass per seqeunce and sort peptides into partitions
+            let mut peptides_sorted_by_partition = vec![Vec::new(); partition_limits.len()];
+
+            for sequence in peptides.into_iter() {
+                let mass = calc_sequence_mass_int(sequence.as_str())?;
+                let partition = get_mass_partition(&partition_limits, mass)?;
+                peptides_sorted_by_partition[partition].push((mass, sequence));
+            }
+
+            // Add peptides to bloom filter and count them
+            for (partition_id, peptides) in peptides_sorted_by_partition.into_iter().enumerate() {
+                if peptides.is_empty() {
+                    continue;
+                }
+                let mut bloom_filter = bloom_filter_arc[partition_id].lock().unwrap();
+                let mut partition = partitions_counters[partition_id].lock().unwrap();
+                for (mass, sequence) in peptides.into_iter() {
+                    if bloom_filter.contains(&sequence)? {
+                        continue;
+                    }
+                    bloom_filter.add(&sequence)?;
+                    *partition.entry(mass).or_insert(0) += 1;
+                }
+            }
+            processed_proteins.fetch_add(1, Ordering::Relaxed);
+        }
+        debug!("Thread finished {}", tid);
+        Ok(())
+    }
+}
+
 /// Counts the number of peptides per mass in the given protein files,
 ///
 pub struct PeptideMassCounter;
@@ -195,36 +321,24 @@ impl PeptideMassCounter {
         )?;
 
         // Start threads
-        let ctr_thread_handles: Vec<std::thread::JoinHandle<Result<()>>> = (0..num_threads)
+        let mass_count_threads = (0..num_threads)
             .map(|tid| {
-                // Make copies of shared resources to move into thread
-                let thread_protein_queue_arc = protein_queue_arc.clone();
-                let thread_stop_flag = stop_flag.clone();
-                let thread_protease = get_protease_by_name(
-                    protease.get_name(),
-                    protease.get_min_length(),
-                    protease.get_max_length(),
-                    protease.get_max_missed_cleavages(),
-                )?;
-                let thread_bloom_filter_arc = bloom_filters.clone();
-                let remove_peptides_containing_unknown = remove_peptides_containing_unknown.clone();
-                let thread_partition_limits = partition_limits.clone();
-                let thread_partitions_counters = partitions_counters.clone();
-                let thread_processed_proteins = processed_proteins.clone();
-                Ok(std::thread::spawn(move || {
-                    Self::count_thread(
-                        tid,
-                        thread_protein_queue_arc,
-                        thread_stop_flag,
-                        thread_protease,
-                        remove_peptides_containing_unknown,
-                        thread_bloom_filter_arc,
-                        thread_partition_limits,
-                        thread_partitions_counters,
-                        thread_processed_proteins,
-                    )?;
-                    Ok(())
-                }))
+                Ok(MassCountThread::new(
+                    tid,
+                    protein_queue_arc.clone(),
+                    get_protease_by_name(
+                        protease.get_name(),
+                        protease.get_min_length(),
+                        protease.get_max_length(),
+                        protease.get_max_missed_cleavages(),
+                    )?,
+                    remove_peptides_containing_unknown,
+                    bloom_filters.clone(),
+                    partition_limits.clone(),
+                    partitions_counters.clone(),
+                    processed_proteins.clone(),
+                    Some(stop_flag.clone()),
+                ))
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -267,13 +381,9 @@ impl PeptideMassCounter {
         stop_flag.store(true, Ordering::Relaxed);
 
         // Wait for threads to finish
-        for thread_handle in ctr_thread_handles.into_iter() {
-            match thread_handle.join() {
-                Ok(_) => (),
-                Err(err) => bail!(format!("Error in thread: {:?}", err)),
-            };
+        for mut thread in mass_count_threads.into_iter() {
+            thread.join()?;
         }
-        // join_all(ctr_thread_handles).await;
 
         // Stop progress bar
         progress_stop_flag.store(true, Ordering::Relaxed);
@@ -290,81 +400,6 @@ impl PeptideMassCounter {
         partitions_counters.sort_by(|a, b| a.0.cmp(&b.0));
 
         Ok(partitions_counters)
-    }
-
-    fn count_thread(
-        tid: usize,
-        protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
-        stop_flag: Arc<AtomicBool>,
-        protease: Box<dyn Protease>,
-        remove_peptides_containing_unknown: bool,
-        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter>>>,
-        partition_limits: Arc<Vec<i64>>,
-        partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
-        processed_proteins: Arc<AtomicUsize>,
-    ) -> Result<()> {
-        let mut wait_for_queue = false;
-        loop {
-            // Wait for protein queue to fill up
-            if wait_for_queue {
-                sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
-                wait_for_queue = false;
-            }
-            // Try to get protein from queue
-            // if queue is empty wait for queue to fill up
-            // if also stop flag is set, break
-            let protein = match protein_queue_arc.lock().unwrap().pop() {
-                Some(protein) => protein,
-                None => {
-                    if stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
-                        break;
-                    } else {
-                        wait_for_queue = true;
-                        continue;
-                    }
-                }
-            };
-            debug!("Thread {} got protein {}", tid, protein.get_accession());
-
-            // Digest protein, keep only sequences
-            let peptides: Vec<String> = match remove_peptides_containing_unknown {
-                true => remove_unknown_from_digest(protease.cleave(&protein.get_sequence())?)
-                    .map(|pep| Ok(pep.get_sequence().to_string()))
-                    .collect()?,
-                false => protease
-                    .cleave(&protein.get_sequence())?
-                    .map(|pep| Ok(pep.get_sequence().to_string()))
-                    .collect()?,
-            };
-
-            // Calc mass per seqeunce and sort peptides into partitions
-            let mut peptides_sorted_by_partition = vec![Vec::new(); partition_limits.len()];
-
-            for sequence in peptides.into_iter() {
-                let mass = calc_sequence_mass_int(sequence.as_str())?;
-                let partition = get_mass_partition(&partition_limits, mass)?;
-                peptides_sorted_by_partition[partition].push((mass, sequence));
-            }
-
-            // Add peptides to bloom filter and count them
-            for (partition_id, peptides) in peptides_sorted_by_partition.into_iter().enumerate() {
-                if peptides.is_empty() {
-                    continue;
-                }
-                let mut bloom_filter = bloom_filter_arc[partition_id].lock().unwrap();
-                let mut partition = partitions_counters[partition_id].lock().unwrap();
-                for (mass, sequence) in peptides.into_iter() {
-                    if bloom_filter.contains(&sequence)? {
-                        continue;
-                    }
-                    bloom_filter.add(&sequence)?;
-                    *partition.entry(mass).or_insert(0) += 1;
-                }
-            }
-            processed_proteins.fetch_add(1, Ordering::Relaxed);
-        }
-        debug!("Thread finished {}", tid);
-        Ok(())
     }
 }
 
