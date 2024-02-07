@@ -145,22 +145,33 @@ impl PeptideMassCounter {
             .collect();
 
         // Create the bloom filter for counting peptides. Use the allowed fraction of available memory
-        let usable_ram =
-            (System::new_all().available_memory() as f64 * usable_memory_fraction) as u64;
-        let bloom_filter =
-            BloomFilter::new_by_size_and_fp_prob(usable_ram * 8, false_positive_probability)?;
+        let usable_ram = System::new_all().available_memory() as f64 * usable_memory_fraction;
+        let usable_ram_per_partition = (usable_ram / partition_limits.len() as f64).floor() as u64;
+        let bloom_filters = (0..partition_limits.len())
+            .map(|_| {
+                BloomFilter::new_by_size_and_fp_prob(
+                    usable_ram_per_partition * 8,
+                    false_positive_probability,
+                )
+            })
+            .collect::<Result<Vec<BloomFilter>>>()?;
 
         // Put everything in Arcs
         let partition_limits = Arc::new(partition_limits);
         let partitions_counters = Arc::new(partitions_counters);
-        let bloom_filter_arc = Arc::new(Mutex::new(bloom_filter));
+        let bloom_filters: Arc<Vec<Mutex<BloomFilter>>> = Arc::new(
+            bloom_filters
+                .into_iter()
+                .map(|bloom_filter| Mutex::new(bloom_filter))
+                .collect(),
+        );
 
         // Create the the protein queue
         let protein_queue_size = num_threads * 300;
         let protein_queue_arc: Arc<Mutex<Vec<Protein>>> =
             Arc::new(Mutex::new(Vec::with_capacity(protein_queue_size)));
 
-        // Stop flags for threadss
+        // Stop flags for threads
         let progress_stop_flag = Arc::new(AtomicBool::new(false));
         stop_flag.store(false, Ordering::Relaxed);
 
@@ -195,7 +206,7 @@ impl PeptideMassCounter {
                     protease.get_max_length(),
                     protease.get_max_missed_cleavages(),
                 )?;
-                let thread_bloom_filter_arc = bloom_filter_arc.clone();
+                let thread_bloom_filter_arc = bloom_filters.clone();
                 let remove_peptides_containing_unknown = remove_peptides_containing_unknown.clone();
                 let thread_partition_limits = partition_limits.clone();
                 let thread_partitions_counters = partitions_counters.clone();
@@ -287,7 +298,7 @@ impl PeptideMassCounter {
         stop_flag: Arc<AtomicBool>,
         protease: Box<dyn Protease>,
         remove_peptides_containing_unknown: bool,
-        bloom_filter_arc: Arc<Mutex<BloomFilter>>,
+        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter>>>,
         partition_limits: Arc<Vec<i64>>,
         partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
         processed_proteins: Arc<AtomicUsize>,
@@ -326,37 +337,28 @@ impl PeptideMassCounter {
                     .collect()?,
             };
 
-            let filtered_peptides: Result<Vec<String>> = {
-                let mut filtered_peptides = Vec::with_capacity(peptides.len());
-                let mut bloom_filter = match bloom_filter_arc.lock() {
-                    Ok(bloom_filter) => bloom_filter,
-                    Err(err) => bail!(format!("Could not lock bloom filter: {}", err)),
-                };
-                for pep in peptides.into_iter() {
-                    if bloom_filter.contains(pep.as_str())? {
-                        continue;
-                    }
-                    bloom_filter.add(pep.as_str())?;
-                    filtered_peptides.push(pep);
-                }
-                Ok(filtered_peptides)
-            };
+            // Calc mass per seqeunce and sort peptides into partitions
+            let mut peptides_sorted_by_partition = vec![Vec::new(); partition_limits.len()];
 
-            let mut masses_sorted_by_partitions = vec![Vec::new(); partition_limits.len()];
-
-            for sequence in filtered_peptides?.into_iter() {
+            for sequence in peptides.into_iter() {
                 let mass = calc_sequence_mass_int(sequence.as_str())?;
                 let partition = get_mass_partition(&partition_limits, mass)?;
-                masses_sorted_by_partitions[partition].push(mass);
+                peptides_sorted_by_partition[partition].push((mass, sequence));
             }
 
-            for (partition, masses) in masses_sorted_by_partitions.into_iter().enumerate() {
-                if masses.is_empty() {
+            // Add peptides to bloom filter and count them
+            for (partition_id, peptides) in peptides_sorted_by_partition.into_iter().enumerate() {
+                if peptides.is_empty() {
                     continue;
                 }
-                let mut partition_ctr_map = partitions_counters[partition].lock().unwrap();
-                for mass in masses.into_iter() {
-                    *partition_ctr_map.entry(mass).or_insert(0) += 1;
+                let mut bloom_filter = bloom_filter_arc[partition_id].lock().unwrap();
+                let mut partition = partitions_counters[partition_id].lock().unwrap();
+                for (mass, sequence) in peptides.into_iter() {
+                    if bloom_filter.contains(&sequence)? {
+                        continue;
+                    }
+                    bloom_filter.add(&sequence)?;
+                    *partition.entry(mass).or_insert(0) += 1;
                 }
             }
             processed_proteins.fetch_add(1, Ordering::Relaxed);
