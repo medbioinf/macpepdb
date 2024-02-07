@@ -139,9 +139,9 @@ impl PeptideMassCounter {
         }
 
         // Create a counter for each partition
-        let partitions_counters: Vec<Arc<Mutex<HashMap<i64, u64>>>> = partition_limits
+        let partitions_counters: Vec<Mutex<HashMap<i64, u64>>> = partition_limits
             .iter()
-            .map(|_| Arc::new(Mutex::new(HashMap::new())))
+            .map(|_| Mutex::new(HashMap::new()))
             .collect();
 
         // Create the bloom filter for counting peptides. Use the allowed fraction of available memory
@@ -273,13 +273,7 @@ impl PeptideMassCounter {
         let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(partitions_counters)
             .unwrap()
             .into_iter()
-            .flat_map(|counter| {
-                Arc::try_unwrap(counter)
-                    .unwrap()
-                    .into_inner()
-                    .unwrap()
-                    .into_iter()
-            })
+            .flat_map(|counter| counter.into_inner().unwrap().into_iter())
             .collect();
 
         partitions_counters.sort_by(|a, b| a.0.cmp(&b.0));
@@ -295,7 +289,7 @@ impl PeptideMassCounter {
         remove_peptides_containing_unknown: bool,
         bloom_filter_arc: Arc<Mutex<BloomFilter>>,
         partition_limits: Arc<Vec<i64>>,
-        partitions_counters: Arc<Vec<Arc<Mutex<HashMap<i64, u64>>>>>,
+        partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
         processed_proteins: Arc<AtomicUsize>,
     ) -> Result<()> {
         let mut wait_for_queue = false;
