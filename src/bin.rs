@@ -157,6 +157,9 @@ enum Commands {
         /// Protease used for digestion
         #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
         protease: ProteaseChoice,
+        /// Initial number of partitions [default: 4 * num_threads]
+        #[arg(long)]
+        initial_num_partitions: Option<usize>,
         /// Protein files in UniProt text format (txt or dat).
         /// Each file can be compressed with gzip (has last extension `.gz` e.g. `txt.gz``).
         /// Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
@@ -428,6 +431,7 @@ async fn main() -> Result<()> {
             false_positive_probability,
             protease,
             protein_file_paths,
+            initial_num_partitions,
         } => {
             // Create span for this function
             let info_span = info_span!("counting peptide masses");
@@ -439,6 +443,10 @@ async fn main() -> Result<()> {
                 Some(max_number_of_missed_cleavages),
             )?;
             let protein_file_paths = convert_str_paths_and_resolve_globs(protein_file_paths)?;
+            let initial_num_partitions = match initial_num_partitions {
+                Some(num) => num,
+                None => 4 * num_threads,
+            };
 
             let mass_counts = PeptideMassCounter::count(
                 &protein_file_paths,
@@ -447,6 +455,7 @@ async fn main() -> Result<()> {
                 false_positive_probability,
                 usable_memory_fraction,
                 num_threads,
+                initial_num_partitions,
             )
             .instrument(info_span)
             .await?;

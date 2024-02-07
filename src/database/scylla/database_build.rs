@@ -137,6 +137,7 @@ impl DatabaseBuild {
                 partitioner_false_positive_probability,
                 allowed_ram_fraction,
                 10,
+                40,
             )
             .await?;
             let partition_limits =

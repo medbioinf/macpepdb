@@ -49,6 +49,7 @@ impl PeptideMassCounter {
     /// * `false_positive_probability` - False positive probability of the bloom filter
     /// * `usable_memory_fraction` - Fraction of the available memory to use
     /// * `num_threads` - Number of threads to use
+    /// * `initial_num_partitions` - Initial number of partitions for counting
     ///
     pub async fn count<'a>(
         protein_file_paths: &'a Vec<PathBuf>,
@@ -57,6 +58,7 @@ impl PeptideMassCounter {
         false_positive_probability: f64,
         usable_memory_fraction: f64,
         num_threads: usize,
+        initial_num_partitions: usize,
     ) -> Result<Vec<(i64, u64)>> {
         // Count number of proteins in files
         info!("Counting proteins ...");
@@ -121,7 +123,7 @@ impl PeptideMassCounter {
 
         // Calculate the max mass and width of each partition
         let max_mass = INTERNAL_TRYPTOPHAN.get_mono_mass_int() * 60;
-        let mass_step = max_mass / (num_threads * 4) as i64;
+        let mass_step = max_mass / initial_num_partitions as i64;
         debug!("max mass: {}", max_mass);
         debug!("mass step: {}", mass_step);
 
@@ -392,6 +394,7 @@ mod test {
             0.02,
             0.3,
             20,
+            40,
         )
         .await
         .unwrap();
