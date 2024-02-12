@@ -2,15 +2,19 @@
 use std::path::PathBuf;
 
 // 3rd party imports
-use anyhow::Result;
+use anyhow::{bail, Result};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::spawn;
 use tokio::sync::mpsc::Receiver;
+use tokio::task::JoinHandle;
 use tracing::error;
 
 /// Struct for logging messages to a file
 ///
-pub struct MessageLogger;
+pub struct MessageLogger {
+    thread_handle: Option<JoinHandle<Result<usize>>>,
+}
 
 impl MessageLogger {
     /// Starts logging and writes messages to the given file. Stops when all senders are dropped.
@@ -20,7 +24,29 @@ impl MessageLogger {
     /// * `receiver` - Receiver for log messages
     /// * `flush_interval` - Number of messages after the file is flushed
     ///
-    pub async fn start_logging<T>(
+    pub async fn new<T>(
+        log_file_path: PathBuf,
+        receiver: Receiver<T>,
+        flush_interval: usize,
+    ) -> Self
+    where
+        T: ToLogMessage + 'static,
+    {
+        let thread_handle = spawn(Self::log(log_file_path, receiver, flush_interval));
+
+        Self {
+            thread_handle: Some(thread_handle),
+        }
+    }
+
+    /// Logs the messages
+    /// s
+    /// # Arguments
+    /// * `log_file_path` - Path to log file
+    /// * `receiver` - Receiver for log messages
+    /// * `flush_interval` - Number of messages after the file is flushed
+    ///
+    async fn log<T>(
         log_file_path: PathBuf,
         mut receiver: Receiver<T>,
         flush_interval: usize,
@@ -57,6 +83,15 @@ impl MessageLogger {
 
         log_file.flush().await?;
         Ok(message_counter)
+    }
+
+    /// Stops the logger and returns the number of messages logged
+    ///
+    pub async fn stop(&mut self) -> Result<usize> {
+        match self.thread_handle.take() {
+            Some(handle) => Ok(handle.await??),
+            None => bail!("Logger already stopped"),
+        }
     }
 }
 

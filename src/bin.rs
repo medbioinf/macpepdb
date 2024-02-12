@@ -11,13 +11,14 @@ use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_pr
 use futures::StreamExt;
 use glob::glob;
 use indicatif::ProgressStyle;
-use macpepdb::database::scylla::client::{Client, GenericClient};
+use macpepdb::database::generic_client::GenericClient;
+use macpepdb::database::scylla::client::Client;
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
 use macpepdb::tools::peptide_mass_counter::PeptideMassCounter;
 use macpepdb::tools::peptide_partitioner::PeptidePartitioner;
-use tracing::{debug, error, info, info_span, Level};
+use tracing::{debug, error, info, info_span, Instrument, Level};
 use tracing_indicatif::IndicatifLayer;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -156,6 +157,9 @@ enum Commands {
         /// Protease used for digestion
         #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
         protease: ProteaseChoice,
+        /// Initial number of partitions [default: 4 * num_threads]
+        #[arg(long)]
+        initial_num_partitions: Option<usize>,
         /// Protein files in UniProt text format (txt or dat).
         /// Each file can be compressed with gzip (has last extension `.gz` e.g. `txt.gz``).
         /// Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
@@ -285,6 +289,7 @@ async fn main() -> Result<()> {
             }
 
             if database_url.starts_with("scylla://") {
+                let start = std::time::Instant::now();
                 let builder = ScyllaBuild::new(&database_url);
 
                 match builder
@@ -312,6 +317,7 @@ async fn main() -> Result<()> {
                     Ok(_) => info!("Database build completed successfully!"),
                     Err(e) => error!("Database build failed: {:?}", e),
                 }
+                info!("Database build took: {:?}", start.elapsed());
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
@@ -367,7 +373,6 @@ async fn main() -> Result<()> {
         Commands::DomainTypes { database_url } => {
             if database_url.starts_with("scylla://") {
                 let client = Client::new(&database_url).await?;
-                let session = client.get_session();
 
                 let not_updated_peptides = info_span!("not_updated_peptides");
                 let not_updated_peptides_enter = not_updated_peptides.enter();
@@ -384,7 +389,7 @@ async fn main() -> Result<()> {
 
                     debug!("Streaming rows of partition {}", partition);
 
-                    let mut rows_stream = session
+                    let mut rows_stream = client
                         .query_iter(query_statement, (partition,))
                         .await
                         .unwrap();
@@ -426,7 +431,11 @@ async fn main() -> Result<()> {
             false_positive_probability,
             protease,
             protein_file_paths,
+            initial_num_partitions,
         } => {
+            // Create span for this function
+            let info_span = info_span!("counting peptide masses");
+
             let protease = get_protease_by_name(
                 protease.to_str(),
                 Some(min_peptide_length),
@@ -434,6 +443,10 @@ async fn main() -> Result<()> {
                 Some(max_number_of_missed_cleavages),
             )?;
             let protein_file_paths = convert_str_paths_and_resolve_globs(protein_file_paths)?;
+            let initial_num_partitions = match initial_num_partitions {
+                Some(num) => num,
+                None => 4 * num_threads,
+            };
 
             let mass_counts = PeptideMassCounter::count(
                 &protein_file_paths,
@@ -442,7 +455,9 @@ async fn main() -> Result<()> {
                 false_positive_probability,
                 usable_memory_fraction,
                 num_threads,
+                initial_num_partitions,
             )
+            .instrument(info_span)
             .await?;
 
             let num_peptides: u64 = mass_counts.iter().map(|x| x.1).sum();

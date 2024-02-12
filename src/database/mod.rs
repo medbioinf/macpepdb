@@ -2,6 +2,8 @@
 pub mod configuration_table;
 /// Trait for database building / maintenance.
 pub mod database_build;
+/// Trait for database client
+pub mod generic_client;
 /// Support for ScyllaDB
 pub mod scylla;
 /// Trait for selectable tables storing entity data

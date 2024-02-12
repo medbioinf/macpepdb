@@ -9,9 +9,11 @@ use crate::database::configuration_table::{
     MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY, MAX_PEPTIDE_LENGTH_KEY, MIN_PEPTIDE_LENGTH_KEY,
     PARTITION_LIMITS_KEY, PROTEASE_NAME_KEY, REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY, TABLE_NAME,
 };
-use crate::database::scylla::client::GenericClient;
+use crate::database::generic_client::GenericClient;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
+
+use crate::database::scylla::client::Client;
 
 pub struct ConfigurationTable {}
 
@@ -23,11 +25,8 @@ impl Table for ConfigurationTable {
     }
 }
 
-impl<C> ConfigurationTableTrait<C> for ConfigurationTable
-where
-    C: GenericClient + Send,
-{
-    async fn get_setting<T>(client: &C, key: &str) -> Result<Option<T>>
+impl ConfigurationTableTrait<Client> for ConfigurationTable {
+    async fn get_setting<T>(client: &Client, key: &str) -> Result<Option<T>>
     where
         T: DeserializeOwned,
     {
@@ -36,11 +35,7 @@ where
             client.get_database(),
             Self::table_name()
         );
-        let row = client
-            .get_session()
-            .query(statement, (key,))
-            .await?
-            .first_row()?;
+        let row = client.query(statement, (key,)).await?.first_row()?;
         let (_, value) = row.into_typed::<(String, String)>()?;
 
         let mut wrapper: JsonValue = serde_json::from_str(value.as_str())?;
@@ -52,7 +47,7 @@ where
         Ok(config_value)
     }
 
-    async fn set_setting<T>(client: &C, key: &str, value: &T) -> Result<()>
+    async fn set_setting<T>(client: &Client, key: &str, value: &T) -> Result<()>
     where
         T: Serialize,
     {
@@ -64,14 +59,11 @@ where
 
         let wrapper = json!({ JSON_KEY: value });
 
-        client
-            .get_session()
-            .query(statement, (key, wrapper.to_string()))
-            .await?;
+        client.query(statement, (key, wrapper.to_string())).await?;
         Ok(())
     }
 
-    async fn select(client: &C) -> Result<Configuration> {
+    async fn select(client: &Client) -> Result<Configuration> {
         let enzyme_name = Self::get_setting::<String>(client, PROTEASE_NAME_KEY)
             .await
             .map_err(|error| {
@@ -140,7 +132,7 @@ where
         ))
     }
 
-    async fn insert(client: &mut C, configuration: &Configuration) -> Result<()> {
+    async fn insert(client: &mut Client, configuration: &Configuration) -> Result<()> {
         ConfigurationTable::set_setting::<String>(
             client,
             PROTEASE_NAME_KEY,

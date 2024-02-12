@@ -11,13 +11,14 @@ use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 use scylla::transport::query_result::FirstRowError;
 
+use crate::database::generic_client::GenericClient;
 // internal imports
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
 
-use super::client::GenericClient;
+use super::client::Client;
 
 const TABLE_NAME: &'static str = "proteins";
 
@@ -47,7 +48,7 @@ lazy_static! {
 pub struct ProteinTable {}
 
 impl ProteinTable {
-    pub async fn insert<'a, C: GenericClient>(client: &C, protein: &Protein) -> Result<()> {
+    pub async fn insert<'a>(client: &Client, protein: &Protein) -> Result<()> {
         let statement = format!(
             "INSERT INTO {}.{} ({}) VALUES ({})",
             client.get_database(),
@@ -56,7 +57,6 @@ impl ProteinTable {
             INSERT_PLACEHOLDERS.as_str()
         );
         client
-            .get_session()
             .query(
                 statement,
                 (
@@ -77,8 +77,8 @@ impl ProteinTable {
         return Ok(());
     }
 
-    pub async fn update<'a, C: GenericClient>(
-        client: &C,
+    pub async fn update<'a>(
+        client: &Client,
         old_prot: &Protein,
         updated_prot: &Protein,
     ) -> Result<()> {
@@ -101,7 +101,6 @@ impl ProteinTable {
         batch.append_statement(insert_statement.as_str());
 
         client
-            .get_session()
             .batch(
                 &batch,
                 (
@@ -126,17 +125,14 @@ impl ProteinTable {
         return Ok(());
     }
 
-    pub async fn delete<'a, C: GenericClient>(client: &C, protein: &Protein) -> Result<()> {
+    pub async fn delete<'a>(client: &Client, protein: &Protein) -> Result<()> {
         let statement = format!(
             "DELETE FROM {}.{} WHERE accession = ?",
             client.get_database(),
             TABLE_NAME
         );
 
-        client
-            .get_session()
-            .query(statement, (protein.get_accession(),))
-            .await?;
+        client.query(statement, (protein.get_accession(),)).await?;
 
         return Ok(());
     }
@@ -147,13 +143,10 @@ impl ProteinTable {
     /// # Arguments
     /// * `client` - The database client
     /// * `attribute` - Accession or gene name, will be wrapped in a like-query
-    pub async fn search<'a, C>(
-        client: Arc<C>,
+    pub async fn search<'a>(
+        client: Arc<Client>,
         attribute: String,
-    ) -> Result<impl Stream<Item = Result<Protein>> + 'a>
-    where
-        C: GenericClient + Unpin + 'a,
-    {
+    ) -> Result<impl Stream<Item = Result<Protein>> + 'a> {
         Ok(try_stream! {
 
 
@@ -196,13 +189,10 @@ impl ProteinTable {
     /// # Arguments
     /// * `client` - The database client
     /// * `peptide` - The peptide
-    pub async fn get_proteins_of_peptide<'a, C>(
-        client: &'a C,
+    pub async fn get_proteins_of_peptide<'a>(
+        client: &'a Client,
         peptide: &'a Peptide,
-    ) -> Result<impl Stream<Item = Result<Protein>> + 'a>
-    where
-        C: GenericClient + Unpin + 'a,
-    {
+    ) -> Result<impl Stream<Item = Result<Protein>> + 'a> {
         Ok(try_stream! {
             let accession_placeholder = peptide
                 .get_proteins()
@@ -234,10 +224,7 @@ impl Table for ProteinTable {
     }
 }
 
-impl<'a, C> SelectableTableTrait<'a, C> for ProteinTable
-where
-    C: GenericClient + Send + Sync + Unpin + 'a,
-{
+impl<'a> SelectableTableTrait<'a, Client> for ProteinTable {
     type Parameter = CqlValue;
     type Record = Row;
     type RecordIter = RowIterator;
@@ -249,12 +236,11 @@ where
     }
 
     async fn raw_select_multiple<'b>(
-        client: &C,
+        client: &Client,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Vec<Self::Record>> {
-        let session = client.get_session();
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
@@ -265,17 +251,15 @@ where
             statement += " ";
             statement += additional;
         }
-        return Ok(session.query(statement, params).await?.rows()?);
+        return Ok(client.query(statement, params).await?.rows()?);
     }
 
     async fn raw_select<'b>(
-        client: &C,
+        client: &Client,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Option<Self::Record>> {
-        let session = client.get_session();
-
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
@@ -287,7 +271,7 @@ where
             statement += additional;
         }
 
-        let row_res = session.query(statement, params).await?;
+        let row_res = client.query(statement, params).await?;
 
         match row_res.first_row() {
             Ok(row) => Ok(Some(row)),
@@ -297,17 +281,12 @@ where
     }
 
     async fn select_multiple<'b>(
-        client: &C,
+        client: &Client,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Vec<Self::Entity>> {
-        let rows: Vec<Row> = Self::raw_select_multiple(
-            client,
-            <Self as SelectableTableTrait<C>>::select_cols(),
-            additional,
-            params,
-        )
-        .await?;
+        let rows: Vec<Row> =
+            Self::raw_select_multiple(client, Self::select_cols(), additional, params).await?;
         let mut records = Vec::new();
         for row in rows {
             records.push(Self::Entity::from(row));
@@ -316,17 +295,11 @@ where
     }
 
     async fn select<'b>(
-        client: &C,
+        client: &Client,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Option<Self::Entity>> {
-        let row = Self::raw_select(
-            client,
-            <Self as SelectableTableTrait<C>>::select_cols(),
-            additional,
-            params,
-        )
-        .await?;
+        let row = Self::raw_select(client, Self::select_cols(), additional, params).await?;
 
         if row.is_none() {
             return Ok(None);
@@ -334,7 +307,7 @@ where
         return Ok(Some(Self::Entity::from(row.unwrap())));
     }
     async fn raw_stream(
-        client: &'a C,
+        client: &'a Client,
         cols: &str,
         additional: &str,
         params: &'a [&'a Self::Parameter],
@@ -350,10 +323,10 @@ where
             statement += " ";
             statement += additional;
         }
-        let mut prepared_statement = client.get_session().prepare(statement).await?;
+        let mut prepared_statement = client.prepare(statement).await?;
         prepared_statement.set_page_size(num_rows);
         Ok(try_stream! {
-            let row_stream = client.get_session().execute_iter(prepared_statement, params).await?;
+            let row_stream = client.execute_iter(prepared_statement, params).await?;
             for await row in row_stream {
                 yield row?;
             }
@@ -361,19 +334,13 @@ where
     }
 
     async fn stream(
-        client: &'a C,
+        client: &'a Client,
         additional: &'a str,
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
     ) -> Result<impl Stream<Item = Result<Self::Entity>>> {
-        let raw_stream = Self::raw_stream(
-            client,
-            <Self as SelectableTableTrait<C>>::select_cols(),
-            additional,
-            params,
-            num_rows,
-        )
-        .await?;
+        let raw_stream =
+            Self::raw_stream(client, Self::select_cols(), additional, params, num_rows).await?;
         Ok(try_stream! {
             for await row in raw_stream  {
                 yield Self::Entity::from(row?);
@@ -486,7 +453,6 @@ mod tests {
             TABLE_NAME
         );
         let row = client
-            .get_session()
             .query(count_statement, &[])
             .await
             .unwrap()

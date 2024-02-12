@@ -1,16 +1,12 @@
+// std imports
+use std::ops::Deref;
+
 // 3rd party imports
 use anyhow::{anyhow, Result};
 use scylla::{transport::session::Session, SessionBuilder};
 
-/// Wrapper trait for a ScyllaDB session to make it more convenient to use with generic implementation
-///
-pub trait GenericClient: Send + Sync {
-    fn new(database_url: &str) -> impl std::future::Future<Output = Result<Self>> + Send
-    where
-        Self: Sized;
-    fn get_session(&self) -> &Session;
-    fn get_database(&self) -> &str;
-}
+// local imports
+use crate::database::generic_client::GenericClient;
 
 pub struct Client {
     session: Session,
@@ -46,7 +42,15 @@ impl Client {
     }
 }
 
-impl GenericClient for Client {
+impl Deref for Client {
+    type Target = Session;
+
+    fn deref(&self) -> &Self::Target {
+        &self.session
+    }
+}
+
+impl GenericClient<Session> for Client {
     /// Creates a new ScyllaDB client
     ///
     /// # Arguments
@@ -68,7 +72,7 @@ impl GenericClient for Client {
         })
     }
 
-    fn get_session(&self) -> &Session {
+    fn get_inner_client(&self) -> &Session {
         &self.session
     }
 

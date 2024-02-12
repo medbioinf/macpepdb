@@ -6,15 +6,17 @@ use tracing::{debug, info};
 
 // internal imports
 use crate::{
-    database::scylla::{create_keyspace_if_not_exists, schema::UP},
+    database::{
+        generic_client::GenericClient,
+        scylla::{create_keyspace_if_not_exists, schema::UP},
+    },
     tools::cql::get_cql_value,
 };
 
-use super::client::{Client, GenericClient};
+use crate::database::scylla::client::Client;
 
 pub async fn run_migrations(client: &Client) -> Result<()> {
     info!("Running Scylla migrations");
-    let session = client.get_session();
 
     create_keyspace_if_not_exists(&client).await;
 
@@ -32,8 +34,8 @@ pub async fn run_migrations(client: &Client) -> Result<()> {
 
         let statement = statement.replace(":KEYSPACE:", client.get_database());
         // Have to do it consecutively because batch statements dont allow CREATE
-        session.query(statement.as_str(), &[]).await.unwrap();
-        session
+        client.query(statement.as_str(), &[]).await.unwrap();
+        client
             .query(
                 migration_history_statement,
                 (
@@ -49,14 +51,12 @@ pub async fn run_migrations(client: &Client) -> Result<()> {
 }
 
 pub async fn get_latest_migration_id(client: &Client) -> Result<i32> {
-    let session = client.get_session();
-
     let latest_migration_id_query: String = format!(
         "SELECT id FROM {}.migrations WHERE pk='pk1' ORDER BY id DESC LIMIT 1",
         client.get_database()
     );
 
-    let row = session
+    let row = client
         .query(latest_migration_id_query, [])
         .await?
         .first_row()?;
@@ -71,13 +71,11 @@ mod tests {
     use serial_test::serial;
     use tracing_test::traced_test;
 
+    use crate::database::generic_client::GenericClient;
     use crate::database::scylla::tests::DATABASE_URL;
     use crate::database::scylla::{
-        client::{Client, GenericClient},
-        drop_keyspace,
-        migrations::get_latest_migration_id,
-        prepare_database_for_tests,
-        schema::UP,
+        client::Client, drop_keyspace, migrations::get_latest_migration_id,
+        prepare_database_for_tests, schema::UP,
     };
 
     use super::run_migrations;
@@ -86,11 +84,10 @@ mod tests {
     #[serial]
     async fn test_get_latest_migration_id() {
         let client = Client::new(DATABASE_URL).await.unwrap();
-        let session = client.get_session();
 
         prepare_database_for_tests(&client).await;
 
-        let prepared = session
+        let prepared = client
             .prepare(format!(
                 "INSERT INTO {}.migrations (pk, id, created, description) VALUES (?,?,?,?)",
                 client.get_database()
@@ -98,17 +95,17 @@ mod tests {
             .await
             .unwrap();
 
-        session
+        client
             .execute(&prepared, ("pk1", 1, 123, "yo"))
             .await
             .unwrap();
 
-        session
+        client
             .execute(&prepared, ("pk1", 2, 123, "zzz"))
             .await
             .unwrap();
 
-        session
+        client
             .execute(&prepared, ("pk1", 3, 123, "oy"))
             .await
             .unwrap();

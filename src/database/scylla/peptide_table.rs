@@ -18,8 +18,8 @@ use scylla::transport::errors::QueryError;
 use scylla::transport::iterator::RowIterator;
 use scylla::transport::query_result::FirstRowError;
 
+use crate::database::generic_client::GenericClient;
 // internal imports
-use crate::database::scylla::client::GenericClient;
 use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
@@ -29,6 +29,8 @@ use crate::functions::post_translational_modification::{get_ptm_conditions, PTMC
 use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::omicstools::convert_to_internal_dummy_peptide;
 use crate::tools::peptide_partitioner::get_mass_partition;
+
+use crate::database::scylla::client::Client;
 
 pub const TABLE_NAME: &'static str = "peptides";
 
@@ -58,7 +60,7 @@ lazy_static! {
         .join(", ");
 }
 
-pub struct PeptideTable {}
+pub struct PeptideTable;
 
 impl PeptideTable {
     /// Inserts multiple peptides into the database.
@@ -68,13 +70,12 @@ impl PeptideTable {
     /// * `client` - Database client or open transaction
     /// * `peptides` - Iterator over peptides to insert
     ///
-    pub async fn bulk_insert<'a, C, T>(
-        client: &C,
+    pub async fn bulk_insert<'a, T>(
+        client: &Client,
         peptides: T,
         prepared: &PreparedStatement,
     ) -> Result<()>
     where
-        C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
         if peptides.len() == 0 {
@@ -86,7 +87,7 @@ impl PeptideTable {
         // Alternative: select then check in application code then upsert
         let insertion_futures = peptides
             .map(|x| {
-                client.get_session().execute(
+                client.execute(
                     &prepared,
                     (
                         x.get_missed_cleavages(),
@@ -111,77 +112,6 @@ impl PeptideTable {
         return Ok(());
     }
 
-    // pub async fn batch_insert<'a, C, T>(
-    //     client: &C,
-    //     peptides: T,
-    //     prepared: &PreparedStatement,
-    // ) -> Result<()>
-    // where
-    //     C: GenericClient,
-    //     T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
-    // {
-    //     let mut peptides_groups = vec![Vec::<&Peptide>::new(); 100];
-    //     for peptide in peptides {
-    //         let partition = peptide.get_partition() as usize;
-    //         peptides_groups[partition].push(peptide);
-    //     }
-
-    //     peptides_groups = peptides_groups
-    //         .into_iter()
-    //         .filter(|pep_vec| pep_vec.len() > 0)
-    //         .collect();
-
-    //     let mut batch: Batch = Default::default();
-    //     batch.append_statement(prepared.clone());
-
-    //     let session = client.get_session();
-
-    //     let futures = peptides_groups
-    //         .into_iter()
-    //         .map(|pep_vec| {
-    //             session.batch(
-    //                 &batch,
-    //                 pep_vec
-    //                     .iter()
-    //                     .map(|x| {
-    //                         (
-    //                             x.get_missed_cleavages(),
-    //                             x.get_aa_counts(),
-    //                             x.get_proteins(),
-    //                             x.get_is_swiss_prot(),
-    //                             x.get_is_trembl(),
-    //                             x.get_taxonomy_ids(),
-    //                             x.get_unique_taxonomy_ids(),
-    //                             x.get_proteome_ids(),
-    //                             x.get_partition(),
-    //                             x.get_mass(),
-    //                             x.get_sequence(),
-    //                             x.get_domains(),
-    //                         )
-    //                     })
-    //                     .collect::<Vec<(
-    //                         i16,
-    //                         &Vec<i16>,
-    //                         &Vec<String>,
-    //                         bool,
-    //                         bool,
-    //                         &Vec<i64>,
-    //                         &Vec<i64>,
-    //                         &Vec<String>,
-    //                         i64,
-    //                         i64,
-    //                         &String,
-    //                         &Vec<Domain>,
-    //                     )>>(),
-    //             )
-    //         })
-    //         .collect::<Vec<_>>();
-
-    //     join_all(futures).await;
-
-    //     return Ok(());
-    // }
-
     /// Updates the protein accessions of the given peptides.
     /// If new_protein_accession is given a metadata flaged as outdated.
     /// The protein of new_protein_accession is assumed to be identical to the old_protein in all fields but the accession.
@@ -193,14 +123,13 @@ impl PeptideTable {
     /// * `old_protein_accession` - Old protein accession to remove
     /// * `new_protein_accession` - New protein accession to add (optional)
     ///
-    pub async fn update_protein_accession<'a, C, T>(
-        client: &C,
+    pub async fn update_protein_accession<'a, T>(
+        client: &Client,
         peptides: &mut T,
         old_protein_accession: &str,
         new_protein_accession: Option<&str>,
     ) -> Result<()>
     where
-        C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
         // if a new protein accession is given add it, otherwise set is_metadata_updated to false
@@ -226,11 +155,10 @@ impl PeptideTable {
             set_statement,
         );
 
-        let prepared = client.get_session().prepare(statement).await?;
+        let prepared = client.prepare(statement).await?;
 
         for peptide in peptides {
             client
-                .get_session()
                 .execute(
                     &prepared,
                     (
@@ -245,20 +173,18 @@ impl PeptideTable {
         return Ok(());
     }
 
-    pub async fn unset_is_metadata_updated<'a, C, T>(client: &C, peptides: &mut T) -> Result<()>
+    pub async fn unset_is_metadata_updated<'a, T>(client: &Client, peptides: &mut T) -> Result<()>
     where
-        C: GenericClient,
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
         let statement = format!(
             "UPDATE {}.{} SET is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
             client.get_database(), TABLE_NAME
         );
-        let prepared = client.get_session().prepare(statement).await?;
+        let prepared = client.prepare(statement).await?;
 
         for peptide in peptides {
             client
-                .get_session()
                 .execute(
                     &prepared,
                     (
@@ -283,8 +209,8 @@ impl PeptideTable {
     /// * `matching_peptides` - A bloom filter to check if a peptide was already found
     /// * `ptm_condition` - Optional: PTM condition to check if a peptide is matches
     ///
-    async fn search_ptm_condition<'a, C>(
-        client: Arc<C>,
+    async fn search_ptm_condition<'a>(
+        client: Arc<Client>,
         configuration: Arc<Configuration>,
         mass: i64,
         lower_mass_tolerance_ppm: i64,
@@ -294,10 +220,7 @@ impl PeptideTable {
         is_reviewed: &'a Option<bool>,
         matching_peptides: &'a mut BloomFilter,
         ptm_condition: Option<&'a PTMCondition>,
-    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a>
-    where
-        C: GenericClient + Unpin + 'a,
-    {
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
         Ok(try_stream! {
             // Calculate mass range
             let lower_mass_limit = mass - (mass / 1000000 * lower_mass_tolerance_ppm);
@@ -392,8 +315,8 @@ impl PeptideTable {
     /// * `ptms` - The PTMs to search for
     /// * `matching_peptides` - A bloom filter to check if a peptide was already found
     ///
-    pub async fn search<'a, C>(
-        client: Arc<C>,
+    pub async fn search<'a>(
+        client: Arc<Client>,
         configuration: Arc<Configuration>,
         mass: i64,
         lower_mass_tolerance_ppm: i64,
@@ -403,10 +326,7 @@ impl PeptideTable {
         proteome_id: Option<String>,
         is_reviewed: Option<bool>,
         ptms: Vec<PTM>,
-    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a>
-    where
-        C: GenericClient + Unpin + 'a,
-    {
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
         Ok(try_stream! {
             let mut matching_peptides = BloomFilter::new_by_size_and_fp_prob(80_000_000, 0.001)?; // around 10MB
 
@@ -459,14 +379,11 @@ impl PeptideTable {
     /// * `sequence` - The sequence to check
     /// * `configuration` - MaCPepDB configuration
     ///
-    pub async fn exists_by_sequence<C>(
-        client: &C,
+    pub async fn exists_by_sequence(
+        client: &Client,
         sequence: &str,
         configuration: &Configuration,
-    ) -> Result<bool>
-    where
-        C: GenericClient + Unpin,
-    {
+    ) -> Result<bool> {
         let sequence = sequence.to_uppercase();
         let mass = mass_to_int(calculate_mass_of_peptide_sequence(sequence.as_str())?);
         let partition = get_mass_partition(configuration.get_partition_limits(), mass)?;
@@ -491,15 +408,12 @@ impl PeptideTable {
     /// * `client` - The database client
     /// * `protein` - The protein
     ///
-    pub async fn get_peptides_of_proteins<'a, C>(
-        client: &'a C,
+    pub async fn get_peptides_of_proteins<'a>(
+        client: &'a Client,
         protein: &'a Protein,
         protease: &'a dyn Protease,
         partition_limits: &'a Vec<i64>,
-    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a>
-    where
-        C: GenericClient + Unpin,
-    {
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
         Ok(try_stream! {
             // First digest the protein
             let dummy_peptides: HashSet<Peptide> = convert_to_internal_dummy_peptide(
@@ -559,10 +473,7 @@ impl Table for PeptideTable {
     }
 }
 
-impl<'a, C> SelectableTableTrait<'a, C> for PeptideTable
-where
-    C: GenericClient + Send + Sync + Unpin + 'a,
-{
+impl<'a> SelectableTableTrait<'a, Client> for PeptideTable {
     type Parameter = CqlValue;
     type Record = Row;
     type RecordIter = RowIterator;
@@ -574,12 +485,12 @@ where
     }
 
     async fn raw_select_multiple<'b>(
-        client: &C,
+        client: &Client,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Vec<Self::Record>> {
-        let session = client.get_session();
+        let session = client;
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
@@ -594,12 +505,12 @@ where
     }
 
     async fn raw_select<'b>(
-        client: &C,
+        client: &Client,
         cols: &str,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Option<Self::Record>> {
-        let session = client.get_session();
+        let session = client;
         let mut statement = format!(
             "SELECT {} FROM {}.{}",
             cols,
@@ -620,17 +531,12 @@ where
     }
 
     async fn select_multiple<'b>(
-        client: &C,
+        client: &Client,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Vec<Self::Entity>> {
-        let rows = Self::raw_select_multiple(
-            client,
-            <Self as SelectableTableTrait<C>>::select_cols(),
-            additional,
-            params,
-        )
-        .await?;
+        let rows =
+            Self::raw_select_multiple(client, Self::select_cols(), additional, params).await?;
         let mut records = Vec::new();
         for row in rows {
             records.push(Self::Entity::from(row));
@@ -639,17 +545,11 @@ where
     }
 
     async fn select<'b>(
-        client: &C,
+        client: &Client,
         additional: &str,
         params: &[&'b Self::Parameter],
     ) -> Result<Option<Self::Entity>> {
-        let row = Self::raw_select(
-            client,
-            <Self as SelectableTableTrait<C>>::select_cols(),
-            additional,
-            params,
-        )
-        .await?;
+        let row = Self::raw_select(client, Self::select_cols(), additional, params).await?;
         if row.is_none() {
             return Ok(None);
         }
@@ -657,7 +557,7 @@ where
     }
 
     async fn raw_stream(
-        client: &'a C,
+        client: &'a Client,
         cols: &str,
         additional: &str,
         params: &'a [&'a Self::Parameter],
@@ -673,10 +573,10 @@ where
             statement += " ";
             statement += additional;
         }
-        let mut prepared_statement = client.get_session().prepare(statement).await?;
+        let mut prepared_statement = client.prepare(statement).await?;
         prepared_statement.set_page_size(num_rows);
         Ok(try_stream! {
-            let row_stream = client.get_session().execute_iter(prepared_statement, params).await?;
+            let row_stream = client.execute_iter(prepared_statement, params).await?;
             for await row in row_stream {
                 yield row?;
             }
@@ -684,19 +584,13 @@ where
     }
 
     async fn stream(
-        client: &'a C,
+        client: &'a Client,
         additional: &'a str,
         params: &'a [&'a Self::Parameter],
         num_rows: i32,
     ) -> Result<impl Stream<Item = Result<Self::Entity>>> {
-        let raw_stream = Self::raw_stream(
-            client,
-            <Self as SelectableTableTrait<C>>::select_cols(),
-            additional,
-            params,
-            num_rows,
-        )
-        .await?;
+        let raw_stream =
+            Self::raw_stream(client, Self::select_cols(), additional, params, num_rows).await?;
         Ok(try_stream! {
             for await row in raw_stream {
                 yield Self::Entity::from(row?);
@@ -841,7 +735,7 @@ mod tests {
             TABLE_NAME,
             UPDATE_SET_PLACEHOLDER.as_str()
         );
-        let prepared = client.get_session().prepare(statement).await.unwrap();
+        let prepared = client.prepare(statement).await.unwrap();
 
         PeptideTable::bulk_insert(&client, &mut conflicting_peptides.iter(), &prepared)
             .await
@@ -857,7 +751,6 @@ mod tests {
             PeptideTable::table_name()
         );
         let row = client
-            .get_session()
             .query(count_statement, &[])
             .await
             .unwrap()
@@ -950,7 +843,7 @@ mod tests {
             UPDATE_SET_PLACEHOLDER.as_str()
         );
 
-        let prepared = client.get_session().prepare(statement).await.unwrap();
+        let prepared = client.prepare(statement).await.unwrap();
 
         PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
             .await
@@ -1037,7 +930,7 @@ mod tests {
             UPDATE_SET_PLACEHOLDER.as_str()
         );
 
-        let prepared = client.get_session().prepare(statement).await.unwrap();
+        let prepared = client.prepare(statement).await.unwrap();
 
         PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
             .await
@@ -1051,7 +944,6 @@ mod tests {
 
         for peptide in &peptides {
             client
-                .get_session()
                 .query(
                     statement.to_owned(),
                     (
@@ -1114,7 +1006,6 @@ mod tests {
 
         for peptide in &peptides {
             client
-                .get_session()
                 .query(
                     statement.to_owned(),
                     (
