@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 // std imports
 use std::time::Instant;
 
@@ -5,10 +7,8 @@ use std::time::Instant;
 use anyhow::Result;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::StreamExt;
-use indicatif::ProgressStyle;
 use scylla::frame::response::result::CqlValue;
-use tracing::{info_span, Span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing::info;
 
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
 use crate::database::generic_client::GenericClient;
@@ -20,6 +20,7 @@ use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
 use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::peptide_partitioner::get_mass_partition;
+use crate::tools::progress_monitor::ProgressMonitor;
 
 pub async fn query_performance(
     database_url: &str,
@@ -29,6 +30,28 @@ pub async fn query_performance(
     max_variable_modifications: i16,
     ptms: Vec<PTM>,
 ) -> Result<()> {
+    let processed_masses = Arc::new(AtomicUsize::new(0));
+    let mut progress_monitor = ProgressMonitor::new(
+        "",
+        vec![processed_masses.clone()],
+        vec![Some(masses.len() as u64)],
+        vec!["masses".to_string()],
+        None,
+    )?;
+
+    info!("Calculating number of PTM conditions (depending on given masses and PMTs) ...");
+    let num_ptm_conditions: usize = masses
+        .iter()
+        .map(|mass| {
+            processed_masses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(get_ptm_conditions(*mass, max_variable_modifications, &ptms)?.len())
+        })
+        .collect::<Result<Vec<usize>>>()?
+        .into_iter()
+        .sum();
+    progress_monitor.stop().await?;
+    info!("... {} PTM conditions", num_ptm_conditions);
+
     let client = Client::new(database_url).await?;
     let mut mass_stats: Vec<(i64, u64, u128)> = Vec::new();
 
@@ -36,10 +59,16 @@ pub async fn query_performance(
 
     let partition_limits = config.get_partition_limits();
 
-    let header_span = info_span!("Querying");
-    header_span.pb_set_style(&ProgressStyle::default_bar());
-    header_span.pb_set_length(masses.len() as u64);
-    let header_span_enter = header_span.enter();
+    let processed_ptm_conditions = Arc::new(AtomicUsize::new(0));
+    let processed_masses = Arc::new(AtomicUsize::new(0));
+
+    let mut progress_monitor = ProgressMonitor::new(
+        "",
+        vec![processed_masses.clone(), processed_ptm_conditions.clone()],
+        vec![Some(masses.len() as u64), Some(num_ptm_conditions as u64)],
+        vec!["masses".to_string(), "PTM conditions".to_string()],
+        None,
+    )?;
 
     let query_statement_str = format!(
         "SELECT {} FROM {}.{} WHERE partition = ? AND mass >= ? AND mass <= ?",
@@ -104,11 +133,11 @@ pub async fn query_performance(
                 matching_peptides_ctr,
                 query_start.elapsed().as_millis(),
             ));
+            processed_ptm_conditions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        Span::current().pb_inc(1);
+        processed_masses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    std::mem::drop(header_span_enter);
-    std::mem::drop(header_span);
+    progress_monitor.stop().await?;
     // Sum up queries, matching peptides and time
     let num_matching_peptides = mass_stats
         .iter()
