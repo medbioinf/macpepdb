@@ -61,12 +61,29 @@ pub async fn query_performance(
 
     let processed_ptm_conditions = Arc::new(AtomicUsize::new(0));
     let processed_masses = Arc::new(AtomicUsize::new(0));
+    let processed_peptides = Arc::new(AtomicUsize::new(0));
+    let matching_peptides = Arc::new(AtomicUsize::new(0));
 
     let mut progress_monitor = ProgressMonitor::new(
         "",
-        vec![processed_masses.clone(), processed_ptm_conditions.clone()],
-        vec![Some(masses.len() as u64), Some(num_ptm_conditions as u64)],
-        vec!["masses".to_string(), "PTM conditions".to_string()],
+        vec![
+            processed_masses.clone(),
+            processed_ptm_conditions.clone(),
+            processed_peptides.clone(),
+            matching_peptides.clone(),
+        ],
+        vec![
+            Some(masses.len() as u64),
+            Some(num_ptm_conditions as u64),
+            None,
+            None,
+        ],
+        vec![
+            "masses".to_string(),
+            "PTM conditions".to_string(),
+            "processed peptides".to_string(),
+            "matching peptides".to_string(),
+        ],
         None,
     )?;
 
@@ -125,7 +142,9 @@ pub async fn query_performance(
 
                     if ptm_condition.check_peptide(&peptide) {
                         matching_peptides_ctr += 1;
+                        matching_peptides.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
+                    processed_peptides.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
             mass_stats.push((
