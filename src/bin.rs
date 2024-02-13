@@ -103,6 +103,9 @@ enum Commands {
         protein_file_paths: Vec<String>,
     },
     QueryPerformance {
+        /// Log interval for metrics in seconds
+        #[arg(long, default_value_t = 60)]
+        metrics_log_interval: u64,
         /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
         /// Input file with masses to query
@@ -115,6 +118,8 @@ enum Commands {
         upper_mass_tolerance: i64,
         /// Maximum number of variable modifications
         max_variable_modifications: i16,
+        /// File to log metrics
+        metrics_log_file: String,
     },
     Web {
         /// Database URL to connect e.g. scylla://host1,host2/keyspace
@@ -323,12 +328,14 @@ async fn main() -> Result<()> {
             }
         }
         Commands::QueryPerformance {
+            metrics_log_interval,
             database_url,
             masses_file,
             ptm_file,
             lower_mass_tolerance,
             upper_mass_tolerance,
             max_variable_modifications,
+            metrics_log_file,
         } => {
             let masses: Vec<i64> = read_to_string(Path::new(&masses_file))?
                 .split("\n")
@@ -343,6 +350,7 @@ async fn main() -> Result<()> {
                 .collect();
 
             let ptms = PtmReader::read(Path::new(&ptm_file))?;
+            let metrics_log_file = Path::new(&metrics_log_file);
 
             if database_url.starts_with("scylla://") {
                 scylla_performance::query_performance(
@@ -351,6 +359,8 @@ async fn main() -> Result<()> {
                     lower_mass_tolerance,
                     upper_mass_tolerance,
                     max_variable_modifications,
+                    metrics_log_file,
+                    metrics_log_interval,
                     ptms,
                 )
                 .await?;

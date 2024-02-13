@@ -1,7 +1,7 @@
+// std imports
+use std::path::Path;
 use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
-// std imports
-use std::time::Instant;
 
 // 3rd party imports
 use anyhow::Result;
@@ -19,6 +19,7 @@ use crate::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
 use crate::database::table::Table;
 use crate::entities::peptide::Peptide;
 use crate::functions::post_translational_modification::get_ptm_conditions;
+use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::tools::progress_monitor::ProgressMonitor;
 
@@ -28,8 +29,11 @@ pub async fn query_performance(
     lower_mass_tolerance: i64,
     upper_mass_tolerance: i64,
     max_variable_modifications: i16,
+    metrics_log_file: &Path,
+    metrics_log_interval: u64,
     ptms: Vec<PTM>,
 ) -> Result<()> {
+    // Count number of PTM conditions
     let processed_masses = Arc::new(AtomicUsize::new(0));
     let mut progress_monitor = ProgressMonitor::new(
         "",
@@ -52,13 +56,14 @@ pub async fn query_performance(
     progress_monitor.stop().await?;
     info!("... {} PTM conditions", num_ptm_conditions);
 
+    // Open client
     let client = Client::new(database_url).await?;
-    let mut mass_stats: Vec<(i64, u64, u128)> = Vec::new();
 
+    // Get configuration and partition limits
     let config = ConfigurationTable::select(&client).await?;
-
     let partition_limits = config.get_partition_limits();
 
+    // Create atomic counters
     let processed_ptm_conditions = Arc::new(AtomicUsize::new(0));
     let processed_masses = Arc::new(AtomicUsize::new(0));
     let processed_peptides = Arc::new(AtomicUsize::new(0));
@@ -87,6 +92,24 @@ pub async fn query_performance(
         None,
     )?;
 
+    // Metrics logger
+    let mut metrics_logger = MetricsLogger::new(
+        vec![
+            processed_masses.clone(),
+            processed_ptm_conditions.clone(),
+            processed_peptides.clone(),
+            matching_peptides.clone(),
+        ],
+        vec![
+            "masses".to_string(),
+            "PTM conditions".to_string(),
+            "processed peptides".to_string(),
+            "matching peptides".to_string(),
+        ],
+        metrics_log_file.to_path_buf(),
+        metrics_log_interval,
+    )?;
+
     let query_statement_str = format!(
         "SELECT {} FROM {}.{} WHERE partition = ? AND mass >= ? AND mass <= ?",
         SELECT_COLS,
@@ -103,7 +126,6 @@ pub async fn query_performance(
 
         // Iterate PTM conditions
         for ptm_condition in ptm_conditions.iter() {
-            let query_start = Instant::now();
             // Calculate mass range
             let lower_mass_limit = CqlValue::BigInt(
                 ptm_condition.get_mass()
@@ -120,8 +142,6 @@ pub async fn query_performance(
             let upper_partition_index =
                 get_mass_partition(&partition_limits, upper_mass_limit.as_bigint().unwrap())
                     .unwrap();
-
-            let mut matching_peptides_ctr: u64 = 0;
 
             for partition in lower_partition_index..upper_partition_index + 1 {
                 let partition_cql_value = CqlValue::BigInt(partition as i64);
@@ -141,45 +161,16 @@ pub async fn query_performance(
                     let peptide = Peptide::from(row);
 
                     if ptm_condition.check_peptide(&peptide) {
-                        matching_peptides_ctr += 1;
                         matching_peptides.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     }
                     processed_peptides.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 }
             }
-            mass_stats.push((
-                *mass,
-                matching_peptides_ctr,
-                query_start.elapsed().as_millis(),
-            ));
             processed_ptm_conditions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
         processed_masses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     progress_monitor.stop().await?;
-    // Sum up queries, matching peptides and time
-    let num_matching_peptides = mass_stats
-        .iter()
-        .map(|(_, peps, _)| *peps as usize)
-        .sum::<usize>();
-    let num_millis = mass_stats
-        .iter()
-        .map(|(_, _, millis)| *millis as usize)
-        .sum::<usize>();
-    // calculate averages
-    let average_queries = mass_stats.len() as f64 / masses.len() as f64;
-    let average_matching_peptides = num_matching_peptides as f64 / mass_stats.len() as f64;
-    let average_millis = num_millis as f64 / mass_stats.len() as f64;
-    println!("Querying took {} ms", num_millis);
-    println!("Queries\tMatching peptides\tTime");
-    println!(
-        "{}/{:.1}\t{}/{:.1}\t{}/{:.1}",
-        mass_stats.len(),
-        average_queries,
-        num_matching_peptides,
-        average_matching_peptides,
-        num_millis,
-        average_millis
-    );
+    metrics_logger.stop().await?;
     Ok(())
 }
