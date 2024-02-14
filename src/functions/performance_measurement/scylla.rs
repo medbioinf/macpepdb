@@ -6,6 +6,7 @@ use std::sync::Arc;
 // 3rd party imports
 use anyhow::Result;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
+use futures::future::join_all;
 use futures::StreamExt;
 use scylla::frame::response::result::CqlValue;
 use tracing::info;
@@ -61,7 +62,7 @@ pub async fn query_performance(
 
     // Get configuration and partition limits
     let config = ConfigurationTable::select(&client).await?;
-    let partition_limits = config.get_partition_limits();
+    let partition_limits = Arc::new(config.get_partition_limits().clone());
 
     // Create atomic counters
     let processed_ptm_conditions = Arc::new(AtomicUsize::new(0));
@@ -117,57 +118,75 @@ pub async fn query_performance(
         PeptideTable::table_name()
     );
 
-    let query_statement = client.prepare(query_statement_str).await?;
-
+    let client = Arc::new(client);
     // Iterate masses
     for mass in masses.iter() {
         // Create PTM conditions
         let ptm_conditions = get_ptm_conditions(*mass, max_variable_modifications, &ptms)?;
 
-        // Iterate PTM conditions
-        for ptm_condition in ptm_conditions.iter() {
-            // Calculate mass range
-            let lower_mass_limit = CqlValue::BigInt(
-                ptm_condition.get_mass()
-                    - (ptm_condition.get_mass() / 1000000 * lower_mass_tolerance),
-            );
-            let upper_mass_limit = CqlValue::BigInt(
-                ptm_condition.get_mass()
-                    + (ptm_condition.get_mass() / 1000000 * upper_mass_tolerance),
-            );
+        let tasks: Vec<tokio::task::JoinHandle<Result<()>>> = ptm_conditions
+            .into_iter()
+            .map(|ptm_condition| {
+                let task_client = client.clone();
+                let task_query_statement_str = query_statement_str.clone();
+                let task_partition_limits = partition_limits.clone();
+                let task_processed_peptides = processed_peptides.clone();
+                let task_matching_peptides = matching_peptides.clone();
+                let task_processed_ptm_conditions = processed_ptm_conditions.clone();
+                tokio::task::spawn(async move {
+                    let query_statement = task_client.prepare(task_query_statement_str).await?;
+                    let lower_mass_limit = CqlValue::BigInt(
+                        ptm_condition.get_mass()
+                            - (ptm_condition.get_mass() / 1000000 * lower_mass_tolerance),
+                    );
+                    let upper_mass_limit = CqlValue::BigInt(
+                        ptm_condition.get_mass()
+                            + (ptm_condition.get_mass() / 1000000 * upper_mass_tolerance),
+                    );
 
-            let lower_partition_index =
-                get_mass_partition(&partition_limits, lower_mass_limit.as_bigint().unwrap())
-                    .unwrap();
-            let upper_partition_index =
-                get_mass_partition(&partition_limits, upper_mass_limit.as_bigint().unwrap())
-                    .unwrap();
-
-            for partition in lower_partition_index..upper_partition_index + 1 {
-                let partition_cql_value = CqlValue::BigInt(partition as i64);
-                // let params: Vec<&CqlValue> =
-                //     vec![&partition_cql_value, &lower_mass_limit, &upper_mass_limit];
-
-                let mut rows_stream = client
-                    .execute_iter(
-                        query_statement.to_owned(),
-                        (&partition_cql_value, &lower_mass_limit, &upper_mass_limit),
+                    let lower_partition_index = get_mass_partition(
+                        &task_partition_limits,
+                        lower_mass_limit.as_bigint().unwrap(),
                     )
-                    .await
+                    .unwrap();
+                    let upper_partition_index = get_mass_partition(
+                        &task_partition_limits,
+                        upper_mass_limit.as_bigint().unwrap(),
+                    )
                     .unwrap();
 
-                while let Some(row_opt) = rows_stream.next().await {
-                    let row = row_opt.unwrap();
-                    let peptide = Peptide::from(row);
+                    for partition in lower_partition_index..upper_partition_index + 1 {
+                        let partition_cql_value = CqlValue::BigInt(partition as i64);
+                        // let params: Vec<&CqlValue> =
+                        //     vec![&partition_cql_value, &lower_mass_limit, &upper_mass_limit];
 
-                    if ptm_condition.check_peptide(&peptide) {
-                        matching_peptides.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let mut rows_stream = task_client
+                            .execute_iter(
+                                query_statement.to_owned(),
+                                (&partition_cql_value, &lower_mass_limit, &upper_mass_limit),
+                            )
+                            .await
+                            .unwrap();
+
+                        while let Some(row_opt) = rows_stream.next().await {
+                            let row = row_opt.unwrap();
+                            let peptide = Peptide::from(row);
+
+                            if ptm_condition.check_peptide(&peptide) {
+                                task_matching_peptides
+                                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            task_processed_peptides
+                                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        }
                     }
-                    processed_peptides.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-            }
-            processed_ptm_conditions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
+                    task_processed_ptm_conditions
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    Ok(())
+                })
+            })
+            .collect::<Vec<_>>();
+        join_all(tasks).await;
         processed_masses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     progress_monitor.stop().await?;
