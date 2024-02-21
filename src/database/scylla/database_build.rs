@@ -406,16 +406,18 @@ impl DatabaseBuild {
                     Ok(protein_queue) => protein_queue,
                     Err(err) => bail!(format!("Could not lock protein queue: {}", err)),
                 };
-                if protein_queue.is_empty() {
-                    if stop_flag.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    wait_for_queue = true;
-                    continue;
-                }
-                let protein = protein_queue.pop().unwrap(); // unwrap is safe because we checked if queue is empty
-                protein
+                protein_queue.pop()
             };
+
+            if protein.is_none() {
+                if stop_flag.load(Ordering::Relaxed) {
+                    break;
+                }
+                wait_for_queue = true;
+                continue;
+            }
+
+            let protein = protein.unwrap();
 
             let mut accession_list = protein.get_secondary_accessions().clone();
             accession_list.push(protein.get_accession().to_owned());
