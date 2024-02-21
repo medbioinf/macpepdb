@@ -21,6 +21,8 @@ pub mod omicstools;
 pub mod peptide_mass_counter;
 /// Thread for displaying multiple progress bars
 pub mod progress_monitor;
+/// Counter for protein in files
+pub mod protein_counter;
 /// Minitor for display queue utilization
 pub mod queue_monitor;
 /// Custom serde (de-) serializer
