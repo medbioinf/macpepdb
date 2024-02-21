@@ -54,18 +54,7 @@ const DEFAULT_PROTEASE: ProteaseChoice = ProteaseChoice::Trypsin;
 enum Commands {
     /// Builds a new MaCPepDB or updates an existing one
     Build {
-        /// Database URL to connect e.g. scylla://host1,host2/keyspace
-        database_url: String,
-        /// Number of threads to use for building the database
-        num_threads: usize,
-        /// Number of partitions or a pre generated partition limits file (see mass-counter and partitioning)
-        ///
-        partitions: String,
-        /// Fraction of usable memory for the bloom filter for counting peptides
-        /// For a tryptic digest of the complete Uniprot database 16 GB is recommended
-        usable_memory_fraction: f64,
-        /// Path to the log folder
-        log_folder: String,
+        // Optional arguments
         /// Path taxdmp.zip from [NCBI](https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdmp.zip)
         #[arg(long)]
         taxonomy_file: Option<String>,
@@ -96,6 +85,20 @@ enum Commands {
         /// Protease used for digestion
         #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
         protease: ProteaseChoice,
+        /// Fraction of usable memory for the bloom filter for counting peptides
+        /// For a tryptic digest of the complete Uniprot database 16 GB is recommended
+        #[arg(long, default_value_t = 0.3)]
+        usable_memory_fraction: f64,
+
+        // Positional arguments
+        /// Database URL to connect e.g. scylla://host1,host2/keyspace
+        database_url: String,
+        /// Number of threads to use for building the database
+        num_threads: usize,
+        /// Number of partitions or a pre generated partition limits file (see mass-counter and partitioning)
+        partitions: String,
+        /// Path to the log folder
+        log_folder: String,
         /// Protein files in UniProt text format (txt or dat).
         /// Each file can be compressed with gzip (has last extension `.gz` e.g. `txt.gz``).
         /// Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
@@ -122,30 +125,26 @@ enum Commands {
         metrics_log_file: String,
     },
     Web {
+        /// Setting this flag disables the creation of the taxonomy name search index,
+        /// disables the taxonomy search end point and reduces the memory usage of the web server
+        /// by ~1GB
+        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        no_taxonomy_search: bool,
+
+        // positional arguments
         /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
         /// Interface (IP) to bind the web server to
         interface: String,
         /// Port to bind the web server to
         port: u16,
-        /// Setting this flag disables the creation of the taxonomy name search index,
-        /// disables the taxonomy search end point and reduces the memory usage of the web server
-        /// by ~1GB
-        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
-        no_taxonomy_search: bool,
     },
     DomainTypes {
         /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
     },
     MassCounter {
-        /// Number of threads for counting the masses (10-20 recommended, as there are some mutexes involved which introduce some wait times)
-        num_threads: usize,
-        /// Fraction of usable memory for the bloom filter for counting peptides
-        /// For a tryptic digest of the complete Uniprot database 16 GB is recommended
-        usable_memory_fraction: f64,
-        /// Optional path to store the peptide per mass table
-        out_file: String,
+        // Optional arguments
         /// Can be skipped once the database is built the first time
         #[arg(long, default_value_t = DEFAULT_MIN_PEPTIDE_LENGTH)]
         min_peptide_length: usize,
@@ -165,6 +164,15 @@ enum Commands {
         /// Initial number of partitions [default: 4 * num_threads]
         #[arg(long)]
         initial_num_partitions: Option<usize>,
+
+        // Positional arguments
+        /// Number of threads for counting the masses (10-20 recommended, as there are some mutexes involved which introduce some wait times)
+        num_threads: usize,
+        /// Fraction of usable memory for the bloom filter for counting peptides
+        /// For a tryptic digest of the complete Uniprot database 16 GB is recommended
+        usable_memory_fraction: f64,
+        /// Optional path to store the peptide per mass table
+        out_file: String,
         /// Protein files in UniProt text format (txt or dat).
         /// Each file can be compressed with gzip (has last extension `.gz` e.g. `txt.gz``).
         /// Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
@@ -172,15 +180,18 @@ enum Commands {
         protein_file_paths: Vec<String>,
     },
     Partitioning {
+        // Optional arguments
+        /// Optional partition tolerance (default: 0.01)
+        #[arg(long)]
+        partition_tolerance: Option<f64>,
+
+        // Positional arguments
         /// Number of partitions
         num_partitions: u64,
         /// Mass counts file
         mass_counts_file: String,
         /// Path to store the partitioning TSV file
         out_file: String,
-        /// Optional partition tolerance (default: 0.01)
-        #[arg(long)]
-        partition_tolerance: Option<f64>,
     },
     Version {},
 }
