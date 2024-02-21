@@ -6,7 +6,7 @@ use std::{
         Arc, Mutex,
     },
     thread::sleep,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{bail, Result};
@@ -342,8 +342,6 @@ impl PeptideMassCounter {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let mut last_wait_instant: Option<Instant> = None;
-
         for protein_file_path in protein_file_paths.iter() {
             info!("Reading proteins from {}", protein_file_path.display());
             let mut reader = Reader::new(protein_file_path, 4096)?;
@@ -354,10 +352,6 @@ impl PeptideMassCounter {
                         // Wait before pushing the protein into queue
                         sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
                         wait_for_queue = false;
-                        if last_wait_instant.is_some_and(|x| (Instant::now() - x).as_secs() > 60) {
-                            debug!("Producer sleeping since 1 minute");
-                        }
-                        last_wait_instant = Some(Instant::now());
                     }
                     // Acquire lock on protein queue
                     let mut protein_queue = match protein_queue_arc.lock() {
@@ -369,7 +363,6 @@ impl PeptideMassCounter {
                         wait_for_queue = true;
                         continue;
                     }
-                    last_wait_instant = None;
                     protein_queue.push(protein);
                     break;
                 }
