@@ -44,6 +44,7 @@ use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_digest};
 use crate::tools::peptide_mass_counter::PeptideMassCounter;
 use crate::tools::progress_monitor::ProgressMonitor;
+use crate::tools::protein_counter::ProteinCounter;
 use crate::tools::queue_monitor::QueueMonitor;
 use scylla::frame::response::result::CqlValue;
 
@@ -191,6 +192,10 @@ impl DatabaseBuild {
 
         let protein_queue_size = num_threads * 300;
 
+        // Count proteins
+        info!("Counting proteins in files");
+        let proteins_to_process = ProteinCounter::count(protein_file_paths, num_threads).await?;
+
         // Database client
         let client = Arc::new(Client::new(database_url).await?);
 
@@ -239,7 +244,7 @@ impl DatabaseBuild {
                 processed_peptides.clone(),
                 occurred_errors.clone(),
             ],
-            vec![None, None, None],
+            vec![Some(proteins_to_process as u64), None, None],
             vec![
                 "proteins".to_string(),
                 "peptides".to_string(),
@@ -1011,19 +1016,10 @@ impl DatabaseBuildTrait for DatabaseBuild {
             Self::build_taxonomy_tree(&client, taxonomy_file_path).await?;
         }
 
-        let mut protein_ctr: usize = 0;
-
         if !protein_file_paths.is_empty() {
             // read, digest and insert proteins and peptides
             info!("Starting digest and insert");
 
-            info!("Counting proteins ...");
-            for path in protein_file_paths.iter() {
-                debug!("... {}", path.display());
-                protein_ctr += Reader::new(path, 1024)?.count_proteins()?;
-            }
-
-            info!("... {} proteins", protein_ctr);
             let mut attempt_protein_file_path = protein_file_paths.clone();
             // Insert proteins/peptides until no error occurred
             for attempt in 1.. {
