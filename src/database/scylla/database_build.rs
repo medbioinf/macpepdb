@@ -1007,12 +1007,13 @@ impl DatabaseBuildTrait for DatabaseBuild {
         )?;
 
         if let Some(taxonomy_file_path) = taxonomy_file_path {
+            info!("Taxonomy tree build...");
             Self::build_taxonomy_tree(&client, taxonomy_file_path).await?;
         }
 
         if !protein_file_paths.is_empty() {
             // read, digest and insert proteins and peptides
-            info!("Starting digest and insert");
+            info!("Protein digestion ...");
 
             let mut attempt_protein_file_path = protein_file_paths.clone();
             // Insert proteins/peptides until no error occurred
@@ -1054,6 +1055,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             }
         }
 
+        info!("Metadata update ...");
         Self::collect_peptide_metadata(
             num_threads,
             &self.database_url,
