@@ -6,7 +6,7 @@ use std::sync::Arc;
 // 3rd party imports
 use anyhow::{bail, Result};
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
-use futures::{pin_mut, Stream, StreamExt};
+use futures::StreamExt;
 use tracing::info;
 
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
