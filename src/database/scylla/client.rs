@@ -1,9 +1,12 @@
 // std imports
-use std::ops::Deref;
+use std::{num::NonZeroUsize, ops::Deref};
 
 // 3rd party imports
 use anyhow::{anyhow, Result};
-use scylla::{transport::session::Session, SessionBuilder};
+use scylla::{
+    transport::session::{PoolSize, Session},
+    SessionBuilder,
+};
 
 // local imports
 use crate::database::generic_client::GenericClient;
@@ -11,6 +14,7 @@ use crate::database::generic_client::GenericClient;
 pub struct Client {
     session: Session,
     database: String,
+    url: String,
 }
 
 impl Client {
@@ -40,6 +44,10 @@ impl Client {
             keyspace.trim().to_string(),
         ))
     }
+
+    pub fn get_url(&self) -> &str {
+        &self.url
+    }
 }
 
 impl Deref for Client {
@@ -65,10 +73,12 @@ impl GenericClient<Session> for Client {
         Ok(Self {
             session: SessionBuilder::new()
                 .known_nodes(hostnames)
+                .pool_size(PoolSize::PerHost(NonZeroUsize::new(1).unwrap()))
                 .build()
                 .await
                 .unwrap(),
             database: keyspace,
+            url: database_url.to_string(),
         })
     }
 
