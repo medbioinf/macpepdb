@@ -199,27 +199,27 @@ pub trait Filter<'a> {
     /// # Arguments
     /// * `client` - The client to use for the query
     /// * `partition_limits` - The partition limits
-    /// * `mass` - The mass to query
+    /// * `ptm_condition` - The PTM condition to query
     /// * `lower_mass_tolerance_ppm` - The lower mass tolerance in ppm
     /// * `upper_mass_tolerance_ppm` - The upper mass tolerance in ppm
-    /// * `ptm_condition` - The PTM condition to query
     /// * `filter_pipeline` - The filter pipeline
     /// * `peptide_sender` - The sender to send the peptides to the final stream
     ///
     fn filter_with_ptm_conditions(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
-        mass: i64,
+        ptm_condition: PTMCondition,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
-        ptm_condition: PTMCondition,
         filter_pipeline: Arc<Vec<Box<dyn FilterFunction>>>,
         peptide_sender: Sender<Result<Peptide>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
-            // Calculate mass range
-            let lower_mass_limit = mass - (mass / 1000000 * lower_mass_tolerance_ppm);
-            let upper_mass_limit = mass + (mass / 1000000 * upper_mass_tolerance_ppm);
+            // Calculate mass range based on ptm condition
+            let lower_mass_limit = ptm_condition.get_mass()
+                - (ptm_condition.get_mass() / 1000000 * lower_mass_tolerance_ppm);
+            let upper_mass_limit = ptm_condition.get_mass()
+                + (ptm_condition.get_mass() / 1000000 * upper_mass_tolerance_ppm);
 
             // Get partition
             let lower_partition_index =
@@ -316,10 +316,9 @@ impl<'a> Filter<'a> for MultiTaskFilter {
                         Self::filter_with_ptm_conditions(
                             client.clone(),
                             partition_limits.clone(),
-                            mass,
+                            ptm_condition,
                             lower_mass_tolerance_ppm,
                             upper_mass_tolerance_ppm,
-                            ptm_condition,
                             filter_pipeline.clone(),
                             peptide_sender.clone(),
                         )
@@ -393,10 +392,9 @@ impl<'a> Filter<'a> for MultiThreadSingleClientFilter {
                             Self::filter_with_ptm_conditions(
                                 thread_client,
                                 thread_partition_limits,
-                                mass,
+                                ptm_condition,
                                 lower_mass_tolerance_ppm,
                                 upper_mass_tolerance_ppm,
-                                ptm_condition,
                                 thread_filter_pipeline,
                                 thread_peptide_sender,
                             )
@@ -469,10 +467,9 @@ impl<'a> Filter<'a> for MultiThreadMultiClientFilter {
                             Self::filter_with_ptm_conditions(
                                 thread_client,
                                 thread_partition_limits,
-                                mass,
+                                ptm_condition,
                                 lower_mass_tolerance_ppm,
                                 upper_mass_tolerance_ppm,
-                                ptm_condition,
                                 thread_filter_pipeline,
                                 thread_peptide_sender,
                             )
@@ -554,10 +551,9 @@ impl<'a> Filter<'a> for QueuedMultiThreadSingleClientFilter {
                                 Self::filter_with_ptm_conditions(
                                     thread_client.clone(),
                                     thread_partition_limits.clone(),
-                                    mass,
+                                    ptm_condition,
                                     lower_mass_tolerance_ppm,
                                     upper_mass_tolerance_ppm,
-                                    ptm_condition,
                                     thread_filter_pipeline.clone(),
                                     thread_peptide_sender.clone(),
                                 )
@@ -647,10 +643,9 @@ impl<'a> Filter<'a> for QueuedMultiThreadMultiClientFilter {
                                 Self::filter_with_ptm_conditions(
                                     thread_client.clone(),
                                     thread_partition_limits.clone(),
-                                    mass,
+                                    ptm_condition,
                                     lower_mass_tolerance_ppm,
                                     upper_mass_tolerance_ppm,
-                                    ptm_condition,
                                     thread_filter_pipeline.clone(),
                                     thread_peptide_sender.clone(),
                                 )
