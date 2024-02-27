@@ -32,7 +32,7 @@ pub trait FilterFunction: Send + Sync {
     fn is_match(&self, peptide: &Peptide) -> Result<bool>;
 }
 
-/// Filter function for SwissProt
+/// Filters peptides which not are in SwissProt
 ///
 struct IsSwissProtFilterFunction;
 
@@ -42,7 +42,7 @@ impl FilterFunction for IsSwissProtFilterFunction {
     }
 }
 
-/// Filter function for TrEMBL
+/// Filter peptides which are not in TrEMBL
 ///
 struct IsTrEMBLFilterFunction;
 
@@ -52,19 +52,7 @@ impl FilterFunction for IsTrEMBLFilterFunction {
     }
 }
 
-/// Filter function for PTM
-///
-struct PTMConditionFilterFunction {
-    ptm_condition: PTMCondition,
-}
-
-impl FilterFunction for PTMConditionFilterFunction {
-    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
-        Ok(self.ptm_condition.check_peptide(peptide))
-    }
-}
-
-/// Distinct filter function for each PTM condition
+/// Makes sure that no peptide is returned twice
 ///
 pub struct ThreadSafeDistinctFilterFunction {
     bloom_filter: RwLock<BloomFilter>,
@@ -95,6 +83,8 @@ impl FilterFunction for ThreadSafeDistinctFilterFunction {
     }
 }
 
+/// Filters peptides which are not in the given taxonomy IDs
+///
 struct TaxonomyFilterFunction {
     taxonomy_ids: Vec<i64>,
 }
@@ -110,6 +100,8 @@ impl FilterFunction for TaxonomyFilterFunction {
     }
 }
 
+/// Filters peptides which are not in the given proteome IDs
+///
 struct ProteomeFilterFunction {
     proteome_ids: Vec<String>,
 }
@@ -127,8 +119,8 @@ impl FilterFunction for ProteomeFilterFunction {
 
 pub type FalliblePeptideStream = Pin<Box<dyn Stream<Item = Result<Peptide>> + Send>>;
 
-pub trait Filter<'a> {
-    fn filter(
+pub trait Search<'a> {
+    fn search(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
         mass: i64,
@@ -173,6 +165,12 @@ pub trait Filter<'a> {
 
     /// In case the mass range exceeds on partition, this function will calculate the mass range for the partition.
     ///
+    /// # Arguments
+    /// * `partition` - The partition to calculate the mass range for
+    /// * `partition_limits` - The partition limits
+    /// * `lower_mass_limit` - The lower mass limit
+    /// * `upper_mass_limit` - The upper mass limit
+    ///
     fn get_query_limits_for_partition(
         partition: usize,
         partition_limits: &Vec<i64>,
@@ -205,7 +203,7 @@ pub trait Filter<'a> {
     /// * `filter_pipeline` - The filter pipeline
     /// * `peptide_sender` - The sender to send the peptides to the final stream
     ///
-    fn filter_with_ptm_conditions(
+    fn search_with_ptm_conditions(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
         ptm_condition: PTMCondition,
@@ -290,7 +288,7 @@ pub trait Filter<'a> {
     /// * `filter_pipeline` - The filter pipeline
     /// * `peptide_sender` - The sender to send the peptides to the final stream
     ///
-    fn filter_without_ptm_condition(
+    fn search_without_ptm_condition(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
         mass: i64,
@@ -361,10 +359,10 @@ pub trait Filter<'a> {
 
 /// Asynchronous filter where one task is spawned for each PTM condition.
 ///
-pub struct MultiTaskFilter;
+pub struct MultiTaskSearch;
 
-impl<'a> Filter<'a> for MultiTaskFilter {
-    async fn filter(
+impl<'a> Search<'a> for MultiTaskSearch {
+    async fn search(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
         mass: i64,
@@ -395,7 +393,7 @@ impl<'a> Filter<'a> for MultiTaskFilter {
                 .map(|ptm_condition|
                     // Spawn on task for each PTM condition
                     tokio::task::spawn(
-                        Self::filter_with_ptm_conditions(
+                        Self::search_with_ptm_conditions(
                             client.clone(),
                             partition_limits.clone(),
                             ptm_condition,
@@ -410,7 +408,7 @@ impl<'a> Filter<'a> for MultiTaskFilter {
                 // Spawn one task for the mass range as there are not PTMs
                 vec![
                     tokio::task::spawn(
-                        Self::filter_without_ptm_condition(
+                        Self::search_without_ptm_condition(
                             client.clone(),
                             partition_limits.clone(),
                             mass,
@@ -445,13 +443,13 @@ impl<'a> Filter<'a> for MultiTaskFilter {
 /// Multi-threaded filter where one thread is spawned for each PTM condition but they share a single client.
 /// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
 ///
-/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest filter.
+/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest search.
 /// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
 ///
-pub struct MultiThreadSingleClientFilter;
+pub struct MultiThreadSingleClientSearch;
 
-impl<'a> Filter<'a> for MultiThreadSingleClientFilter {
-    async fn filter(
+impl<'a> Search<'a> for MultiThreadSingleClientSearch {
+    async fn search(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
         mass: i64,
@@ -490,7 +488,7 @@ impl<'a> Filter<'a> for MultiThreadSingleClientFilter {
                             .build()?;
 
                         runtime.block_on(
-                            Self::filter_with_ptm_conditions(
+                            Self::search_with_ptm_conditions(
                                 thread_client,
                                 thread_partition_limits,
                                 ptm_condition,
@@ -518,14 +516,14 @@ impl<'a> Filter<'a> for MultiThreadSingleClientFilter {
 /// Multi-threaded filter where one thread is spawned for each PTM condition and a separate client.
 /// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
 ///
-/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest filter.
+/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest search.
 /// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
 ///
 ///
-pub struct MultiThreadMultiClientFilter {}
+pub struct MultiThreadMultiClientSearch {}
 
-impl<'a> Filter<'a> for MultiThreadMultiClientFilter {
-    async fn filter(
+impl<'a> Search<'a> for MultiThreadMultiClientSearch {
+    async fn search(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
         mass: i64,
@@ -569,7 +567,7 @@ impl<'a> Filter<'a> for MultiThreadMultiClientFilter {
                             .build()?;
 
                         runtime.block_on(
-                            Self::filter_with_ptm_conditions(
+                            Self::search_with_ptm_conditions(
                                 thread_client,
                                 thread_partition_limits,
                                 ptm_condition,
@@ -598,13 +596,13 @@ impl<'a> Filter<'a> for MultiThreadMultiClientFilter {
 /// one PTM condition until the each one is processed.
 /// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
 ///
-/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest filter.
+/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest search.
 /// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
 ///
-pub struct QueuedMultiThreadSingleClientFilter;
+pub struct QueuedMultiThreadSingleClientSearch;
 
-impl<'a> Filter<'a> for QueuedMultiThreadSingleClientFilter {
-    async fn filter(
+impl<'a> Search<'a> for QueuedMultiThreadSingleClientSearch {
+    async fn search(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
         mass: i64,
@@ -656,7 +654,7 @@ impl<'a> Filter<'a> for QueuedMultiThreadSingleClientFilter {
                             let ptm_condition = ptm_condition.unwrap();
 
                             runtime.block_on(
-                                Self::filter_with_ptm_conditions(
+                                Self::search_with_ptm_conditions(
                                     thread_client.clone(),
                                     thread_partition_limits.clone(),
                                     ptm_condition,
@@ -687,13 +685,13 @@ impl<'a> Filter<'a> for QueuedMultiThreadSingleClientFilter {
 /// one PTM condition until the each one is processed.
 /// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
 ///
-/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest filter.
+/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest search.
 /// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
 ///
-pub struct QueuedMultiThreadMultiClientFilter;
+pub struct QueuedMultiThreadMultiClientSearch;
 
-impl<'a> Filter<'a> for QueuedMultiThreadMultiClientFilter {
-    async fn filter(
+impl<'a> Search<'a> for QueuedMultiThreadMultiClientSearch {
+    async fn search(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
         mass: i64,
@@ -751,7 +749,7 @@ impl<'a> Filter<'a> for QueuedMultiThreadMultiClientFilter {
                             let ptm_condition = ptm_condition.unwrap();
 
                             runtime.block_on(
-                                Self::filter_with_ptm_conditions(
+                                Self::search_with_ptm_conditions(
                                     thread_client.clone(),
                                     thread_partition_limits.clone(),
                                     ptm_condition,
