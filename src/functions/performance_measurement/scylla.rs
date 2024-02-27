@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 // 3rd party imports
 use anyhow::{bail, Result};
+use clap::builder::PossibleValue;
+use clap::ValueEnum;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::StreamExt;
 use tracing::info;
@@ -23,13 +25,86 @@ use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::progress_monitor::ProgressMonitor;
 
-const FILTER_LABELS: [&str; 5] = [
-    "multi_task_filter",
-    "multi_thread_multi_client_filter",
-    "multi_thread_single_client_filter",
-    "queued_multi_thread_multi_client_filter",
-    "queued_multi_thread_single_client_filter",
+/// Enum for supported peptide filters, to make them available as choices for the CLI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportedFilter {
+    MultiTaskFilter,
+    MultiThreadMultiClientFilter,
+    MultiThreadSingleClientFilter,
+    QueuedMultiThreadMultiClientFilter,
+    QueuedMultiThreadSingleClientFilter,
+}
+
+impl SupportedFilter {
+    /// Parses the filter name and returns the corresponding enum variant
+    ///
+    /// # Arguments
+    /// * `name` - Name of the filter
+    ///
+    pub fn from_str(name: &str) -> Result<Self> {
+        match name {
+            "multi_task_filter" => Ok(SupportedFilter::MultiTaskFilter),
+            "multi_thread_multi_client_filter" => Ok(SupportedFilter::MultiThreadMultiClientFilter),
+            "multi_thread_single_client_filter" => {
+                Ok(SupportedFilter::MultiThreadSingleClientFilter)
+            }
+            "queued_multi_thread_multi_client_filter" => {
+                Ok(SupportedFilter::QueuedMultiThreadMultiClientFilter)
+            }
+            "queued_multi_thread_single_client_filter" => {
+                Ok(SupportedFilter::QueuedMultiThreadSingleClientFilter)
+            }
+            _ => bail!("Unknown filter: {}", name),
+        }
+    }
+
+    /// Returns the name of the filter
+    ///
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            SupportedFilter::MultiTaskFilter => "multi_task_filter",
+            SupportedFilter::MultiThreadMultiClientFilter => "multi_thread_multi_client_filter",
+            SupportedFilter::MultiThreadSingleClientFilter => "multi_thread_single_client_filter",
+            SupportedFilter::QueuedMultiThreadMultiClientFilter => {
+                "queued_multi_thread_multi_client_filter"
+            }
+            SupportedFilter::QueuedMultiThreadSingleClientFilter => {
+                "queued_multi_thread_single_client_filter"
+            }
+        }
+    }
+}
+
+/// List of all supported peptide filters
+///
+pub const ALL_SUPPORTED_FILTERS: &[SupportedFilter; 5] = &[
+    SupportedFilter::MultiTaskFilter,
+    SupportedFilter::MultiThreadMultiClientFilter,
+    SupportedFilter::MultiThreadSingleClientFilter,
+    SupportedFilter::QueuedMultiThreadMultiClientFilter,
+    SupportedFilter::QueuedMultiThreadSingleClientFilter,
 ];
+
+/// Implementation of the Display trait for SupportedFilter
+///
+impl std::fmt::Display for SupportedFilter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_str())
+    }
+}
+
+/// Implementation of the ValueEnum trait for SupportedFilter
+/// for the CLI
+///
+impl ValueEnum for SupportedFilter {
+    fn value_variants<'a>() -> &'a [Self] {
+        ALL_SUPPORTED_FILTERS
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(PossibleValue::new(self.to_str()))
+    }
+}
 
 async fn get_peptide_stream<'a>(
     filter_label: &str,
@@ -146,13 +221,20 @@ pub async fn query_performance(
     metrics_log_interval: u64,
     ptms: Vec<PTM>,
     num_threads: Option<usize>,
+    filters: Vec<SupportedFilter>,
 ) -> Result<()> {
-    for filter_label in FILTER_LABELS {
+    let filters = if filters.is_empty() {
+        ALL_SUPPORTED_FILTERS.to_vec()
+    } else {
+        filters
+    };
+
+    for filter in filters.iter() {
         info!(
             "Running performance measurement for filter: {}",
-            filter_label
+            filter.to_str()
         );
-        let metrics_log_file = metrics_log_folder.join(format!("{}.tsv", filter_label));
+        let metrics_log_file = metrics_log_folder.join(format!("{}.tsv", filter.to_str()));
         // Count number of PTM conditions
         let processed_masses = Arc::new(AtomicUsize::new(0));
         let mut progress_monitor = ProgressMonitor::new(
@@ -224,7 +306,7 @@ pub async fn query_performance(
         // Iterate masses
         for mass in masses.iter() {
             let mut filtered_stream = get_peptide_stream(
-                filter_label,
+                filter.to_str(),
                 client.clone(),
                 partition_limits.clone(),
                 *mass,
