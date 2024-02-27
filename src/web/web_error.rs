@@ -2,7 +2,6 @@
 use std::fmt;
 
 // 3rd party imports
-use anyhow;
 use async_stream::stream;
 use axum::{
     http::StatusCode,

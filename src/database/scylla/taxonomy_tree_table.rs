@@ -1,7 +1,7 @@
 // 3rd party imports
 use anyhow::{Context, Result};
 use dihardts_omicstools::biology::taxonomy::TaxonomyTree;
-use serde_json;
+use serde_json::to_string as serde_to_string;
 
 // internal imports
 use crate::database::scylla::blob_table::BlobTable;
@@ -23,7 +23,7 @@ impl TaxonomyTreeTable {
     /// * `taxonomy_tree` - The taxonomy tree to insert
     ///
     pub async fn insert(client: &Client, taxonomy_tree: &TaxonomyTree) -> Result<()> {
-        let json_str = serde_json::to_string(taxonomy_tree)?;
+        let json_str = serde_to_string(taxonomy_tree)?;
         BlobTable::delete(client, KEY_PREFIX)
             .await
             .context("Error when deleting the old taxonomy tree chunks")?;
