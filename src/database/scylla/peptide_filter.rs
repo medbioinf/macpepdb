@@ -125,7 +125,7 @@ impl FilterFunction for ProteomeFilterFunction {
     }
 }
 
-pub type FalliblePeptideStream = Pin<Box<dyn Stream<Item = Result<Peptide>>>>;
+pub type FalliblePeptideStream = Pin<Box<dyn Stream<Item = Result<Peptide>> + Send>>;
 
 pub trait Filter<'a> {
     fn filter(
@@ -277,6 +277,86 @@ pub trait Filter<'a> {
             Ok(())
         }
     }
+
+    /// Query PTM condition which needs more work prior to the actual query than just querying the mass.
+    ///
+    /// # Arguments
+    /// * `client` - The client to use for the query
+    /// * `partition_limits` - The partition limits
+    /// * `mass` - The mass to query
+    /// * `lower_mass_tolerance_ppm` - The lower mass tolerance in ppm
+    /// * `upper_mass_tolerance_ppm` - The upper mass tolerance in ppm
+    /// * `ptm_condition` - The PTM condition to query
+    /// * `filter_pipeline` - The filter pipeline
+    /// * `peptide_sender` - The sender to send the peptides to the final stream
+    ///
+    fn filter_without_ptm_condition(
+        client: Arc<Client>,
+        partition_limits: Arc<Vec<i64>>,
+        mass: i64,
+        lower_mass_tolerance_ppm: i64,
+        upper_mass_tolerance_ppm: i64,
+        filter_pipeline: Arc<Vec<Box<dyn FilterFunction>>>,
+        peptide_sender: Sender<Result<Peptide>>,
+    ) -> impl std::future::Future<Output = Result<()>> + Send {
+        async move {
+            // Calculate mass range
+            let lower_mass_limit = mass - (mass / 1000000 * lower_mass_tolerance_ppm);
+            let upper_mass_limit = mass + (mass / 1000000 * upper_mass_tolerance_ppm);
+
+            // Get partition
+            let lower_partition_index =
+                get_mass_partition(partition_limits.as_ref(), lower_mass_limit)?;
+            let upper_partition_index =
+                get_mass_partition(partition_limits.as_ref(), upper_mass_limit)?;
+
+            for partition in lower_partition_index..=upper_partition_index {
+                let (query_lower_mass_limit, query_upper_mass_limit) =
+                    if lower_partition_index != upper_partition_index {
+                        // in case we have to query multiple partitions make sure only query the mass range for the partition
+                        // E.g s`lower_mass_limit` might by in partition n but no in n+1 as
+                        Self::get_query_limits_for_partition(
+                            partition,
+                            partition_limits.as_ref(),
+                            lower_mass_limit,
+                            upper_mass_limit,
+                        )
+                    } else {
+                        // If everything is in one partition, just query the mass range
+                        (
+                            CqlValue::BigInt(lower_mass_limit),
+                            CqlValue::BigInt(upper_mass_limit),
+                        )
+                    };
+
+                let partition_cql_value = CqlValue::BigInt(partition as i64);
+                let query_params = vec![
+                    &partition_cql_value,
+                    &query_lower_mass_limit,
+                    &query_upper_mass_limit,
+                ];
+
+                let peptide_stream = PeptideTable::stream(
+                    client.as_ref(),
+                    "WHERE partition = ? AND mass >= ? AND mass <= ?",
+                    &query_params,
+                    10000,
+                )
+                .await?;
+                pin_mut!(peptide_stream);
+                while let Some(peptide) = peptide_stream.next().await {
+                    let peptide = peptide?;
+                    for filter in filter_pipeline.iter() {
+                        if !filter.is_match(&peptide)? {
+                            continue;
+                        }
+                    }
+                    peptide_sender.send(Ok(peptide))?;
+                }
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Asynchronous filter where one task is spawned for each PTM condition.
@@ -309,9 +389,11 @@ impl<'a> Filter<'a> for MultiTaskFilter {
         let (peptide_sender, peptide_receiver) = channel::<Result<Peptide>>();
 
         Ok(Box::pin(try_stream! {
-            let _tasks: Vec<tokio::task::JoinHandle<Result<()>>> = ptm_conditions
+            let _tasks: Vec<tokio::task::JoinHandle<Result<()>>> = if ptm_conditions.len() > 0 {
+                ptm_conditions
                 .into_iter()
                 .map(|ptm_condition|
+                    // Spawn on task for each PTM condition
                     tokio::task::spawn(
                         Self::filter_with_ptm_conditions(
                             client.clone(),
@@ -323,7 +405,23 @@ impl<'a> Filter<'a> for MultiTaskFilter {
                             peptide_sender.clone(),
                         )
                     )
-                ).collect();
+                ).collect()
+            } else {
+                // Spawn one task for the mass range as there are not PTMs
+                vec![
+                    tokio::task::spawn(
+                        Self::filter_without_ptm_condition(
+                            client.clone(),
+                            partition_limits.clone(),
+                            mass,
+                            lower_mass_tolerance_ppm,
+                            upper_mass_tolerance_ppm,
+                            filter_pipeline.clone(),
+                            peptide_sender.clone(),
+                        )
+                    )
+                ]
+            };
 
             drop(peptide_sender);
 
@@ -346,6 +444,9 @@ impl<'a> Filter<'a> for MultiTaskFilter {
 
 /// Multi-threaded filter where one thread is spawned for each PTM condition but they share a single client.
 /// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
+///
+/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest filter.
+/// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
 ///
 pub struct MultiThreadSingleClientFilter;
 
@@ -416,6 +517,10 @@ impl<'a> Filter<'a> for MultiThreadSingleClientFilter {
 
 /// Multi-threaded filter where one thread is spawned for each PTM condition and a separate client.
 /// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
+///
+/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest filter.
+/// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
+///
 ///
 pub struct MultiThreadMultiClientFilter {}
 
@@ -492,6 +597,9 @@ impl<'a> Filter<'a> for MultiThreadMultiClientFilter {
 /// Multi-threaded filter where a number of threads are spawned, each one is using the same DB client and is processing
 /// one PTM condition until the each one is processed.
 /// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
+///
+/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest filter.
+/// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
 ///
 pub struct QueuedMultiThreadSingleClientFilter;
 
@@ -578,6 +686,9 @@ impl<'a> Filter<'a> for QueuedMultiThreadSingleClientFilter {
 /// Multi-threaded filter where a number of threads are spawned, each one is using the same DB client and is processing
 /// one PTM condition until the each one is processed.
 /// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
+///
+/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest filter.
+/// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
 ///
 pub struct QueuedMultiThreadMultiClientFilter;
 
