@@ -16,10 +16,10 @@ use crate::database::generic_client::GenericClient;
 use crate::database::scylla::configuration_table::ConfigurationTable;
 // internal imports
 use crate::database::scylla::client::Client;
-use crate::database::scylla::peptide_filter::{
-    FalliblePeptideStream, Filter, MultiTaskFilter, MultiThreadMultiClientFilter,
-    MultiThreadSingleClientFilter, QueuedMultiThreadMultiClientFilter,
-    QueuedMultiThreadSingleClientFilter,
+use crate::database::scylla::peptide_search::{
+    FalliblePeptideStream, MultiTaskSearch, MultiThreadMultiClientSearch,
+    MultiThreadSingleClientSearch, QueuedMultiThreadMultiClientSearch,
+    QueuedMultiThreadSingleClientSearch, Search,
 };
 use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::metrics_logger::MetricsLogger;
@@ -27,15 +27,15 @@ use crate::tools::progress_monitor::ProgressMonitor;
 
 /// Enum for supported peptide filters, to make them available as choices for the CLI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SupportedFilter {
-    MultiTaskFilter,
-    MultiThreadMultiClientFilter,
-    MultiThreadSingleClientFilter,
-    QueuedMultiThreadMultiClientFilter,
-    QueuedMultiThreadSingleClientFilter,
+pub enum SupportedSearch {
+    MultiTaskSearch,
+    MultiThreadMultiClientSearch,
+    MultiThreadSingleClientSearch,
+    QueuedMultiThreadMultiClientSearch,
+    QueuedMultiThreadSingleClientSearch,
 }
 
-impl SupportedFilter {
+impl SupportedSearch {
     /// Parses the filter name and returns the corresponding enum variant
     ///
     /// # Arguments
@@ -43,16 +43,16 @@ impl SupportedFilter {
     ///
     pub fn from_str(name: &str) -> Result<Self> {
         match name {
-            "multi_task_filter" => Ok(SupportedFilter::MultiTaskFilter),
-            "multi_thread_multi_client_filter" => Ok(SupportedFilter::MultiThreadMultiClientFilter),
+            "multi_task_filter" => Ok(SupportedSearch::MultiTaskSearch),
+            "multi_thread_multi_client_filter" => Ok(SupportedSearch::MultiThreadMultiClientSearch),
             "multi_thread_single_client_filter" => {
-                Ok(SupportedFilter::MultiThreadSingleClientFilter)
+                Ok(SupportedSearch::MultiThreadSingleClientSearch)
             }
             "queued_multi_thread_multi_client_filter" => {
-                Ok(SupportedFilter::QueuedMultiThreadMultiClientFilter)
+                Ok(SupportedSearch::QueuedMultiThreadMultiClientSearch)
             }
             "queued_multi_thread_single_client_filter" => {
-                Ok(SupportedFilter::QueuedMultiThreadSingleClientFilter)
+                Ok(SupportedSearch::QueuedMultiThreadSingleClientSearch)
             }
             _ => bail!("Unknown filter: {}", name),
         }
@@ -62,13 +62,13 @@ impl SupportedFilter {
     ///
     pub fn to_str(&self) -> &'static str {
         match self {
-            SupportedFilter::MultiTaskFilter => "multi_task_filter",
-            SupportedFilter::MultiThreadMultiClientFilter => "multi_thread_multi_client_filter",
-            SupportedFilter::MultiThreadSingleClientFilter => "multi_thread_single_client_filter",
-            SupportedFilter::QueuedMultiThreadMultiClientFilter => {
+            SupportedSearch::MultiTaskSearch => "multi_task_filter",
+            SupportedSearch::MultiThreadMultiClientSearch => "multi_thread_multi_client_filter",
+            SupportedSearch::MultiThreadSingleClientSearch => "multi_thread_single_client_filter",
+            SupportedSearch::QueuedMultiThreadMultiClientSearch => {
                 "queued_multi_thread_multi_client_filter"
             }
-            SupportedFilter::QueuedMultiThreadSingleClientFilter => {
+            SupportedSearch::QueuedMultiThreadSingleClientSearch => {
                 "queued_multi_thread_single_client_filter"
             }
         }
@@ -77,28 +77,28 @@ impl SupportedFilter {
 
 /// List of all supported peptide filters
 ///
-pub const ALL_SUPPORTED_FILTERS: &[SupportedFilter; 5] = &[
-    SupportedFilter::MultiTaskFilter,
-    SupportedFilter::MultiThreadMultiClientFilter,
-    SupportedFilter::MultiThreadSingleClientFilter,
-    SupportedFilter::QueuedMultiThreadMultiClientFilter,
-    SupportedFilter::QueuedMultiThreadSingleClientFilter,
+pub const ALL_SUPPORTED_SEARCHES: &[SupportedSearch; 5] = &[
+    SupportedSearch::MultiTaskSearch,
+    SupportedSearch::MultiThreadMultiClientSearch,
+    SupportedSearch::MultiThreadSingleClientSearch,
+    SupportedSearch::QueuedMultiThreadMultiClientSearch,
+    SupportedSearch::QueuedMultiThreadSingleClientSearch,
 ];
 
-/// Implementation of the Display trait for SupportedFilter
+/// Implementation of the Display trait for SupportedSearch
 ///
-impl std::fmt::Display for SupportedFilter {
+impl std::fmt::Display for SupportedSearch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_str())
     }
 }
 
-/// Implementation of the ValueEnum trait for SupportedFilter
+/// Implementation of the ValueEnum trait for SupportedSearch
 /// for the CLI
 ///
-impl ValueEnum for SupportedFilter {
+impl ValueEnum for SupportedSearch {
     fn value_variants<'a>() -> &'a [Self] {
-        ALL_SUPPORTED_FILTERS
+        ALL_SUPPORTED_SEARCHES
     }
 
     fn to_possible_value(&self) -> Option<PossibleValue> {
@@ -107,7 +107,7 @@ impl ValueEnum for SupportedFilter {
 }
 
 async fn get_peptide_stream<'a>(
-    filter_label: &str,
+    search_label: &str,
     client: Arc<Client>,
     partition_limits: Arc<Vec<i64>>,
     mass: i64,
@@ -121,9 +121,9 @@ async fn get_peptide_stream<'a>(
     ptms: Vec<PTM>,
     num_threads: Option<usize>,
 ) -> Result<FalliblePeptideStream> {
-    match filter_label {
+    match search_label {
         "multi_task_filter" => {
-            MultiTaskFilter::filter(
+            MultiTaskSearch::search(
                 client,
                 partition_limits,
                 mass,
@@ -140,7 +140,7 @@ async fn get_peptide_stream<'a>(
             .await
         }
         "multi_thread_multi_client_filter" => {
-            MultiThreadMultiClientFilter::filter(
+            MultiThreadMultiClientSearch::search(
                 client,
                 partition_limits,
                 mass,
@@ -157,7 +157,7 @@ async fn get_peptide_stream<'a>(
             .await
         }
         "multi_thread_single_client_filter" => {
-            MultiThreadSingleClientFilter::filter(
+            MultiThreadSingleClientSearch::search(
                 client,
                 partition_limits,
                 mass,
@@ -174,7 +174,7 @@ async fn get_peptide_stream<'a>(
             .await
         }
         "queued_multi_thread_multi_client_filter" => {
-            QueuedMultiThreadMultiClientFilter::filter(
+            QueuedMultiThreadMultiClientSearch::search(
                 client,
                 partition_limits,
                 mass,
@@ -191,7 +191,7 @@ async fn get_peptide_stream<'a>(
             .await
         }
         "queued_multi_thread_single_client_filter" => {
-            QueuedMultiThreadSingleClientFilter::filter(
+            QueuedMultiThreadSingleClientSearch::search(
                 client,
                 partition_limits,
                 mass,
@@ -207,7 +207,7 @@ async fn get_peptide_stream<'a>(
             )
             .await
         }
-        _ => bail!("Unknown filter label: {}", filter_label),
+        _ => bail!("Unknown filter label: {}", search_label),
     }
 }
 
@@ -221,20 +221,21 @@ pub async fn query_performance(
     metrics_log_interval: u64,
     ptms: Vec<PTM>,
     num_threads: Option<usize>,
-    filters: Vec<SupportedFilter>,
+    searches: Vec<SupportedSearch>,
 ) -> Result<()> {
-    let filters = if filters.is_empty() {
-        ALL_SUPPORTED_FILTERS.to_vec()
+    // Check if user requested a specific search otherwise do all
+    let searches = if searches.is_empty() {
+        ALL_SUPPORTED_SEARCHES.to_vec()
     } else {
-        filters
+        searches
     };
 
-    for filter in filters.iter() {
+    for search in searches.iter() {
         info!(
-            "Running performance measurement for filter: {}",
-            filter.to_str()
+            "Running performance measurement for search: {}",
+            search.to_str()
         );
-        let metrics_log_file = metrics_log_folder.join(format!("{}.tsv", filter.to_str()));
+        let metrics_log_file = metrics_log_folder.join(format!("{}.tsv", search.to_str()));
         // Count number of PTM conditions
         let processed_masses = Arc::new(AtomicUsize::new(0));
         let mut progress_monitor = ProgressMonitor::new(
@@ -306,7 +307,7 @@ pub async fn query_performance(
         // Iterate masses
         for mass in masses.iter() {
             let mut filtered_stream = get_peptide_stream(
-                filter.to_str(),
+                search.to_str(),
                 client.clone(),
                 partition_limits.clone(),
                 *mass,

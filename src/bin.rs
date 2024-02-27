@@ -25,7 +25,7 @@ use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
 // internal imports
 use macpepdb::functions::performance_measurement::scylla as scylla_performance;
-use macpepdb::functions::performance_measurement::scylla::SupportedFilter;
+use macpepdb::functions::performance_measurement::scylla::SupportedSearch;
 use macpepdb::io::post_translational_modification_csv::reader::Reader as PtmReader;
 use macpepdb::mass::convert::to_int as mass_to_int;
 use macpepdb::web::server::start as start_web_server;
@@ -118,7 +118,7 @@ enum Commands {
         only_n_masses: Option<usize>,
         /// Use only the given filter
         #[arg(long, action = clap::ArgAction::Append)]
-        filter: Vec<SupportedFilter>,
+        filter: Vec<SupportedSearch>,
         /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
         /// Input file with masses to query
