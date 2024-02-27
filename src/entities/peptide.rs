@@ -3,20 +3,19 @@ use std::{
     cmp,
     collections::HashMap,
     hash::{Hash, Hasher},
-    string::ToString,
 };
 
 // 3rd party imports
 use anyhow::Result;
 use scylla::frame::response::result::Row as ScyllaRow;
-use serde;
+use serde::{Deserialize, Serialize};
 
 // internal imports
 use super::domain::Domain;
 use crate::entities::protein::Protein;
 use crate::tools::serde::{deserialize_mass_from_int, serialize_mass_to_float};
 
-#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Peptide {
     partition: i64,
     #[serde(
