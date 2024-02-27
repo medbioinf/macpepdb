@@ -356,6 +356,11 @@ pub async fn search(
         taxonomy_ids = Some(ids);
     }
 
+    let proteome_ids = match payload.proteome_id {
+        Some(proteome_id) => Some(vec![proteome_id]),
+        None => None,
+    };
+
     let peptide_stream = match PeptideTable::search(
         app_state.get_db_client(),
         app_state.get_configuration(),
@@ -364,7 +369,7 @@ pub async fn search(
         payload.upper_mass_tolerance_ppm.clone(),
         payload.max_variable_modifications.clone(),
         taxonomy_ids,
-        payload.proteome_id.clone(),
+        proteome_ids,
         payload.is_reviewed.clone(),
         ptms,
     )
