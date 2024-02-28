@@ -1,8 +1,9 @@
 // std imports
-use std::{num::NonZeroUsize, ops::Deref};
+use std::{collections::HashMap, num::NonZeroUsize, ops::Deref, time::Duration};
 
 // 3rd party imports
 use anyhow::{anyhow, Result};
+use fancy_regex::Regex;
 use scylla::{
     transport::session::{PoolSize, Session},
     SessionBuilder,
@@ -11,6 +12,138 @@ use scylla::{
 // local imports
 use crate::database::generic_client::GenericClient;
 
+lazy_static! {
+    pub static ref URL_PASER_REGEX: Regex = Regex::new(r"(?m)((?P<credentials>[^:]*?:[^:]+)@){0,1}(?P<hosts>.+)/(?P<keyspace>[^/?]+)(\?(?P<attributes>.+)){0,1}").unwrap();
+}
+
+/// Pool type for the ScyllaDB client
+/// default is PerHost
+///
+#[derive(PartialEq, Eq, Debug)]
+enum PoolType {
+    PerHost,
+    PerShard,
+}
+
+impl From<&str> for PoolType {
+    fn from(s: &str) -> Self {
+        match s {
+            "host" => PoolType::PerHost,
+            "shard" => PoolType::PerShard,
+            _ => PoolType::PerHost,
+        }
+    }
+}
+
+struct ClientSettings {
+    pub hosts: Vec<String>,
+    pub keyspace: String,
+    pub user: Option<String>,
+    pub password: Option<String>,
+    pub connection_timeout: Option<Duration>,
+    pub pool_size: Option<usize>,
+    pub pool_type: PoolType,
+}
+
+impl ClientSettings {
+    pub fn new(database_url: &str) -> Result<Self> {
+        // Parse url
+        let matches = match URL_PASER_REGEX.captures(database_url)? {
+            Some(matches) => matches,
+            None => return Err(anyhow!("Invalid database URL")),
+        };
+
+        // Extract hosts and keyspace as they are mandatory
+        let hosts: Vec<String> = match matches.name("hosts") {
+            Some(hosts) => hosts.as_str().split(',').map(|s| s.to_string()).collect(),
+            None => return Err(anyhow!("Invalid database URL, hosts not found")),
+        };
+
+        let keyspace = match matches.name("keyspace") {
+            Some(keyspace) => keyspace.as_str().to_string(),
+            None => return Err(anyhow!("Invalid database URL, keyspace not found")),
+        };
+
+        // Create settings
+        let mut settings = Self {
+            hosts,
+            keyspace,
+            user: None,
+            password: None,
+            connection_timeout: None,
+            pool_size: None,
+            pool_type: PoolType::PerHost,
+        };
+
+        // Extract credentials and attributes if present
+        match matches.name("credentials") {
+            Some(credentials) => {
+                let credentials = credentials.as_str().split(':').collect::<Vec<&str>>();
+                settings.user = Some(credentials[0].to_string());
+                settings.password = Some(credentials[1].to_string());
+            }
+            None => (),
+        };
+
+        // Extract attributes if present
+        let attributes = match matches.name("attributes") {
+            Some(attributes) => attributes.as_str().to_owned(),
+            None => "".to_owned(),
+        };
+
+        // Parse attributes
+        if !attributes.is_empty() {
+            let attributes: HashMap<&str, &str> = attributes
+                .split('&')
+                .map(|attribute| {
+                    let attribute: Vec<&str> = attribute.split('=').collect();
+                    (attribute[0], attribute[1])
+                })
+                .collect();
+
+            if let Some(timeout) = attributes.get("connection_timeout") {
+                settings.connection_timeout = Some(Duration::from_secs(timeout.parse()?));
+            }
+
+            if let Some(pool_size) = attributes.get("pool_size") {
+                settings.pool_size = Some(pool_size.parse()?);
+            }
+
+            if let Some(pool_type) = attributes.get("pool_type") {
+                settings.pool_type = PoolType::from(*pool_type);
+            }
+        }
+        Ok(settings)
+    }
+
+    pub async fn to_session(&self) -> Result<Session> {
+        let mut builder = SessionBuilder::new().known_nodes(self.hosts.clone());
+
+        if self.user.is_some() && self.password.is_some() {
+            builder = builder.user(self.user.as_ref().unwrap(), self.password.as_ref().unwrap());
+        }
+
+        if let Some(timeout) = self.connection_timeout {
+            builder = builder.connection_timeout(timeout);
+        }
+
+        if let Some(pool_size) = self.pool_size {
+            let pool_size = match NonZeroUsize::new(pool_size) {
+                Some(pool_size) => pool_size,
+                None => return Err(anyhow!("Invalid pool size must be larger than 0")),
+            };
+
+            let pool_size = match self.pool_type {
+                PoolType::PerHost => PoolSize::PerHost(pool_size),
+                PoolType::PerShard => PoolSize::PerShard(pool_size),
+            };
+            builder = builder.pool_size(pool_size);
+        }
+
+        Ok(builder.build().await?)
+    }
+}
+
 pub struct Client {
     session: Session,
     database: String,
@@ -18,33 +151,6 @@ pub struct Client {
 }
 
 impl Client {
-    /// Parses the database URL and returns a list of hostnames and the keyspace
-    ///
-    /// # Arguments
-    /// * `database_url` - Database URL in the format `scylla://<hostname1>,<hostname2>,<hostname3>/keyspace`
-    ///
-    pub fn parse_database_url(database_url: &str) -> Result<(Vec<String>, String)> {
-        // Remove protocol `scylla://`
-        let plain_database_url = database_url[9..].to_string();
-        // Split into hostnames and database
-        let (hostnames, keyspace): (String, String) = match plain_database_url.split_once("/") {
-            Some((hostnames, keyspace)) => (hostnames.to_string(), keyspace.to_string()),
-            None => {
-                return Err(anyhow!(
-                    "Database URL {} is not valid. It should be in the form `scylla://<hostname1>,<hostname2>,<hostname3>/keyspace`",
-                    database_url
-                ))
-            }
-        };
-        Ok((
-            hostnames
-                .split(",")
-                .map(|node| node.trim().to_string())
-                .collect(),
-            keyspace.trim().to_string(),
-        ))
-    }
-
     pub fn get_url(&self) -> &str {
         &self.url
     }
@@ -62,22 +168,16 @@ impl GenericClient<Session> for Client {
     /// Creates a new ScyllaDB client
     ///
     /// # Arguments
-    /// * `hostnames` - List of hostnames to connect to
-    /// * `database` - Name of the keyspace to use
+    /// * `database_url` - A string slice that holds the database URL
     ///
     async fn new(database_url: &str) -> Result<Self>
     where
         Self: Sized,
     {
-        let (hostnames, keyspace) = Self::parse_database_url(database_url)?;
+        let settings = ClientSettings::new(database_url)?;
         Ok(Self {
-            session: SessionBuilder::new()
-                .known_nodes(hostnames)
-                .pool_size(PoolSize::PerHost(NonZeroUsize::new(1).unwrap()))
-                .build()
-                .await
-                .unwrap(),
-            database: keyspace,
+            session: settings.to_session().await?,
+            database: settings.keyspace.clone(),
             url: database_url.to_string(),
         })
     }
@@ -97,16 +197,63 @@ mod tests {
 
     #[test]
     fn test_parse_database_url() {
-        let database_url = "scylla://localhost01,localhost02,localhost03.org/some_keyspace";
-        let (hostnames, keyspace) = Client::parse_database_url(database_url).unwrap();
+        let url_credentials_attributes = "gandalf:mellon@10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1&pool_type=shard";
+        let url_attributes = "10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1";
+        let url_mandatory =
+            "10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot";
+
+        let settings = ClientSettings::new(url_credentials_attributes).unwrap();
+        assert_eq!(settings.user, Some("gandalf".to_string()));
+        assert_eq!(settings.password, Some("mellon".to_string()));
         assert_eq!(
-            hostnames,
+            settings.hosts,
             vec![
-                "localhost01".to_string(),
-                "localhost02".to_string(),
-                "localhost03.org".to_string()
+                "10.0.0.168".to_string(),
+                "10.0.0.35".to_string(),
+                "10.0.0.139".to_string(),
+                "10.0.0.11".to_string(),
+                "10.0.0.73".to_string(),
+                "10.0.0.194".to_string()
             ]
         );
-        assert_eq!(keyspace, "some_keyspace".to_string());
+        assert_eq!(settings.connection_timeout, Some(Duration::from_secs(60)));
+        assert_eq!(settings.pool_size, Some(1));
+        assert_eq!(settings.pool_type, PoolType::PerShard);
+
+        let settings = ClientSettings::new(url_attributes).unwrap();
+        assert_eq!(settings.user, None);
+        assert_eq!(settings.password, None);
+        assert_eq!(
+            settings.hosts,
+            vec![
+                "10.0.0.168".to_string(),
+                "10.0.0.35".to_string(),
+                "10.0.0.139".to_string(),
+                "10.0.0.11".to_string(),
+                "10.0.0.73".to_string(),
+                "10.0.0.194".to_string()
+            ]
+        );
+        assert_eq!(settings.connection_timeout, Some(Duration::from_secs(60)));
+        assert_eq!(settings.pool_size, Some(1));
+        assert_eq!(settings.pool_type, PoolType::PerHost);
+
+        let settings = ClientSettings::new(url_mandatory).unwrap();
+        assert_eq!(settings.user, None);
+        assert_eq!(settings.password, None);
+        assert_eq!(
+            settings.hosts,
+            vec![
+                "10.0.0.168".to_string(),
+                "10.0.0.35".to_string(),
+                "10.0.0.139".to_string(),
+                "10.0.0.11".to_string(),
+                "10.0.0.73".to_string(),
+                "10.0.0.194".to_string()
+            ]
+        );
+        assert_eq!(settings.connection_timeout, None);
+        assert_eq!(settings.pool_size, None);
+        assert_eq!(settings.pool_type, PoolType::PerHost);
     }
 }
