@@ -13,7 +13,7 @@ use scylla::{
 use crate::database::generic_client::GenericClient;
 
 lazy_static! {
-    pub static ref URL_PASER_REGEX: Regex = Regex::new(r"(?m)((?P<credentials>[^:]*?:[^:]+)@){0,1}(?P<hosts>.+)/(?P<keyspace>[^/?]+)(\?(?P<attributes>.+)){0,1}").unwrap();
+    pub static ref URL_PASER_REGEX: Regex = Regex::new(r"(?m)scylla://((?P<credentials>[^:]*?:[^:]+)@){0,1}(?P<hosts>.+)/(?P<keyspace>[^/?]+)(\?(?P<attributes>.+)){0,1}").unwrap();
 }
 
 /// Pool type for the ScyllaDB client
@@ -55,7 +55,11 @@ impl ClientSettings {
 
         // Extract hosts and keyspace as they are mandatory
         let hosts: Vec<String> = match matches.name("hosts") {
-            Some(hosts) => hosts.as_str().split(',').map(|s| s.to_string()).collect(),
+            Some(hosts) => hosts
+                .as_str()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect(),
             None => return Err(anyhow!("Invalid database URL, hosts not found")),
         };
 
@@ -197,10 +201,10 @@ mod tests {
 
     #[test]
     fn test_parse_database_url() {
-        let url_credentials_attributes = "gandalf:mellon@10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1&pool_type=shard";
-        let url_attributes = "10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1";
+        let url_credentials_attributes = "scylla://gandalf:mellon@10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1&pool_type=shard";
+        let url_attributes = "scylla://10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1";
         let url_mandatory =
-            "10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot";
+            "scylla://10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot";
 
         let settings = ClientSettings::new(url_credentials_attributes).unwrap();
         assert_eq!(settings.user, Some("gandalf".to_string()));
