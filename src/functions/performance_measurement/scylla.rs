@@ -24,6 +24,7 @@ use crate::database::scylla::peptide_search::{
 use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::progress_monitor::ProgressMonitor;
+use crate::tools::scylla_client_metrics_monitor::ScyllaClientMetricsMonitor;
 
 /// Enum for supported peptide filters, to make them available as choices for the CLI
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +239,7 @@ pub async fn query_performance(
         let metrics_log_file = metrics_log_folder.join(format!("{}.tsv", search.to_str()));
         // Count number of PTM conditions
         let processed_masses = Arc::new(AtomicUsize::new(0));
+
         let mut progress_monitor = ProgressMonitor::new(
             "",
             vec![processed_masses.clone()],
@@ -304,6 +306,10 @@ pub async fn query_performance(
         )?;
 
         let client = Arc::new(client);
+
+        let mut client_metrics_monitor =
+            ScyllaClientMetricsMonitor::new::<()>("", client.clone(), Some(1000))?;
+
         // Iterate masses
         for mass in masses.iter() {
             let mut filtered_stream = get_peptide_stream(
@@ -332,6 +338,7 @@ pub async fn query_performance(
         }
         progress_monitor.stop().await?;
         metrics_logger.stop().await?;
+        client_metrics_monitor.stop().await?;
     }
     Ok(())
 }
