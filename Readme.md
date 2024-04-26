@@ -152,6 +152,18 @@ You can try using io tuner for your disk, however in some cases the performance 
 ### Build
 To build the database use `cargo run -r -- build ...`. Use `--help` for all options.
 
+### Database URL
+Connection settings to database given via an URL: `scylla://[user:password@]<comma_separated_list_of_hosts>/<keyspace>[?attirbute1=foo&attribute2=bar&...]`
+
+Supported attributes (see: https://docs.rs/scylla/latest/scylla/transport/session_builder/type.SessionBuilder.html)
+
+| Attribute | Type | Description |
+| --- | --- | --- |
+| `connection_timeout`| `usize` | In seconds |
+| `pool_size` | `usize` |   |
+| `pool_type` | `String` | Per host or per shard, only applied when pool_size is given (possible values: `host`, `shard`, default: `host`) |
+
+
 #### Recommendations
 1. Use MaCPepDB's sub commands `mass-count` and `partitioning` to generate balanced peptide partitions before building the database. Once the masses are counted you can use the resulting file to generate different peptide partitions you can use with the build command to find an optimum. E.g. for complete Uniprot a couple million peptides per partitions were the optimum. Depending on your hardware and protein collection it will change.
 

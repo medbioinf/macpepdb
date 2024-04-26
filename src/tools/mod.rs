@@ -25,6 +25,8 @@ pub mod progress_monitor;
 pub mod protein_counter;
 /// Minitor for display queue utilization
 pub mod queue_monitor;
+/// Monitor for scylla client metrics
+pub mod scylla_client_metrics_monitor;
 /// Custom serde (de-) serializer
 pub mod serde;
 /// Tool for testing

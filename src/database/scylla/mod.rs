@@ -5,6 +5,8 @@ pub mod client;
 pub mod configuration_table;
 pub mod database_build;
 pub mod migrations;
+/// Different filter architectures for filtering peptides from database
+pub mod peptide_search;
 pub mod peptide_table;
 pub mod protein_table;
 pub mod schema;

@@ -1,25 +1,216 @@
 // std imports
-use std::time::Instant;
+use std::path::Path;
+use std::sync::atomic::AtomicUsize;
+use std::sync::Arc;
 
 // 3rd party imports
-use anyhow::Result;
+use anyhow::{bail, Result};
+use clap::builder::PossibleValue;
+use clap::ValueEnum;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::StreamExt;
-use indicatif::ProgressStyle;
-use scylla::frame::response::result::CqlValue;
-use tracing::{info_span, Span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing::info;
 
 use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
 use crate::database::generic_client::GenericClient;
 use crate::database::scylla::configuration_table::ConfigurationTable;
 // internal imports
 use crate::database::scylla::client::Client;
-use crate::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
-use crate::database::table::Table;
-use crate::entities::peptide::Peptide;
+use crate::database::scylla::peptide_search::{
+    FalliblePeptideStream, MultiTaskSearch, MultiThreadMultiClientSearch,
+    MultiThreadSingleClientSearch, QueuedMultiThreadMultiClientSearch,
+    QueuedMultiThreadSingleClientSearch, Search,
+};
 use crate::functions::post_translational_modification::get_ptm_conditions;
-use crate::tools::peptide_partitioner::get_mass_partition;
+use crate::tools::metrics_logger::MetricsLogger;
+use crate::tools::progress_monitor::ProgressMonitor;
+use crate::tools::scylla_client_metrics_monitor::ScyllaClientMetricsMonitor;
+
+/// Enum for supported peptide filters, to make them available as choices for the CLI
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SupportedSearch {
+    MultiTaskSearch,
+    MultiThreadMultiClientSearch,
+    MultiThreadSingleClientSearch,
+    QueuedMultiThreadMultiClientSearch,
+    QueuedMultiThreadSingleClientSearch,
+}
+
+impl SupportedSearch {
+    /// Parses the filter name and returns the corresponding enum variant
+    ///
+    /// # Arguments
+    /// * `name` - Name of the filter
+    ///
+    pub fn from_str(name: &str) -> Result<Self> {
+        match name {
+            "multi_task_filter" => Ok(SupportedSearch::MultiTaskSearch),
+            "multi_thread_multi_client_filter" => Ok(SupportedSearch::MultiThreadMultiClientSearch),
+            "multi_thread_single_client_filter" => {
+                Ok(SupportedSearch::MultiThreadSingleClientSearch)
+            }
+            "queued_multi_thread_multi_client_filter" => {
+                Ok(SupportedSearch::QueuedMultiThreadMultiClientSearch)
+            }
+            "queued_multi_thread_single_client_filter" => {
+                Ok(SupportedSearch::QueuedMultiThreadSingleClientSearch)
+            }
+            _ => bail!("Unknown filter: {}", name),
+        }
+    }
+
+    /// Returns the name of the filter
+    ///
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            SupportedSearch::MultiTaskSearch => "multi_task_filter",
+            SupportedSearch::MultiThreadMultiClientSearch => "multi_thread_multi_client_filter",
+            SupportedSearch::MultiThreadSingleClientSearch => "multi_thread_single_client_filter",
+            SupportedSearch::QueuedMultiThreadMultiClientSearch => {
+                "queued_multi_thread_multi_client_filter"
+            }
+            SupportedSearch::QueuedMultiThreadSingleClientSearch => {
+                "queued_multi_thread_single_client_filter"
+            }
+        }
+    }
+}
+
+/// List of all supported peptide filters
+///
+pub const ALL_SUPPORTED_SEARCHES: &[SupportedSearch; 5] = &[
+    SupportedSearch::MultiTaskSearch,
+    SupportedSearch::MultiThreadMultiClientSearch,
+    SupportedSearch::MultiThreadSingleClientSearch,
+    SupportedSearch::QueuedMultiThreadMultiClientSearch,
+    SupportedSearch::QueuedMultiThreadSingleClientSearch,
+];
+
+/// Implementation of the Display trait for SupportedSearch
+///
+impl std::fmt::Display for SupportedSearch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_str())
+    }
+}
+
+/// Implementation of the ValueEnum trait for SupportedSearch
+/// for the CLI
+///
+impl ValueEnum for SupportedSearch {
+    fn value_variants<'a>() -> &'a [Self] {
+        ALL_SUPPORTED_SEARCHES
+    }
+
+    fn to_possible_value(&self) -> Option<PossibleValue> {
+        Some(PossibleValue::new(self.to_str()))
+    }
+}
+
+async fn get_peptide_stream<'a>(
+    search_label: &str,
+    client: Arc<Client>,
+    partition_limits: Arc<Vec<i64>>,
+    mass: i64,
+    lower_mass_tolerance_ppm: i64,
+    upper_mass_tolerance_ppm: i64,
+    max_variable_modifications: i16,
+    distinct: bool,
+    taxonomy_ids: Option<Vec<i64>>,
+    proteome_ids: Option<Vec<String>>,
+    is_reviewed: Option<bool>,
+    ptms: Vec<PTM>,
+    num_threads: Option<usize>,
+) -> Result<FalliblePeptideStream> {
+    match search_label {
+        "multi_task_filter" => {
+            MultiTaskSearch::search(
+                client,
+                partition_limits,
+                mass,
+                lower_mass_tolerance_ppm,
+                upper_mass_tolerance_ppm,
+                max_variable_modifications,
+                distinct,
+                taxonomy_ids,
+                proteome_ids,
+                is_reviewed,
+                ptms,
+                num_threads,
+            )
+            .await
+        }
+        "multi_thread_multi_client_filter" => {
+            MultiThreadMultiClientSearch::search(
+                client,
+                partition_limits,
+                mass,
+                lower_mass_tolerance_ppm,
+                upper_mass_tolerance_ppm,
+                max_variable_modifications,
+                distinct,
+                taxonomy_ids,
+                proteome_ids,
+                is_reviewed,
+                ptms,
+                num_threads,
+            )
+            .await
+        }
+        "multi_thread_single_client_filter" => {
+            MultiThreadSingleClientSearch::search(
+                client,
+                partition_limits,
+                mass,
+                lower_mass_tolerance_ppm,
+                upper_mass_tolerance_ppm,
+                max_variable_modifications,
+                distinct,
+                taxonomy_ids,
+                proteome_ids,
+                is_reviewed,
+                ptms,
+                num_threads,
+            )
+            .await
+        }
+        "queued_multi_thread_multi_client_filter" => {
+            QueuedMultiThreadMultiClientSearch::search(
+                client,
+                partition_limits,
+                mass,
+                lower_mass_tolerance_ppm,
+                upper_mass_tolerance_ppm,
+                max_variable_modifications,
+                distinct,
+                taxonomy_ids,
+                proteome_ids,
+                is_reviewed,
+                ptms,
+                num_threads,
+            )
+            .await
+        }
+        "queued_multi_thread_single_client_filter" => {
+            QueuedMultiThreadSingleClientSearch::search(
+                client,
+                partition_limits,
+                mass,
+                lower_mass_tolerance_ppm,
+                upper_mass_tolerance_ppm,
+                max_variable_modifications,
+                distinct,
+                taxonomy_ids,
+                proteome_ids,
+                is_reviewed,
+                ptms,
+                num_threads,
+            )
+            .await
+        }
+        _ => bail!("Unknown filter label: {}", search_label),
+    }
+}
 
 pub async fn query_performance(
     database_url: &str,
@@ -27,111 +218,127 @@ pub async fn query_performance(
     lower_mass_tolerance: i64,
     upper_mass_tolerance: i64,
     max_variable_modifications: i16,
+    metrics_log_folder: &Path,
+    metrics_log_interval: u64,
     ptms: Vec<PTM>,
+    num_threads: Option<usize>,
+    searches: Vec<SupportedSearch>,
 ) -> Result<()> {
-    let client = Client::new(database_url).await?;
-    let mut mass_stats: Vec<(i64, u64, u128)> = Vec::new();
+    // Check if user requested a specific search otherwise do all
+    let searches = if searches.is_empty() {
+        ALL_SUPPORTED_SEARCHES.to_vec()
+    } else {
+        searches
+    };
 
-    let config = ConfigurationTable::select(&client).await?;
+    for search in searches.iter() {
+        info!(
+            "Running performance measurement for search: {}",
+            search.to_str()
+        );
+        let metrics_log_file = metrics_log_folder.join(format!("{}.tsv", search.to_str()));
+        // Count number of PTM conditions
+        let processed_masses = Arc::new(AtomicUsize::new(0));
 
-    let partition_limits = config.get_partition_limits();
+        let mut progress_monitor = ProgressMonitor::new(
+            "",
+            vec![processed_masses.clone()],
+            vec![Some(masses.len() as u64)],
+            vec!["masses".to_string()],
+            None,
+        )?;
 
-    let header_span = info_span!("Querying");
-    header_span.pb_set_style(&ProgressStyle::default_bar());
-    header_span.pb_set_length(masses.len() as u64);
-    let header_span_enter = header_span.enter();
+        info!("Calculating number of PTM conditions (depending on given masses and PMTs) ...");
+        let num_ptm_conditions: usize = masses
+            .iter()
+            .map(|mass| {
+                processed_masses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                Ok(get_ptm_conditions(*mass, max_variable_modifications, &ptms)?.len())
+            })
+            .collect::<Result<Vec<usize>>>()?
+            .into_iter()
+            .sum();
+        progress_monitor.stop().await?;
+        info!("... {} PTM conditions", num_ptm_conditions);
 
-    let query_statement_str = format!(
-        "SELECT {} FROM {}.{} WHERE partition = ? AND mass >= ? AND mass <= ?",
-        SELECT_COLS,
-        client.get_database(),
-        PeptideTable::table_name()
-    );
+        // Open client
+        let client = Client::new(database_url).await?;
 
-    let query_statement = client.prepare(query_statement_str).await?;
+        // Get configuration and partition limits
+        let config = ConfigurationTable::select(&client).await?;
+        let partition_limits = Arc::new(config.get_partition_limits().clone());
 
-    // Iterate masses
-    for mass in masses.iter() {
-        // Create PTM conditions
-        let ptm_conditions = get_ptm_conditions(*mass, max_variable_modifications, &ptms)?;
+        // Create atomic counters
+        let processed_masses = Arc::new(AtomicUsize::new(0));
+        let matching_peptides = Arc::new(AtomicUsize::new(0));
+        let errors = Arc::new(AtomicUsize::new(0));
 
-        // Iterate PTM conditions
-        for ptm_condition in ptm_conditions.iter() {
-            let query_start = Instant::now();
-            // Calculate mass range
-            let lower_mass_limit = CqlValue::BigInt(
-                ptm_condition.get_mass()
-                    - (ptm_condition.get_mass() / 1000000 * lower_mass_tolerance),
-            );
-            let upper_mass_limit = CqlValue::BigInt(
-                ptm_condition.get_mass()
-                    + (ptm_condition.get_mass() / 1000000 * upper_mass_tolerance),
-            );
+        let mut progress_monitor = ProgressMonitor::new(
+            "",
+            vec![
+                processed_masses.clone(),
+                matching_peptides.clone(),
+                errors.clone(),
+            ],
+            vec![Some(masses.len() as u64), None, None],
+            vec![
+                "masses".to_string(),
+                "matching peptides".to_string(),
+                "errors".to_string(),
+            ],
+            None,
+        )?;
 
-            let lower_partition_index =
-                get_mass_partition(&partition_limits, lower_mass_limit.as_bigint().unwrap())
-                    .unwrap();
-            let upper_partition_index =
-                get_mass_partition(&partition_limits, upper_mass_limit.as_bigint().unwrap())
-                    .unwrap();
+        // Metrics logger
+        let mut metrics_logger = MetricsLogger::new(
+            vec![
+                processed_masses.clone(),
+                matching_peptides.clone(),
+                errors.clone(),
+            ],
+            vec![
+                "masses".to_string(),
+                "matching peptides".to_string(),
+                "errors".to_string(),
+            ],
+            metrics_log_file.to_path_buf(),
+            metrics_log_interval,
+        )?;
 
-            let mut matching_peptides_ctr: u64 = 0;
+        let client = Arc::new(client);
 
-            for partition in lower_partition_index..upper_partition_index + 1 {
-                let partition_cql_value = CqlValue::BigInt(partition as i64);
-                // let params: Vec<&CqlValue> =
-                //     vec![&partition_cql_value, &lower_mass_limit, &upper_mass_limit];
+        let mut client_metrics_monitor =
+            ScyllaClientMetricsMonitor::new::<()>("", client.clone(), Some(1000))?;
 
-                let mut rows_stream = client
-                    .execute_iter(
-                        query_statement.to_owned(),
-                        (&partition_cql_value, &lower_mass_limit, &upper_mass_limit),
-                    )
-                    .await
-                    .unwrap();
-
-                while let Some(row_opt) = rows_stream.next().await {
-                    let row = row_opt.unwrap();
-                    let peptide = Peptide::from(row);
-
-                    if ptm_condition.check_peptide(&peptide) {
-                        matching_peptides_ctr += 1;
-                    }
-                }
-            }
-            mass_stats.push((
+        // Iterate masses
+        for mass in masses.iter() {
+            let mut filtered_stream = get_peptide_stream(
+                search.to_str(),
+                client.clone(),
+                partition_limits.clone(),
                 *mass,
-                matching_peptides_ctr,
-                query_start.elapsed().as_millis(),
-            ));
+                lower_mass_tolerance,
+                upper_mass_tolerance,
+                max_variable_modifications,
+                false,
+                None,
+                None,
+                None,
+                ptms.clone(),
+                num_threads,
+            )
+            .await?;
+            while let Some(peptide) = filtered_stream.next().await {
+                match peptide {
+                    Ok(_) => matching_peptides.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                    Err(_) => errors.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+                };
+            }
+            processed_masses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
-        Span::current().pb_inc(1);
+        progress_monitor.stop().await?;
+        metrics_logger.stop().await?;
+        client_metrics_monitor.stop().await?;
     }
-    std::mem::drop(header_span_enter);
-    std::mem::drop(header_span);
-    // Sum up queries, matching peptides and time
-    let num_matching_peptides = mass_stats
-        .iter()
-        .map(|(_, peps, _)| *peps as usize)
-        .sum::<usize>();
-    let num_millis = mass_stats
-        .iter()
-        .map(|(_, _, millis)| *millis as usize)
-        .sum::<usize>();
-    // calculate averages
-    let average_queries = mass_stats.len() as f64 / masses.len() as f64;
-    let average_matching_peptides = num_matching_peptides as f64 / mass_stats.len() as f64;
-    let average_millis = num_millis as f64 / mass_stats.len() as f64;
-    println!("Querying took {} ms", num_millis);
-    println!("Queries\tMatching peptides\tTime");
-    println!(
-        "{}/{:.1}\t{}/{:.1}\t{}/{:.1}",
-        mass_stats.len(),
-        average_queries,
-        num_matching_peptides,
-        average_matching_peptides,
-        num_millis,
-        average_millis
-    );
     Ok(())
 }
