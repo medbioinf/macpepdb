@@ -28,6 +28,7 @@ axum-streams = { version = "0.11", features = ["json", "csv", "text"] }
 bitvec = "1.0.1"
 chrono = "0.4.23"
 clap = { version = "4.3.0", features = ["derive"] }
+crossbeam-queue = "0.3.11"
 csv = "1.2.2"
 dihardts_cstools = "~1.0.0"
 dihardts_omicstools = "1.11.0"
