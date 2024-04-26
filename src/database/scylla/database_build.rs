@@ -22,7 +22,7 @@ use scylla::prepared_statement::PreparedStatement;
 use tokio::fs::create_dir_all;
 use tokio::spawn;
 use tokio::sync::mpsc::{channel, Sender};
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 // internal imports
 use crate::database::configuration_table::{
@@ -475,14 +475,18 @@ impl DatabaseBuild {
                     }
                     Err(err) => {
                         occurred_errors.fetch_add(1, Ordering::Relaxed);
-                        error!("Upsert failed for {}", protein.get_accession());
+                        let error_msg = format!(
+                            "Upsert failed  for `{}` ({})",
+                            protein.get_accession(),
+                            tries
+                        );
+                        if tries < MAX_INSERT_TRIES {
+                            warn!("{}", error_msg);
+                        } else {
+                            error!("{}", error_msg);
+                        }
                         error_sender
-                            .send(format!(
-                                "Attempt {}: Upsert failed `{}`\n{:?}\n",
-                                tries,
-                                protein.get_accession(),
-                                err
-                            ))
+                            .send(format!("{}\n{:?}\n", error_msg, err))
                             .await?;
                         sleep(Duration::from_millis(100));
                         continue;
