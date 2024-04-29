@@ -1,3 +1,2 @@
 [toolchain]
-# use nightly until async traits are stable
 channel = "stable"
