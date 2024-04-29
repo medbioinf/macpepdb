@@ -256,6 +256,7 @@ impl FallibleIterator for Reader {
                             NaiveDate::parse_from_str(line[5..date_end].trim(), "%d-%b-%Y")?
                                 .and_hms_opt(0, 0, 0)
                                 .ok_or(anyhow::anyhow!("no date"))?
+                                .and_utc()
                                 .timestamp()
                     }
                     "GN" => {

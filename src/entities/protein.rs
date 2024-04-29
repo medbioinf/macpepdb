@@ -2,8 +2,8 @@
 use std::cmp::min;
 
 // 3rd party imports
-use anyhow::{anyhow, Result};
-use chrono::NaiveDateTime;
+use anyhow::{bail, Result};
+use chrono::DateTime;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
@@ -189,9 +189,15 @@ impl Protein {
         }
 
         // Date
-        let date = NaiveDateTime::from_timestamp_opt(self.get_updated_at(), 0)
-            .ok_or(anyhow!("timestamp could not be converted to NaiveDateTime"))?
-            .format("%d-%b-%Y");
+        let date = match DateTime::from_timestamp(self.get_updated_at(), 0) {
+            Some(date) => date.format("%d-%b-%Y"),
+            None => {
+                bail!(
+                    "timestamp could not be converted to DateTime from timestamp {}",
+                    self.get_updated_at(),
+                )
+            }
+        };
         entry.push_str(&format!("DT   {}, unprocessable.\n", date));
 
         // Name
