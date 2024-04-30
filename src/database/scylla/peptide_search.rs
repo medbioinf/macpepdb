@@ -1,7 +1,6 @@
 use std::pin::Pin;
 // std imports
 use std::cmp::{max, min};
-use std::sync::mpsc::{channel, Sender};
 use std::sync::RwLock;
 use std::sync::{Arc, Mutex};
 use std::thread::available_parallelism;
@@ -9,6 +8,7 @@ use std::thread::available_parallelism;
 // 3rd party imports
 use anyhow::{bail, Result};
 use async_stream::try_stream;
+use crossbeam_channel::{unbounded as channel, Sender};
 use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::{pin_mut, Stream, StreamExt};
