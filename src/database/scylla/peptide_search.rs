@@ -261,13 +261,13 @@ pub trait Search<'a> {
                 pin_mut!(peptide_stream);
                 while let Some(peptide) = peptide_stream.next().await {
                     let peptide = peptide?;
+                    if !ptm_condition.check_peptide(&peptide) {
+                        continue;
+                    }
                     for filter in filter_pipeline.iter() {
                         if !filter.is_match(&peptide)? {
                             continue;
                         }
-                    }
-                    if !ptm_condition.check_peptide(&peptide) {
-                        continue;
                     }
                     peptide_sender.send(Ok(peptide))?;
                 }
