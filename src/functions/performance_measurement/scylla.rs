@@ -320,7 +320,7 @@ pub async fn query_performance(
                 lower_mass_tolerance,
                 upper_mass_tolerance,
                 max_variable_modifications,
-                false,
+                true,
                 None,
                 None,
                 None,
