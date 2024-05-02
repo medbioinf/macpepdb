@@ -12,6 +12,7 @@ use std::time::Duration;
 
 // 3rd party imports
 use anyhow::{bail, Result};
+use crossbeam_queue::ArrayQueue;
 use dihardts_omicstools::biology::io::taxonomy_reader::TaxonomyReader;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
@@ -44,7 +45,7 @@ use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_
 use crate::tools::peptide_mass_counter::PeptideMassCounter;
 use crate::tools::progress_monitor::ProgressMonitor;
 use crate::tools::protein_counter::ProteinCounter;
-use crate::tools::queue_monitor::QueueMonitor;
+use crate::tools::queue_monitor::{ArrayQueueMonitor, QueueMonitor};
 use scylla::frame::response::result::CqlValue;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
@@ -199,7 +200,8 @@ impl DatabaseBuild {
         let client = Arc::new(Client::new(database_url).await?);
 
         // Digestion variables
-        let protein_queue_arc: Arc<Mutex<Vec<Protein>>> = Arc::new(Mutex::new(Vec::new()));
+        let protein_queue_arc: Arc<ArrayQueue<Protein>> =
+            Arc::new(ArrayQueue::new(protein_queue_size));
         let partition_limits_arc: Arc<Vec<i64>> = Arc::new(partition_limits);
         let stop_flag = Arc::new(AtomicBool::new(false));
 
@@ -264,7 +266,7 @@ impl DatabaseBuild {
             metrics_log_intervals,
         )?;
 
-        let mut queue_monitor = QueueMonitor::new(
+        let mut queue_monitor = ArrayQueueMonitor::new(
             "",
             vec![protein_queue_arc.clone()],
             vec![protein_queue_size as u64],
@@ -304,26 +306,15 @@ impl DatabaseBuild {
 
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(protein_file_path, 4096)?;
-            let mut wait_for_queue = false;
             while let Some(protein) = reader.next()? {
+                let mut next_protein = protein;
                 loop {
-                    if wait_for_queue {
-                        // Wait before pushing the protein into queue
-                        sleep(*PROTEIN_QUEUE_WRITE_SLEEP_TIME);
-                        wait_for_queue = false;
+                    match protein_queue_arc.push(next_protein) {
+                        Ok(_) => break,
+                        Err(protein) => {
+                            next_protein = protein;
+                        }
                     }
-                    // Acquire lock on protein queue
-                    let mut protein_queue = match protein_queue_arc.lock() {
-                        Ok(protein_queue) => protein_queue,
-                        Err(err) => bail!(format!("Could not lock protein queue: {}", err)),
-                    };
-                    // If protein queue is already full, set wait and try again
-                    if protein_queue.len() >= protein_queue_size {
-                        wait_for_queue = true;
-                        continue;
-                    }
-                    protein_queue.push(protein);
-                    break;
                 }
             }
         }
@@ -363,7 +354,7 @@ impl DatabaseBuild {
     ///
     async fn digestion_thread(
         client: Arc<Client>,
-        protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
+        protein_queue_arc: Arc<ArrayQueue<Protein>>,
         partition_limits_arc: Arc<Vec<i64>>,
         stop_flag: Arc<AtomicBool>,
         protease: Box<dyn Protease>,
@@ -374,8 +365,6 @@ impl DatabaseBuild {
         processed_peptides: Arc<AtomicUsize>,
         occurred_errors: Arc<AtomicUsize>,
     ) -> Result<()> {
-        let mut wait_for_queue = false;
-
         let statement = format!(
             "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
             client.get_database(),
@@ -385,27 +374,11 @@ impl DatabaseBuild {
         let prepared = client.prepare(statement).await?;
 
         loop {
-            if wait_for_queue {
-                // Wait before trying to get next protein from queue
-                debug!("Sleeping");
-                sleep(*PROTEIN_QUEUE_READ_SLEEP_TIME);
-                wait_for_queue = false;
-            }
-            // Get next protein from queue
-            // if queue is empty and stop_flag is set, break
-            let protein = {
-                let mut protein_queue = match protein_queue_arc.lock() {
-                    Ok(protein_queue) => protein_queue,
-                    Err(err) => bail!(format!("Could not lock protein queue: {}", err)),
-                };
-                protein_queue.pop()
-            };
-
+            let protein = protein_queue_arc.pop();
             if protein.is_none() {
                 if stop_flag.load(Ordering::Relaxed) {
                     break;
                 }
-                wait_for_queue = true;
                 continue;
             }
 
