@@ -1,12 +1,11 @@
 use std::pin::Pin;
 // std imports
 use std::cmp::{max, min};
+use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::{Arc, Mutex};
-use std::thread::available_parallelism;
 
 // 3rd party imports
-use anyhow::{bail, Result};
+use anyhow::Result;
 use async_stream::try_stream;
 use crossbeam_channel::{unbounded as channel, Sender};
 use dihardts_cstools::bloom_filter::BloomFilter;
@@ -14,7 +13,6 @@ use dihardts_omicstools::proteomics::post_translational_modifications::PostTrans
 use futures::{pin_mut, Stream, StreamExt};
 use scylla::frame::response::result::CqlValue;
 
-use crate::database::generic_client::GenericClient;
 use crate::database::selectable_table::SelectableTable;
 use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::peptide_partitioner::get_mass_partition;
@@ -775,3 +773,5 @@ impl<'a> Search<'a> for QueuedMultiThreadMultiClientSearch {
         }))
     }
 }
+
+// See commit 9926c71adaf7fda760f4dae3be611c18e5cfc233 for other implementations of the Search trait

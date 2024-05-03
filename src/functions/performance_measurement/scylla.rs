@@ -16,11 +16,7 @@ use crate::database::generic_client::GenericClient;
 use crate::database::scylla::configuration_table::ConfigurationTable;
 // internal imports
 use crate::database::scylla::client::Client;
-use crate::database::scylla::peptide_search::{
-    FalliblePeptideStream, MultiTaskSearch, MultiThreadMultiClientSearch,
-    MultiThreadSingleClientSearch, QueuedMultiThreadMultiClientSearch,
-    QueuedMultiThreadSingleClientSearch, Search,
-};
+use crate::database::scylla::peptide_search::{FalliblePeptideStream, MultiTaskSearch, Search};
 use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::progress_monitor::ProgressMonitor;
@@ -30,10 +26,6 @@ use crate::tools::scylla_client_metrics_monitor::ScyllaClientMetricsMonitor;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SupportedSearch {
     MultiTaskSearch,
-    MultiThreadMultiClientSearch,
-    MultiThreadSingleClientSearch,
-    QueuedMultiThreadMultiClientSearch,
-    QueuedMultiThreadSingleClientSearch,
 }
 
 impl SupportedSearch {
@@ -45,16 +37,6 @@ impl SupportedSearch {
     pub fn from_str(name: &str) -> Result<Self> {
         match name {
             "multi_task_filter" => Ok(SupportedSearch::MultiTaskSearch),
-            "multi_thread_multi_client_filter" => Ok(SupportedSearch::MultiThreadMultiClientSearch),
-            "multi_thread_single_client_filter" => {
-                Ok(SupportedSearch::MultiThreadSingleClientSearch)
-            }
-            "queued_multi_thread_multi_client_filter" => {
-                Ok(SupportedSearch::QueuedMultiThreadMultiClientSearch)
-            }
-            "queued_multi_thread_single_client_filter" => {
-                Ok(SupportedSearch::QueuedMultiThreadSingleClientSearch)
-            }
             _ => bail!("Unknown filter: {}", name),
         }
     }
@@ -64,27 +46,13 @@ impl SupportedSearch {
     pub fn to_str(&self) -> &'static str {
         match self {
             SupportedSearch::MultiTaskSearch => "multi_task_filter",
-            SupportedSearch::MultiThreadMultiClientSearch => "multi_thread_multi_client_filter",
-            SupportedSearch::MultiThreadSingleClientSearch => "multi_thread_single_client_filter",
-            SupportedSearch::QueuedMultiThreadMultiClientSearch => {
-                "queued_multi_thread_multi_client_filter"
-            }
-            SupportedSearch::QueuedMultiThreadSingleClientSearch => {
-                "queued_multi_thread_single_client_filter"
-            }
         }
     }
 }
 
 /// List of all supported peptide filters
 ///
-pub const ALL_SUPPORTED_SEARCHES: &[SupportedSearch; 5] = &[
-    SupportedSearch::MultiTaskSearch,
-    SupportedSearch::MultiThreadMultiClientSearch,
-    SupportedSearch::MultiThreadSingleClientSearch,
-    SupportedSearch::QueuedMultiThreadMultiClientSearch,
-    SupportedSearch::QueuedMultiThreadSingleClientSearch,
-];
+pub const ALL_SUPPORTED_SEARCHES: &[SupportedSearch; 1] = &[SupportedSearch::MultiTaskSearch];
 
 /// Implementation of the Display trait for SupportedSearch
 ///
@@ -125,74 +93,6 @@ async fn get_peptide_stream<'a>(
     match search_label {
         "multi_task_filter" => {
             MultiTaskSearch::search(
-                client,
-                partition_limits,
-                mass,
-                lower_mass_tolerance_ppm,
-                upper_mass_tolerance_ppm,
-                max_variable_modifications,
-                distinct,
-                taxonomy_ids,
-                proteome_ids,
-                is_reviewed,
-                ptms,
-                num_threads,
-            )
-            .await
-        }
-        "multi_thread_multi_client_filter" => {
-            MultiThreadMultiClientSearch::search(
-                client,
-                partition_limits,
-                mass,
-                lower_mass_tolerance_ppm,
-                upper_mass_tolerance_ppm,
-                max_variable_modifications,
-                distinct,
-                taxonomy_ids,
-                proteome_ids,
-                is_reviewed,
-                ptms,
-                num_threads,
-            )
-            .await
-        }
-        "multi_thread_single_client_filter" => {
-            MultiThreadSingleClientSearch::search(
-                client,
-                partition_limits,
-                mass,
-                lower_mass_tolerance_ppm,
-                upper_mass_tolerance_ppm,
-                max_variable_modifications,
-                distinct,
-                taxonomy_ids,
-                proteome_ids,
-                is_reviewed,
-                ptms,
-                num_threads,
-            )
-            .await
-        }
-        "queued_multi_thread_multi_client_filter" => {
-            QueuedMultiThreadMultiClientSearch::search(
-                client,
-                partition_limits,
-                mass,
-                lower_mass_tolerance_ppm,
-                upper_mass_tolerance_ppm,
-                max_variable_modifications,
-                distinct,
-                taxonomy_ids,
-                proteome_ids,
-                is_reviewed,
-                ptms,
-                num_threads,
-            )
-            .await
-        }
-        "queued_multi_thread_single_client_filter" => {
-            QueuedMultiThreadSingleClientSearch::search(
                 client,
                 partition_limits,
                 mass,
