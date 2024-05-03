@@ -1,8 +1,8 @@
-use std::pin::Pin;
 // std imports
 use std::cmp::{max, min};
+use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::RwLock;
 
 // 3rd party imports
 use anyhow::Result;
@@ -13,10 +13,10 @@ use dihardts_omicstools::proteomics::post_translational_modifications::PostTrans
 use futures::{pin_mut, Stream, StreamExt};
 use scylla::frame::response::result::CqlValue;
 
+// local imports
 use crate::database::selectable_table::SelectableTable;
 use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::peptide_partitioner::get_mass_partition;
-// local imports
 use crate::{
     database::scylla::peptide_table::PeptideTable, entities::peptide::Peptide,
     functions::post_translational_modification::PTMCondition,
@@ -27,7 +27,7 @@ use super::client::Client;
 /// Trait to check conditions on peptides
 ///
 pub trait FilterFunction: Send + Sync {
-    fn is_match(&self, peptide: &Peptide) -> Result<bool>;
+    fn is_match(&mut self, peptide: &Peptide) -> Result<bool>;
 }
 
 /// Filters peptides which not are in SwissProt
@@ -35,7 +35,7 @@ pub trait FilterFunction: Send + Sync {
 struct IsSwissProtFilterFunction;
 
 impl FilterFunction for IsSwissProtFilterFunction {
-    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
         Ok(peptide.get_is_swiss_prot())
     }
 }
@@ -45,7 +45,7 @@ impl FilterFunction for IsSwissProtFilterFunction {
 struct IsTrEMBLFilterFunction;
 
 impl FilterFunction for IsTrEMBLFilterFunction {
-    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
         Ok(peptide.get_is_trembl())
     }
 }
@@ -53,43 +53,28 @@ impl FilterFunction for IsTrEMBLFilterFunction {
 /// Makes sure that no peptide is returned twice
 ///
 pub struct ThreadSafeDistinctFilterFunction {
-    bloom_filter: RwLock<BloomFilter>,
+    bloom_filter: BloomFilter,
 }
 
 impl FilterFunction for ThreadSafeDistinctFilterFunction {
-    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
-        match self.bloom_filter.read() {
-            Ok(bloom_filter) => {
-                if bloom_filter.contains(peptide.get_sequence())? {
-                    return Ok(false);
-                }
-            }
-            Err(_) => bail!("Could not read bloom filter"),
+    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+        if self.bloom_filter.contains(&peptide.get_sequence())? {
+            return Ok(false);
         }
-
-        match self.bloom_filter.write() {
-            Ok(mut bloom_filter) => {
-                // Check again
-                if bloom_filter.contains(peptide.get_sequence())? {
-                    return Ok(false);
-                }
-                bloom_filter.add(peptide.get_sequence())?;
-                Ok(true)
-            }
-            Err(_) => bail!("Could not write bloom filter"),
-        }
+        self.bloom_filter.add(&peptide.get_sequence())?;
+        Ok(true)
     }
 }
 
 /// Filters peptides which are not in the given taxonomy IDs
 ///
 struct TaxonomyFilterFunction {
-    taxonomy_ids: Vec<i64>,
+    taxonomy_ids: Arc<Vec<i64>>,
 }
 
 impl FilterFunction for TaxonomyFilterFunction {
-    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
-        for taxonomy_id in &self.taxonomy_ids {
+    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+        for taxonomy_id in self.taxonomy_ids.iter() {
             if peptide.get_taxonomy_ids().contains(taxonomy_id) {
                 return Ok(true);
             }
@@ -101,12 +86,12 @@ impl FilterFunction for TaxonomyFilterFunction {
 /// Filters peptides which are not in the given proteome IDs
 ///
 struct ProteomeFilterFunction {
-    proteome_ids: Vec<String>,
+    proteome_ids: Arc<Vec<String>>,
 }
 
 impl FilterFunction for ProteomeFilterFunction {
-    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
-        for proteome_id in &self.proteome_ids {
+    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+        for proteome_id in self.proteome_ids.iter() {
             if peptide.get_proteome_ids().contains(proteome_id) {
                 return Ok(true);
             }
@@ -135,14 +120,14 @@ pub trait Search<'a> {
 
     fn create_filter_pipeline(
         distinct: bool,
-        taxonomy_ids: Option<Vec<i64>>,
-        proteome_ids: Option<Vec<String>>,
+        taxonomy_ids: Option<Arc<Vec<i64>>>,
+        proteome_ids: Option<Arc<Vec<String>>>,
         is_reviewed: Option<bool>,
     ) -> Result<Vec<Box<dyn FilterFunction>>> {
         let mut filter_pipeline: Vec<Box<dyn FilterFunction>> = Vec::new();
         if distinct {
             filter_pipeline.push(Box::new(ThreadSafeDistinctFilterFunction {
-                bloom_filter: RwLock::new(BloomFilter::new_by_size_and_fp_prob(80_000_000, 0.001)?),
+                bloom_filter: BloomFilter::new_by_size_and_fp_prob(80_000_000, 0.001)?,
             }));
         }
         if let Some(taxonomy_ids) = taxonomy_ids {
@@ -203,51 +188,18 @@ pub trait Search<'a> {
     ///
     fn search_with_ptm_conditions(
         client: Arc<Client>,
-        partition_limits: Arc<Vec<i64>>,
-        ptm_condition: PTMCondition,
-        lower_mass_tolerance_ppm: i64,
-        upper_mass_tolerance_ppm: i64,
-        filter_pipeline: Arc<Vec<Box<dyn FilterFunction>>>,
+        partition: usize,
+        conditions: Vec<(i64, i64, PTMCondition)>,
+        mut filter_pipeline: Vec<Box<dyn FilterFunction>>,
         peptide_sender: Sender<Result<Peptide>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
-            // Calculate mass range based on ptm condition
-            let lower_mass_limit = ptm_condition.get_mass()
-                - (ptm_condition.get_mass() / 1000000 * lower_mass_tolerance_ppm);
-            let upper_mass_limit = ptm_condition.get_mass()
-                + (ptm_condition.get_mass() / 1000000 * upper_mass_tolerance_ppm);
+            let partition = CqlValue::BigInt(partition as i64);
+            for (lower_mass_limit, upper_mass_limit, ptm_condition) in conditions.iter() {
+                let lower_mass_limit = CqlValue::BigInt(*lower_mass_limit);
+                let upper_mass_limit = CqlValue::BigInt(*upper_mass_limit);
 
-            // Get partition
-            let lower_partition_index =
-                get_mass_partition(partition_limits.as_ref(), lower_mass_limit)?;
-            let upper_partition_index =
-                get_mass_partition(partition_limits.as_ref(), upper_mass_limit)?;
-
-            for partition in lower_partition_index..=upper_partition_index {
-                let (query_lower_mass_limit, query_upper_mass_limit) =
-                    if lower_partition_index != upper_partition_index {
-                        // in case we have to query multiple partitions make sure only query the mass range for the partition
-                        // E.g s`lower_mass_limit` might by in partition n but no in n+1 as
-                        Self::get_query_limits_for_partition(
-                            partition,
-                            partition_limits.as_ref(),
-                            lower_mass_limit,
-                            upper_mass_limit,
-                        )
-                    } else {
-                        // If everything is in one partition, just query the mass range
-                        (
-                            CqlValue::BigInt(lower_mass_limit),
-                            CqlValue::BigInt(upper_mass_limit),
-                        )
-                    };
-
-                let partition_cql_value = CqlValue::BigInt(partition as i64);
-                let query_params = vec![
-                    &partition_cql_value,
-                    &query_lower_mass_limit,
-                    &query_upper_mass_limit,
-                ];
+                let query_params = vec![&partition, &lower_mass_limit, &upper_mass_limit];
 
                 let peptide_stream = PeptideTable::stream(
                     client.as_ref(),
@@ -262,7 +214,7 @@ pub trait Search<'a> {
                     if !ptm_condition.check_peptide(&peptide) {
                         continue;
                     }
-                    for filter in filter_pipeline.iter() {
+                    for filter in filter_pipeline.iter_mut() {
                         if !filter.is_match(&peptide)? {
                             continue;
                         }
@@ -292,7 +244,7 @@ pub trait Search<'a> {
         mass: i64,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
-        filter_pipeline: Arc<Vec<Box<dyn FilterFunction>>>,
+        mut filter_pipeline: Vec<Box<dyn FilterFunction>>,
         peptide_sender: Sender<Result<Peptide>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
@@ -342,7 +294,7 @@ pub trait Search<'a> {
                 pin_mut!(peptide_stream);
                 while let Some(peptide) = peptide_stream.next().await {
                     let peptide = peptide?;
-                    for filter in filter_pipeline.iter() {
+                    for filter in filter_pipeline.iter_mut() {
                         if !filter.is_match(&peptide)? {
                             continue;
                         }
@@ -352,6 +304,54 @@ pub trait Search<'a> {
             }
             Ok(())
         }
+    }
+
+    /// Splitup and sort PTM condition by partition
+    ///
+    /// # Arguments
+    /// * ptm_conditions - The PTM conditions to split and sort
+    /// * partition_limits - The partition limits
+    ///
+    fn split_and_sort_ptm_conditions(
+        ptm_conditions: Vec<PTMCondition>,
+        partition_limits: &Vec<i64>,
+        lower_mass_tolerance_ppm: i64,
+        upper_mass_tolerance_ppm: i64,
+    ) -> Result<HashMap<usize, Vec<(i64, i64, PTMCondition)>>> {
+        let mut sorted_ptm_conditions: HashMap<usize, Vec<(i64, i64, PTMCondition)>> =
+            HashMap::new();
+        for ptm_condition in ptm_conditions {
+            // Calculate mass range based on ptm condition
+            let lower_mass_limit = ptm_condition.get_mass()
+                - (ptm_condition.get_mass() / 1000000 * lower_mass_tolerance_ppm);
+            let upper_mass_limit = ptm_condition.get_mass()
+                + (ptm_condition.get_mass() / 1000000 * upper_mass_tolerance_ppm);
+
+            // Get partition
+            let lower_partition_index =
+                get_mass_partition(partition_limits.as_ref(), lower_mass_limit)?;
+            let upper_partition_index =
+                get_mass_partition(partition_limits.as_ref(), upper_mass_limit)?;
+
+            if lower_partition_index == upper_partition_index {
+                sorted_ptm_conditions
+                    .entry(lower_partition_index)
+                    .or_insert(Vec::new())
+                    .push((lower_mass_limit, upper_mass_limit, ptm_condition));
+            } else {
+                for partition in lower_partition_index..=upper_partition_index {
+                    sorted_ptm_conditions
+                        .entry(partition)
+                        .or_insert(Vec::new())
+                        .push((
+                            max(partition_limits[partition], lower_mass_limit),
+                            min(partition_limits[partition], upper_mass_limit),
+                            ptm_condition.clone(),
+                        ));
+                }
+            }
+        }
+        Ok(sorted_ptm_conditions)
     }
 }
 
@@ -374,50 +374,65 @@ impl<'a> Search<'a> for MultiTaskSearch {
         ptms: Vec<PTM>,
         _num_threads: Option<usize>,
     ) -> Result<FalliblePeptideStream> {
-        let ptm_conditions = get_ptm_conditions(mass, max_variable_modifications, &ptms)?;
-        let filter_pipeline = Arc::new(Self::create_filter_pipeline(
-            distinct,
-            taxonomy_ids,
-            proteome_ids,
-            is_reviewed,
-        )?);
+        let taxonomy_ids = match taxonomy_ids {
+            Some(taxonomy_ids) => Some(Arc::new(taxonomy_ids)),
+            None => None,
+        };
+        let proteome_ids = match proteome_ids {
+            Some(proteome_ids) => Some(Arc::new(proteome_ids)),
+            None => None,
+        };
+
+        let sorted_ptm_conditions = Self::split_and_sort_ptm_conditions(
+            get_ptm_conditions(mass, max_variable_modifications, &ptms)?,
+            partition_limits.as_ref(),
+            lower_mass_tolerance_ppm,
+            upper_mass_tolerance_ppm,
+        )?;
 
         let (peptide_sender, peptide_receiver) = channel::<Result<Peptide>>();
 
         Ok(Box::pin(try_stream! {
-            let _tasks: Vec<tokio::task::JoinHandle<Result<()>>> = if ptm_conditions.len() > 0 {
-                ptm_conditions
-                .into_iter()
-                .map(|ptm_condition|
+            let mut tasks: Vec<tokio::task::JoinHandle<Result<()>>> = Vec::with_capacity(max(sorted_ptm_conditions.len(), 1));
+            if sorted_ptm_conditions.len() > 0 {
+                for (partition, conditions) in sorted_ptm_conditions.into_iter() {
+                    let filter_pipeline = Self::create_filter_pipeline(
+                        distinct,
+                        taxonomy_ids.clone(),
+                        proteome_ids.clone(),
+                        is_reviewed,
+                    )?;
+
                     // Spawn on task for each PTM condition
-                    tokio::task::spawn(
+                    tasks.push(tokio::task::spawn(
                         Self::search_with_ptm_conditions(
                             client.clone(),
-                            partition_limits.clone(),
-                            ptm_condition,
-                            lower_mass_tolerance_ppm,
-                            upper_mass_tolerance_ppm,
-                            filter_pipeline.clone(),
+                            partition,
+                            conditions,
+                            filter_pipeline,
                             peptide_sender.clone(),
                         )
-                    )
-                ).collect()
+                    ));
+                }
             } else {
-                // Spawn one task for the mass range as there are not PTMs
-                vec![
-                    tokio::task::spawn(
-                        Self::search_without_ptm_condition(
-                            client.clone(),
-                            partition_limits.clone(),
-                            mass,
-                            lower_mass_tolerance_ppm,
-                            upper_mass_tolerance_ppm,
-                            filter_pipeline.clone(),
-                            peptide_sender.clone(),
-                        )
+                // Spawn one task for the mass range as there are no PTMs
+                tasks.push(tokio::task::spawn(
+                    Self::search_without_ptm_condition(
+                        client.clone(),
+                        partition_limits.clone(),
+                        mass,
+                        lower_mass_tolerance_ppm,
+                        upper_mass_tolerance_ppm,
+                        Self::create_filter_pipeline(
+                            distinct,
+                            taxonomy_ids,
+                            proteome_ids,
+                            is_reviewed,
+                        )?,
+                        peptide_sender.clone(),
                     )
-                ]
-            };
+                ));
+            }
 
             drop(peptide_sender);
 
@@ -427,342 +442,6 @@ impl<'a> Search<'a> for MultiTaskSearch {
                     Err(_) => break,
                 }
             }
-
-            loop {
-                match peptide_receiver.recv() {
-                    Ok(peptide) => yield peptide?,
-                    Err(_) => break,
-                }
-            }
-        }))
-    }
-}
-
-/// Multi-threaded filter where one thread is spawned for each PTM condition but they share a single client.
-/// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
-///
-/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest search.
-/// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
-///
-pub struct MultiThreadSingleClientSearch;
-
-impl<'a> Search<'a> for MultiThreadSingleClientSearch {
-    async fn search(
-        client: Arc<Client>,
-        partition_limits: Arc<Vec<i64>>,
-        mass: i64,
-        lower_mass_tolerance_ppm: i64,
-        upper_mass_tolerance_ppm: i64,
-        max_variable_modifications: i16,
-        distinct: bool,
-        taxonomy_ids: Option<Vec<i64>>,
-        proteome_ids: Option<Vec<String>>,
-        is_reviewed: Option<bool>,
-        ptms: Vec<PTM>,
-        _num_threads: Option<usize>,
-    ) -> Result<FalliblePeptideStream> {
-        let ptm_conditions = get_ptm_conditions(mass, max_variable_modifications, &ptms)?;
-
-        let filter_pipeline = Arc::new(Self::create_filter_pipeline(
-            distinct,
-            taxonomy_ids,
-            proteome_ids,
-            is_reviewed,
-        )?);
-
-        let (peptide_sender, peptide_receiver) = channel::<Result<Peptide>>();
-
-        Ok(Box::pin(try_stream! {
-            let _threads: Vec<std::thread::JoinHandle<Result<()>>> = ptm_conditions
-                .into_iter()
-                .map(|ptm_condition| {
-                    let thread_client = client.clone();
-                    let thread_partition_limits = partition_limits.clone();
-                    let thread_filter_pipeline = filter_pipeline.clone();
-                    let thread_peptide_sender = peptide_sender.clone();
-                    std::thread::spawn(move || {
-                        let runtime = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()?;
-
-                        runtime.block_on(
-                            Self::search_with_ptm_conditions(
-                                thread_client,
-                                thread_partition_limits,
-                                ptm_condition,
-                                lower_mass_tolerance_ppm,
-                                upper_mass_tolerance_ppm,
-                                thread_filter_pipeline,
-                                thread_peptide_sender,
-                            )
-                        )
-                    })
-                }).collect();
-
-            drop(peptide_sender);
-
-            loop {
-                match peptide_receiver.recv() {
-                    Ok(peptide) => yield peptide?,
-                    Err(_) => break,
-                }
-            }
-        }))
-    }
-}
-
-/// Multi-threaded filter where one thread is spawned for each PTM condition and a separate client.
-/// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
-///
-/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest search.
-/// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
-///
-///
-pub struct MultiThreadMultiClientSearch {}
-
-impl<'a> Search<'a> for MultiThreadMultiClientSearch {
-    async fn search(
-        client: Arc<Client>,
-        partition_limits: Arc<Vec<i64>>,
-        mass: i64,
-        lower_mass_tolerance_ppm: i64,
-        upper_mass_tolerance_ppm: i64,
-        max_variable_modifications: i16,
-        distinct: bool,
-        taxonomy_ids: Option<Vec<i64>>,
-        proteome_ids: Option<Vec<String>>,
-        is_reviewed: Option<bool>,
-        ptms: Vec<PTM>,
-        _num_threads: Option<usize>,
-    ) -> Result<FalliblePeptideStream> {
-        let ptm_conditions = get_ptm_conditions(mass, max_variable_modifications, &ptms)?;
-
-        let filter_pipeline = Arc::new(Self::create_filter_pipeline(
-            distinct,
-            taxonomy_ids,
-            proteome_ids,
-            is_reviewed,
-        )?);
-
-        let (peptide_sender, peptide_receiver) = channel::<Result<Peptide>>();
-
-        let mut clients = Vec::with_capacity(ptm_conditions.len());
-        for _ in 0..ptm_conditions.len() {
-            clients.push(Arc::new(Client::new(client.get_url()).await?));
-        }
-
-        Ok(Box::pin(try_stream! {
-            let _threads: Vec<std::thread::JoinHandle<Result<()>>> = ptm_conditions
-                .into_iter()
-                .map(|ptm_condition| {
-                    let thread_client = clients.pop().unwrap();
-                    let thread_partition_limits = partition_limits.clone();
-                    let thread_filter_pipeline = filter_pipeline.clone();
-                    let thread_peptide_sender = peptide_sender.clone();
-                    std::thread::spawn(move || {
-                        let runtime = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()?;
-
-                        runtime.block_on(
-                            Self::search_with_ptm_conditions(
-                                thread_client,
-                                thread_partition_limits,
-                                ptm_condition,
-                                lower_mass_tolerance_ppm,
-                                upper_mass_tolerance_ppm,
-                                thread_filter_pipeline,
-                                thread_peptide_sender,
-                            )
-                        )
-                    })
-                }).collect();
-
-            drop(peptide_sender);
-
-            loop {
-                match peptide_receiver.recv() {
-                    Ok(peptide) => yield peptide?,
-                    Err(_) => break,
-                }
-            }
-        }))
-    }
-}
-
-/// Multi-threaded filter where a number of threads are spawned, each one is using the same DB client and is processing
-/// one PTM condition until the each one is processed.
-/// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
-///
-/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest search.
-/// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
-///
-pub struct QueuedMultiThreadSingleClientSearch;
-
-impl<'a> Search<'a> for QueuedMultiThreadSingleClientSearch {
-    async fn search(
-        client: Arc<Client>,
-        partition_limits: Arc<Vec<i64>>,
-        mass: i64,
-        lower_mass_tolerance_ppm: i64,
-        upper_mass_tolerance_ppm: i64,
-        max_variable_modifications: i16,
-        distinct: bool,
-        taxonomy_ids: Option<Vec<i64>>,
-        proteome_ids: Option<Vec<String>>,
-        is_reviewed: Option<bool>,
-        ptms: Vec<PTM>,
-        num_threads: Option<usize>,
-    ) -> Result<FalliblePeptideStream> {
-        let num_threads = num_threads.unwrap_or(available_parallelism()?.get());
-
-        let ptm_conditions = get_ptm_conditions(mass, max_variable_modifications, &ptms)?;
-        let ptm_conditions = Arc::new(Mutex::new(ptm_conditions));
-
-        let filter_pipeline = Arc::new(Self::create_filter_pipeline(
-            distinct,
-            taxonomy_ids,
-            proteome_ids,
-            is_reviewed,
-        )?);
-
-        let (peptide_sender, peptide_receiver) = channel::<Result<Peptide>>();
-
-        Ok(Box::pin(try_stream! {
-            let _threads: Vec<std::thread::JoinHandle<Result<()>>> = (0..num_threads)
-                .map(|_| {
-                    let thread_ptm_conditions = ptm_conditions.clone();
-                    let thread_client = client.clone();
-                    let thread_partition_limits = partition_limits.clone();
-                    let thread_filter_pipeline = filter_pipeline.clone();
-                    let thread_peptide_sender = peptide_sender.clone();
-                    std::thread::spawn(move || {
-                        let runtime = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()?;
-
-                        loop {
-                            let ptm_condition = match thread_ptm_conditions.lock() {
-                                Ok(mut ptm_conditions) => ptm_conditions.pop(),
-                                Err(_) => bail!("Could not lock PTM conditions"),
-                            };
-                            if ptm_condition.is_none() {
-                                break;
-                            }
-                            let ptm_condition = ptm_condition.unwrap();
-
-                            runtime.block_on(
-                                Self::search_with_ptm_conditions(
-                                    thread_client.clone(),
-                                    thread_partition_limits.clone(),
-                                    ptm_condition,
-                                    lower_mass_tolerance_ppm,
-                                    upper_mass_tolerance_ppm,
-                                    thread_filter_pipeline.clone(),
-                                    thread_peptide_sender.clone(),
-                                )
-                            )?;
-                        }
-                        Ok(())
-                    })
-                }).collect();
-
-            drop(peptide_sender);
-
-            loop {
-                match peptide_receiver.recv() {
-                    Ok(peptide) => yield peptide?,
-                    Err(_) => break,
-                }
-            }
-        }))
-    }
-}
-
-/// Multi-threaded filter where a number of threads are spawned, each one is using the same DB client and is processing
-/// one PTM condition until the each one is processed.
-/// Each thread will spawn single threaded Tokio engine to deal with Scylla's async driver.
-///
-/// **Attention:** All performance tests indicate, that [MultiTaskFilter] is the fastest search.
-/// Therefore this one is also not feature complete as it lacks the ability to query a given mass without any PTMs
-///
-pub struct QueuedMultiThreadMultiClientSearch;
-
-impl<'a> Search<'a> for QueuedMultiThreadMultiClientSearch {
-    async fn search(
-        client: Arc<Client>,
-        partition_limits: Arc<Vec<i64>>,
-        mass: i64,
-        lower_mass_tolerance_ppm: i64,
-        upper_mass_tolerance_ppm: i64,
-        max_variable_modifications: i16,
-        distinct: bool,
-        taxonomy_ids: Option<Vec<i64>>,
-        proteome_ids: Option<Vec<String>>,
-        is_reviewed: Option<bool>,
-        ptms: Vec<PTM>,
-        num_threads: Option<usize>,
-    ) -> Result<FalliblePeptideStream> {
-        let num_threads = num_threads.unwrap_or(available_parallelism()?.get());
-
-        let ptm_conditions = get_ptm_conditions(mass, max_variable_modifications, &ptms)?;
-
-        let filter_pipeline = Arc::new(Self::create_filter_pipeline(
-            distinct,
-            taxonomy_ids,
-            proteome_ids,
-            is_reviewed,
-        )?);
-
-        let mut clients = Vec::with_capacity(num_threads);
-        for _ in 0..num_threads {
-            clients.push(Arc::new(Client::new(client.get_url()).await?));
-        }
-
-        let ptm_conditions = Arc::new(Mutex::new(ptm_conditions));
-
-        let (peptide_sender, peptide_receiver) = channel::<Result<Peptide>>();
-
-        Ok(Box::pin(try_stream! {
-            let _threads: Vec<std::thread::JoinHandle<Result<()>>> = (0..num_threads)
-                .map(|_| {
-                    let thread_ptm_conditions = ptm_conditions.clone();
-                    let thread_client = clients.pop().unwrap();
-                    let thread_partition_limits = partition_limits.clone();
-                    let thread_filter_pipeline = filter_pipeline.clone();
-                    let thread_peptide_sender = peptide_sender.clone();
-                    std::thread::spawn(move || {
-                        let runtime = tokio::runtime::Builder::new_current_thread()
-                            .enable_all()
-                            .build()?;
-
-                        loop {
-                            let ptm_condition = match thread_ptm_conditions.lock() {
-                                Ok(mut ptm_conditions) => ptm_conditions.pop(),
-                                Err(_) => bail!("Could not lock PTM conditions"),
-                            };
-                            if ptm_condition.is_none() {
-                                break;
-                            }
-                            let ptm_condition = ptm_condition.unwrap();
-
-                            runtime.block_on(
-                                Self::search_with_ptm_conditions(
-                                    thread_client.clone(),
-                                    thread_partition_limits.clone(),
-                                    ptm_condition,
-                                    lower_mass_tolerance_ppm,
-                                    upper_mass_tolerance_ppm,
-                                    thread_filter_pipeline.clone(),
-                                    thread_peptide_sender.clone(),
-                                )
-                            )?;
-                        }
-                        Ok(())
-                    })
-                }).collect();
-
-            drop(peptide_sender);
 
             loop {
                 match peptide_receiver.recv() {

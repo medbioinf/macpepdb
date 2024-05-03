@@ -40,6 +40,7 @@ pub fn validate_ptm_vec(ptms: &Vec<PTM>) -> Result<()> {
 
 /// Simple struct to store and check the occurrence of an amino acid
 ///
+#[derive(Clone)]
 pub enum AminoAcidOccurrence {
     Equal(i16),
     GreaterOrEqual(i16),
@@ -82,6 +83,7 @@ impl Display for AminoAcidOccurrence {
 /// PTMCondition to check peptides against a given mass and PTMs.
 /// Each PTM condition can be used to query a range of peptides.
 ///
+#[derive(Clone)]
 pub struct PTMCondition {
     mass: i64,
     amino_acid_occurrences: HashMap<usize, AminoAcidOccurrence>,
