@@ -1,3 +1,6 @@
+// std imports
+use std::collections::HashMap;
+
 // 3rd party imports
 use anyhow::{Context, Result};
 use dihardts_omicstools::biology::taxonomy::TaxonomyTree;
@@ -39,9 +42,17 @@ impl TaxonomyTreeTable {
     /// * `client` - The client to use for the database connection
     ///
     pub async fn select(client: &Client) -> Result<TaxonomyTree> {
-        Ok(serde_json::from_slice(
-            BlobTable::select_raw(client, KEY_PREFIX).await?.as_slice(),
-        )?)
+        let bytes = BlobTable::select_raw(client, KEY_PREFIX).await?;
+        if bytes.is_empty() {
+            tracing::debug!("No taxonomy tree found");
+            return Ok(TaxonomyTree::new(
+                HashMap::new(),
+                Vec::new(),
+                HashMap::new(),
+                Vec::new(),
+            ));
+        }
+        Ok(serde_json::from_slice(bytes.as_slice())?)
     }
 }
 
