@@ -20,6 +20,10 @@ path = "src/lib.rs"
 name = "macpepdb"
 path = "src/bin.rs"
 
+[[bin]]
+name = "macpepdb_performance"
+path = "src/bin_performance.rs"
+
 [dependencies]
 anyhow = "~1.0.69"
 async-stream = "0.3.5"

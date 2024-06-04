@@ -1,6 +1,5 @@
 // std imports
 use std::collections::HashSet;
-use std::fs::read_to_string;
 use std::path::PathBuf;
 use std::{path::Path, thread::sleep, time::Duration};
 
@@ -24,10 +23,6 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
 // internal imports
-use macpepdb::functions::performance_measurement::scylla as scylla_performance;
-use macpepdb::functions::performance_measurement::scylla::SupportedSearch;
-use macpepdb::io::post_translational_modification_csv::reader::Reader as PtmReader;
-use macpepdb::mass::convert::to_int as mass_to_int;
 use macpepdb::web::server::start as start_web_server;
 use macpepdb::{
     database::{
@@ -105,34 +100,6 @@ enum Commands {
         /// Glob patterns are allowed. e.g. /path/to/**/*.dat, put them in quotes if your shell expands them.
         #[arg(value_delimiter = ' ', num_args = 0..)]
         protein_file_paths: Vec<String>,
-    },
-    QueryPerformance {
-        /// Log interval for metrics in seconds
-        #[arg(long, default_value_t = 60)]
-        metrics_log_interval: u64,
-        /// Number of threads for queued multi-threaded filter
-        #[arg(long)]
-        threads: Option<usize>,
-        /// Use only x first masses
-        #[arg(long)]
-        only_n_masses: Option<usize>,
-        /// Use only the given filter
-        #[arg(long, action = clap::ArgAction::Append)]
-        filter: Vec<SupportedSearch>,
-        /// Database URL to connect e.g. scylla://host1,host2/keyspace
-        database_url: String,
-        /// Input file with masses to query
-        masses_file: String,
-        /// PTM file
-        ptm_file: String,
-        /// Lower mass tolerance (ppm)
-        lower_mass_tolerance: i64,
-        /// Upper mass tolerance (ppm)
-        upper_mass_tolerance: i64,
-        /// Maximum number of variable modifications
-        max_variable_modifications: i16,
-        /// Folder to log metrics
-        metrics_log_folder: String,
     },
     Web {
         /// Setting this flag disables the creation of the taxonomy name search index,
@@ -344,56 +311,6 @@ async fn main() -> Result<()> {
                     Err(e) => error!("Database build failed: {:?}", e),
                 }
                 info!("Database build took: {:?}", start.elapsed());
-            } else {
-                error!("Unsupported database protocol: {}", database_url);
-            }
-        }
-        Commands::QueryPerformance {
-            metrics_log_interval,
-            threads,
-            only_n_masses,
-            filter,
-            database_url,
-            masses_file,
-            ptm_file,
-            lower_mass_tolerance,
-            upper_mass_tolerance,
-            max_variable_modifications,
-            metrics_log_folder,
-        } => {
-            let mut masses: Vec<i64> = read_to_string(Path::new(&masses_file))?
-                .split("\n")
-                .filter_map(|line| {
-                    if !line.is_empty() {
-                        let mass = mass_to_int(line.parse::<f64>().unwrap());
-                        Some(mass)
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            if let Some(only_n_masses) = only_n_masses {
-                masses.truncate(only_n_masses);
-            }
-
-            let ptms = PtmReader::read(Path::new(&ptm_file))?;
-            let metrics_log_folder = Path::new(&metrics_log_folder);
-
-            if database_url.starts_with("scylla://") {
-                scylla_performance::query_performance(
-                    &database_url,
-                    masses,
-                    lower_mass_tolerance,
-                    upper_mass_tolerance,
-                    max_variable_modifications,
-                    metrics_log_folder,
-                    metrics_log_interval,
-                    ptms,
-                    threads,
-                    filter,
-                )
-                .await?;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
