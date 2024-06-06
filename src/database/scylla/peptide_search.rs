@@ -209,14 +209,14 @@ pub trait Search<'a> {
                 )
                 .await?;
                 pin_mut!(peptide_stream);
-                while let Some(peptide) = peptide_stream.next().await {
+                'peptide_loop: while let Some(peptide) = peptide_stream.next().await {
                     let peptide = peptide?;
                     if !ptm_condition.check_peptide(&peptide) {
                         continue;
                     }
                     for filter in filter_pipeline.iter_mut() {
                         if !filter.is_match(&peptide)? {
-                            continue;
+                            continue 'peptide_loop;
                         }
                     }
                     peptide_sender.send(Ok(peptide))?;
@@ -292,11 +292,11 @@ pub trait Search<'a> {
                 )
                 .await?;
                 pin_mut!(peptide_stream);
-                while let Some(peptide) = peptide_stream.next().await {
+                'peptide_loop: while let Some(peptide) = peptide_stream.next().await {
                     let peptide = peptide?;
                     for filter in filter_pipeline.iter_mut() {
                         if !filter.is_match(&peptide)? {
-                            continue;
+                            continue 'peptide_loop;
                         }
                     }
                     peptide_sender.send(Ok(peptide))?;
