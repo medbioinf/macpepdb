@@ -41,28 +41,35 @@ pub async fn start(
     port: u16,
     with_taxonomy_search: bool,
 ) -> Result<()> {
+    tracing::info!("Start MaCPepDB web server");
     // Create a database client
     // Session maintains it own connection pool internally: https://github.com/scylladb/scylla-rust-driver/issues/724
     // A single client with a session should be sufficient for the entire application
     let db_client = Client::new(database_url).await?;
 
     // Load configuration
+    tracing::debug!("Loading configuration...");
     let configuration: Configuration = ConfigurationTable::select(&db_client).await?;
 
     // Load taxonomy tree
+    tracing::debug!("Taxonomy tree...");
     let taxonomy_tree: TaxonomyTree = TaxonomyTreeTable::select(&db_client).await?;
 
     // Build search index for taxonomy scientific name
     let mut taxonomy_search: Option<SearchIndex<u64>> = None;
 
     if with_taxonomy_search {
+        tracing::debug!("Build taxonomy search index...");
         let mut index = SearchIndex::default();
         for tax in taxonomy_tree.get_taxonomies() {
             index.insert(&tax.get_id(), &tax.get_scientific_name());
         }
         taxonomy_search = Some(index);
+    } else {
+        tracing::info!("No taxonomy search...");
     }
 
+    tracing::debug!("Build app state...");
     let app_state = Arc::new(AppState::new(
         db_client,
         configuration,
@@ -76,8 +83,7 @@ pub async fn start(
         .allow_headers(vec![http::header::ACCEPT, http::header::CONTENT_TYPE])
         .allow_origin(Any);
 
-    tracing::info!("Start MaCPepDB web server");
-
+    tracing::debug!("Create router...");
     // Build our application with route
     let app = Router::new()
         // Peptide routes
@@ -104,8 +110,9 @@ pub async fn start(
         .fallback(page_not_found)
         .layer(cors);
 
+    tracing::debug!("Bind listener...");
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", interface, port)).await?;
-    tracing::info!("ready for connections, listening on {}:{}", interface, port);
+    tracing::info!("Ready for connections, listening on {}:{}", interface, port);
     axum::serve(listener, app).await.unwrap();
 
     Ok(())
