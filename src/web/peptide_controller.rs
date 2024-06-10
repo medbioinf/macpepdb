@@ -5,11 +5,11 @@ use std::sync::Arc;
 // 3rd party imports
 use anyhow::Result;
 use async_stream::stream;
+use axum::body::Body;
 use axum::extract::{Json, Path, State};
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum_streams::*;
 use dihardts_omicstools::chemistry::amino_acid::get_amino_acid_by_one_letter_code;
 use dihardts_omicstools::proteomics::post_translational_modifications::{
     ModificationType as PtmType, Position as PtmPosition, PostTranslationalModification as PTM,
@@ -25,6 +25,7 @@ use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::scylla::protein_table::ProteinTable;
 use crate::database::selectable_table::SelectableTable;
+use crate::entities::peptide::TsvPeptide;
 use crate::entities::protein::Protein;
 use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::peptide_partitioner::get_mass_partition;
@@ -89,8 +90,7 @@ use crate::web::web_error::WebError;
 ///     ],
 ///     "proteome_ids": [
 ///         "UP000000589"
-///     ],
-///     "domains": []
+///     ]
 /// }
 ///
 pub async fn get_peptide(
@@ -250,7 +250,7 @@ impl SearchRequestBody {
 /// * Method: `POST`
 /// * Headers:
 ///     * `Content-Type`: `application/json`
-///     * `Accept`: `application/json`, `text/csv`, `text/plain` (optional, default: `application/json`, controls the output format)
+///     * `Accept`: `application/json`, `text/tsv`, `text/plain` (optional, default: `application/json`, controls the output format)
 /// * Body:
 ///     ```json
 ///     {
@@ -286,25 +286,10 @@ impl SearchRequestBody {
 /// ```
 /// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](get_peptide).
 ///
-/// ### `text/csv`
-/// Due to serde limitations, the CSV does not contain a header.
-/// The columns are:
-/// * `partition`
-/// * `mass`
-/// * `sequence`
-/// * `amino_acid_count_a`
-/// * `amino_acid_count_b`
-/// * ...
-/// * `amino_acid_count_z`
-/// * `proteins`
-/// * `is_swiss_prot`
-/// * `is_trembl`
-/// * `taxonomy_ids`
-/// * `unique_taxonomy_ids`
-/// * `proteome_ids`
-///
-/// ```csv
-/// 51,2006988396539,NLETPSCKNGFLLDGFPR,1,0,0,1,1,1,2,2,0,0,0,1,3,0,2,0,2,0,1,1,1,0,0,0,0,0,0,Q9WTP6,true,false,10090,10090,UP000000589
+/// ### `text/tsv`
+/// ```tsv
+/// partition	mass	sequence	missed_cleavages	aa_counts	proteins	is_swiss_prot	is_trembl	taxonomy_ids	unique_taxonomy_ids	proteome_ids
+/// 51\t2006.988396539\tNLETPSCKNGFLLDGFPR\t1,0,0,1,1,1,2,2,0,0,0,1,3,0,2,0,2,0,1,1,1,0,0,0,0,0,0\tQ9WTP6\ttrue\tfalse\t10090\t10090\tUP000000589
 /// ...
 /// ```
 ///
@@ -319,14 +304,14 @@ pub async fn search(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
     Json(payload): Json<SearchRequestBody>,
-) -> impl IntoResponse {
+) -> Result<(StatusCode, Body), WebError> {
     // Need to handle WebError manually, because we need to return a stream
     let ptms = match payload.get_modifications() {
         Ok(ptms) => ptms,
         Err(err) => {
-            return StreamBodyAs::text(WebError::new_string_stream(
+            return Ok((
                 StatusCode::BAD_REQUEST,
-                format!("Error while parsing modifications: {:?}", err),
+                Body::from(format!("!!! Error while parsing modifications: {:?}", err)),
             ));
         }
     };
@@ -339,9 +324,12 @@ pub async fn search(
             .get_taxonomy(taxonomy_id as u64)
             .is_none()
         {
-            return StreamBodyAs::text(WebError::new_string_stream(
+            return Ok((
                 StatusCode::BAD_REQUEST,
-                format!("Taxonomy with id {} does not exist", taxonomy_id),
+                Body::from(format!(
+                    "!!! Taxonomy with id {} does not exist",
+                    taxonomy_id
+                )),
             ));
         }
 
@@ -377,9 +365,9 @@ pub async fn search(
     {
         Ok(peptide_stream) => peptide_stream,
         Err(err) => {
-            return StreamBodyAs::text(WebError::new_string_stream(
+            return Ok((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Error while searching for peptides: {:?}", err),
+                Body::from(format!("Error while searching for peptides: {:?}", err)),
             ));
         }
     };
@@ -387,44 +375,103 @@ pub async fn search(
     let default_header = match HeaderValue::from_str("application/json") {
         Ok(header) => header,
         Err(err) => {
-            return StreamBodyAs::text(WebError::new_string_stream(
+            return Ok((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Error while setting default header: {:?}", err),
+                Body::from(format!("!!! Error while setting default header: {:?}", err)),
             ));
         }
     };
 
     let accept_header = headers.get(ACCEPT).unwrap_or(&default_header);
 
-    match accept_header.to_str().unwrap() {
-        "application/json" => StreamBodyAs::json_array(stream! {
-            for await peptide_res in peptide_stream {
-                match peptide_res {
-                    Ok(peptide) => yield peptide,
-                    Err(err) => error!("{:?}", err)
+    let (status_code, body) = match accept_header.to_str().unwrap() {
+        "application/json" => (
+            StatusCode::OK,
+            Body::from_stream(stream! {
+                // start json array
+                yield Ok("[".to_string());
+                // set delimiter to empty string for first element
+                let mut delimiter = "".to_string();
+                // stream peptides
+                for await peptide in peptide_stream {
+                    yield Ok(delimiter.to_owned());
+                    // handle error on underlaying stream
+                    if let Err(err) = peptide {
+                        error!("{:?}", err);
+                        yield Err(format!("!!! {:?}", err));
+                        break;
+                    }
+                    let peptide = peptide.unwrap();
+                    match serde_json::to_string(&peptide) {
+                        Ok(json) => yield Ok(json),
+                        Err(err) => {
+                            error!("{:?}", err);
+                            yield Err(format!("!!! {:?}", err));
+                            break;
+                        }
+                    };
+                    // set delimiter to comma after first element
+                    delimiter = ",".to_string();
                 }
-            }
-        }),
-        "text/csv" => StreamBodyAs::csv(stream! {
-            for await peptide_res in peptide_stream {
-                match peptide_res {
-                    Ok(peptide) => yield peptide,
-                    Err(err) => error!("{:?}", err)
+                // end json array
+                yield Ok("]".to_string());
+            }),
+        ),
+        "text/csv" => (
+            StatusCode::OK,
+            Body::from_stream(stream! {
+                let mut has_headers = true;
+                for await peptide in peptide_stream {
+                    // handle error on underlaying stream
+                    if let Err(err) = peptide {
+                        error!("{:?}", err);
+                        yield Err(format!("!!! {:?}", err));
+                        break;
+                    }
+                    let peptide = TsvPeptide::from(peptide.unwrap());
+                    let mut writer = csv::WriterBuilder::new().has_headers(has_headers).delimiter(b'\t').from_writer(vec![]);
+                    match writer.serialize(peptide) {
+                        Ok(_) => (),
+                        Err(err) => {
+                            error!("{:?}", err);
+                            yield Err(format!("!!! {:?}", err));
+                            break;
+                        }
+                    };
+                    match writer.into_inner() {
+                        Ok(csv) => yield Ok(csv),
+                        Err(err) => {
+                            error!("{:?}", err);
+                            yield Err(format!("!!! {:?}", err));
+                            break;
+                        }
+                    };
+                    has_headers = false;
                 }
-            }
-        }),
-        "text/plain" => StreamBodyAs::text(stream! {
-            for await peptide_res in peptide_stream {
-                match peptide_res {
-                    Ok(peptide) => yield peptide.to_string(),
-                    Err(err) => error!("{:?}", err)
+                yield Ok(vec![b'\n']);
+            }),
+        ),
+        "text/plain" => (
+            StatusCode::OK,
+            Body::from_stream(stream! {
+                let mut delimiter = "".to_string();
+                for await peptide in peptide_stream {
+                    yield Ok(delimiter.to_owned());
+                    yield match peptide {
+                        Ok(peptide) => Ok(peptide.get_sequence().to_owned()),
+                        Err(err) => Err(format!("!!! {:?}", err)),
+                    };
+                    delimiter = "\n".to_string();
                 }
-                yield "\n".to_string();
-            }
-        }),
-        _ => StreamBodyAs::text(WebError::new_string_stream(
-            StatusCode::BAD_REQUEST,
-            "Unknown format requested".to_string(),
-        )),
-    }
+                yield Ok(delimiter);
+            }),
+        ),
+        _ => (
+            StatusCode::NOT_ACCEPTABLE,
+            Body::from_stream(stream! {
+                yield Err::<String, String>("!!! Unsupported accept header".to_string());
+            }),
+        ),
+    };
+    Ok((status_code, body))
 }

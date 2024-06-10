@@ -32,6 +32,7 @@ pub struct Peptide {
     taxonomy_ids: Vec<i64>,
     unique_taxonomy_ids: Vec<i64>,
     proteome_ids: Vec<String>,
+    #[serde(skip_serializing)]
     domains: Vec<Domain>,
 }
 
@@ -372,5 +373,60 @@ impl From<ScyllaRow> for Peptide {
 impl ToString for Peptide {
     fn to_string(&self) -> String {
         self.sequence.clone()
+    }
+}
+
+/// Peptide which can be serialized to a TSV file, where Vectors are comma separated lists
+///
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TsvPeptide {
+    partition: i64,
+    #[serde(
+        serialize_with = "serialize_mass_to_float",
+        deserialize_with = "deserialize_mass_from_int"
+    )]
+    mass: i64,
+    sequence: String,
+    missed_cleavages: i16,
+    aa_counts: String,
+    proteins: String,
+    is_swiss_prot: bool,
+    is_trembl: bool,
+    taxonomy_ids: String,
+    unique_taxonomy_ids: String,
+    proteome_ids: String,
+    // domains: String,
+}
+
+impl From<Peptide> for TsvPeptide {
+    fn from(peptide: Peptide) -> Self {
+        Self {
+            partition: peptide.partition,
+            mass: peptide.mass,
+            sequence: peptide.sequence,
+            missed_cleavages: peptide.missed_cleavages,
+            aa_counts: peptide
+                .aa_counts
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(","),
+            proteins: peptide.proteins.join(","),
+            is_swiss_prot: peptide.is_swiss_prot,
+            is_trembl: peptide.is_trembl,
+            taxonomy_ids: peptide
+                .taxonomy_ids
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(","),
+            unique_taxonomy_ids: peptide
+                .unique_taxonomy_ids
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<String>>()
+                .join(","),
+            proteome_ids: peptide.proteome_ids.join(","),
+        }
     }
 }
