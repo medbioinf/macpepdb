@@ -12,6 +12,7 @@ use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::{pin_mut, Stream, StreamExt};
 use scylla::frame::response::result::CqlValue;
+use tracing::error;
 
 // local imports
 use crate::database::selectable_table::SelectableTable;
@@ -187,6 +188,7 @@ pub trait Search<'a> {
     /// * `peptide_sender` - The sender to send the peptides to the final stream
     ///
     fn search_with_ptm_conditions(
+        task_id: usize,
         client: Arc<Client>,
         partition: usize,
         conditions: Vec<(i64, i64, PTMCondition)>,
@@ -201,27 +203,48 @@ pub trait Search<'a> {
 
                 let query_params = vec![&partition, &lower_mass_limit, &upper_mass_limit];
 
-                let peptide_stream = PeptideTable::stream(
+                let peptide_stream = match PeptideTable::stream(
                     client.as_ref(),
                     "WHERE partition = ? AND mass >= ? AND mass <= ?",
                     &query_params,
                     10000,
                 )
-                .await?;
+                .await
+                {
+                    Ok(stream) => stream,
+                    Err(err) => {
+                        error!("task {}: error creating peptide stream: {}", task_id, err);
+                        return Err(err);
+                    }
+                };
                 pin_mut!(peptide_stream);
                 'peptide_loop: while let Some(peptide) = peptide_stream.next().await {
-                    let peptide = peptide?;
+                    let peptide = match peptide {
+                        Ok(peptide) => peptide,
+                        Err(err) => {
+                            error!("task {}: error receiving peptide: {}", task_id, err);
+                            return Err(err);
+                        }
+                    };
                     if !ptm_condition.check_peptide(&peptide) {
                         continue;
                     }
                     for filter in filter_pipeline.iter_mut() {
                         if !filter.is_match(&peptide)? {
+                            // debug!("peptide: {} filtered", &seq);
                             continue 'peptide_loop;
                         }
                     }
-                    peptide_sender.send(Ok(peptide))?;
+                    match peptide_sender.send(Ok(peptide)) {
+                        Ok(_) => {}
+                        Err(err) => {
+                            error!("task {}: error sending peptide: {}", task_id, err);
+                            return Err(err.into());
+                        }
+                    };
                 }
             }
+            drop(peptide_sender);
             Ok(())
         }
     }
@@ -395,7 +418,7 @@ impl<'a> Search<'a> for MultiTaskSearch {
         Ok(Box::pin(try_stream! {
             let mut tasks: Vec<tokio::task::JoinHandle<Result<()>>> = Vec::with_capacity(max(sorted_ptm_conditions.len(), 1));
             if sorted_ptm_conditions.len() > 0 {
-                for (partition, conditions) in sorted_ptm_conditions.into_iter() {
+                for (task_id, (partition, conditions)) in sorted_ptm_conditions.into_iter().enumerate() {
                     let filter_pipeline = Self::create_filter_pipeline(
                         distinct,
                         taxonomy_ids.clone(),
@@ -406,6 +429,7 @@ impl<'a> Search<'a> for MultiTaskSearch {
                     // Spawn on task for each PTM condition
                     tasks.push(tokio::task::spawn(
                         Self::search_with_ptm_conditions(
+                            task_id,
                             client.clone(),
                             partition,
                             conditions,
@@ -436,18 +460,26 @@ impl<'a> Search<'a> for MultiTaskSearch {
 
             drop(peptide_sender);
 
-            loop {
-                match peptide_receiver.recv() {
-                    Ok(peptide) => yield peptide?,
-                    Err(_) => break,
-                }
-            }
+            // Workaround task. When testing the web API requesting certain masses did not end the stream.
+            // Tracked it down to the loop which collects the filtered peptides from the database streams.
+            // Seems like the receiver did not noticed the last disconnect or something every time (but only if the web API is used)
+            // By spawning an empty task and join it after the loop the stream ends as expected.
+            // Initially the workaround task printed a debug message every few seconds to see if it is still running.
+            let workaround = tokio::task::spawn(async move {});
 
             loop {
                 match peptide_receiver.recv() {
                     Ok(peptide) => yield peptide?,
-                    Err(_) => break,
+                    Err(_) => {
+                        // this error occues when all senders are dropped
+                        break;
+                    }
                 }
+            }
+            workaround.await?;
+
+            for task in tasks {
+                task.await??;
             }
         }))
     }
