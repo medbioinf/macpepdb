@@ -7,11 +7,11 @@ use std::sync::Arc;
 // 3rd party imports
 use anyhow::Result;
 use async_stream::try_stream;
-use crossbeam_channel::{unbounded as channel, Sender};
 use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::{pin_mut, Stream, StreamExt};
 use scylla::frame::response::result::CqlValue;
+use tokio::sync::mpsc::{unbounded_channel as channel, UnboundedSender as Sender};
 use tracing::error;
 
 // local imports
@@ -413,7 +413,7 @@ impl<'a> Search<'a> for MultiTaskSearch {
             upper_mass_tolerance_ppm,
         )?;
 
-        let (peptide_sender, peptide_receiver) = channel::<Result<Peptide>>();
+        let (peptide_sender, mut peptide_receiver) = channel::<Result<Peptide>>();
 
         Ok(Box::pin(try_stream! {
             let mut tasks: Vec<tokio::task::JoinHandle<Result<()>>> = Vec::with_capacity(max(sorted_ptm_conditions.len(), 1));
@@ -460,23 +460,14 @@ impl<'a> Search<'a> for MultiTaskSearch {
 
             drop(peptide_sender);
 
-            // Workaround task. When testing the web API requesting certain masses did not end the stream.
-            // Tracked it down to the loop which collects the filtered peptides from the database streams.
-            // Seems like the receiver did not noticed the last disconnect or something every time (but only if the web API is used)
-            // By spawning an empty task and join it after the loop the stream ends as expected.
-            // Initially the workaround task printed a debug message every few seconds to see if it is still running.
-            let workaround = tokio::task::spawn(async move {});
-
             loop {
-                match peptide_receiver.recv() {
-                    Ok(peptide) => yield peptide?,
-                    Err(_) => {
-                        // this error occues when all senders are dropped
+                match peptide_receiver.recv().await {
+                    Some(peptide) => yield peptide?,
+                    None => {
                         break;
                     }
                 }
             }
-            workaround.await?;
 
             for task in tasks {
                 task.await??;
