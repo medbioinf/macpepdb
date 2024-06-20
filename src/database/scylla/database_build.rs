@@ -45,7 +45,7 @@ use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_
 use crate::tools::peptide_mass_counter::PeptideMassCounter;
 use crate::tools::progress_monitor::ProgressMonitor;
 use crate::tools::protein_counter::ProteinCounter;
-use crate::tools::queue_monitor::ArrayQueueMonitor;
+use crate::tools::queue_monitor::QueueMonitor;
 use scylla::frame::response::result::CqlValue;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
@@ -266,7 +266,7 @@ impl DatabaseBuild {
             metrics_log_intervals,
         )?;
 
-        let mut queue_monitor = ArrayQueueMonitor::new(
+        let mut queue_monitor = QueueMonitor::new(
             "",
             vec![protein_queue_arc.clone()],
             vec![protein_queue_size as u64],

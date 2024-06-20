@@ -32,7 +32,7 @@ use macpepdb::io::post_translational_modification_csv::reader::Reader as PtmRead
 use macpepdb::mass::convert::{to_float as mass_to_float, to_int as mass_to_int};
 use macpepdb::tools::metrics_logger::MetricsLogger;
 use macpepdb::tools::progress_monitor::ProgressMonitor;
-use macpepdb::tools::queue_monitor::ArrayQueueMonitor;
+use macpepdb::tools::queue_monitor::QueueMonitor;
 
 const STOP_FLAG_CHECK_TIMEOUT: u64 = 1000;
 
@@ -327,7 +327,7 @@ async fn monitoring(
         None,
     )?;
 
-    let mut queue_monitor = ArrayQueueMonitor::new(
+    let mut queue_monitor = QueueMonitor::new(
         "",
         vec![mass_queue],
         vec![total_masses],
