@@ -1,46 +1,39 @@
 // std imports
 use std::path::Path;
-use std::str::FromStr;
 
 // 3rd party imports
 use anyhow::Result;
-use dihardts_omicstools::{
-    chemistry::amino_acid::get_amino_acid_by_one_letter_code,
-    proteomics::post_translational_modifications::{
-        ModificationType, Position, PostTranslationalModification as PTM,
-    },
-};
-use serde::Deserialize;
+use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 
-#[derive(Debug, Deserialize)]
-struct PostTranslationalModificationCsvRecord {
-    name: String,
-    amino_acids: String,
-    mass_delta: f64,
-    mod_type: String,
-    position: String,
-}
-
+/// Reader for PTMs from a CSV file, e.g.
+/// ```csv
+/// name,amino_acid,mass_delta,mod_type,position
+/// Carbamidomethyl,C,57.021464,Static,Anywhere
+/// Oxidation,M,15.994915,Variable,Anywhere
+/// ```
+///
 pub struct Reader {}
 
 impl Reader {
+    /// Read PTMs from the given CSV file
+    ///
+    /// # Arguments
+    /// * `path` - The path to the CSV file
+    ///
     pub fn read(path: &Path) -> Result<Vec<PTM>> {
-        let mut reader = csv::Reader::from_path(path)?;
-        let mut ptms: Vec<PTM> = Vec::new();
-        for record_res in reader.deserialize() {
-            let record: PostTranslationalModificationCsvRecord = record_res?;
-            for aa_code in record.amino_acids.chars() {
-                let amino_acid = get_amino_acid_by_one_letter_code(aa_code)?;
-                ptms.push(PTM::new(
-                    &record.name.as_str(),
-                    amino_acid,
-                    record.mass_delta,
-                    ModificationType::from_str(&record.mod_type)?,
-                    Position::from_str(&record.position)?,
-                ));
-            }
-        }
-        return Ok(ptms);
+        let reader = csv::ReaderBuilder::new()
+            .has_headers(true)
+            .delimiter(b',')
+            .from_path(path)?;
+
+        reader
+            .into_deserialize::<PTM>()
+            .into_iter()
+            .map(|ptm_result| match ptm_result {
+                Ok(ptm) => Ok(ptm),
+                Err(e) => Err(anyhow::Error::new(e)),
+            })
+            .collect()
     }
 }
 
@@ -53,7 +46,6 @@ mod test {
     fn test_read() {
         let mod_csv = Path::new("test_files/mods.csv");
         let ptms = Reader::read(mod_csv).unwrap();
-
         assert_eq!(ptms.len(), 2);
     }
 }

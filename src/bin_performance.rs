@@ -150,18 +150,6 @@ async fn web_searching(
 ) -> Result<()> {
     let client = reqwest::Client::new();
 
-    // Convert to JSON serializable PTMs
-    let ptms = ptms
-        .iter()
-        .map(|ptm| {
-            (
-                ptm.get_amino_acid().get_code().to_string(),
-                *ptm.get_mass_delta(),
-                ptm.get_mod_type().to_string(),
-                ptm.get_position().to_string(),
-            )
-        })
-        .collect::<Vec<(String, f64, String, String)>>();
     let endpoint = format!("{}/api/peptides/search", web_url);
 
     loop {
@@ -197,7 +185,7 @@ async fn web_searching(
 
             if !peptide_response.status().is_success() {
                 error!(
-                    "Request was not success: {}, {:?} => Retry",
+                    "Request was not successfull: {}, {:?} => Retry",
                     mass,
                     peptide_response.text().await?
                 );

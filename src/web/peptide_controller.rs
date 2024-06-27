@@ -1,5 +1,4 @@
 // std imports
-use std::str::FromStr;
 use std::sync::Arc;
 
 // 3rd party imports
@@ -10,14 +9,10 @@ use axum::extract::{Json, Path, State};
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
-use dihardts_omicstools::chemistry::amino_acid::get_amino_acid_by_one_letter_code;
-use dihardts_omicstools::proteomics::post_translational_modifications::{
-    ModificationType as PtmType, Position as PtmPosition, PostTranslationalModification as PTM,
-};
+use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::TryStreamExt;
 use scylla::frame::response::result::CqlValue;
-use serde::Deserialize;
 use tracing::error;
 
 // internal imports
@@ -204,40 +199,21 @@ pub async fn get_peptide_existence(
 
 /// Simple struct to deserialize the request body for peptide search
 ///
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 pub struct SearchRequestBody {
     mass: f64,
     lower_mass_tolerance_ppm: i64,
     upper_mass_tolerance_ppm: i64,
     max_variable_modifications: i16,
-    modifications: Vec<(char, f64, String, String)>,
+    modifications: Vec<PTM>,
     taxonomy_id: Option<i64>,
     proteome_id: Option<String>,
     is_reviewed: Option<bool>,
 }
 
-impl SearchRequestBody {
-    /// Convert the modifications from the request body to a vector of PTMs
-    ///
-    pub fn get_modifications(&self) -> Result<Vec<PTM>> {
-        let mut psms: Vec<PTM> = Vec::new();
-        for (ptm_idx, ptm_tuple) in self.modifications.iter().enumerate() {
-            let ptm = PTM::new(
-                format!("ptm_{}", ptm_idx).as_str(),
-                get_amino_acid_by_one_letter_code(ptm_tuple.0)?,
-                ptm_tuple.1,
-                PtmType::from_str(ptm_tuple.2.as_str())?,
-                PtmPosition::from_str(ptm_tuple.3.as_str())?,
-            );
-            psms.push(ptm);
-        }
-        Ok(psms)
-    }
-}
-
 /// Returns a stream of peptides matching the given parameters.
 /// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
-/// Importnant: Peptides only contain the accession of the proteins of origin.
+/// Important: Peptides only contain the accession of the proteins of origin.
 ///
 /// # Arguments
 /// * `db_client` - The database client
@@ -264,12 +240,13 @@ impl SearchRequestBody {
 ///         "max_variable_modifications": 3,
 ///         # List of post translational modifications
 ///         "modifications": [
-///             [
-///                 "C",        # Amino acid one letter code
-///                 57.021464,  # Mass shift
-///                 "static",   # Type: static, variable
-///                 "anywhere"  # Position: anywhere, n, c
-///             ]
+///             {
+///                 "name": "Mod something",
+///                 "amino_acid": "C",
+///                 "mass_delta": 42.0,
+///                 "mod_type": Static,     # Type: Static, Variable
+///                 "position": Anywhere    # Position: Anywhere, Terminus-N, Terminus-C, Bond-C, Bond-N
+///             }
 ///         ]
 ///     }
 ///     ```
@@ -305,17 +282,6 @@ pub async fn search(
     headers: HeaderMap,
     Json(payload): Json<SearchRequestBody>,
 ) -> Result<(StatusCode, Body), WebError> {
-    // Need to handle WebError manually, because we need to return a stream
-    let ptms = match payload.get_modifications() {
-        Ok(ptms) => ptms,
-        Err(err) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                Body::from(format!("!!! Error while parsing modifications: {:?}", err)),
-            ));
-        }
-    };
-
     let mut taxonomy_ids: Option<Vec<i64>> = None;
     if let Some(taxonomy_id) = payload.taxonomy_id {
         // Check if taxonomy exists
@@ -359,7 +325,7 @@ pub async fn search(
         taxonomy_ids,
         proteome_ids,
         payload.is_reviewed.clone(),
-        ptms,
+        payload.modifications,
     )
     .await
     {
