@@ -115,7 +115,7 @@ pub async fn get_protein(
         return Ok(Json(
             protein
                 .to_json_with_peptides(
-                    app_state.get_db_client_as_ref(),
+                    app_state.get_db_client().clone(),
                     app_state.get_configuration_as_ref().get_partition_limits(),
                     protease.as_ref(),
                 )
@@ -225,7 +225,7 @@ pub async fn search_protein(
         for await protein in proteins {
             match protein {
                 Ok(protein) => yield match protein.to_json_with_peptides(
-                    app_state.get_db_client_as_ref(),
+                    app_state.get_db_client().clone(),
                     app_state.get_configuration_as_ref().get_partition_limits(),
                     protease.as_ref(),
                 ).await {

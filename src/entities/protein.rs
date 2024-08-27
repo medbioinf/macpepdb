@@ -1,5 +1,6 @@
 // std imports
 use std::cmp::min;
+use std::sync::Arc;
 
 // 3rd party imports
 use anyhow::{bail, Result};
@@ -264,15 +265,17 @@ impl Protein {
     ///
     pub async fn to_json_with_peptides(
         &self,
-        client: &Client,
+        client: Arc<Client>,
         partition_limits: &Vec<i64>,
         protease: &dyn Protease,
     ) -> Result<JsonValue> {
-        let peptides: Vec<Peptide> =
+        let mut peptides: Vec<Peptide> =
             PeptideTable::get_peptides_of_proteins(client, &self, protease, partition_limits)
                 .await?
                 .try_collect()
                 .await?;
+
+        peptides.sort_by(|pep_x, pep_y| pep_x.get_mass().partial_cmp(&pep_y.get_mass()).unwrap());
 
         let mut protein_json: JsonValue = serde_json::to_value(self)?;
         protein_json["peptides"] = serde_json::to_value(peptides)?;
