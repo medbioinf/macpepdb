@@ -1,15 +1,15 @@
 // std imports
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::{path::Path, thread::sleep, time::Duration};
+use std::process;
+use std::{path::Path, time::Duration};
 
 // 3rd party imports
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::StreamExt;
 use glob::glob;
-use indicatif::ProgressStyle;
 use macpepdb::database::generic_client::GenericClient;
 use macpepdb::database::scylla::client::Client;
 use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
@@ -17,7 +17,12 @@ use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
 use macpepdb::tools::peptide_mass_counter::PeptideMassCounter;
 use macpepdb::tools::peptide_partitioner::PeptidePartitioner;
+use metrics_exporter_prometheus::PrometheusBuilder;
+use reqwest::Url;
+use tokio::net::TcpListener;
+use tokio::time::sleep;
 use tracing::{debug, error, info, info_span, Instrument, Level};
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_indicatif::IndicatifLayer;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
@@ -35,9 +40,18 @@ use macpepdb::{
 // In order to use it with clap it needs to be an enum which is created via a template and build rs
 include!(concat!(env!("OUT_DIR"), "/protease_choice.rs"));
 
+/// Default min Peptide length
+///
 const DEFAULT_MIN_PEPTIDE_LENGTH: usize = 6;
+
+/// Default max peptide length
+///
 const DEFAULT_MAX_PEPTIDE_LENGTH: usize = 50;
+
+/// Default max number of missed cleavages
+///
 const DEFAULT_MAX_NUMBER_OF_MISSED_CLEAVAGES: usize = 2;
+
 /// Default false positive probability for bloom filters
 ///
 const DEFAULT_FALSE_POSITIVE_PROBABILITY: f64 = 0.01;
@@ -45,6 +59,46 @@ const DEFAULT_FALSE_POSITIVE_PROBABILITY: f64 = 0.01;
 /// Default protease
 ///
 const DEFAULT_PROTEASE: ProteaseChoice = ProteaseChoice::Trypsin;
+
+/// Target for tracing
+///
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum TracingTarget {
+    Loki,
+    File,
+    Terminal,
+    All,
+}
+
+/// Target for metrics
+///
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum MetricTarget {
+    Terminal,
+    Prometheus,
+    All,
+}
+
+/// Log rotation values for CLI
+///
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum TracingLogRotation {
+    Minutely,
+    Hourly,
+    Daily,
+    Never,
+}
+
+impl Into<Rotation> for TracingLogRotation {
+    fn into(self) -> Rotation {
+        match self {
+            TracingLogRotation::Minutely => Rotation::MINUTELY,
+            TracingLogRotation::Hourly => Rotation::HOURLY,
+            TracingLogRotation::Daily => Rotation::DAILY,
+            TracingLogRotation::Never => Rotation::NEVER,
+        }
+    }
+}
 
 #[derive(Debug, Subcommand)]
 enum Commands {
@@ -75,9 +129,6 @@ enum Commands {
         /// If set, domains will be added to the database
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         include_domains: bool, // this is a flag now `--include-domains`
-        /// Interval in seconds at which the metrics are logged to file
-        #[arg(long, default_value_t = 900)]
-        metrics_log_interval: u64,
         /// Protease used for digestion
         #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
         protease: ProteaseChoice,
@@ -177,13 +228,34 @@ enum Commands {
 #[command(name = "macpepdb")]
 struct Cli {
     /// Verbosity level
-    /// 0 - Error
-    /// 1 - Warn
-    /// 2 - Info
-    /// 3 - Debug
+    /// 0 - Error,
+    /// 1 - Warn,
+    /// 2 - Info,
+    /// 3 - Debug,
     /// > 3 - Trace
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
+    /// How to log tracing. Can be used multiple times
+    #[arg(short, long, value_enum, action = clap::ArgAction::Append)]
+    tracing_target: Vec<TracingTarget>,
+    /// Tracing log file. Only used if `file` is set in `tracing_target`.
+    #[arg(short, long, default_value = "./logs/macpepdb.log")]
+    file: PathBuf,
+    /// Tracing log rotation. Only used if `file` is set in `tracing_target`.
+    #[arg(short, long, value_enum, default_value = "never")]
+    rotation: TracingLogRotation,
+    /// Remote address of Loki endpoint for logging.
+    /// Only used if `loki` is set in `tracing_target`.
+    #[arg(short, long, default_value = "127.0.0.1:3100")]
+    loki: String,
+    /// How to log metrics. Can be used multiple times
+    #[arg(short, long, value_enum, action = clap::ArgAction::Append)]
+    metric_target: Vec<MetricTarget>,
+    /// Local address to serve the Prometheus metrics endpoint.
+    /// Port zero will automatically use a free port.
+    /// Only used if `prometheus` is set in `metric_target`.
+    #[arg(short, long, default_value = "127.0.0.1:9494")]
+    prometheus: String,
     #[command(subcommand)]
     command: Commands,
 }
@@ -192,6 +264,7 @@ struct Cli {
 async fn main() -> Result<()> {
     let args = Cli::parse();
 
+    //// Set up tracing
     let verbosity = match args.verbose {
         0 => Level::ERROR,
         1 => Level::WARN,
@@ -202,24 +275,100 @@ async fn main() -> Result<()> {
 
     let filter = EnvFilter::from_default_env()
         .add_directive(verbosity.into())
-        .add_directive("scylla=info".parse().unwrap())
-        .add_directive("tokio_postgres=info".parse().unwrap());
+        .add_directive("scylla=error".parse().unwrap())
+        .add_directive("tokio_postgres=error".parse().unwrap())
+        .add_directive("hyper=error".parse().unwrap())
+        .add_directive("reqwest=error".parse().unwrap());
 
-    let indicatif_layer = IndicatifLayer::new()
-        .with_progress_style(
-            ProgressStyle::with_template(
-                "{spinner:.cyan} {span_child_prefix} {span_name} {span_fields} {wide_msg} {elapsed}",
-            )
-            .unwrap(),
-        )
-        .with_span_child_prefix_symbol("↳ ")
-        .with_span_child_prefix_indent(" ");
+    // Tracing layers
+    let mut tracing_indicatif_layer = None;
+    let mut tracing_terminal_layer = None;
+    let mut tracing_loki_layer = None;
+    let mut tracing_file_layer = None;
+
+    // Tracing guards/tasks
+    let mut _tracing_loki_task = None;
+    let mut _tracing_log_writer_guard = None;
+
+    if args.tracing_target.contains(&TracingTarget::Terminal)
+        || args.metric_target.contains(&MetricTarget::Terminal)
+        || args.tracing_target.contains(&TracingTarget::All)
+        || args.metric_target.contains(&MetricTarget::All)
+    {
+        let layer = IndicatifLayer::new()
+            .with_span_child_prefix_symbol("\t")
+            .with_span_child_prefix_indent("");
+        tracing_indicatif_layer = Some(layer);
+    }
+
+    if args.tracing_target.contains(&TracingTarget::Terminal)
+        || args.tracing_target.contains(&TracingTarget::All)
+    {
+        let parent_layer = tracing_indicatif_layer.as_ref().unwrap();
+        tracing_terminal_layer =
+            Some(tracing_subscriber::fmt::layer().with_writer(parent_layer.get_stderr_writer()));
+    }
+
+    if args.tracing_target.contains(&TracingTarget::File)
+        || args.tracing_target.contains(&TracingTarget::All)
+    {
+        let file_appender = RollingFileAppender::new(
+            args.rotation.into(),
+            args.file.parent().unwrap(),
+            args.file.file_name().unwrap(),
+        );
+        let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+        tracing_file_layer = Some(tracing_subscriber::fmt::layer().with_writer(non_blocking));
+        _tracing_log_writer_guard = Some(guard);
+    }
+
+    if args.tracing_target.contains(&TracingTarget::Loki)
+        || args.tracing_target.contains(&TracingTarget::All)
+    {
+        let (layer, task) = tracing_loki::builder()
+            .label("macpepdb", "development")?
+            .extra_field("pid", format!("{}", process::id()))?
+            .build_url(Url::parse(&format!("http://{}", args.loki)).unwrap())?;
+        tracing_loki_layer = Some(layer);
+        _tracing_loki_task = Some(tokio::spawn(task));
+    }
 
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
-        .with(indicatif_layer)
+        .with(tracing_terminal_layer)
+        .with(tracing_indicatif_layer)
+        .with(tracing_file_layer)
+        .with(tracing_loki_layer)
         .with(filter)
         .init();
+
+    //// Setup (prometheus) metrics
+
+    let mut _prometheus_scrape_address = None;
+
+    if args.metric_target.contains(&MetricTarget::Prometheus)
+        || args.metric_target.contains(&MetricTarget::All)
+    {
+        let prometheus_metrics_builder = PrometheusBuilder::new();
+
+        // Create TCP listener for Prometheus metrics to check if port is available.
+        // When Port 0 is given, the OS will choose a free port.
+        let prometheus_scrape_socket_tmp = TcpListener::bind(&args.prometheus)
+            .await
+            .context("Creating TCP listener for Prometheus scrape endpoint")?;
+        // Copy socket address to be able to use it for the endpoint
+        let prometheus_scrape_socket = prometheus_scrape_socket_tmp.local_addr()?;
+        _prometheus_scrape_address = Some(format!(
+            "{}:{}",
+            prometheus_scrape_socket.ip(),
+            prometheus_scrape_socket.port()
+        ));
+        // Drop listener to make port available for the web server
+        drop(prometheus_scrape_socket_tmp);
+
+        prometheus_metrics_builder
+            .with_http_listener(prometheus_scrape_socket)
+            .install()?;
+    }
 
     info!("Welcome to MaCPepDB!");
 
@@ -237,7 +386,6 @@ async fn main() -> Result<()> {
             partitioner_false_positive_probability,
             keep_peptides_containing_unknown,
             include_domains,
-            metrics_log_interval,
             protease,
             protein_file_paths,
         } => {
@@ -303,7 +451,6 @@ async fn main() -> Result<()> {
                         )),
                         &log_folder,
                         include_domains,
-                        metrics_log_interval,
                     )
                     .await
                 {
@@ -354,7 +501,7 @@ async fn main() -> Result<()> {
                     while let Some(row_opt) = rows_stream.next().await {
                         if row_opt.is_err() {
                             debug!("Row opt err");
-                            sleep(Duration::from_millis(100));
+                            sleep(Duration::from_millis(100)).await;
                             continue;
                         }
                         let row = row_opt.unwrap();
@@ -469,6 +616,7 @@ async fn main() -> Result<()> {
             println!("-- Mass Centric Peptide Database --");
             println!("Version: {}", env!("CARGO_PKG_VERSION"));
             println!("Repository: {}", env!("CARGO_PKG_REPOSITORY"));
+            sleep(Duration::from_secs(20)).await;
         }
     };
 

@@ -46,6 +46,5 @@ pub trait DatabaseBuild {
         initial_configuration_opt: Option<Configuration>,
         log_folder: &PathBuf,
         include_domains: bool,
-        metrics_log_interval: u64,
     ) -> impl std::future::Future<Output = Result<()>> + Send;
 }

@@ -40,7 +40,7 @@ impl MessageLogger {
     }
 
     /// Logs the messages
-    /// s
+    ///
     /// # Arguments
     /// * `log_file_path` - Path to log file
     /// * `receiver` - Receiver for log messages

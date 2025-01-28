@@ -13,8 +13,8 @@ pub mod peptide_partitioner;
 
 pub mod cql;
 
-/// Logger from metrics
-pub mod metrics_logger;
+/// Monitor for metrics, made available by the prometheus scrape endpoint
+pub mod metrics_monitor;
 /// Functions to process data from dihardts_omicstools
 pub mod omicstools;
 /// Peptide mass counter

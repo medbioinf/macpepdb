@@ -16,7 +16,7 @@ use dihardts_omicstools::proteomics::proteases::{
 };
 use fallible_iterator::FallibleIterator;
 use sysinfo::{System, SystemExt};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use crate::{
     chemistry::amino_acid::{calc_sequence_mass_int, INTERNAL_TRYPTOPHAN},
@@ -116,7 +116,7 @@ impl MassCountThread {
                     }
                 }
             };
-            debug!("Thread {} got protein {}", tid, protein.get_accession());
+            trace!("Thread {} got protein {}", tid, protein.get_accession());
 
             // Digest protein, keep only sequences
             let peptides: Vec<String> = match remove_peptides_containing_unknown {
