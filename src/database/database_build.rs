@@ -33,7 +33,6 @@ pub trait DatabaseBuild {
     /// * `initial_configuration_opt` - Optional initial configuration.
     /// * `log_folder` - Path to the log folder.
     /// * `include_domains` - Whether to include domain parsing.
-    /// * `metrics_log_interval` - Intervals in seconds for logging metrics
     ///
     fn build(
         &self,
