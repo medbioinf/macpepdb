@@ -9,13 +9,13 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum_streams::StreamBodyAs;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
+use futures::TryStreamExt;
 use scylla::frame::response::result::CqlValue;
 use serde_json::Value as JsonValue;
 use tracing::error;
 
 // internal imports
 use crate::database::scylla::protein_table::ProteinTable;
-use crate::database::selectable_table::SelectableTable;
 use crate::web::web_error::WebError;
 
 use super::app_state::AppState;
@@ -94,7 +94,10 @@ pub async fn get_protein(
         "WHERE accession = ?",
         &[&CqlValue::Text(accession)],
     )
-    .await?;
+    .await?
+    .try_collect::<Vec<_>>()
+    .await?
+    .pop();
 
     if let Some(protein) = protein_opt {
         // Proteases are not saved in the database, so we have to create them

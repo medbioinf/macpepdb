@@ -21,22 +21,27 @@ use super::generic_client::GenericClient;
 
 pub async fn drop_keyspace(client: &Client) {
     let drop_statement = DROP_KEYSPACE.replace(":KEYSPACE:", client.get_database());
-    client.query(drop_statement, &[]).await.unwrap();
+    client.query_unpaged(drop_statement, &[]).await.unwrap();
 }
 
 pub async fn create_keyspace_if_not_exists(client: &Client) {
     let create_statement = CREATE_KEYSPACE.replace(":KEYSPACE:", client.get_database());
-    client.query(create_statement, &[]).await.unwrap();
+    client.query_unpaged(create_statement, &[]).await.unwrap();
 }
 
 pub async fn prepare_database_for_tests(client: &Client) {
+    // Empty the prepared statement cache
+    client.reset_prepared_statement_cache().await;
     // Dropping a keyspace automatically drops all contained tables
     drop_keyspace(&client).await;
     create_keyspace_if_not_exists(&client).await;
 
     for statement in UP {
         let statement = statement.replace(":KEYSPACE:", client.get_database());
-        client.query(statement, &[]).await.unwrap();
+        client
+            .query_unpaged(statement.to_owned(), &[])
+            .await
+            .unwrap();
     }
 }
 

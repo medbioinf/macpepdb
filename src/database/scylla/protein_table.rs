@@ -1,64 +1,93 @@
-// std imports
 use std::sync::Arc;
 
-// 3rd party imports
 use anyhow::Result;
 use async_stream::try_stream;
 use futures::Stream;
 use scylla::batch::Batch;
-use scylla::frame::response::result::{CqlValue, Row};
-use scylla::transport::errors::QueryError;
-use scylla::transport::iterator::RowIterator;
-use scylla::transport::query_result::FirstRowError;
+use scylla::frame::response::result::CqlValue;
 
+use super::client::Client;
 use crate::database::generic_client::GenericClient;
-// internal imports
-use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
+use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
 
-use super::client::Client;
-
 const TABLE_NAME: &'static str = "proteins";
 
-const SELECT_COLS: &'static str = "accession, secondary_accessions, entry_name, name, \
-    genes, taxonomy_id, proteome_id, is_reviewed, sequence, updated_at, domains";
+const SELECT_COLS: [&'static str; 11] = [
+    "accession",
+    "secondary_accessions",
+    "entry_name",
+    "name",
+    "genes",
+    "taxonomy_id",
+    "proteome_id",
+    "is_reviewed",
+    "sequence",
+    "updated_at",
+    "domains",
+];
 
-const INSERT_COLS: &'static str = SELECT_COLS;
-
-const UPDATE_COLS: &'static str = "secondary_accessions, entry_name, name, \
-    genes, taxonomy_id, proteome_id, is_reviewed, sequence, updated_at, domains";
+const INSERT_COLS: [&'static str; 11] = SELECT_COLS;
 
 lazy_static! {
-    static ref INSERT_PLACEHOLDERS: String = INSERT_COLS
-        .split(", ",)
-        .enumerate()
-        .map(|(_, _)| "?")
-        .collect::<Vec<&str>>()
-        .join(", ");
-    static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS
-        .split(", ",)
-        .enumerate()
-        .map(|(_, col)| format!("{} = ?", col))
-        .collect::<Vec<String>>()
-        .join(", ");
+    /// Select statement without WHERE clause.
+    ///
+    static ref SELECT_STATEMENT: String = format!(
+        "SELECT {} FROM :KEYSPACE:.{}",
+        SELECT_COLS.join(", "),
+        TABLE_NAME
+    );
+
+    /// Insert statement.
+    /// Takes INSERT_COLS as columns in same order.
+    static ref INSERT_STATEMENT: String = format!(
+        "INSERT INTO :KEYSPACE:.{} ({}) VALUES ({})",
+        TABLE_NAME,
+        INSERT_COLS.join(", "),
+        vec!["?"; INSERT_COLS.len()].join(", ")
+    );
+
+    /// Delete statement.
+    /// Takes only the primary key as parameter.
+    ///
+    static ref DELETE_STATEMENT: String =
+        format!("DELETE FROM :KEYSPACE:.{} WHERE accession = ?", TABLE_NAME);
+}
+
+/// Tuoel which represents a row of the protein table.
+///
+type TypedProteinRow = (
+    String,
+    Vec<String>,
+    String,
+    String,
+    Vec<String>,
+    i64,
+    String,
+    bool,
+    String,
+    i64,
+    Vec<Domain>,
+);
+
+impl From<TypedProteinRow> for Protein {
+    fn from(row: TypedProteinRow) -> Self {
+        Protein::new(
+            row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10,
+        )
+    }
 }
 
 pub struct ProteinTable {}
 
 impl ProteinTable {
     pub async fn insert<'a>(client: &Client, protein: &Protein) -> Result<()> {
-        let statement = format!(
-            "INSERT INTO {}.{} ({}) VALUES ({})",
-            client.get_database(),
-            TABLE_NAME,
-            INSERT_COLS,
-            INSERT_PLACEHOLDERS.as_str()
-        );
+        let statement = client.get_prepared_statement(&INSERT_STATEMENT).await?;
         client
-            .query(
-                statement,
+            .execute_unpaged(
+                &statement,
                 (
                     protein.get_accession(),
                     protein.get_secondary_accessions(),
@@ -74,7 +103,7 @@ impl ProteinTable {
                 ),
             )
             .await?;
-        return Ok(());
+        Ok(())
     }
 
     pub async fn update<'a>(
@@ -84,18 +113,8 @@ impl ProteinTable {
     ) -> Result<()> {
         let mut batch: Batch = Batch::default();
 
-        let delete_statement = format!(
-            "DELETE FROM {}.{} WHERE accession = ?",
-            client.get_database(),
-            TABLE_NAME
-        );
-        let insert_statement = format!(
-            "INSERT INTO {}.{} ({}) VALUES ({})",
-            client.get_database(),
-            TABLE_NAME,
-            INSERT_COLS,
-            INSERT_PLACEHOLDERS.as_str()
-        );
+        let delete_statement = DELETE_STATEMENT.replace(":KEYSPACE:", client.get_database());
+        let insert_statement = INSERT_STATEMENT.replace(":KEYSPACE:", client.get_database());
 
         batch.append_statement(delete_statement.as_str());
         batch.append_statement(insert_statement.as_str());
@@ -126,13 +145,11 @@ impl ProteinTable {
     }
 
     pub async fn delete<'a>(client: &Client, protein: &Protein) -> Result<()> {
-        let statement = format!(
-            "DELETE FROM {}.{} WHERE accession = ?",
-            client.get_database(),
-            TABLE_NAME
-        );
+        let statement = client.get_prepared_statement(&DELETE_STATEMENT).await?;
 
-        client.query(statement, (protein.get_accession(),)).await?;
+        client
+            .execute_unpaged(&statement, (protein.get_accession(),))
+            .await?;
 
         return Ok(());
     }
@@ -157,11 +174,10 @@ impl ProteinTable {
             ];
 
 
-            for await protein in ProteinTable::stream(
+            for await protein in Self::select(
                 client.as_ref(),
                 "WHERE accession LIKE ? ALLOW FILTERING",
-                param.as_slice(),
-                10000,
+                param.as_slice()
             )
             .await? {
                 yield protein?;
@@ -172,11 +188,10 @@ impl ProteinTable {
                 &attr_cql_value
             ];
 
-            for await protein in ProteinTable::stream(
+            for await protein in Self::select(
                 client.as_ref(),
                 "WHERE genes CONTAINS ? ALLOW FILTERING",
                 param.as_slice(),
-                10000,
             )
             .await? {
                 yield protein?;
@@ -206,13 +221,39 @@ impl ProteinTable {
             let params: Vec<CqlValue> = peptide.get_proteins().iter().map(|accession| CqlValue::Text(accession.to_owned())).collect();
             let param_refs: Vec<&CqlValue> = params.iter().collect();
 
-            for await protein in Self::stream(
+            for await protein in Self::select(
                 client,
                 &statement_addition,
                 param_refs.as_slice(),
-                10000
             ).await? {
                 yield protein?;
+            }
+        })
+    }
+
+    /// Selects proteins from the database ans streams them back.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `additional` - Additional statement to add to the select statement, e.g. WHERE clause
+    /// * `params` - Parameters for the additional statement
+    ///
+    pub async fn select<'b>(
+        client: &Client,
+        additional: &str,
+        params: &[&'b CqlValue],
+    ) -> Result<impl Stream<Item = Result<Protein>>> {
+        let statement = format!("{} {};", SELECT_STATEMENT.as_str(), additional);
+        let prepared_statement = client.get_prepared_statement(&statement).await?;
+
+        let stream = client
+            .execute_iter(prepared_statement, params)
+            .await?
+            .rows_stream::<TypedProteinRow>()?;
+
+        Ok(try_stream! {
+            for await protein_result in stream  {
+                yield protein_result?.into();
             }
         })
     }
@@ -224,131 +265,6 @@ impl Table for ProteinTable {
     }
 }
 
-impl<'a> SelectableTableTrait<'a, Client> for ProteinTable {
-    type Parameter = CqlValue;
-    type Record = Row;
-    type RecordIter = RowIterator;
-    type RecordIterErr = QueryError;
-    type Entity = Protein;
-
-    fn select_cols() -> &'static str {
-        SELECT_COLS
-    }
-
-    async fn raw_select_multiple<'b>(
-        client: &Client,
-        cols: &str,
-        additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Vec<Self::Record>> {
-        let mut statement = format!(
-            "SELECT {} FROM {}.{}",
-            cols,
-            client.get_database(),
-            Self::table_name(),
-        );
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-        return Ok(client.query(statement, params).await?.rows()?);
-    }
-
-    async fn raw_select<'b>(
-        client: &Client,
-        cols: &str,
-        additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Option<Self::Record>> {
-        let mut statement = format!(
-            "SELECT {} FROM {}.{}",
-            cols,
-            client.get_database(),
-            Self::table_name(),
-        );
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-
-        let row_res = client.query(statement, params).await?;
-
-        match row_res.first_row() {
-            Ok(row) => Ok(Some(row)),
-            Err(FirstRowError::RowsEmpty) => Ok(None),
-            Err(FirstRowError::RowsExpected(err)) => Err(err.into()),
-        }
-    }
-
-    async fn select_multiple<'b>(
-        client: &Client,
-        additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Vec<Self::Entity>> {
-        let rows: Vec<Row> =
-            Self::raw_select_multiple(client, Self::select_cols(), additional, params).await?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(Self::Entity::from(row));
-        }
-        return Ok(records);
-    }
-
-    async fn select<'b>(
-        client: &Client,
-        additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Option<Self::Entity>> {
-        let row = Self::raw_select(client, Self::select_cols(), additional, params).await?;
-
-        if row.is_none() {
-            return Ok(None);
-        }
-        return Ok(Some(Self::Entity::from(row.unwrap())));
-    }
-    async fn raw_stream(
-        client: &'a Client,
-        cols: &str,
-        additional: &str,
-        params: &'a [&'a Self::Parameter],
-        num_rows: i32,
-    ) -> Result<impl Stream<Item = Result<Self::Record>>> {
-        let mut statement = format!(
-            "SELECT {} FROM {}.{}",
-            cols,
-            client.get_database(),
-            Self::table_name()
-        );
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-        let mut prepared_statement = client.prepare(statement).await?;
-        prepared_statement.set_page_size(num_rows);
-        Ok(try_stream! {
-            let row_stream = client.execute_iter(prepared_statement, params).await?;
-            for await row in row_stream {
-                yield row?;
-            }
-        })
-    }
-
-    async fn stream(
-        client: &'a Client,
-        additional: &'a str,
-        params: &'a [&'a Self::Parameter],
-        num_rows: i32,
-    ) -> Result<impl Stream<Item = Result<Self::Entity>>> {
-        let raw_stream =
-            Self::raw_stream(client, Self::select_cols(), additional, params, num_rows).await?;
-        Ok(try_stream! {
-            for await row in raw_stream  {
-                yield Self::Entity::from(row?);
-            }
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     // std imports
@@ -356,10 +272,13 @@ mod tests {
 
     // external imports
     use fallible_iterator::FallibleIterator;
+    use futures::TryStreamExt;
     use serial_test::serial;
+    use tokio::pin;
 
     // internal imports
     use super::*;
+    use crate::database::generic_client::GenericClient;
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
     use crate::database::scylla::tests::DATABASE_URL;
@@ -452,21 +371,15 @@ mod tests {
             client.get_database(),
             TABLE_NAME
         );
-        let row = client
-            .query(count_statement, &[])
+        let count = client
+            .query_unpaged(count_statement, &[])
             .await
             .unwrap()
-            .first_row()
-            .unwrap();
-
-        let count = row
-            .columns
-            .first()
+            .into_rows_result()
             .unwrap()
-            .as_ref()
+            .first_row::<(i64,)>()
             .unwrap()
-            .as_bigint()
-            .unwrap();
+            .0;
 
         assert_eq!(count, EXPECTED_PROTEINS);
     }
@@ -486,11 +399,15 @@ mod tests {
 
         let protein = ProteinTable::select(
             &mut client,
-            "WHERE accession = ? ",
+            "WHERE accession = ?",
             &[&CqlValue::Text(TRYPSIN.get_accession().to_owned())],
         )
         .await
         .unwrap()
+        .try_collect::<Vec<Protein>>()
+        .await
+        .unwrap()
+        .pop()
         .unwrap();
 
         assert_eq!(protein, TRYPSIN.to_owned());
@@ -517,6 +434,10 @@ mod tests {
         )
         .await
         .unwrap()
+        .try_collect::<Vec<Protein>>()
+        .await
+        .unwrap()
+        .pop()
         .unwrap();
 
         assert_eq!(actual, UPDATED_TRYPSIN.to_owned());
@@ -534,15 +455,33 @@ mod tests {
 
         ProteinTable::delete(&mut client, &TRYPSIN).await.unwrap();
 
-        let row_opt = ProteinTable::raw_select(
+        let stream = ProteinTable::select(
             &mut client,
-            SELECT_COLS,
             "WHERE accession = ? ",
             &[&CqlValue::Text(TRYPSIN.get_accession().to_owned())],
         )
         .await
         .unwrap();
 
+        pin!(stream);
+
+        let row_opt = stream.try_next().await.unwrap();
+
         assert!(row_opt.is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_tokenawareness() {
+        let client = Client::new(DATABASE_URL).await.unwrap();
+        prepare_database_for_tests(&client).await;
+        for statement in &[INSERT_STATEMENT.as_str(), DELETE_STATEMENT.as_str()] {
+            let prepared_statement = client.get_prepared_statement(statement).await.unwrap();
+            assert!(
+                prepared_statement.is_token_aware(),
+                "Statement `{}` is not token aware",
+                statement
+            );
+        }
     }
 }

@@ -19,7 +19,6 @@ use tracing::error;
 use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::scylla::protein_table::ProteinTable;
-use crate::database::selectable_table::SelectableTable;
 use crate::entities::peptide::TsvPeptide;
 use crate::entities::protein::Protein;
 use crate::mass::convert::to_int as mass_to_int;
@@ -108,7 +107,10 @@ pub async fn get_peptide(
             &CqlValue::Text(sequence),
         ],
     )
-    .await?;
+    .await?
+    .try_collect::<Vec<_>>()
+    .await?
+    .pop();
 
     if peptide_opt.is_none() {
         return Err(WebError::new(

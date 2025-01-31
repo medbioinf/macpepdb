@@ -7,7 +7,7 @@ use std::{
 
 // 3rd party imports
 use anyhow::Result;
-use scylla::frame::response::result::Row as ScyllaRow;
+use scylla::macros::{DeserializeValue, SerializeValue};
 use serde::{Deserialize, Serialize};
 
 // internal imports
@@ -15,7 +15,7 @@ use super::domain::Domain;
 use crate::entities::protein::Protein;
 use crate::tools::serde::{deserialize_mass_from_int, serialize_mass_to_float};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Debug, DeserializeValue, SerializeValue, Deserialize, Serialize)]
 pub struct Peptide {
     partition: i64,
     #[serde(
@@ -69,7 +69,7 @@ impl Peptide {
             aa_counts[one_letter_code as usize % 65] += 1;
         }
 
-        return Ok(Peptide {
+        Ok(Peptide {
             partition,
             mass,
             sequence,
@@ -82,7 +82,52 @@ impl Peptide {
             unique_taxonomy_ids,
             proteome_ids,
             domains,
-        });
+        })
+    }
+
+    /// Creates a new peptide but needs the amino acid counts
+    ///
+    /// # Arguments
+    /// * `partition` - The mass partition
+    /// * `mass` - The mass
+    /// * `sequence` - The sequence
+    /// * `missed_cleavages` - The number of missed cleavages
+    /// * `aa_counts` - The amino acid counts
+    /// * `proteins` - The containing proteins
+    /// * `is_swiss_prot` - True if the peptide is contained in a Swiss-Prot protein
+    /// * `is_trembl` - True if the peptide is contained in a TrEMBL protein
+    /// * `taxonomy_ids` - The taxonomy IDs
+    /// * `unique_taxonomy_ids` - Taxonomy IDs where the peptide is only contained in one protein
+    /// * `proteome_ids` - The proteome IDs
+    ///
+    pub fn new_full(
+        partition: i64,
+        mass: i64,
+        sequence: String,
+        missed_cleavages: i16,
+        aa_counts: Vec<i16>,
+        proteins: Vec<String>,
+        is_swiss_prot: bool,
+        is_trembl: bool,
+        taxonomy_ids: Vec<i64>,
+        unique_taxonomy_ids: Vec<i64>,
+        proteome_ids: Vec<String>,
+        domains: Vec<Domain>,
+    ) -> Peptide {
+        Peptide {
+            partition,
+            mass,
+            sequence,
+            missed_cleavages,
+            aa_counts,
+            proteins,
+            is_swiss_prot,
+            is_trembl,
+            taxonomy_ids,
+            unique_taxonomy_ids,
+            proteome_ids,
+            domains,
+        }
     }
 
     /// Returns the mass partition
@@ -320,53 +365,6 @@ impl Eq for Peptide {}
 impl Hash for Peptide {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.sequence.hash(state);
-    }
-}
-impl From<ScyllaRow> for Peptide {
-    fn from(row: ScyllaRow) -> Self {
-        let (
-            partition,
-            mass,
-            sequence,
-            missed_cleavages,
-            aa_counts,
-            proteins,
-            is_swiss_prot,
-            is_trembl,
-            taxonomy_ids,
-            unique_taxonomy_ids,
-            proteome_ids,
-            domains,
-        ) = row
-            .into_typed::<(
-                i64,
-                i64,
-                String,
-                i16,
-                Vec<i16>,
-                Vec<String>,
-                bool,
-                bool,
-                Option<Vec<i64>>,
-                Option<Vec<i64>>,
-                Option<Vec<String>>,
-                Option<Vec<Domain>>,
-            )>()
-            .unwrap();
-        Self {
-            partition,
-            mass,
-            sequence,
-            missed_cleavages,
-            aa_counts,
-            proteins,
-            is_swiss_prot,
-            is_trembl,
-            taxonomy_ids: taxonomy_ids.unwrap_or(vec![]),
-            unique_taxonomy_ids: unique_taxonomy_ids.unwrap_or(vec![]),
-            proteome_ids: proteome_ids.unwrap_or(vec![]),
-            domains: domains.unwrap_or(vec![]),
-        }
     }
 }
 

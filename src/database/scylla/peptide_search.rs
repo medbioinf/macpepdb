@@ -15,7 +15,6 @@ use tokio::sync::mpsc::{unbounded_channel as channel, UnboundedSender as Sender}
 use tracing::error;
 
 // local imports
-use crate::database::selectable_table::SelectableTable;
 use crate::functions::post_translational_modification::get_ptm_conditions;
 use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::{
@@ -203,11 +202,10 @@ pub trait Search<'a> {
 
                 let query_params = vec![&partition, &lower_mass_limit, &upper_mass_limit];
 
-                let peptide_stream = match PeptideTable::stream(
+                let peptide_stream = match PeptideTable::select(
                     client.as_ref(),
                     "WHERE partition = ? AND mass >= ? AND mass <= ?",
                     &query_params,
-                    10000,
                 )
                 .await
                 {
@@ -307,11 +305,10 @@ pub trait Search<'a> {
                     &query_upper_mass_limit,
                 ];
 
-                let peptide_stream = PeptideTable::stream(
+                let peptide_stream = PeptideTable::select(
                     client.as_ref(),
                     "WHERE partition = ? AND mass >= ? AND mass <= ?",
                     &query_params,
-                    10000,
                 )
                 .await?;
                 pin_mut!(peptide_stream);

@@ -30,7 +30,7 @@ impl TaxonomyTreeTable {
         BlobTable::delete(client, KEY_PREFIX)
             .await
             .context("Error when deleting the old taxonomy tree chunks")?;
-        BlobTable::insert_raw(client, KEY_PREFIX, json_str.as_bytes())
+        BlobTable::insert(client, KEY_PREFIX, json_str.as_bytes())
             .await
             .context("Error when inserting the new taxonomy tree chunks")?;
         Ok(())
@@ -42,7 +42,7 @@ impl TaxonomyTreeTable {
     /// * `client` - The client to use for the database connection
     ///
     pub async fn select(client: &Client) -> Result<TaxonomyTree> {
-        let bytes = BlobTable::select_raw(client, KEY_PREFIX).await?;
+        let bytes = BlobTable::select(client, KEY_PREFIX).await?;
         if bytes.is_empty() {
             tracing::debug!("No taxonomy tree found");
             return Ok(TaxonomyTree::new(

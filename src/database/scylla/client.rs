@@ -8,6 +8,7 @@ use scylla::{
     transport::session::{PoolSize, Session},
     SessionBuilder,
 };
+use tokio::sync::RwLock;
 
 // local imports
 use crate::database::generic_client::GenericClient;
@@ -152,11 +153,44 @@ pub struct Client {
     session: Session,
     database: String,
     url: String,
+    prepared_statement_cache:
+        RwLock<HashMap<String, scylla::prepared_statement::PreparedStatement>>,
 }
 
 impl Client {
     pub fn get_url(&self) -> &str {
         &self.url
+    }
+
+    /// Get a prepared statement from the cache
+    /// if the statement is not in the cache it be added and returned
+    pub async fn get_prepared_statement(
+        &self,
+        query: &str,
+    ) -> Result<scylla::prepared_statement::PreparedStatement> {
+        // Closure to make sure read guard is dropped
+        {
+            let read_guard = self.prepared_statement_cache.read().await;
+            if let Some(statement) = read_guard.get(query) {
+                return Ok(statement.clone());
+            }
+        }
+
+        let statement = self
+            .prepare(query.replace(":KEYSPACE:", &self.database))
+            .await?;
+
+        // Closure to make sure write guard is dropped
+        {
+            let mut write_guard = self.prepared_statement_cache.write().await;
+            write_guard.insert(query.to_string(), statement.clone());
+        }
+
+        Ok(statement)
+    }
+
+    pub async fn reset_prepared_statement_cache(&self) {
+        self.prepared_statement_cache.write().await.clear();
     }
 }
 
@@ -183,6 +217,7 @@ impl GenericClient<Session> for Client {
             session: settings.to_session().await?,
             database: settings.keyspace.clone(),
             url: database_url.to_string(),
+            prepared_statement_cache: RwLock::new(HashMap::new()),
         })
     }
 

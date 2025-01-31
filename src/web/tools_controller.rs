@@ -1,5 +1,5 @@
-use std::collections::HashSet;
 // std imports
+use std::collections::HashSet;
 use std::sync::Arc;
 
 // 3rd party imports
@@ -9,6 +9,7 @@ use dihardts_omicstools::proteomics::proteases::functions::{
     get_by_name as get_protease_by_name, ALL as AVAILABLE_PROTEASES,
 };
 use fallible_iterator::FallibleIterator;
+use futures::TryStreamExt;
 use scylla::frame::response::result::CqlValue;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
@@ -16,7 +17,6 @@ use serde_json::{json, Value as JsonValue};
 // internal imports
 use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::scylla::peptide_table::PeptideTable;
-use crate::database::selectable_table::SelectableTable;
 use crate::entities::peptide::Peptide;
 use crate::mass::convert::to_float as mass_to_float;
 use crate::tools::omicstools::convert_to_internal_dummy_peptide;
@@ -166,11 +166,13 @@ pub async fn digest(
                     .flatten(),
             );
 
-            let db_peptides_partition = PeptideTable::select_multiple(
+            let db_peptides_partition = PeptideTable::select(
                 app_state.get_db_client_as_ref(),
                 &statement_addition,
                 select_params_ref.as_slice(),
             )
+            .await?
+            .try_collect::<Vec<_>>()
             .await?;
 
             db_peptides.extend(db_peptides_partition);

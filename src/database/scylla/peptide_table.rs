@@ -10,20 +10,17 @@ use dihardts_omicstools::proteomics::post_translational_modifications::PostTrans
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
-use futures::Stream;
-use scylla::frame::response::result::{CqlValue, Row};
-use scylla::prepared_statement::PreparedStatement;
-use scylla::transport::errors::QueryError;
-use scylla::transport::iterator::RowIterator;
-use scylla::transport::query_result::FirstRowError;
+use futures::{Stream, TryStreamExt};
+use scylla::frame::response::result::CqlValue;
+use tokio::pin;
 use tokio::task::JoinSet;
 
-// internal imports
 use crate::database::generic_client::GenericClient;
+// internal imports
 use crate::database::scylla::peptide_search::{FalliblePeptideStream, MultiTaskSearch, Search};
-use crate::database::selectable_table::SelectableTable as SelectableTableTrait;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
+use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
 use crate::mass::convert::to_int as mass_to_int;
@@ -34,32 +31,129 @@ use crate::database::scylla::client::Client;
 
 pub const TABLE_NAME: &'static str = "peptides";
 
-pub const SELECT_COLS: &'static str = "partition, mass, sequence, missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids, domains";
+pub const SELECT_COLS: [&'static str; 12] = [
+    "partition",
+    "mass",
+    "sequence",
+    "missed_cleavages",
+    "aa_counts",
+    "proteins",
+    "is_swiss_prot",
+    "is_trembl",
+    "taxonomy_ids",
+    "unique_taxonomy_ids",
+    "proteome_ids",
+    "domains",
+];
 
-const INSERT_COLS: &'static str = SELECT_COLS;
+const INSERT_COLS: [&'static str; 12] = SELECT_COLS;
 
-const UPDATE_COLS: &'static str = "missed_cleavages, aa_counts, proteins, is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids, domains";
+const UPDATE_COLS: [&'static str; 9] = [
+    "missed_cleavages",
+    "aa_counts",
+    "proteins",
+    "is_swiss_prot",
+    "is_trembl",
+    "taxonomy_ids",
+    "unique_taxonomy_ids",
+    "proteome_ids",
+    "domains",
+];
 
 lazy_static! {
-    static ref INSERT_PLACEHOLDERS: String = INSERT_COLS
-        .split(", ",)
-        .enumerate()
-        .map(|(_, _)| "?")
-        .collect::<Vec<&str>>()
-        .join(", ");
-    pub static ref UPDATE_SET_PLACEHOLDER: String = UPDATE_COLS
-        .split(", ",)
-        .enumerate()
-        .map(|(_, col)| {
-            if col == "proteins" {
-                return format!("{} = {} + ?", col, col);
-            }
-            format!("{} = ?", col)
-        })
-        .collect::<Vec<String>>()
-        .join(", ");
+    /// Select statement with any additional where-clause
+    ///
+    static ref SELECT_STATEMENT: String =
+        format!("SELECT {} FROM :KEYSPACE:.{}", SELECT_COLS.join(", "), TABLE_NAME);
+
+    /// Insert statement
+    /// Takes the columns stated in INSERT_COLS in the same order
+    ///
+    static ref INSERT_STATEMENT: String = format!(
+        "INSERT INTO :KEYSPACE:.{} ({}) VALUES ({})",
+        TABLE_NAME,
+        INSERT_COLS.join(", "),
+        vec!["?"; INSERT_COLS.len()].join(", ")
+    );
+
+    /// Upsert statement
+    /// Takes the columns in UPDATE_COLS in the same order and peptide partition, mass and sequence as primary key
+    ///
+    static ref UPSERT_STATEMENT: String = format!(
+        "UPDATE :KEYSPACE:.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+        TABLE_NAME,
+        UPDATE_COLS
+            .iter()
+            .map(|col| {
+                if *col != "proteins" {
+                    return format!("{} = ?", col);
+                } else {
+                    format!("{} = {} + ?", col, col)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join(", ")
+    );
+
+    /// Statement to set the metadatata_update column to false
+    /// Takes peptide partition, mass and sequence
+    ///
+    static ref SET_METADATA_TO_FALSE_STATEMENT: String = format!(
+        "UPDATE :KEYSPACE:.{} SET is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
+        TABLE_NAME
+    );
+
+    /// Statements for removing protein accession to a peptide
+    /// Takes vector of proteins accessions and peptide partition, mass and sequence
+    ///
+    static ref REMOVE_PROTEINS_STATEMENT: String = format!("UPDATE :KEYSPACE:.{} SET proteins = proteins - ? WHERE partition = ? and mass = ? and sequence = ?", TABLE_NAME);
+
+    /// Statements for adding protein accession to a peptide
+    /// Takes vector of proteins accessions and peptide partition, mass and sequence
+    ///
+    static ref ADD_PROTEINS_STATEMENT: String = format!("UPDATE :KEYSPACE:.{} SET proteins = proteins + ? WHERE partition = ? and mass = ? and sequence = ?", TABLE_NAME);
+
 }
 
+/// Type alias for typed peptide rows
+///
+pub type TypedPeptideRow = (
+    i64,
+    i64,
+    String,
+    i16,
+    Vec<i16>,
+    HashSet<String>,
+    bool,
+    bool,
+    HashSet<i64>,
+    HashSet<i64>,
+    HashSet<String>,
+    HashSet<Domain>,
+);
+
+/// Implementation to convert TypedPeptideRow into a Peptide
+///
+impl From<TypedPeptideRow> for Peptide {
+    fn from(row: TypedPeptideRow) -> Self {
+        Peptide::new_full(
+            row.0,
+            row.1,
+            row.2,
+            row.3,
+            row.4,
+            row.5.into_iter().collect(),
+            row.6,
+            row.7,
+            row.8.into_iter().collect(),
+            row.9.into_iter().collect(),
+            row.10.into_iter().collect(),
+            row.11.into_iter().collect(),
+        )
+    }
+}
+
+/// Struct to access and manipulate the peptide
 pub struct PeptideTable;
 
 impl PeptideTable {
@@ -70,11 +164,7 @@ impl PeptideTable {
     /// * `client` - Database client or open transaction
     /// * `peptides` - Iterator over peptides to insert
     ///
-    pub async fn bulk_insert<'a, T>(
-        client: &Client,
-        peptides: T,
-        prepared: &PreparedStatement,
-    ) -> Result<()>
+    pub async fn bulk_upsert<'a, T>(client: &Client, peptides: T) -> Result<()>
     where
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
@@ -82,13 +172,15 @@ impl PeptideTable {
             return Ok(());
         }
 
+        let prepared_statement = client.get_prepared_statement(&UPSERT_STATEMENT).await?;
+
         // Update has upsert functionality in Scylla. protein accessions are added to the set (see UPDATE_SET_PLACEHOLDERS)
         // Alternative: always execute two lightweight transactions update ... if exists, update ... if not exists
         // Alternative: select then check in application code then upsert
         let insertion_futures = peptides
             .map(|x| {
-                client.execute(
-                    &prepared,
+                client.execute_unpaged(
+                    &prepared_statement,
                     (
                         x.get_missed_cleavages(),
                         x.get_aa_counts(),
@@ -113,7 +205,7 @@ impl PeptideTable {
     }
 
     /// Updates the protein accessions of the given peptides.
-    /// If new_protein_accession is given a metadata flaged as outdated.
+    /// If new_protein_accession is given a metadata flagged as outdated.
     /// The protein of new_protein_accession is assumed to be identical to the old_protein in all fields but the accession.
     /// Therefore is_metadata_updated is not set to false in the update case.
     ///
@@ -159,7 +251,7 @@ impl PeptideTable {
 
         for peptide in peptides {
             client
-                .execute(
+                .execute_unpaged(
                     &prepared,
                     (
                         peptide.get_partition(),
@@ -173,20 +265,76 @@ impl PeptideTable {
         return Ok(());
     }
 
+    pub async fn add_proteins<'a, T>(
+        client: &Client,
+        peptides: &mut T,
+        proteins: HashSet<String>,
+    ) -> Result<()>
+    where
+        T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
+    {
+        let prepared_statement = client
+            .get_prepared_statement(&ADD_PROTEINS_STATEMENT)
+            .await?;
+
+        for peptide in peptides {
+            client
+                .execute_unpaged(
+                    &prepared_statement,
+                    (
+                        &proteins,
+                        peptide.get_partition(),
+                        peptide.get_mass(),
+                        &peptide.get_sequence(),
+                    ),
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn remove_proteins<'a, T>(
+        client: &Client,
+        peptides: &mut T,
+        proteins: HashSet<String>,
+    ) -> Result<()>
+    where
+        T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
+    {
+        let prepared_statement = client
+            .get_prepared_statement(&REMOVE_PROTEINS_STATEMENT)
+            .await?;
+
+        for peptide in peptides {
+            client
+                .execute_unpaged(
+                    &prepared_statement,
+                    (
+                        &proteins,
+                        peptide.get_partition(),
+                        peptide.get_mass(),
+                        &peptide.get_sequence(),
+                    ),
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn unset_is_metadata_updated<'a, T>(client: &Client, peptides: &mut T) -> Result<()>
     where
         T: Iterator<Item = &'a Peptide> + ExactSizeIterator,
     {
-        let statement = format!(
-            "UPDATE {}.{} SET is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            client.get_database(), TABLE_NAME
-        );
-        let prepared = client.prepare(statement).await?;
+        let prepared_statement = client
+            .get_prepared_statement(&SET_METADATA_TO_FALSE_STATEMENT)
+            .await?;
 
         for peptide in peptides {
             client
-                .execute(
-                    &prepared,
+                .execute_unpaged(
+                    &prepared_statement,
                     (
                         peptide.get_partition(),
                         peptide.get_mass(),
@@ -261,9 +409,9 @@ impl PeptideTable {
         let mass = mass_to_int(calculate_mass_of_peptide_sequence(sequence.as_str())?);
         let partition = get_mass_partition(configuration.get_partition_limits(), mass)?;
 
-        let peptide_opt = PeptideTable::select(
+        let stream = PeptideTable::select(
             client,
-            "WHERE partition = ? AND mass = ? and sequence = ?",
+            "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
             &[
                 &CqlValue::BigInt(partition as i64),
                 &CqlValue::BigInt(mass),
@@ -272,7 +420,9 @@ impl PeptideTable {
         )
         .await?;
 
-        Ok(peptide_opt.is_some())
+        pin!(stream);
+
+        Ok(stream.try_next().await?.is_some())
     }
 
     /// Returns peptides of protein
@@ -295,31 +445,57 @@ impl PeptideTable {
             )
             .collect()?;
 
-
-            let mut foos = JoinSet::new();
+            let mut join: JoinSet<Result<Option<Peptide>>> = JoinSet::new();
             for peptide in dummy_peptides.into_iter() {
                 let task_client = client.clone();
-                foos.spawn(async move {
-                    let values = vec![
-                        CqlValue::BigInt(peptide.get_partition()),
-                        CqlValue::BigInt(peptide.get_mass()),
-                        CqlValue::Text(peptide.get_sequence().to_owned()),
-                    ];
-                    let value_refs = values.iter().collect::<Vec<&CqlValue>>();
-
-                    PeptideTable::select(
+                join.spawn(async move {
+                    let stream = PeptideTable::select(
                         task_client.as_ref(),
-                        "WHERE partition = ? AND mass = ? and sequence = ?",
-                        value_refs.as_slice()
-                    ).await
+                        "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
+                        &[
+                            &CqlValue::BigInt(peptide.get_partition()),
+                            &CqlValue::BigInt(peptide.get_mass()),
+                            &CqlValue::Text(peptide.get_sequence().to_owned()),
+                        ],
+                    ).await?;
+                    pin!(stream);
+
+                    Ok(stream.try_next().await?)
                 });
             }
 
-            while let Some(peptide) = foos.join_next().await {
+            while let Some(peptide) = join.join_next().await {
                 yield match peptide?? {
                     Some(peptide) => peptide,
                     None => continue,
                 }
+            }
+        })
+    }
+
+    /// Selects peptides from the database and streams them back.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `additional` - Additional statement to add to the select statement, e.g. WHERE clause
+    /// * `params` - Parameters for the additional statement
+    ///
+    pub async fn select<'b>(
+        client: &Client,
+        additional: &str,
+        params: &[&'b CqlValue],
+    ) -> Result<impl Stream<Item = Result<Peptide>>> {
+        let statement = format!("{} {};", SELECT_STATEMENT.as_str(), additional);
+        let prepared_statement = client.get_prepared_statement(&statement).await?;
+
+        let stream = client
+            .execute_iter(prepared_statement, params)
+            .await?
+            .rows_stream::<TypedPeptideRow>()?;
+
+        Ok(try_stream! {
+            for await peptide_result in stream {
+                yield peptide_result?.into();
             }
         })
     }
@@ -328,132 +504,6 @@ impl PeptideTable {
 impl Table for PeptideTable {
     fn table_name() -> &'static str {
         TABLE_NAME
-    }
-}
-
-impl<'a> SelectableTableTrait<'a, Client> for PeptideTable {
-    type Parameter = CqlValue;
-    type Record = Row;
-    type RecordIter = RowIterator;
-    type RecordIterErr = QueryError;
-    type Entity = Peptide;
-
-    fn select_cols() -> &'static str {
-        SELECT_COLS
-    }
-
-    async fn raw_select_multiple<'b>(
-        client: &Client,
-        cols: &str,
-        additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Vec<Self::Record>> {
-        let session = client;
-        let mut statement = format!(
-            "SELECT {} FROM {}.{}",
-            cols,
-            client.get_database(),
-            Self::table_name(),
-        );
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-        return Ok(session.query(statement, params).await?.rows()?);
-    }
-
-    async fn raw_select<'b>(
-        client: &Client,
-        cols: &str,
-        additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Option<Self::Record>> {
-        let session = client;
-        let mut statement = format!(
-            "SELECT {} FROM {}.{}",
-            cols,
-            client.get_database(),
-            Self::table_name(),
-        );
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-        let row_res = session.query(statement, params).await?;
-
-        match row_res.first_row() {
-            Ok(row) => Ok(Some(row)),
-            Err(FirstRowError::RowsEmpty) => Ok(None),
-            Err(FirstRowError::RowsExpected(err)) => Err(err.into()),
-        }
-    }
-
-    async fn select_multiple<'b>(
-        client: &Client,
-        additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Vec<Self::Entity>> {
-        let rows =
-            Self::raw_select_multiple(client, Self::select_cols(), additional, params).await?;
-        let mut records = Vec::new();
-        for row in rows {
-            records.push(Self::Entity::from(row));
-        }
-        return Ok(records);
-    }
-
-    async fn select<'b>(
-        client: &Client,
-        additional: &str,
-        params: &[&'b Self::Parameter],
-    ) -> Result<Option<Self::Entity>> {
-        let row = Self::raw_select(client, Self::select_cols(), additional, params).await?;
-        if row.is_none() {
-            return Ok(None);
-        }
-        return Ok(Some(Self::Entity::from(row.unwrap())));
-    }
-
-    async fn raw_stream(
-        client: &'a Client,
-        cols: &str,
-        additional: &str,
-        params: &'a [&'a Self::Parameter],
-        num_rows: i32,
-    ) -> Result<impl Stream<Item = Result<Self::Record>>> {
-        let mut statement = format!(
-            "SELECT {} FROM {}.{}",
-            cols,
-            client.get_database(),
-            Self::table_name()
-        );
-        if additional.len() > 0 {
-            statement += " ";
-            statement += additional;
-        }
-        let mut prepared_statement = client.prepare(statement).await?;
-        prepared_statement.set_page_size(num_rows);
-        Ok(try_stream! {
-            let row_stream = client.execute_iter(prepared_statement, params).await?;
-            for await row in row_stream {
-                yield row?;
-            }
-        })
-    }
-
-    async fn stream(
-        client: &'a Client,
-        additional: &'a str,
-        params: &'a [&'a Self::Parameter],
-        num_rows: i32,
-    ) -> Result<impl Stream<Item = Result<Self::Entity>>> {
-        let raw_stream =
-            Self::raw_stream(client, Self::select_cols(), additional, params, num_rows).await?;
-        Ok(try_stream! {
-            for await row in raw_stream {
-                yield Self::Entity::from(row?);
-            }
-        })
     }
 }
 
@@ -470,6 +520,7 @@ mod tests {
 
     // internal imports
     use super::*;
+    use crate::database::generic_client::GenericClient;
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
     use crate::database::scylla::tests::DATABASE_URL;
@@ -587,19 +638,11 @@ mod tests {
         )
         .unwrap()];
 
-        let statement = format!(
-            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            client.get_database(),
-            TABLE_NAME,
-            UPDATE_SET_PLACEHOLDER.as_str()
-        );
-        let prepared = client.prepare(statement).await.unwrap();
-
-        PeptideTable::bulk_insert(&client, &mut conflicting_peptides.iter(), &prepared)
+        PeptideTable::bulk_upsert(&client, &mut conflicting_peptides.iter())
             .await
             .unwrap();
 
-        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
+        PeptideTable::bulk_upsert(&client, &mut peptides.iter())
             .await
             .unwrap();
 
@@ -608,29 +651,21 @@ mod tests {
             client.get_database(),
             PeptideTable::table_name()
         );
-        let row = client
-            .query(count_statement, &[])
+        let (count,) = client
+            .query_unpaged(count_statement, &[])
             .await
             .unwrap()
-            .first_row()
+            .into_rows_result()
+            .unwrap()
+            .first_row::<(i64,)>()
             .unwrap();
 
-        assert_eq!(
-            row.columns
-                .first()
-                .unwrap()
-                .as_ref()
-                .unwrap()
-                .as_bigint()
-                .unwrap() as usize,
-            EXPECTED_PEPTIDES.len()
-        );
+        assert_eq!(count as usize, EXPECTED_PEPTIDES.len());
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let row = PeptideTable::raw_select(
+        let stream = PeptideTable::select(
             &mut client,
-            "proteins",
-            "WHERE partition = ? AND mass = ? and sequence = ?",
+            "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
             &[
                 &CqlValue::BigInt(conflicting_peptides[0].get_partition()),
                 &CqlValue::BigInt(conflicting_peptides[0].get_mass()),
@@ -638,36 +673,37 @@ mod tests {
             ],
         )
         .await
-        .unwrap()
         .unwrap();
 
-        let associated_proteins: Vec<String> = row
-            .columns
-            .get(0)
-            .unwrap()
-            .to_owned()
-            .unwrap()
-            .into_vec()
-            .unwrap()
-            .into_iter()
-            .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-            .collect();
+        pin!(stream);
 
-        assert_eq!(associated_proteins.len(), 2);
-        assert!(associated_proteins.contains(&leptin.get_accession().to_owned()));
-        assert!(associated_proteins.contains(&CONFLICTING_PEPTIDE_PROTEIN_ACCESSION.to_owned()));
+        let peptide = stream.try_next().await.unwrap().unwrap();
 
-        // Check if metadata is marked as not updated.
-        let rows = PeptideTable::raw_select_multiple(&mut client, "is_metadata_updated", "", &[])
+        assert_eq!(peptide.get_proteins().len(), 2);
+        assert!(peptide
+            .get_proteins()
+            .contains(&leptin.get_accession().to_owned()));
+        assert!(peptide
+            .get_proteins()
+            .contains(&CONFLICTING_PEPTIDE_PROTEIN_ACCESSION.to_owned()));
+
+        let statement = format!(
+            "SELECT is_metadata_updated FROM {}.{}",
+            client.get_database(),
+            PeptideTable::table_name()
+        );
+
+        let stream = client
+            .query_iter(statement, [])
             .await
+            .unwrap()
+            .rows_stream::<(bool,)>()
             .unwrap();
 
-        // Check if accession was updated and not appended for all peptides.
-        for row in rows.iter() {
-            let is_metadata_updated_opt = row.columns.get(0).unwrap().to_owned();
-            if is_metadata_updated_opt.is_some() {
-                assert!(!is_metadata_updated_opt.unwrap().as_boolean().unwrap());
-            }
+        pin!(stream);
+
+        while let Some(row) = stream.try_next().await.unwrap() {
+            assert!(!row.0);
         }
     }
 
@@ -694,68 +730,59 @@ mod tests {
 
         assert_eq!(peptides.len(), EXPECTED_PEPTIDES.len());
 
-        let statement = format!(
-            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            client.get_database(),
-            TABLE_NAME,
-            UPDATE_SET_PLACEHOLDER.as_str()
-        );
-
-        let prepared = client.prepare(statement).await.unwrap();
-
-        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
+        PeptideTable::bulk_upsert(&client, &mut peptides.iter())
             .await
             .unwrap();
 
-        PeptideTable::update_protein_accession(
+        PeptideTable::remove_proteins(
             &client,
             &mut peptides.iter(),
-            leptin.get_accession(),
-            Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION),
+            vec![leptin.get_accession().to_owned()]
+                .into_iter()
+                .collect(),
+        )
+        .await
+        .unwrap();
+
+        PeptideTable::add_proteins(
+            &client,
+            &mut peptides.iter(),
+            vec![CONFLICTING_PEPTIDE_PROTEIN_ACCESSION.to_owned()]
+                .into_iter()
+                .collect(),
         )
         .await
         .unwrap();
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(&client, "proteins", "", &[])
-            .await
-            .unwrap();
+        let stream = PeptideTable::select(&client, "", &[]).await.unwrap();
 
-        // Check if accession was updated and not appended for all peptides.
-        for row in rows.iter() {
-            let protein_accessions: Vec<String> = row
-                .columns
-                .get(0)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .into_vec()
-                .unwrap()
-                .into_iter()
-                .map(|cql_val| cql_val.as_text().unwrap().to_owned())
-                .collect();
-            assert_eq!(protein_accessions.len(), 1);
-            assert_eq!(protein_accessions[0], CONFLICTING_PEPTIDE_PROTEIN_ACCESSION);
+        pin!(stream);
+
+        while let Some(peptide) = stream.try_next().await.unwrap() {
+            assert_eq!(peptide.get_proteins().len(), 1);
+            assert_eq!(
+                peptide.get_proteins()[0],
+                CONFLICTING_PEPTIDE_PROTEIN_ACCESSION
+            );
         }
 
-        PeptideTable::update_protein_accession(
+        PeptideTable::remove_proteins(
             &client,
             &mut peptides.iter(),
-            CONFLICTING_PEPTIDE_PROTEIN_ACCESSION,
-            None,
+            vec![CONFLICTING_PEPTIDE_PROTEIN_ACCESSION.to_owned()]
+                .into_iter()
+                .collect(),
         )
         .await
         .unwrap();
 
-        // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(&client, "proteins", "", &[])
-            .await
-            .unwrap();
+        let stream = PeptideTable::select(&client, "", &[]).await.unwrap();
 
-        // Check if accession was updated and not appended for all peptides.
-        for row in rows.iter() {
-            let protein_accessions_opt = row.columns.get(0).unwrap();
-            assert!(protein_accessions_opt.is_none());
+        pin!(stream);
+
+        while let Some(peptide) = stream.try_next().await.unwrap() {
+            assert_eq!(peptide.get_proteins().len(), 0);
         }
     }
 
@@ -781,30 +808,27 @@ mod tests {
         .collect()
         .unwrap();
 
-        let statement = format!(
-            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            client.get_database(),
-            TABLE_NAME,
-            UPDATE_SET_PLACEHOLDER.as_str()
-        );
-
-        let prepared = client.prepare(statement).await.unwrap();
-
-        PeptideTable::bulk_insert(&client, &mut peptides.iter(), &prepared)
+        PeptideTable::bulk_upsert(&client, &mut peptides.iter())
             .await
             .unwrap();
 
-        let statement = format!(
+        let set_metadata_update_to_true_statement = format!(
             "UPDATE {}.{} SET is_metadata_updated = true WHERE partition = ? and mass = ? and sequence = ?",
             client.get_database(),
             PeptideTable::table_name()
         );
 
-        for peptide in &peptides {
+        let select_metadata_flag_statement = format!(
+            "SELECT is_metadata_updated FROM {}.{}",
+            client.get_database(),
+            PeptideTable::table_name()
+        );
+
+        for peptide in peptides.iter() {
             client
-                .query(
-                    statement.to_owned(),
-                    (
+                .query_unpaged(
+                    set_metadata_update_to_true_statement.as_str(),
+                    &(
                         peptide.get_partition(),
                         peptide.get_mass(),
                         peptide.get_sequence(),
@@ -813,31 +837,21 @@ mod tests {
                 .await
                 .unwrap();
         }
-        PeptideTable::update_protein_accession(
-            &client,
-            &mut peptides.iter(),
-            leptin.get_accession(),
-            Some(CONFLICTING_PEPTIDE_PROTEIN_ACCESSION),
-        )
-        .await
-        .unwrap();
 
-        // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
+        let stream = client
+            .query_iter(select_metadata_flag_statement.as_str(), [])
             .await
+            .unwrap()
+            .rows_stream::<(bool,)>()
             .unwrap();
 
-        for row in rows.iter() {
-            assert!(row
-                .columns
-                .get(0)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_boolean()
-                .unwrap());
+        pin!(stream);
+
+        while let Some(row) = stream.try_next().await.unwrap() {
+            assert!(row.0);
         }
 
+        // Update the protein accession which should set the metadata flag to false
         PeptideTable::update_protein_accession(
             &client,
             &mut peptides.iter(),
@@ -847,26 +861,24 @@ mod tests {
         .await
         .unwrap();
 
-        let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
+        let stream = client
+            .query_iter(select_metadata_flag_statement.as_str(), [])
             .await
+            .unwrap()
+            .rows_stream::<(bool,)>()
             .unwrap();
 
-        for row in rows.iter() {
-            assert!(!row
-                .columns
-                .get(0)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_boolean()
-                .unwrap());
+        pin!(stream);
+
+        while let Some(row) = stream.try_next().await.unwrap() {
+            assert!(!row.0);
         }
 
-        for peptide in &peptides {
+        for peptide in peptides.iter() {
             client
-                .query(
-                    statement.to_owned(),
-                    (
+                .query_unpaged(
+                    set_metadata_update_to_true_statement.as_str(),
+                    &(
                         peptide.get_partition(),
                         peptide.get_mass(),
                         peptide.get_sequence(),
@@ -876,24 +888,43 @@ mod tests {
                 .unwrap();
         }
 
+        // Unset the metadata flag using the unset function
         PeptideTable::unset_is_metadata_updated(&client, &mut peptides.iter())
             .await
             .unwrap();
 
-        // Check that the conflicting peptide was inserted correctly with two protein accessions.
-        let rows = PeptideTable::raw_select_multiple(&client, "is_metadata_updated", "", &[])
+        let stream = client
+            .query_iter(select_metadata_flag_statement.as_str(), &[])
             .await
+            .unwrap()
+            .rows_stream::<(bool,)>()
             .unwrap();
 
-        for row in rows.iter() {
-            assert!(!row
-                .columns
-                .get(0)
-                .unwrap()
-                .to_owned()
-                .unwrap()
-                .as_boolean()
-                .unwrap());
+        pin!(stream);
+
+        while let Some(row) = stream.try_next().await.unwrap() {
+            assert!(!row.0);
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_tokenawareness() {
+        let client = Client::new(DATABASE_URL).await.unwrap();
+        prepare_database_for_tests(&client).await;
+        for statement in &[
+            INSERT_STATEMENT.as_str(),
+            UPSERT_STATEMENT.as_str(),
+            SET_METADATA_TO_FALSE_STATEMENT.as_str(),
+            REMOVE_PROTEINS_STATEMENT.as_str(),
+            ADD_PROTEINS_STATEMENT.as_str(),
+        ] {
+            let prepared_statement = client.get_prepared_statement(statement).await.unwrap();
+            assert!(
+                prepared_statement.is_token_aware(),
+                "Statement `{}` is not token aware",
+                statement
+            );
         }
     }
 }

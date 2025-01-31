@@ -8,7 +8,7 @@ use chrono::DateTime;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
-use scylla::frame::response::result::Row as ScyllaRow;
+use scylla::macros::{DeserializeValue, SerializeValue};
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 
@@ -19,7 +19,7 @@ use crate::{database::scylla::peptide_table::PeptideTable, entities::domain::Dom
 
 use super::peptide::Peptide;
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, DeserializeValue, SerializeValue, Serialize)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
 ///
 pub struct Protein {
@@ -298,51 +298,6 @@ impl Protein {
         let mut protein_json: JsonValue = serde_json::to_value(self)?;
         protein_json["peptides"] = serde_json::to_value(peptides)?;
         Ok(protein_json)
-    }
-}
-
-impl From<ScyllaRow> for Protein {
-    fn from(row: ScyllaRow) -> Self {
-        let (
-            accession,
-            secondary_accessions,
-            entry_name,
-            name,
-            genes,
-            taxonomy_id,
-            proteome_id,
-            is_reviewed,
-            sequence,
-            updated_at,
-            domains,
-        ) = row
-            .into_typed::<(
-                String,
-                Option<Vec<String>>,
-                String,
-                String,
-                Option<Vec<String>>,
-                i64,
-                String,
-                bool,
-                String,
-                i64,
-                Vec<Domain>,
-            )>()
-            .unwrap();
-        Protein {
-            accession,
-            secondary_accessions: secondary_accessions.unwrap_or(vec![]),
-            entry_name,
-            name,
-            genes: genes.unwrap_or(vec![]),
-            taxonomy_id,
-            proteome_id,
-            is_reviewed,
-            sequence,
-            updated_at,
-            domains,
-        }
     }
 }
 

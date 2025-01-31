@@ -1,9 +1,9 @@
 // 3rd party imports
-use scylla::FromUserType;
-use scylla::IntoUserType;
+use scylla::macros::{DeserializeValue, SerializeValue};
+use serde::{Deserialize, Serialize};
 
 #[derive(
-    Clone, PartialEq, Debug, IntoUserType, FromUserType, serde::Deserialize, serde::Serialize,
+    Debug, Clone, Hash, Eq, PartialEq, DeserializeValue, SerializeValue, Serialize, Deserialize,
 )]
 pub struct Domain {
     name: String,

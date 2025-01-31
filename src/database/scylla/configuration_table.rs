@@ -1,19 +1,60 @@
 // 3rd party imports
-use anyhow::{anyhow, Ok, Result};
+use anyhow::{anyhow, Result};
+use scylla::transport::query_result::FirstRowError;
 use serde::{de::DeserializeOwned, ser::Serialize};
 use serde_json::{from_value as from_json_value, json, Value as JsonValue};
 
 // internal imports
-use crate::database::configuration_table::{
-    ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait, JSON_KEY,
-    MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY, MAX_PEPTIDE_LENGTH_KEY, MIN_PEPTIDE_LENGTH_KEY,
-    PARTITION_LIMITS_KEY, PROTEASE_NAME_KEY, REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY, TABLE_NAME,
-};
-use crate::database::generic_client::GenericClient;
+use crate::database::scylla::client::Client;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
 
-use crate::database::scylla::client::Client;
+pub const TABLE_NAME: &'static str = "config";
+pub const JSON_KEY: &'static str = "wrapper";
+pub const PROTEASE_NAME_KEY: &'static str = "enzyme_name";
+pub const MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY: &'static str = "max_number_of_missed_cleavages";
+pub const MIN_PEPTIDE_LENGTH_KEY: &'static str = "min_peptide_length";
+pub const MAX_PEPTIDE_LENGTH_KEY: &'static str = "max_peptide_length";
+pub const REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY: &'static str =
+    "remove_peptides_containing_unknown";
+pub const PARTITION_LIMITS_KEY: &'static str = "partition_limits";
+
+lazy_static! {
+    static ref SELECT_STATEMENT: String = format!(
+        "SELECT conf_key, value FROM :KEYSPACE:.{} WHERE conf_key = ?;",
+        TABLE_NAME
+    );
+    static ref INSERT_STATEMENT: String = format!(
+        "INSERT INTO :KEYSPACE:.{} (conf_key, value) VALUES (?,?);",
+        TABLE_NAME
+    );
+}
+
+/// Error for incomplete configurations.
+///
+#[derive(Debug)]
+pub struct ConfigurationIncompleteError {
+    configuration_key: String,
+}
+
+impl ConfigurationIncompleteError {
+    pub fn new(key: &str) -> Self {
+        Self {
+            configuration_key: format!("{} not found", key),
+        }
+    }
+}
+
+impl std::fmt::Display for ConfigurationIncompleteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "key '{}' is missing", self.configuration_key)
+    }
+}
+
+/// Simple table for storing various types configuration values.
+/// Table constists of two columns, conf_key (VARCHAR(256)) and value (JSONB).
+/// Each value will be wrapped in a JSON object with a single key, "wrapper" and than stored.
+///
 
 pub struct ConfigurationTable {}
 
@@ -25,45 +66,68 @@ impl Table for ConfigurationTable {
     }
 }
 
-impl ConfigurationTableTrait<Client> for ConfigurationTable {
+impl ConfigurationTable {
+    /// Returns the value for the saved for the given key.
+    ///
+    /// # Arguments
+    /// * `client` - A database client
+    /// * `key` - The key to look up
+    ///
     async fn get_setting<T>(client: &Client, key: &str) -> Result<Option<T>>
     where
         T: DeserializeOwned,
     {
-        let statement = format!(
-            "SELECT conf_key, value FROM {}.{} WHERE conf_key = ?;",
-            client.get_database(),
-            Self::table_name()
-        );
-        let row = client.query(statement, (key,)).await?.first_row()?;
-        let (_, value) = row.into_typed::<(String, String)>()?;
+        let prepared_statement = client.get_prepared_statement(&SELECT_STATEMENT).await?;
+        let row = client
+            .execute_unpaged(&prepared_statement, (key,))
+            .await?
+            .into_rows_result()?
+            .first_row::<(String, String)>();
 
-        let mut wrapper: JsonValue = serde_json::from_str(value.as_str())?;
-        let config_value = match wrapper.get_mut(JSON_KEY) {
-            Some(val) => Some(from_json_value(val.take())?),
-            None => None,
-        };
+        match row {
+            Ok(row) => {
+                let mut wrapper: JsonValue = serde_json::from_str(row.1.as_str())?;
+                let config_value = match wrapper.get_mut(JSON_KEY) {
+                    Some(val) => Some(from_json_value(val.take())?),
+                    None => None,
+                };
 
-        Ok(config_value)
+                Ok(config_value)
+            }
+            Err(err) => match err {
+                FirstRowError::RowsEmpty => Ok(None),
+                _ => Err(err.into()),
+            },
+        }
     }
 
+    /// Sets the value for the given key.
+    ///
+    /// # Arguments
+    /// * `client` - A database client
+    /// * `key` - The key to look up
+    /// * `value` - The value to save
+    ///
     async fn set_setting<T>(client: &Client, key: &str, value: &T) -> Result<()>
     where
         T: Serialize,
     {
-        let statement = format!(
-            "INSERT INTO {}.{} (conf_key, value) VALUES (?,?);",
-            client.get_database(),
-            Self::table_name()
-        );
+        let prepared_statement = client.get_prepared_statement(&INSERT_STATEMENT).await?;
 
         let wrapper = json!({ JSON_KEY: value });
 
-        client.query(statement, (key, wrapper.to_string())).await?;
+        client
+            .execute_unpaged(&prepared_statement, (key, wrapper.to_string()))
+            .await?;
         Ok(())
     }
 
-    async fn select(client: &Client) -> Result<Configuration> {
+    /// Selects the configuration from the database.
+    ///
+    /// # Arguments
+    /// * `client` - A database client
+    ///
+    pub async fn select(client: &Client) -> Result<Configuration> {
         let enzyme_name = Self::get_setting::<String>(client, PROTEASE_NAME_KEY)
             .await
             .map_err(|error| {
@@ -132,7 +196,13 @@ impl ConfigurationTableTrait<Client> for ConfigurationTable {
         ))
     }
 
-    async fn insert(client: &mut Client, configuration: &Configuration) -> Result<()> {
+    /// Inserts the configuration into the database.
+    ///
+    /// # Arguments
+    /// * `client` - A database client
+    /// * `configuration` - The configuration to insert
+    ///
+    pub async fn insert(client: &mut Client, configuration: &Configuration) -> Result<()> {
         ConfigurationTable::set_setting::<String>(
             client,
             PROTEASE_NAME_KEY,
@@ -187,6 +257,7 @@ mod tests {
 
     // internal imports
     use super::*;
+    use crate::database::generic_client::GenericClient;
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
     use crate::database::scylla::tests::DATABASE_URL;
