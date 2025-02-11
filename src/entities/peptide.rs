@@ -1,9 +1,6 @@
 // 3rd party imports
 use serde::Deserialize;
 
-// internal imports
-use crate::entities::protein::Protein;
-
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Peptide<T>
 where
