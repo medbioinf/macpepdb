@@ -17,6 +17,10 @@ use crate::entities::protein::Protein as MaCPepDBProtein;
 /// but the peptide's proteins only contain protein accession.
 type ProteinEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 
+/// Minimum length of search term
+///
+const MIN_SEARCH_TERM_LENGTH: usize = 3;
+
 /// Fetch MaCPepDB configuration from the servers
 ///
 /// # Arguments
@@ -48,7 +52,7 @@ pub fn ProteinSearch() -> Element {
     //
     let mut proteins: Resource<Result<Option<Rc<Vec<ProteinEntity>>>>> =
         use_resource(move || async move {
-            if protein_id.read_unchecked().is_empty() {
+            if protein_id.read_unchecked().len() < MIN_SEARCH_TERM_LENGTH {
                 fetch_status.set(FetchStatus::None);
                 return Ok(None);
             }
