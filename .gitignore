@@ -1,3 +1,6 @@
 /target
 /dist
 /public/index.css*
+
+# OS
+.DS_Store
