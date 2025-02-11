@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 // 3rd party imports
 use dioxus::prelude::*;
 use dioxus_router::components::Link;
@@ -8,23 +10,28 @@ use crate::routes::Routes;
 
 /// Properties for protein list
 ///
-#[derive(Props)]
-pub struct ProteinListProps<'a, T> {
+#[derive(Clone, PartialEq, Props)]
+pub struct ProteinListProps<T>
+where
+    T: 'static + PartialEq,
+{
     /// List of proteins to render
-    pub proteins: Vec<&'a MaCPepDBProtein<T>>,
+    pub proteins: Rc<Vec<MaCPepDBProtein<T>>>,
 }
 
 /// Renders a list of proteins with most common attributes: accession, entry name, name, genes.
 ///
-pub fn ProteinList<'a, T>(cx: Scope<'a, ProteinListProps<'a, T>>) -> Element {
-    if cx.props.proteins.is_empty() {
-        return render! {
+pub fn ProteinList<T>(props: ProteinListProps<T>) -> Element
+where
+    T: 'static + PartialEq,
+{
+    if props.proteins.is_empty() {
+        return rsx! {
             div { "No proteins" }
         };
     }
-    render! {
-        table {
-            class: "table table-striped table-hover",
+    rsx! {
+        table { class: "table table-striped table-hover",
             thead {
                 tr {
                     th { "Accession" }
@@ -35,11 +42,13 @@ pub fn ProteinList<'a, T>(cx: Scope<'a, ProteinListProps<'a, T>>) -> Element {
                 }
             }
             tbody {
-                for protein in cx.props.proteins.iter() {
+                for protein in props.proteins.iter() {
                     tr {
                         td {
                             Link {
-                                to: Routes::Protein{protein_id: protein.get_accession().to_owned()},
+                                to: Routes::Protein {
+                                    protein_id: protein.get_accession().to_owned(),
+                                },
                                 "{protein.get_accession()}"
                             }
                         }

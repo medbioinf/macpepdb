@@ -3,53 +3,23 @@
 # App name
 name = "MaCPepDB"
 
-# The Dioxus platform to default to
-default_platform = "web"
-
-# `build` & `serve` output path
-out_dir = "dist"
-
-# The static resource path
-asset_dir = "public"
-
 [web.app]
 
 # HTML title tag content
 title = "MaCPepDB"
 
-[web.watcher]
-
-# When watcher is triggered, regenerate the `index.html`
-reload_html = true
-
-# Which files or dirs will be monitored
-watch_path = ["src", "public"]
-
-index_on_404 = true
-
-# Include style or script assets
+# include `assets` in web platform
 [web.resource]
 
-# CSS style file
-style = [
-    "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css",
-    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css",
-    "/index.css",
-]
+# Additional CSS style files
+style = []
 
-# Javascript code file
-script = [
-    "https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js",
-    "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js",
-]
+# Additional JavaScript files
+script = []
 
 [web.resource.dev]
 
-# Same as [web.resource], but for development servers
-
-# CSS style file
-style = []
-
-# JavaScript files
+# Javascript code file
+# serve: [dev-server] only
 script = []
 

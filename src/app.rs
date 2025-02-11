@@ -1,24 +1,25 @@
 // 3rd party imports
-use dioxus::prelude::*;
-use dioxus_router::prelude::*;
+use dioxus::{
+    document::{Script, Stylesheet},
+    prelude::*,
+};
+use dioxus_router::prelude::Router;
 
 // internal imports
-use crate::configuration::Configuration as AppConfiguration;
-use crate::routes::Routes;
-
-/// The root component of the web app
-#[derive(PartialEq, Props)]
-pub struct RootProps {
-    pub configuration: AppConfiguration,
-}
+use crate::{configuration::Configuration, routes::Routes};
 
 /// Root component for the entire frontend
-/// Makes the frontend configuration available to all components
 ///
-pub fn App(cx: Scope<'_, RootProps>) -> Element {
-    use_shared_state_provider(cx, || cx.props.configuration.clone());
+pub fn App() -> Element {
+    #[allow(clippy::redundant_closure)]
+    use_context_provider(|| Configuration::new());
 
-    render! {
+    rsx! {
+        Stylesheet { href: "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" }
+        Stylesheet { href: "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" }
+        Stylesheet { href: asset!("./public/index.css") }
+        Script { src: "https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js" }
+        Script { src: "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" }
         Router::<Routes> {}
     }
 }

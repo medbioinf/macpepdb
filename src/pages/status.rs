@@ -1,6 +1,8 @@
+use std::rc::Rc;
+
 // 3rd party imports
+use anyhow::Result;
 use dioxus::prelude::*;
-use reqwest;
 
 // internal imports
 use crate::components::configuration::*;
@@ -13,43 +15,42 @@ use crate::entities::configuration::Configuration as MacPepDBConfiguration;
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 ///
 pub async fn get_macpepdb_configuration(
-    macpepdb_base_url: String,
-) -> Result<MacPepDBConfiguration, reqwest::Error> {
+    macpepdb_base_url: Signal<String>,
+) -> Result<Rc<MacPepDBConfiguration>> {
     let url = format!("{}/api/configuration", macpepdb_base_url);
-    reqwest::get(&url).await?.json().await
+    Ok(Rc::new(
+        reqwest::get(&url)
+            .await?
+            .json::<MacPepDBConfiguration>()
+            .await?,
+    ))
 }
 
-pub fn Status(cx: Scope) -> Element {
-    let app_config = use_shared_state::<AppConfiguration>(cx).unwrap().read();
-    let macpepdb_config = use_future(cx, (), |_| {
-        get_macpepdb_configuration(app_config.get_macpepdb_base_url().to_owned())
-    });
+pub fn Status() -> Element {
+    let app_config = use_context::<AppConfiguration>();
+    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let macpepdb_config = use_resource(move || get_macpepdb_configuration(macpepdb_base_url));
 
-    render! {
+    rsx! {
         div {
             h1 { "Welcome to MaCPepDB - Mass Centric Peptide Database" }
             div {
-                p {
-                    "Quickly build and access the digest of a large proteome."
-                }
+                p { "Quickly build and access the digest of a large proteome." }
             }
         }
-        match macpepdb_config.value() {
+        match &*macpepdb_config.read_unchecked() {
             Some(Ok(macpepdb_config)) => {
-                render! {
-                    Configuration {
-                        macpepdb_configuration: macpepdb_config,
-
-                    }
+                rsx! {
+                    Configuration { macpepdb_configuration: macpepdb_config.clone() }
                 }
             }
             Some(Err(e)) => {
-                render! {
+                rsx! {
                     div { "Error loading the configuration {e}" }
                 }
             }
             None => {
-                render! {
+                rsx! {
                     div { "Loading ..." }
                 }
             }

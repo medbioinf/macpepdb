@@ -2,7 +2,6 @@
 use anyhow::Result;
 use dioxus::prelude::*;
 use dioxus_router::components::Link;
-use reqwest;
 
 // internal imports
 use crate::components::rounded_mass::RoundedMass;
@@ -14,7 +13,7 @@ use crate::routes::Routes;
 /// As peptides contain their protein of origin and proteins contain their peptides, MaCPepDB
 /// stops the recursion on third level by only adding the protein accession to the peptides
 /// instead of the whole protein.
-type PeptideEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
+type ProteinEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 
 /// Fetch protein from MaCPepDB
 ///
@@ -22,35 +21,35 @@ type PeptideEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 /// * `protein_id` - Protein accession or gene name
 ///
-pub async fn get_protein(macpepdb_base_url: String, protein_id: String) -> Result<PeptideEntity> {
+pub async fn get_protein(
+    macpepdb_base_url: Signal<String>,
+    protein_id: Signal<String>,
+) -> Result<ProteinEntity> {
     let url = format!("{}/api/proteins/{}", macpepdb_base_url, protein_id);
     Ok(reqwest::get(&url).await?.json().await?)
 }
 
 /// Properties for protein page
-#[derive(PartialEq, Props)]
+#[derive(Clone, PartialEq, Props)]
 pub struct ProteinProps {
     /// Protein ID to fetch
     pub protein_id: String,
 }
 
 /// Protein page
-pub fn Protein(cx: Scope<ProteinProps>) -> Element {
-    let app_config = use_shared_state::<AppConfiguration>(cx).unwrap();
-    let protein = use_future(cx, (), |_| {
-        get_protein(
-            app_config.clone().read().get_macpepdb_base_url().to_owned(),
-            cx.props.protein_id.clone(),
-        )
-    });
+pub fn Protein(props: ProteinProps) -> Element {
+    let app_config = use_context::<AppConfiguration>();
+    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let protein_id = use_signal(|| props.protein_id.to_owned());
 
-    render! {
+    let protein = use_resource(move || get_protein(macpepdb_base_url, protein_id));
+
+    rsx! {
         div {
-            h2 { "Protein: {cx.props.protein_id}" }
-            match protein.value() {
-                Some(Ok(protein)) => render! {
-                    table {
-                        class: "table table-striped",
+            h2 { "Protein: {props.protein_id}" }
+            match &*protein.read_unchecked() {
+                Some(Ok(protein)) => rsx! {
+                    table { class: "table table-striped",
                         thead {
                             tr {
                                 th { "Attribute" }
@@ -66,17 +65,13 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                                 td { "Secondary accession" }
                                 td {
                                     if !protein.get_secondary_accessions().is_empty() {
-                                        render! {
-                                            ul {
-                                                for sec_accession in protein.get_secondary_accessions() {
-                                                    li { "{sec_accession}" }
-                                                }
+                                        ul {
+                                            for sec_accession in protein.get_secondary_accessions() {
+                                                li { "{sec_accession}" }
                                             }
                                         }
                                     } else {
-                                        render! {
-                                            "None"
-                                        }
+                                        "None"
                                     }
                                 }
                             }
@@ -113,8 +108,7 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                         }
                     }
                     h3 { "Peptides" }
-                    table {
-                        class: "table table-striped table-hover table-sm table-responsive",
+                    table { class: "table table-striped table-hover table-sm table-responsive",
                         thead {
                             tr {
                                 th { "Mass (Da)" }
@@ -125,15 +119,12 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                             for peptide in protein.get_peptides() {
                                 tr {
                                     td {
-                                        RoundedMass {
-                                            mass: peptide.get_mass(),
-                                        }
+                                        RoundedMass { mass: peptide.get_mass() }
                                     }
-                                    td {
-                                        class: "text-break",
+                                    td { class: "text-break",
                                         Link {
-                                            to: Routes::Peptide{
-                                                peptide_sequence: peptide.get_sequence().to_owned()
+                                            to: Routes::Peptide {
+                                                peptide_sequence: peptide.get_sequence().to_owned(),
                                             },
                                             "{peptide.get_sequence()}"
                                         }
@@ -143,12 +134,12 @@ pub fn Protein(cx: Scope<ProteinProps>) -> Element {
                         }
                     }
                 },
-                Some(Err(e)) => render! {
+                Some(Err(e)) => rsx! {
                     div { "Error loading the protein {e}" }
                 },
-                None => render! {
+                None => rsx! {
                     div { "Loading ..." }
-                }
+                },
             }
         }
     }

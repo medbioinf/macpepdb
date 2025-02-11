@@ -1,22 +1,23 @@
+use std::rc::Rc;
+
 // 3rd party imports
 use dioxus::prelude::*;
 
 // internal imports
 use crate::entities::configuration::Configuration as MacPepDBConfiguration;
 
-#[derive(Props)]
-pub struct ConfigurationProps<'a> {
-    pub macpepdb_configuration: &'a MacPepDBConfiguration,
+#[derive(Clone, PartialEq, Props)]
+pub struct ConfigurationProps {
+    pub macpepdb_configuration: Rc<MacPepDBConfiguration>,
 }
 
 /// Component for rendering MaCPepDB configuration
 ///
-pub fn Configuration<'a>(cx: Scope<'a, ConfigurationProps<'a>>) -> Element {
-    render! {
+pub fn Configuration(props: ConfigurationProps) -> Element {
+    rsx! {
         div {
             h2 { "Settings" }
-            table {
-                class: "table table-striped",
+            table { class: "table table-striped",
                 thead {
                     tr {
                         th { "Attribute" }
@@ -26,52 +27,41 @@ pub fn Configuration<'a>(cx: Scope<'a, ConfigurationProps<'a>>) -> Element {
                 tbody {
                     tr {
                         td { "Protease" }
-                        td { cx.props.macpepdb_configuration.get_protease_name() }
+                        td { "{props.macpepdb_configuration.get_protease_name()}" }
                     }
-                    if let Some(max_number_of_missed_cleavages) = cx.props.macpepdb_configuration.get_max_number_of_missed_cleavages() {
-                        render!{
-                            tr {
-                                td { "Max. number of missed cleavages" }
-                                td { max_number_of_missed_cleavages.to_string() }
-                            }
+                    if let Some(max_number_of_missed_cleavages) = props
+                        .macpepdb_configuration
+                        .get_max_number_of_missed_cleavages()
+                    {
+                        tr {
+                            td { "Max. number of missed cleavages" }
+                            td { "{max_number_of_missed_cleavages}" }
                         }
                     }
                     tr {
                         td { "Min. peptide length" }
                         td {
-                            match cx.props.macpepdb_configuration.get_min_peptide_length() {
-                                Some(min_peptide_length) => {
-                                    min_peptide_length.to_string()
-                                }
-                                None => {
-                                    "None".to_string()
-                                }
+                            match props.macpepdb_configuration.get_min_peptide_length() {
+                                Some(min_peptide_length) => min_peptide_length.to_string(),
+                                None => "None".to_string(),
                             }
                         }
                     }
                     tr {
                         td { "Max. peptide length" }
                         td {
-                            match cx.props.macpepdb_configuration.get_max_peptide_length() {
-                                Some(max_peptide_length) => {
-                                    max_peptide_length.to_string()
-                                }
-                                None => {
-                                    "None".to_string()
-                                }
+                            match props.macpepdb_configuration.get_max_peptide_length() {
+                                Some(max_peptide_length) => max_peptide_length.to_string(),
+                                None => "None".to_string(),
                             }
                         }
                     }
                     tr {
                         td { "Contain peptides with X" }
                         td {
-                            match cx.props.macpepdb_configuration.get_remove_peptides_containing_unknown() {
-                                true => {
-                                    "No".to_string()
-                                }
-                                false => {
-                                    "Yes".to_string()
-                                }
+                            match props.macpepdb_configuration.get_remove_peptides_containing_unknown() {
+                                true => "No".to_string(),
+                                false => "Yes".to_string(),
                             }
                         }
                     }
@@ -80,8 +70,7 @@ pub fn Configuration<'a>(cx: Scope<'a, ConfigurationProps<'a>>) -> Element {
         }
         div {
             h2 { "Distribution" }
-            table {
-                class: "table table-striped table-sm",
+            table { class: "table table-striped table-sm",
                 thead {
                     tr {
                         th { "Partition" }
@@ -89,12 +78,10 @@ pub fn Configuration<'a>(cx: Scope<'a, ConfigurationProps<'a>>) -> Element {
                     }
                 }
                 tbody {
-                    for (i, limit) in cx.props.macpepdb_configuration.get_partition_limits().iter().enumerate() {
-                        render!{
-                            tr {
-                                td { (i + 1).to_string() }
-                                td { limit.to_string() }
-                            }
+                    for (i , limit) in props.macpepdb_configuration.get_partition_limits().iter().enumerate() {
+                        tr {
+                            td { "{(i + 1)}" }
+                            td { "{limit}" }
                         }
                     }
                 }

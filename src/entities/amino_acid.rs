@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 /// Amino acid entity
 ///
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, PartialEq)]
 pub struct AminoAcid {
     name: String,
     code: char,

@@ -4,7 +4,10 @@ use serde::Deserialize;
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 /// Keeps all data from the original UniProt entry which are necessary for MaCPepDB
 ///
-pub struct Protein<T> {
+pub struct Protein<T>
+where
+    T: 'static + PartialEq,
+{
     accession: String,
     secondary_accessions: Vec<String>,
     entry_name: String,
@@ -18,7 +21,10 @@ pub struct Protein<T> {
     peptides: Vec<T>,
 }
 
-impl<T> Protein<T> {
+impl<T> Protein<T>
+where
+    T: 'static + PartialEq,
+{
     /// Returns the primary accession
     ///
     pub fn get_accession(&self) -> &String {

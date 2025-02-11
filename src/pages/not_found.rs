@@ -1,16 +1,17 @@
 // 3rd party imports
 use dioxus::prelude::*;
 
-#[derive(PartialEq, Props)]
+#[derive(Clone, PartialEq, Props)]
 pub struct NotFoundProps {
     pub segments: Vec<String>,
 }
 
-pub fn NotFound(cx: Scope<NotFoundProps>) -> Element {
-    render! {
+pub fn NotFound(props: NotFoundProps) -> Element {
+    let segments = props.segments.join("/");
+    rsx! {
         div {
             h1 { "404" }
-            p { "Sorry, this page does not exists." }
+            p { "Sorry, the page '{segments}' does not exists." }
         }
     }
 }

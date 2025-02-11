@@ -6,3 +6,5 @@ pub mod peptide;
 pub mod protein_list;
 /// Component for rendering rounded mass
 pub mod rounded_mass;
+// /// Sequence component
+// pub mod sequence_block;

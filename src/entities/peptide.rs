@@ -5,7 +5,10 @@ use serde::Deserialize;
 use crate::entities::protein::Protein;
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
-pub struct Peptide<T> {
+pub struct Peptide<T>
+where
+    T: 'static + PartialEq,
+{
     partition: i64,
     mass: f64,
     sequence: String,
@@ -19,7 +22,10 @@ pub struct Peptide<T> {
     proteome_ids: Vec<String>,
 }
 
-impl<T> Peptide<T> {
+impl<T> Peptide<T>
+where
+    T: 'static + PartialEq,
+{
     /// Returns the mass partition
     ///
     pub fn get_partition(&self) -> i64 {
@@ -81,28 +87,11 @@ impl<T> Peptide<T> {
     pub fn get_proteome_ids(&self) -> &Vec<String> {
         return &self.proteome_ids;
     }
-}
 
-/// Peptides with full protein records
-///
-impl<T> Peptide<Protein<T>> {
-    /// Returns a vector of reviewed proteins
+    /// Takes the proteins, leaving an empty vector
+    /// Useful for moving the proteins to another entity/component
     ///
-    pub fn get_reviewed_proteins(&self) -> Vec<&Protein<T>> {
-        return self
-            .proteins
-            .iter()
-            .filter(|p| p.get_is_reviewed())
-            .collect();
-    }
-
-    /// Returns a vector of unreviewed proteins
-    ///
-    pub fn get_unreviewed_proteins(&self) -> Vec<&Protein<T>> {
-        return self
-            .proteins
-            .iter()
-            .filter(|p| !p.get_is_reviewed())
-            .collect();
+    pub fn take_proteins(&mut self) -> Vec<T> {
+        std::mem::take(&mut self.proteins)
     }
 }

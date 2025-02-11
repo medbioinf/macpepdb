@@ -2,7 +2,7 @@
 use std::fmt::Display;
 
 // 3rd party imports
-use dioxus::{html::button, prelude::*};
+use dioxus::prelude::*;
 use dioxus_router::prelude::*;
 
 // internal imports
@@ -25,89 +25,62 @@ impl Display for MenuState {
 }
 
 /// Layout with two panes. One for the menu and one for the main content
-pub fn TwoPanes(cx: Scope) -> Element {
-    let menu_state = use_state(cx, || MenuState::Close);
+pub fn TwoPanes() -> Element {
+    let mut menu_state = use_signal(|| MenuState::Close);
 
     let close_menu_fn = move |_| menu_state.set(MenuState::Close);
     let toggle_menu_fn = move |_| {
-        let new_state = match menu_state.get() {
+        let new_state = match *menu_state.read() {
             MenuState::Open => MenuState::Close,
             MenuState::Close => MenuState::Open,
         };
         menu_state.set(new_state);
     };
 
-    render! {
-        div {
-            class: "layout-two-panes container-fluid {menu_state}",
-            aside {
-                class: "pane-menu col-12 col-lg-2 position-sticky d-flex flex-column vh-100",
-                header {
-                    class: "d-flex align-items-center p-3",
+    rsx! {
+        div { class: "layout-two-panes container-fluid {menu_state}",
+            aside { class: "pane-menu col-12 col-lg-2 position-sticky d-flex flex-column vh-100",
+                header { class: "d-flex align-items-center p-3",
 
                     Link {
                         to: Routes::Status {},
                         class: "navbar-brand d-flex align-items-center",
                         onclick: close_menu_fn,
-                        img {
-                            src: "/images/logo.png",
-                            alt: "MaCPepDB logo"
-                        }
-                        span {
-                            "MaCPepDB"
-                        }
+                        img { src: "/images/logo.png", alt: "MaCPepDB logo" }
+                        span { "MaCPepDB" }
                     }
                     button {
                         r#type: "button",
                         class: "btn btn-sm btn-outline-primary d-lg-none",
                         onclick: toggle_menu_fn,
                         i {
-                            class: match menu_state.get() {
+                            class: match *menu_state.read() {
                                 MenuState::Open => "fa-solid fa-xmark",
                                 MenuState::Close => "fa-solid fa-bars",
-                            }
+                            },
                         }
                     }
                 }
-                div {
-                    class: "application-menu d-flex flex-column flex-fill",
-                    nav {
-                        class: "internal-pages flex-fill px-3",
-                        div {
-                            class: "separator",
-                            "Explore the database"
-                        }
-                        ul {
-                            class: "navbar-nav mx-3",
-                            li {
-                                class: "nav-item",
+                div { class: "application-menu d-flex flex-column flex-fill",
+                    nav { class: "internal-pages flex-fill px-3",
+                        div { class: "separator", "Explore the database" }
+                        ul { class: "navbar-nav mx-3",
+                            li { class: "nav-item",
                                 Link {
                                     to: Routes::ProteinSearch {},
                                     onclick: close_menu_fn,
                                     class: "nav-link",
-                                    i{
-                                        class: "fa-solid fa-magnifying-glass me-2"
-                                    }
+                                    i { class: "fa-solid fa-magnifying-glass me-2" }
                                     "Search proteins"
                                 }
                             }
                         }
-                        div {
-                            class: "separator",
-                            "Tools"
-                        }
+                        div { class: "separator", "Tools" }
                     }
-                    nav {
-                        class: "external-pages p-3",
-                        "External links coming soon"
-                    }
+                    nav { class: "external-pages p-3", "External links coming soon" }
                 }
             }
-            div {
-                class: "pane-content col-12 col-lg-10 p-3",
-                Outlet::<Routes> {}
-            }
+            div { class: "pane-content col-12 col-lg-10 p-3", Outlet::<Routes> {} }
         }
-
     }
 }

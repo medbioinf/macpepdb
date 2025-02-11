@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 // 3rd party imports
 use anyhow::Result;
 use dioxus::html::input_data::keyboard_types::Code;
@@ -21,88 +23,83 @@ type ProteinEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 /// * `protein_id` - Protein accession or gene nam
 ///
-pub async fn get_proteins(macpepdb_base_url: &str, protein_id: &str) -> Result<Vec<ProteinEntity>> {
-    let url = format!("{}/api/proteins/search/{}", macpepdb_base_url, protein_id);
-    Ok(reqwest::get(&url).await?.json().await?)
+pub async fn get_proteins(
+    macpepdb_base_url: Signal<String>,
+    protein_id: Signal<String>,
+) -> Result<Rc<Vec<ProteinEntity>>> {
+    let url = format!("{macpepdb_base_url}/api/proteins/search/{protein_id}");
+    Ok(Rc::new(
+        reqwest::get(&url)
+            .await?
+            .json::<Vec<ProteinEntity>>()
+            .await?,
+    ))
 }
 
 /// Search for proteins by accession or gene name
 ///
-pub fn ProteinSearch(cx: Scope) -> Element {
-    let app_config = use_shared_state::<AppConfiguration>(cx).unwrap();
-    let protein_id = use_state(cx, || "".to_string());
-    let proteins = use_state(cx, || FetchStatus::<Result<Vec<ProteinEntity>>>::None);
+pub fn ProteinSearch() -> Element {
+    let app_config = use_context::<AppConfiguration>();
+    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let mut protein_id = use_signal(|| "".to_string());
+    let mut fetch_status: Signal<FetchStatus> = use_signal(|| FetchStatus::None);
 
     // Event handler for fetching proteins on button click or on enter
     //
-    let fetch_proteins = move || {
-        // prevent redundant requests
-        match proteins.get() {
-            FetchStatus::Loading => {
-                return;
+    let mut proteins: Resource<Result<Option<Rc<Vec<ProteinEntity>>>>> =
+        use_resource(move || async move {
+            if protein_id.read_unchecked().is_empty() {
+                fetch_status.set(FetchStatus::None);
+                return Ok(None);
             }
-            _ => {}
-        }
-        cx.spawn({
-            let macpepdb_base_url = app_config.read().get_macpepdb_base_url().to_owned();
-            let proteins = proteins.to_owned();
-            let protein_id = protein_id.to_owned();
-
-            async move {
-                proteins.set(FetchStatus::Loading);
-                proteins.set(FetchStatus::Finished(
-                    get_proteins(&macpepdb_base_url, protein_id.get()).await,
-                ));
-            }
+            fetch_status.set(FetchStatus::Loading);
+            let proteins = get_proteins(macpepdb_base_url, protein_id).await?;
+            fetch_status.set(FetchStatus::Finished);
+            Ok(Some(proteins))
         });
-    };
 
-    render! {
+    rsx! {
         h3 { "Search for proteins" }
-        div {
-            class: "input-group mb-3",
+        div { class: "input-group mb-3",
             input {
                 class: "form-control",
                 r#type: "text",
                 placeholder: "Partial protein accession or full gene name",
                 value: "{protein_id}",
-                oninput: move |evt| protein_id.set(evt.value.clone()),
+                oninput: move |evt| protein_id.set(evt.value()),
                 onkeyup: move |evt| {
                     if evt.code() == Code::Enter || evt.code() == Code::NumpadEnter {
-                        fetch_proteins()
+                        proteins.restart()
                     }
-                }
+                },
             }
             button {
                 class: "btn btn-primary",
                 r#type: "button",
-                onclick: move |_| fetch_proteins(),
+                onclick: move |_| proteins.restart(),
                 "Search"
             }
         }
 
-        match proteins.get() {
-            FetchStatus::None => {
-                render! {""}
+        match &*proteins.read_unchecked() {
+            Some(Ok(None)) => {
+                rsx! { "" }
             }
-            FetchStatus::Loading => {
-                render! {
-                    div { "Loading..." }
+            Some(Ok(Some(proteins))) => {
+                rsx! {
+                    ProteinList { proteins: proteins.clone() }
                 }
             }
-            FetchStatus::Finished(Ok(ref proteins)) => {
-                render! {
-                    ProteinList {
-                        proteins: proteins.iter().collect()
-                    }
-                }
-            }
-            FetchStatus::Finished(Err(ref err)) => {
-                render! {
+            Some(Err(err)) => {
+                rsx! {
                     div { "Error fetching proteins: {err}" }
                 }
             }
+            None => {
+                rsx! {
+                    div { "Loading..." }
+                }
+            }
         }
-
     }
 }

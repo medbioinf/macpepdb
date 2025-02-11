@@ -18,23 +18,13 @@ mod pages;
 /// Routes used by the web app
 mod routes;
 
-// 3rd party imports
-use dioxus_web::Config;
+use dioxus::{logger::tracing::Level, prelude::*};
 
 // internal import
-use crate::app::{App, RootProps};
-use crate::configuration::Configuration;
+use crate::app::App;
 
 fn main() {
-    // Get app configuration
-    let app_config = Configuration::new();
-
-    // launch the web app
-    dioxus_web::launch_with_props(
-        App,
-        RootProps {
-            configuration: app_config,
-        },
-        Config::new(),
-    );
+    // Init debug
+    dioxus_logger::init(Level::INFO).expect("failed to init logger");
+    launch(App);
 }
