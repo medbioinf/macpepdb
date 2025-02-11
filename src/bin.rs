@@ -345,6 +345,7 @@ async fn main() -> Result<()> {
     let mut _prometheus_scrape_address = None;
 
     if args.metric_target.contains(&MetricTarget::Prometheus)
+        || args.metric_target.contains(&MetricTarget::Terminal)
         || args.metric_target.contains(&MetricTarget::All)
     {
         let prometheus_metrics_builder = PrometheusBuilder::new();
