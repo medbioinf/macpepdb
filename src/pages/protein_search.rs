@@ -1,12 +1,9 @@
 use std::rc::Rc;
 
-// 3rd party imports
 use anyhow::Result;
 use dioxus::html::input_data::keyboard_types::Code;
 use dioxus::prelude::*;
-use reqwest;
 
-// internal imports
 use crate::api_helpers::fetch_status::FetchStatus;
 use crate::components::protein_list::ProteinList;
 use crate::configuration::Configuration as AppConfiguration;

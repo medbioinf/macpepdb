@@ -1,8 +1,5 @@
-// 3rd party import
 use dioxus::prelude::*;
-use dioxus_router::prelude::*;
 
-// internal imports
 use crate::layouts::two_panes::TwoPanes;
 use crate::pages::*;
 

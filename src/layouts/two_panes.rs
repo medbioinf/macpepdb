@@ -1,11 +1,7 @@
-// std imports
 use std::fmt::Display;
 
-// 3rd party imports
 use dioxus::prelude::*;
-use dioxus_router::prelude::*;
 
-// internal imports
 use crate::routes::Routes;
 
 /// Menu state (open or close), used to toggle the menu

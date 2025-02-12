@@ -1,6 +1,4 @@
-// 3rd party imports
 use serde::Deserialize;
-use toml;
 
 /// TOML formatted configuration file copied/selected via build.rs
 /// Once compiled the application is deployed into a browser where without any access to the file system   
