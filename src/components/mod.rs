@@ -8,3 +8,5 @@ pub mod protein_list;
 pub mod rounded_mass;
 // /// Sequence component
 // pub mod sequence_block;
+/// Components for peptide search
+pub mod peptide_search;

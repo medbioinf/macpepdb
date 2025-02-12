@@ -74,6 +74,15 @@ pub fn TwoPanes() -> Element {
                                     "Search proteins"
                                 }
                             }
+                            li { class: "nav-item",
+                                Link {
+                                    to: Routes::PeptideSearch {},
+                                    onclick: close_menu_fn,
+                                    class: "nav-link",
+                                    i { class: "fa-solid fa-magnifying-glass me-2" }
+                                    "Search peptides"
+                                }
+                            }
                         }
                         div { class: "separator", "Tools" }
                     }
