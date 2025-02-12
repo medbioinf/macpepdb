@@ -46,7 +46,10 @@ pub fn TwoPanes() -> Element {
                         to: Routes::Status {},
                         class: "navbar-brand d-flex align-items-center",
                         onclick: close_menu_fn,
-                        img { src: "/images/logo.png", alt: "MaCPepDB logo" }
+                        img {
+                            src: asset!("assets/images/logo.png"),
+                            alt: "MaCPepDB logo",
+                        }
                         span { "MaCPepDB" }
                     }
                     button {
