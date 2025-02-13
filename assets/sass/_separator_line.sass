@@ -1,0 +1,18 @@
+.separator-line
+    display: flex
+    align-items: center
+    text-align: center
+    margin-bottom: 0.25rem
+    color: $rub-blue
+    font-weight: bold
+
+    &::before, &::after
+        content: ''
+        flex: 1
+        border-bottom: 2px solid $rub-gray
+
+    &::before
+        margin-right: .25rem
+
+    &::after
+        margin-left: .25rem

@@ -43,7 +43,7 @@ pub fn ProteinSearch() -> Element {
     let app_config = use_context::<AppConfiguration>();
     let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
     let mut protein_id = use_signal(|| "".to_string());
-    let mut fetch_status: Signal<FetchStatus> = use_signal(|| FetchStatus::None);
+    let mut fetch_status: Signal<FetchStatus<()>> = use_signal(|| FetchStatus::None);
 
     // Event handler for fetching proteins on button click or on enter
     //
@@ -55,7 +55,7 @@ pub fn ProteinSearch() -> Element {
             }
             fetch_status.set(FetchStatus::Loading);
             let proteins = get_proteins(macpepdb_base_url, protein_id).await?;
-            fetch_status.set(FetchStatus::Finished);
+            fetch_status.set(FetchStatus::Finished(()));
             Ok(Some(proteins))
         });
 

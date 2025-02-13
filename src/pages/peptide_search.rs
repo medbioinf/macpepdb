@@ -1,6 +1,6 @@
 use dioxus::prelude::*;
 
-use crate::components::peptide_search::sequence_search::SequenceSearch;
+use crate::components::peptide_search::{mass_search::MassSearch, sequence_search::SequenceSearch};
 
 const BY_MASS_TAB: &str = "by mass";
 const BY_SEQUENCE_TAB: &str = "by sequence";
@@ -9,7 +9,8 @@ pub fn PeptideSearch() -> Element {
     let mut selected_tab = use_signal(|| BY_SEQUENCE_TAB);
 
     rsx! {
-        ul { class: "nav nav-tabs",
+        h3 { "Search for peptides" }
+        ul { class: "nav nav-tabs mb-3",
             li { class: "nav-item",
                 button {
                     class: if *selected_tab.read_unchecked() == BY_SEQUENCE_TAB { "nav-link active" } else { "nav-link" },
@@ -30,7 +31,7 @@ pub fn PeptideSearch() -> Element {
                 SequenceSearch {}
             }
             div { class: if *selected_tab.read_unchecked() == BY_MASS_TAB { "tab-pane active" } else { "tab-pane" },
-                "Coming soon"
+                MassSearch {}
             }
         }
     }

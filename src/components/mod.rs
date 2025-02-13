@@ -10,3 +10,5 @@ pub mod rounded_mass;
 // pub mod sequence_block;
 /// Components for peptide search
 pub mod peptide_search;
+/// Line with label to separate vertical sections
+pub mod separator_line;

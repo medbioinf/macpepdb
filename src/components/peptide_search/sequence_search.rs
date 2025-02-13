@@ -51,7 +51,7 @@ pub fn SequenceSearch() -> Element {
     let app_config = use_context::<AppConfiguration>();
     let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
     let mut sequence = use_signal(|| "".to_string());
-    let mut fetch_status: Signal<FetchStatus> = use_signal(|| FetchStatus::None);
+    let mut fetch_status: Signal<FetchStatus<()>> = use_signal(|| FetchStatus::None);
 
     let minimum_sequence_length_to_search = use_resource(move || async move {
         match get_macpepdb_configuration(macpepdb_base_url).await {
@@ -73,12 +73,11 @@ pub fn SequenceSearch() -> Element {
         }
         fetch_status.set(FetchStatus::Loading);
         let peptide = get_peptide(macpepdb_base_url, sequence).await?;
-        fetch_status.set(FetchStatus::Finished);
+        fetch_status.set(FetchStatus::Finished(()));
         Ok(peptide)
     });
 
     rsx! {
-        h3 { "Search for peptide by sequence" }
         div { class: "input-group mb-3",
             input {
                 class: "form-control",

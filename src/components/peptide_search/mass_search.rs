@@ -1,0 +1,542 @@
+use std::{fmt::Display, str::FromStr};
+
+use anyhow::{bail, Result};
+use dioxus::prelude::*;
+use dioxus_logger::tracing::info;
+use futures_util::StreamExt;
+use serde_json::json;
+
+use crate::{
+    api_helpers::fetch_status::FetchStatus,
+    components::{peptide_search, rounded_mass::RoundedMass, separator_line::SeparatorLine},
+    configuration::Configuration as AppConfiguration,
+    entities::{
+        amino_acid::AminoAcid,
+        peptide::Peptide as MaCPepDBPeptide,
+        post_translational_modification::{PostTranslationalModification, PtmPosition, PtmType},
+        protein::Protein as MaCPepDBProtein,
+        taxonomy::Taxonomy,
+    },
+    routes::Routes,
+};
+
+/// Default upper and lower mass tolerance
+///
+const DEFAULT_UPPER_LOWER_MASS_TOLERANCE: i32 = 10;
+
+/// Default charge
+///
+const DEFAULT_CHARGE: i32 = 2;
+
+/// Default max variable modifications
+///
+const DEFAULT_MAX_VAR_MODIFICATIONS: i32 = 2;
+
+/// As proteins contain their peptides and peptides contain their protein of origin, MaCPepDB
+/// stops the recursion on second level by only adding the Protein accession to the peptide
+/// instead of the whole protein.
+type PeptideEntity = MaCPepDBPeptide<String>;
+
+/// Supported mass units for the search
+///
+#[derive(PartialEq)]
+enum MassUnit {
+    Thompson,
+    Dalton,
+}
+
+impl Display for MassUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MassUnit::Thompson => write!(f, "Thompson"),
+            MassUnit::Dalton => write!(f, "Dalton"),
+        }
+    }
+}
+
+impl FromStr for MassUnit {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "thompson" => Ok(MassUnit::Thompson),
+            "dalton" => Ok(MassUnit::Dalton),
+            _ => Err(()),
+        }
+    }
+}
+
+async fn search_peptides(
+    macpepdb_base_url: Signal<String>,
+    thompson: Signal<f64>,
+    charge: Signal<i32>,
+    dalton: Signal<f64>,
+    lower_mass_tolerance: Signal<i32>,
+    upper_mass_tolerance: Signal<i32>,
+    taxonomy: Resource<Result<Option<Taxonomy>>>,
+    max_variable_modifications: Signal<i32>,
+    ptms: Signal<Vec<PostTranslationalModification>>,
+) -> Result<Vec<PeptideEntity>> {
+    let url = format!("{}/api/peptides/search", macpepdb_base_url);
+    let mut body = json!({
+        "mass": *dalton.read(),
+        "lower_mass_tolerance_ppm": *lower_mass_tolerance.read(),
+        "upper_mass_tolerance_ppm": *upper_mass_tolerance.read(),
+        "max_variable_modifications": *max_variable_modifications.read(),
+        "modifications": *ptms.read(),
+    });
+
+    if let Some(Ok(Some(taxonomy))) = &*taxonomy.read_unchecked() {
+        body["taxonomy_id"] = json!(taxonomy.id);
+    }
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(&url)
+        .header("Accept", "application/json")
+        .json(&body)
+        .send()
+        .await?;
+    if !response.status().is_success() {
+        bail!(response.text().await?);
+    }
+
+    Ok(response.json().await?)
+}
+
+pub fn MassSearch() -> Element {
+    let app_config = use_context::<AppConfiguration>();
+    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+
+    // ui state
+    let mut are_filters_visible = use_signal(|| false);
+
+    // mass filter
+    let mut selected_mass_unit = use_signal(|| MassUnit::Thompson);
+    let mut thompson = use_signal(|| 0.0);
+    let mut charge = use_signal(|| DEFAULT_CHARGE);
+    let mut dalton = use_signal(|| 0.0);
+    let mut lower_mass_tolerance = use_signal(|| DEFAULT_UPPER_LOWER_MASS_TOLERANCE);
+    let mut upper_mass_tolerance = use_signal(|| DEFAULT_UPPER_LOWER_MASS_TOLERANCE);
+
+    // taxonomy filter
+    let mut taxonomy_search_term = use_signal(|| "".to_string());
+    let mut selected_taxonomy_id: Signal<Option<u64>> = use_signal(|| None);
+    let taxonomies: Resource<Result<Option<Vec<Taxonomy>>>> = use_resource(move || async move {
+        if taxonomy_search_term.read_unchecked().is_empty() {
+            return Ok(None);
+        }
+
+        let url = format!("{macpepdb_base_url}/api/taxonomies/search");
+        let client = reqwest::Client::new();
+        let response = client
+            .post(&url)
+            .json(&json!({
+                "name_query": format!("*{taxonomy_search_term}*"),
+            }))
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            bail!(response.text().await?);
+        }
+
+        Ok(Some(response.json::<Vec<Taxonomy>>().await?))
+    });
+
+    let selected_taxonomy: Resource<Result<Option<Taxonomy>>> = use_resource(move || async move {
+        if selected_taxonomy_id.read_unchecked().is_none() {
+            return Ok(None);
+        }
+
+        let url = format!(
+            "{macpepdb_base_url}/api/taxonomies/{}",
+            selected_taxonomy_id.unwrap()
+        );
+
+        Ok(Some(reqwest::get(url).await?.json::<Taxonomy>().await?))
+    });
+
+    // post translational modifications
+    let mut max_var_modifications = use_signal(|| DEFAULT_MAX_VAR_MODIFICATIONS);
+    let mut new_ptm_amino_acid = use_signal(|| ' ');
+    let mut new_ptm_mass = use_signal(|| 0.0);
+    let mut new_ptm_type = use_signal(|| PtmType::Static);
+    let mut new_ptm_position = use_signal(|| PtmPosition::Anywhere);
+    let mut ptm_index = use_signal(|| 0); // Just to have something to use as name
+    let mut ptms: Signal<Vec<PostTranslationalModification>> = use_signal(Vec::new);
+    let amino_acids: Resource<Result<Vec<AminoAcid>>> = use_resource(move || async move {
+        let url = format!("{macpepdb_base_url}/api/chemistry/amino_acids");
+        Ok(reqwest::get(&url).await?.json().await?)
+    });
+
+    // search peptides
+    let mut peptides: Signal<FetchStatus<Vec<PeptideEntity>>> = use_signal(|| FetchStatus::None);
+    let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
+        while rx.next().await.is_some() {
+            peptides.set(FetchStatus::Loading);
+            let peptides_result = search_peptides(
+                macpepdb_base_url,
+                thompson,
+                charge,
+                dalton,
+                lower_mass_tolerance,
+                upper_mass_tolerance,
+                selected_taxonomy,
+                max_var_modifications,
+                ptms,
+            )
+            .await;
+            match peptides_result {
+                Ok(new_peptides) => peptides.set(FetchStatus::Finished(new_peptides)),
+                Err(e) => peptides.set(FetchStatus::Error(e)),
+            }
+        }
+    });
+
+    rsx! {
+        SeparatorLine { label: "Mass" }
+
+        select {
+            class: "form-select mb-3",
+            oninput: move |evt| {
+                selected_mass_unit.set(evt.value().parse().unwrap_or(MassUnit::Thompson))
+            },
+            option {
+                value: MassUnit::Thompson.to_string(),
+                selected: *selected_mass_unit.read() == MassUnit::Thompson,
+                "{MassUnit::Thompson.to_string()}"
+            }
+            option {
+                value: MassUnit::Dalton.to_string(),
+                selected: *selected_mass_unit.read() == MassUnit::Dalton,
+                "{MassUnit::Dalton.to_string()}"
+            }
+        }
+
+        div { class: if *selected_mass_unit.read() != MassUnit::Thompson { "d-none" } else { "" },
+
+            div { class: "input-group mb-3",
+                span { class: "input-group-text", "m/z" }
+                input {
+                    id: "thompson",
+                    r#type: "number",
+                    class: "form-control",
+                    value: "{thompson}",
+                    oninput: move |evt| thompson.set(evt.value().parse().unwrap_or(0.0)),
+                }
+            }
+            div { class: "input-group mb-3",
+                span { class: "input-group-text", "charge" }
+                input {
+                    id: "charge",
+                    r#type: "number",
+                    class: "form-control",
+                    value: "{charge}",
+                    oninput: move |evt| charge.set(evt.value().parse().unwrap_or(DEFAULT_CHARGE)),
+                }
+            }
+        }
+        div { class: if *selected_mass_unit.read() != MassUnit::Dalton { "input-group mb-3 d-none" } else { "input-group mb-3" },
+            span { class: "input-group-text", "Da" }
+            input {
+                id: "dalton",
+                r#type: "number",
+                class: "form-control",
+                value: "{dalton}",
+                oninput: move |evt| dalton.set(evt.value().parse().unwrap_or(0.0)),
+            }
+        }
+
+        button {
+            class: "btn btn-primary btn-sm",
+            r#type: "button",
+            onclick: move |_| {
+                let new_value = !*are_filters_visible.read();
+                are_filters_visible.set(new_value);
+            },
+            "Filters"
+            if *are_filters_visible.read() {
+                i { class: "fa-solid fa-chevron-up ms-2" }
+            } else {
+                i { class: "fa-solid fa-chevron-down ms-2" }
+            }
+        }
+        div { class: if *are_filters_visible.read() { "collapse show" } else { "collapse" },
+            SeparatorLine { label: "Mass tolerance (mandatory, unit: ppm)" }
+            div { class: "input-group mb-3",
+                span { class: "input-group-text", "Lower" }
+                input {
+                    r#type: "number",
+                    class: "form-control",
+                    value: "{lower_mass_tolerance}",
+                    oninput: move |evt| {
+                        lower_mass_tolerance
+                            .set(evt.value().parse().unwrap_or(DEFAULT_UPPER_LOWER_MASS_TOLERANCE))
+                    },
+                }
+            }
+            div { class: "input-group mb-3",
+                span { class: "input-group-text", "Upper" }
+                input {
+                    r#type: "number",
+                    class: "form-control",
+                    value: "{upper_mass_tolerance}",
+                    oninput: move |evt| {
+                        upper_mass_tolerance
+                            .set(evt.value().parse().unwrap_or(DEFAULT_UPPER_LOWER_MASS_TOLERANCE))
+                    },
+                }
+            }
+
+            SeparatorLine { label: "Taxonomy (optional)" }
+            div { class: "input-group mb-3",
+                span { class: "input-group-text", "Taxonomy search" }
+                input {
+                    r#type: "text",
+                    class: "form-control",
+                    value: "{taxonomy_search_term}",
+                    oninput: move |evt| { taxonomy_search_term.set(evt.value()) },
+                }
+            }
+            match &*selected_taxonomy.read_unchecked() {
+                Some(Ok(Some(taxonomy))) => rsx! {
+                    div { class: "list-group",
+                        div { class: "list-group-item d-flex justify-content-between align-items-center",
+                            "Selected taxonomy: {taxonomy.scientific_name} (ID: {taxonomy.id}, Rank: {taxonomy.rank})"
+                            button {
+                                class: "btn btn-danger",
+                                r#type: "button",
+                                onclick: move |_| {
+                                    selected_taxonomy_id.set(None);
+                                },
+                                i { class: "fa-solid fa-xmark" }
+                            }
+                        }
+                    }
+                },
+                Some(Ok(None)) => rsx! {
+                    div {}
+                },
+                Some(Err(err)) => rsx! {
+                    div { "Error fetching selected taxonomy: {err}" }
+                },
+                None => rsx! {
+                    div {}
+                },
+            }
+            match &*taxonomies.read_unchecked() {
+                Some(Ok(Some(taxonomies))) => rsx! {
+                    table { class: "table table-striped table-hover",
+                        thead {
+                            tr {
+                                th { "ID" }
+                                th { "Scientific name" }
+                                th { "Rank" }
+                                th { "Select" }
+                            }
+                        }
+                        tbody {
+                            for taxonomy in taxonomies {
+                                tr {
+                                    td { "{taxonomy.id}" }
+                                    td { "{taxonomy.scientific_name}" }
+                                    td { "{taxonomy.rank}" }
+                                    td {
+                                        input {
+                                            r#type: "radio",
+                                            value: "{taxonomy.id}",
+                                            name: "taxonomy",
+                                            oninput: move |evt| {
+                                                selected_taxonomy_id.set(Some(evt.value().parse().unwrap()));
+                                                taxonomy_search_term.set("".to_string());
+                                            },
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                Some(Ok(None)) => rsx! {
+                    div {}
+                },
+                Some(Err(err)) => rsx! {
+                    div { "Error fetching taxonomies: {err}" }
+                },
+                None => rsx! {
+                    div { "Loading..." }
+                },
+            }
+
+            SeparatorLine { label: "Post translational modifications" }
+            div { class: "input-group mb-3",
+                span { class: "input-group-text", "Max variable modifications" }
+                input {
+                    r#type: "number",
+                    class: "form-control",
+                    value: "{max_var_modifications}",
+                    oninput: move |evt| {
+                        max_var_modifications
+                            .set(evt.value().parse().unwrap_or(DEFAULT_UPPER_LOWER_MASS_TOLERANCE))
+                    },
+                }
+            }
+
+            div { class: "input-group mb-3",
+                select {
+                    class: "form-control",
+                    oninput: move |evt| {
+                        new_ptm_amino_acid.set(evt.value().parse().unwrap_or(' '));
+                    },
+                    option { value: " ", "Select amino acid" }
+                    match &*amino_acids.read_unchecked() {
+                        Some(Ok(amino_acid)) => rsx! {
+                            for aa in amino_acid {
+                                option { value: "{aa.get_code()}", "{aa.get_name()} ({aa.get_code()})" }
+                            }
+                        },
+                        Some(Err(e)) => rsx! {
+                            option { "Error loading amino acids: {e}" }
+                        },
+                        None => rsx! {
+                            option { "Loading ..." }
+                        },
+                    }
+                }
+                input {
+                    r#type: "number",
+                    class: "form-control",
+                    value: "{new_ptm_mass}",
+                    oninput: move |evt| {
+                        new_ptm_mass.set(evt.value().parse().unwrap_or(0.0));
+                    },
+                }
+                select {
+                    class: "form-control",
+                    oninput: move |evt| {
+                        new_ptm_type.set(evt.value().parse().unwrap_or(PtmType::Static));
+                    },
+                    option { value: PtmType::Static.to_string(), "{PtmType::Static.to_string()}" }
+                    option { value: PtmType::Variable.to_string(), "{PtmType::Variable.to_string()}" }
+                }
+                select {
+                    class: "form-control",
+                    oninput: move |evt| {
+                        new_ptm_position.set(evt.value().parse().unwrap_or(PtmPosition::Anywhere));
+                    },
+                    option { value: PtmPosition::Anywhere.to_string(),
+                        "{PtmPosition::Anywhere.to_string()}"
+                    }
+                    option { value: PtmPosition::NTerminus.to_string(),
+                        "{PtmPosition::NTerminus.to_string()}"
+                    }
+                    option { value: PtmPosition::CTerminus.to_string(),
+                        "{PtmPosition::CTerminus.to_string()}"
+                    }
+                    option { value: PtmPosition::NBond.to_string(), "{PtmPosition::NBond.to_string()}" }
+                    option { value: PtmPosition::CBond.to_string(), "{PtmPosition::CBond.to_string()}" }
+                }
+                button {
+                    class: "btn btn-primary",
+                    r#type: "button",
+                    onclick: move |_| {
+                        ptm_index += 1;
+                        let ptm = PostTranslationalModification {
+                            name: format!("PTM {}", ptm_index),
+                            amino_acid: *new_ptm_amino_acid.read(),
+                            mass_delta: *new_ptm_mass.read(),
+                            mod_type: new_ptm_type.read().clone(),
+                            position: new_ptm_position.read().clone(),
+                        };
+                        ptms.push(ptm);
+                        info!("Add PTM");
+                    },
+                    "Add PTM"
+                }
+            }
+            div { class: "list-group",
+                for (idx , ptm) in ptms.iter().enumerate() {
+                    div { class: "input-group",
+                        input {
+                            r#type: "text",
+                            class: "form-control",
+                            value: "{ptm.amino_acid}",
+                            disabled: true,
+                        }
+                        input {
+                            r#type: "number",
+                            class: "form-control",
+                            value: "{ptm.mass_delta}",
+                            disabled: true,
+                        }
+                        input {
+                            r#type: "text",
+                            class: "form-control",
+                            value: "{ptm.mod_type}",
+                            disabled: true,
+                        }
+                        input {
+                            r#type: "text",
+                            class: "form-control",
+                            value: "{ptm.position}",
+                            disabled: true,
+                        }
+                        button {
+                            class: "btn btn-danger",
+                            r#type: "button",
+                            onclick: move |_| {
+                                ptms.remove(idx);
+                            },
+                            i { class: "fa-solid fa-xmark" }
+                        }
+                    }
+                }
+            }
+        }
+        div { class: "row d-flex justify-content-start mt-3",
+            div { class: "col",
+                button {
+                    class: "btn btn-primary",
+                    r#type: "button",
+                    onclick: move |_| { search_coroutine.send(()) },
+                    i { class: "fa-solid fa-search me-2" }
+                    "Search"
+                }
+            }
+        }
+        match &*peptides.read_unchecked() {
+            FetchStatus::None => rsx! { "" },
+            FetchStatus::Loading => rsx! { "Loading ..." },
+            FetchStatus::Finished(peptides) => rsx! {
+                table { class: "table table-striped table-hover table-sm table-responsive",
+                    thead {
+                        tr {
+                            th { "Mass (Da)" }
+                            th { "Sequence" }
+                        }
+                    }
+                    tbody {
+                        for peptide in peptides {
+                            tr {
+                                td {
+                                    RoundedMass { mass: peptide.get_mass() }
+                                }
+                                td { class: "text-break",
+                                    Link {
+                                        to: Routes::Peptide {
+                                            peptide_sequence: peptide.get_sequence().to_owned(),
+                                        },
+                                        "{peptide.get_sequence()}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            FetchStatus::Error(err) => rsx! {
+                div { "Error fetching peptides: {err}" }
+            },
+        }
+    }
+}

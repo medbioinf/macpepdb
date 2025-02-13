@@ -6,3 +6,8 @@ pub mod configuration;
 pub mod peptide;
 /// Simplified copy of MaCPepDBs protein entity for easy deserialization
 pub mod protein;
+/// Simplified copy of MaCPepDBs taxonomy entity for easy deserialization
+pub mod taxonomy;
+
+/// Simplified copy of Omicstools PTM
+pub mod post_translational_modification;
