@@ -133,11 +133,13 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                     }
                                 }
                             }
-                            td { "Unique taxonomy IDs (Taxonomies where this peptide is only present in one protein)" }
-                            td {
-                                ul {
-                                    for id in peptide.get_unique_taxonomy_ids().iter() {
-                                        li { "{id}" }
+                            tr {
+                                td { "Unique taxonomy IDs (Taxonomies where this peptide is only present in one protein)" }
+                                td {
+                                    ul {
+                                        for id in peptide.get_unique_taxonomy_ids().iter() {
+                                            li { "{id}" }
+                                        }
                                     }
                                 }
                             }
