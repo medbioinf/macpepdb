@@ -47,5 +47,5 @@ pub async fn prepare_database_for_tests(client: &Client) {
 
 #[cfg(test)]
 pub mod tests {
-    pub const DATABASE_URL: &'static str = "scylla://127.0.0.1:9042/macpepdb";
+    pub const DATABASE_URL: &'static str = "scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb";
 }
