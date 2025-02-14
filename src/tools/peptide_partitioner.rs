@@ -19,7 +19,7 @@ lazy_static! {
 /// * `partition_limits` - A vector of partition limits (cannot be empty)
 /// * `mass` - The mass to get the partition for (must be larger or equal to 0 and small than the last partition limit)
 ///
-pub fn get_mass_partition(partition_limits: &Vec<i64>, mass: i64) -> Result<usize> {
+pub fn get_mass_partition(partition_limits: &[i64], mass: i64) -> Result<usize> {
     // Check for errors in the given arguments
     if partition_limits.is_empty() {
         bail!("Partition limits are empty");
@@ -52,7 +52,7 @@ pub fn get_mass_partition(partition_limits: &Vec<i64>, mass: i64) -> Result<usiz
 
 pub struct PeptidePartitioner;
 
-impl<'a> PeptidePartitioner {
+impl PeptidePartitioner {
     /// Creates a new peptide partitioning based on the peptide mass counts
     ///
     /// # Arguments
@@ -68,7 +68,7 @@ impl<'a> PeptidePartitioner {
         // Set partition tolerance. Throw errors if tolerance is not in the correct range
         let partition_tolerance = match partition_tolerance {
             Some(tolerance) => {
-                if tolerance < 0.0 || tolerance > 1.0 {
+                if !(0.0..=1.0).contains(&tolerance) {
                     bail!("Partition tolerance must be between 0.0 and 1.0");
                 }
 
@@ -153,7 +153,7 @@ mod test {
         let protease = get_protease_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
 
         let mass_counts = PeptideMassCounter::count(
-            &vec![PathBuf::from("test_files/mouse.txt")],
+            &[PathBuf::from("test_files/mouse.txt")],
             protease.as_ref(),
             true,
             0.02,
@@ -224,6 +224,6 @@ mod test {
         // Expect error for negative mass
         assert!(get_mass_partition(&partition_limits, -1).is_err());
         // Expect error for empty partition limits
-        assert!(get_mass_partition(&vec![], 10).is_err());
+        assert!(get_mass_partition(&[], 10).is_err());
     }
 }

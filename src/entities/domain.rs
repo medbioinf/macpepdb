@@ -17,6 +17,7 @@ pub struct Domain {
 }
 
 impl Domain {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         start_index: i64,
         end_index: i64,

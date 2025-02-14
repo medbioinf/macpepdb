@@ -12,7 +12,7 @@ use crate::database::scylla::client::Client;
 
 /// Prefix for the key of the taxonomy tree in the blob table
 ///
-pub const KEY_PREFIX: &'static str = "taxonomy_tree_chunk_";
+pub const KEY_PREFIX: &str = "taxonomy_tree_chunk_";
 
 /// Stores the taxonomy tree in the blob table as binary JSON.
 ///

@@ -8,7 +8,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
 use dihardts_omicstools::biology::taxonomy::Taxonomy;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
 // internal imports
@@ -51,7 +51,7 @@ pub async fn get_taxonomy(
 ) -> Result<Json<JsonValue>, WebError> {
     let taxonomy_tree = app_state.get_taxonomy_tree_as_ref();
     match taxonomy_tree.get_taxonomy(id) {
-        Some(taxonomy) => Ok(Json(taxonomy_to_json(&taxonomy, taxonomy_tree.get_ranks()))),
+        Some(taxonomy) => Ok(Json(taxonomy_to_json(taxonomy, taxonomy_tree.get_ranks()))),
         None => Err(WebError::new(
             StatusCode::NOT_FOUND,
             format!("Could not find taxonomy with ID {}", id),
@@ -114,14 +114,6 @@ impl SearchRequestBody {
     pub fn get_name_query(&self) -> &str {
         self.name_query.as_str()
     }
-}
-
-#[derive(Serialize)]
-struct SerializableTaxonomy<'a> {
-    id: u64,
-    parent_id: u64,
-    scientific_name: &'a str,
-    rank: &'a String,
 }
 
 /// Searches a taxonomies by their names   

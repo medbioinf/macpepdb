@@ -88,9 +88,9 @@ enum TracingLogRotation {
     Never,
 }
 
-impl Into<Rotation> for TracingLogRotation {
-    fn into(self) -> Rotation {
-        match self {
+impl From<TracingLogRotation> for Rotation {
+    fn from(rotation: TracingLogRotation) -> Self {
+        match rotation {
             TracingLogRotation::Minutely => Rotation::MINUTELY,
             TracingLogRotation::Hourly => Rotation::HOURLY,
             TracingLogRotation::Daily => Rotation::DAILY,
@@ -395,10 +395,8 @@ async fn main() -> Result<()> {
 
             let protein_file_paths = convert_str_paths_and_resolve_globs(protein_file_paths)?;
 
-            let taxonomy_file_path = match taxonomy_file {
-                Some(taxonomy_file) => Some(Path::new(&taxonomy_file).to_path_buf()),
-                None => None,
-            };
+            let taxonomy_file_path =
+                taxonomy_file.map(|taxonomy_file| Path::new(&taxonomy_file).to_path_buf());
 
             let log_folder = Path::new(&log_folder).to_path_buf();
 
@@ -504,12 +502,12 @@ async fn main() -> Result<()> {
                             continue;
                         }
                         let row = row_opt.unwrap().0;
-                        let peptide = Peptide::from(row);
+                        let peptide = row;
 
                         let a = peptide.get_domains().iter().map(|x| x.get_name());
 
                         for name in a {
-                            if name == "" {
+                            if name.is_empty() {
                                 info!("{:?}", peptide.get_proteins());
                             }
                             domains.insert(name.to_string());

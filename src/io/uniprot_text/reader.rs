@@ -17,25 +17,25 @@ use crate::entities::domain::Domain;
 use crate::entities::protein::Protein;
 
 /// Identifier for reviewed entries
-const IS_REVIEWED_STRING: &'static str = "Reviewed;";
+const IS_REVIEWED_STRING: &str = "Reviewed;";
 /// Identifier for proteome ID
-const DR_PROTEOMES_IDENTIFIER: &'static str = "Proteomes;";
+const DR_PROTEOMES_IDENTIFIER: &str = "Proteomes;";
 /// End index of identifier for proteome ID
 const DR_PROTEOME_IDENTIFIED_END: usize = DR_PROTEOMES_IDENTIFIER.len() + 5; // 5 = length of "ID   "
 /// Identifier for recommended name
-const DE_RECNAME_IDENTIFIER: &'static str = "RecName";
+const DE_RECNAME_IDENTIFIER: &str = "RecName";
 /// Identifier for alternative name
-const DE_ALTNAME_IDENTIFIER: &'static str = "AltName";
+const DE_ALTNAME_IDENTIFIER: &str = "AltName";
 /// Identifier for full name
-const DE_FULL_IDENTIFIER: &'static str = "Full";
+const DE_FULL_IDENTIFIER: &str = "Full";
 /// Attribute for name in gene line
-const GN_NAME_ATTRIBUTE: &'static str = "Name=";
+const GN_NAME_ATTRIBUTE: &str = "Name=";
 /// Attribute for synonyms in gene line
-const GN_SYNONYMS_ATTRIBUTE: &'static str = "Synonyms=";
+const GN_SYNONYMS_ATTRIBUTE: &str = "Synonyms=";
 
 /// Empty str
 ///
-const EMPTY_STR: &'static str = "";
+const EMPTY_STR: &str = "";
 
 /// Reader for Uniprot text files
 /// <https://web.expasy.org/docs/userman.html>
@@ -88,7 +88,7 @@ impl Reader {
     pub fn reset(&mut self) -> Result<()> {
         self.internal_reader =
             Self::create_internal_reader(&self.uniprot_txt_file_path, self.buffer_size)?;
-        return Ok(());
+        Ok(())
     }
 
     /// Returns the number of entries in the file.
@@ -162,10 +162,7 @@ impl FallibleIterator for Reader {
                             .next()
                             .ok_or(anyhow::anyhow!("no entry name"))?
                             .to_string();
-                        is_reviewed = split
-                            .next()
-                            .ok_or(anyhow::anyhow!("no review status"))?
-                            .to_string()
+                        is_reviewed = split.next().ok_or(anyhow::anyhow!("no review status"))?
                             == IS_REVIEWED_STRING;
                     }
                     "AC" => {
@@ -340,7 +337,7 @@ impl FallibleIterator for Reader {
                                 domain_name = s[7..s.len() - 1].to_string();
                             }
                             if s.starts_with("/evidence") {
-                                if domain_name == "" {
+                                if domain_name.is_empty() {
                                     if ft_type == "TRANSMEM" {
                                         domain_name = "Transmembrane".to_string();
                                     } else if ft_type == "INTRAMEM" {
@@ -410,11 +407,11 @@ mod tests {
 
     const EXPECTED_TAXONOMY_IDS: [i64; 3] = [9606, 10090, 9606];
 
-    const EXPECTED_PROTEOME_IDS: [&'static str; 3] = ["UP000005640", "UP000000589", "UP000005640"];
+    const EXPECTED_PROTEOME_IDS: [&str; 3] = ["UP000005640", "UP000000589", "UP000005640"];
 
     const EXPECTED_REVIEW_STATUS: [bool; 3] = [true, false, true];
 
-    const EXPECTED_SEQUENCES: [&'static str; 3] = [
+    const EXPECTED_SEQUENCES: [&str; 3] = [
         "MNPLLILTFVAAALAAPFDDDDKIVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIAANS",
         "MCWRPLCRFLWLWSYLSYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSAKQRVTGLDFIPGLHPILSLSKMDQTLAVYQQVLTSLPSQNVLQIANDLENLRDLLHLLAFSKSCSLPQTSGLQKPESLDGVLEASLYSTEVVALSRLQGSLQDILQQLDVSPEC",
         "MEAETGSSVETGKKANRGTRIALVVFVGGTLVLGTILFLVSQGLLSLQAKQEYCLKPECIEAAAAILSKVNLSVDPCDNFFRFACDGWISNNPIPEDMPSYGVYPWLRHNVDLKLKELLEKSISRRRDTEAIQKAKILYSSCMNEKAIEKADAKPLLHILRHSPFRWPVLESNIGPEGVWSERKFSLLQTLATFRGQYSNSVFIRLYVSPDDKASNEHILKLDQATLSLAVREDYLDNSTEAKSYRDALYKFMVDTAVLLGANSSRAEHDMKSVLRLEIKIAEIMIPHENRTSEAMYNKMNISELSAMIPQFDWLGYIKKVIDTRLYPHLKDISPSENVVVRVPQYFKDLFRILGSERKKTIANYLVWRMVYSRIPNLSRRFQYRWLEFSRVIQGTTTLLPQWDKCVNFIESALPYVVGKMFVDVYFQEDKKEMMEELVEGVRWAFIDMLEKENEWMDAGTKRKAKEKARAVLAKVGYPEFIMNDTHVNEDLKAIKFSEADYFGNVLQTRKYLAQSDFFWLRKAVPKTEWFTNPTTVNAFYSASTNQIRFPAGELQKPFFWGTEYPRSLSYGAIGVIVGHEFTHGFDNNGRKYDKNGNLDPWWSTESEEKFKEKTKCMINQYSNYYWKKAGLNVKGKRTLGENIADNGGLREAFRAYRKWINDRRQGLEEPLLPGITFTNNQLFFLSYAHVRCNSYRPEAAREQVQIGAHSPPQFRVNGAISNFEEFQKAFNCPPNSTMNRGMDSCRLW"

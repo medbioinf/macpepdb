@@ -2,6 +2,7 @@
 use std::{
     cmp,
     collections::HashMap,
+    fmt::Display,
     hash::{Hash, Hasher},
 };
 
@@ -51,6 +52,7 @@ impl Peptide {
     /// * `unique_taxonomy_ids` - Taxonomy IDs where the peptide is only contained in one protein
     /// * `proteome_ids` - The proteome IDs
     ///
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         partition: i64,
         mass: i64,
@@ -100,6 +102,7 @@ impl Peptide {
     /// * `unique_taxonomy_ids` - Taxonomy IDs where the peptide is only contained in one protein
     /// * `proteome_ids` - The proteome IDs
     ///
+    #[allow(clippy::too_many_arguments)]
     pub fn new_full(
         partition: i64,
         mass: i64,
@@ -133,97 +136,97 @@ impl Peptide {
     /// Returns the mass partition
     ///
     pub fn get_partition(&self) -> i64 {
-        return self.partition;
+        self.partition
     }
 
     /// Returns the mass partition as ref
     ///
     pub fn get_partition_as_ref(&self) -> &i64 {
-        return &self.partition;
+        &self.partition
     }
 
     /// Returns the mass
     pub fn get_mass(&self) -> i64 {
-        return self.mass;
+        self.mass
     }
 
     /// Returns the mass as ref
     pub fn get_mass_as_ref(&self) -> &i64 {
-        return &self.mass;
+        &self.mass
     }
 
     /// Returns the sequence
     pub fn get_sequence(&self) -> &String {
-        return &self.sequence;
+        &self.sequence
     }
 
     /// Returns the number of missed cleavages
     pub fn get_missed_cleavages(&self) -> i16 {
-        return self.missed_cleavages;
+        self.missed_cleavages
     }
 
     /// Returns the number of missed cleavages as ref
     pub fn get_missed_cleavages_as_ref(&self) -> &i16 {
-        return &self.missed_cleavages;
+        &self.missed_cleavages
     }
 
     /// Returns the amino acid counts
     ///
     pub fn get_aa_counts(&self) -> &Vec<i16> {
-        return &self.aa_counts;
+        &self.aa_counts
     }
 
     /// Returns the containing proteins
     pub fn get_proteins(&self) -> &Vec<String> {
-        return &self.proteins;
+        &self.proteins
     }
 
     /// Returns true if the peptide is contained in a Swiss-Prot protein
     ///
     pub fn get_is_swiss_prot(&self) -> bool {
-        return self.is_swiss_prot;
+        self.is_swiss_prot
     }
 
     /// Returns true if the peptide is contained in a Swiss-Prot protein as ref
     ///
     pub fn get_is_swiss_prot_as_ref(&self) -> &bool {
-        return &self.is_swiss_prot;
+        &self.is_swiss_prot
     }
 
     /// Returns true if the peptide is contained in a TrEMBL protein
     ///
     pub fn get_is_trembl(&self) -> bool {
-        return self.is_trembl;
+        self.is_trembl
     }
 
     /// Returns true if the peptide is contained in a TrEMBL protein as ref
     ///
     pub fn get_is_trembl_as_ref(&self) -> &bool {
-        return &self.is_trembl;
+        &self.is_trembl
     }
 
     /// Returns the taxonomy IDs
     ///
     pub fn get_taxonomy_ids(&self) -> &Vec<i64> {
-        return &self.taxonomy_ids;
+        &self.taxonomy_ids
     }
 
     /// Returns the unique taxonomy IDs
     ///
     pub fn get_unique_taxonomy_ids(&self) -> &Vec<i64> {
-        return &self.unique_taxonomy_ids;
+        &self.unique_taxonomy_ids
     }
 
     /// Returns the proteome IDs
     ///
     pub fn get_proteome_ids(&self) -> &Vec<String> {
-        return &self.proteome_ids;
+        &self.proteome_ids
     }
 
     /// Returns the proteome IDs
     ///
     pub fn get_domains(&self) -> &Vec<Domain> {
-        return &self.domains;
+        &self.domains
     }
 
     /// Returns the peptide metadata from the given proteins, format:
@@ -237,9 +240,9 @@ impl Peptide {
     ///
     pub fn get_metadata_from_proteins(
         &self,
-        proteins: &Vec<Protein>,
-        protease_cleavage_codes: &Vec<char>,
-        protease_cleavage_blocker_codes: &Vec<char>,
+        proteins: &[Protein],
+        protease_cleavage_codes: &[char],
+        protease_cleavage_blocker_codes: &[char],
         include_domains: bool,
     ) -> (bool, bool, Vec<i64>, Vec<i64>, Vec<String>, Vec<Domain>) {
         let is_swiss_prot = proteins.iter().any(|protein| protein.get_is_reviewed());
@@ -327,15 +330,15 @@ impl Peptide {
                                     d.get_name().clone(),
                                     d.get_evidence().clone(),
                                     Some(p.get_accession().to_string()),
-                                    Some(d.get_start_index().clone()),
-                                    Some(d.get_end_index().clone()),
+                                    Some(*d.get_start_index()),
+                                    Some(*d.get_end_index()),
                                     Some(start_idx),
                                 ));
                             }
                         }
                     }
 
-                    return domains;
+                    domains
                 })
                 .collect();
         }
@@ -343,20 +346,20 @@ impl Peptide {
         taxonomy_ids.sort();
         taxonomy_ids.dedup();
 
-        return (
+        (
             is_swiss_prot,
             is_trembl,
             taxonomy_ids,
             unique_taxonomy_ids,
             proteome_ids,
             domains,
-        );
+        )
     }
 }
 
 impl PartialEq for Peptide {
     fn eq(&self, other: &Self) -> bool {
-        return self.sequence == other.sequence;
+        self.sequence == other.sequence
     }
 }
 
@@ -368,9 +371,9 @@ impl Hash for Peptide {
     }
 }
 
-impl ToString for Peptide {
-    fn to_string(&self) -> String {
-        self.sequence.clone()
+impl Display for Peptide {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.sequence)
     }
 }
 

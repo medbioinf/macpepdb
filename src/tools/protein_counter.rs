@@ -25,8 +25,8 @@ impl ProteinCounter {
     /// * `protein_files` - List of protein files
     /// * `num_threads` - Number of threads to use
     ///
-    pub async fn count(protein_files: &Vec<PathBuf>, num_threads: usize) -> Result<usize> {
-        let protein_file_queue = Arc::new(Mutex::new(protein_files.clone()));
+    pub async fn count(protein_files: &[PathBuf], num_threads: usize) -> Result<usize> {
+        let protein_file_queue = Arc::new(Mutex::new(protein_files.to_owned()));
         let processed_files: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
         let protein_counter: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(0));
 

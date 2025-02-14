@@ -16,15 +16,15 @@ const REFRESH_INTERVAL: u64 = 1000;
 
 /// Progress style, used when no maximum value is given
 ///
-const SIMPLE_STYLE: &'static str = "        {msg} {pos} {per_sec} ";
+const SIMPLE_STYLE: &str = "        {msg} {pos} {per_sec} ";
 
 /// Progress bar style
 ///
-const PROGRESS_BAR_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len} {per_sec} ";
+const PROGRESS_BAR_STYLE: &str = "        {msg} {wide_bar} {pos}/{len} {per_sec} ";
 
 /// Progress bar style
 ///
-const QUEUE_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len}  ";
+const QUEUE_STYLE: &str = "        {msg} {wide_bar} {pos}/{len}  ";
 
 /// Struct for defining a monitorable metric
 pub struct MonitorableMetric {

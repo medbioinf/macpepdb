@@ -164,7 +164,7 @@ pub async fn get_peptide(
             ))
         }
     };
-    return Ok(Json(peptide_json));
+    Ok(Json(peptide_json))
 }
 
 /// Returns if a peptide exists.
@@ -222,6 +222,7 @@ pub struct SearchRequestBody {
     is_reviewed: Option<bool>,
 }
 
+#[allow(clippy::tabs_in_doc_comments)]
 /// Returns a stream of peptides matching the given parameters.
 /// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
 /// Important: Peptides only contain the accession of the proteins of origin.
@@ -334,21 +335,18 @@ pub async fn search(
         taxonomy_ids = Some(ids);
     }
 
-    let proteome_ids = match payload.proteome_id {
-        Some(proteome_id) => Some(vec![proteome_id]),
-        None => None,
-    };
+    let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
 
     let peptide_stream = match PeptideTable::search(
         app_state.get_db_client(),
         app_state.get_configuration(),
         mass_to_int(calculated_mass),
-        payload.lower_mass_tolerance_ppm.clone(),
-        payload.upper_mass_tolerance_ppm.clone(),
-        payload.max_variable_modifications.clone(),
+        payload.lower_mass_tolerance_ppm,
+        payload.upper_mass_tolerance_ppm,
+        payload.max_variable_modifications,
         taxonomy_ids,
         proteome_ids,
-        payload.is_reviewed.clone(),
+        payload.is_reviewed,
         payload.modifications,
     )
     .await

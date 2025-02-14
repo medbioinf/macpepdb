@@ -9,15 +9,14 @@ use crate::database::scylla::client::Client;
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
 
-pub const TABLE_NAME: &'static str = "config";
-pub const JSON_KEY: &'static str = "wrapper";
-pub const PROTEASE_NAME_KEY: &'static str = "enzyme_name";
-pub const MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY: &'static str = "max_number_of_missed_cleavages";
-pub const MIN_PEPTIDE_LENGTH_KEY: &'static str = "min_peptide_length";
-pub const MAX_PEPTIDE_LENGTH_KEY: &'static str = "max_peptide_length";
-pub const REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY: &'static str =
-    "remove_peptides_containing_unknown";
-pub const PARTITION_LIMITS_KEY: &'static str = "partition_limits";
+pub const TABLE_NAME: &str = "config";
+pub const JSON_KEY: &str = "wrapper";
+pub const PROTEASE_NAME_KEY: &str = "enzyme_name";
+pub const MAX_NUMBER_OF_MISSED_CLEAVAGES_KEY: &str = "max_number_of_missed_cleavages";
+pub const MIN_PEPTIDE_LENGTH_KEY: &str = "min_peptide_length";
+pub const MAX_PEPTIDE_LENGTH_KEY: &str = "max_peptide_length";
+pub const REMOVE_PEPTIDES_CONTAINING_UNKNOWN_KEY: &str = "remove_peptides_containing_unknown";
+pub const PARTITION_LIMITS_KEY: &str = "partition_limits";
 
 lazy_static! {
     static ref SELECT_STATEMENT: String = format!(
@@ -55,7 +54,6 @@ impl std::fmt::Display for ConfigurationIncompleteError {
 /// Table constists of two columns, conf_key (VARCHAR(256)) and value (JSONB).
 /// Each value will be wrapped in a JSON object with a single key, "wrapper" and than stored.
 ///
-
 pub struct ConfigurationTable {}
 
 impl Table for ConfigurationTable {
@@ -262,7 +260,7 @@ mod tests {
     use crate::database::scylla::prepare_database_for_tests;
     use crate::database::scylla::tests::DATABASE_URL;
 
-    const EXPECTED_ENZYME_NAME: &'static str = "Trypsin";
+    const EXPECTED_ENZYME_NAME: &str = "Trypsin";
     const EXPECTED_MAX_MISSED_CLEAVAGES: Option<usize> = Some(2);
     const EXPECTED_MIN_PEPTIDE_LEN: Option<usize> = Some(6);
     const EXPECTED_MAX_PEPTIDE_LEN: Option<usize> = Some(50);
@@ -279,10 +277,10 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select_without_insert() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&client).await;
 
-        let configuration_res = ConfigurationTable::select(&mut client).await;
+        let configuration_res = ConfigurationTable::select(&client).await;
         info!("got config res");
 
         assert!(configuration_res.is_err());
@@ -335,7 +333,7 @@ mod tests {
             .await
             .unwrap();
 
-        let actual_configuration = ConfigurationTable::select(&mut client).await.unwrap();
+        let actual_configuration = ConfigurationTable::select(&client).await.unwrap();
 
         assert_eq!(expected_configuration, actual_configuration);
     }

@@ -51,6 +51,7 @@ impl Protein {
     /// * `sequence` - The amino acid sequence
     /// * `updated_at` - The last update date as unix timestamp
     ///
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         accession: String,
         secondary_accessions: Vec<String>,
@@ -146,7 +147,7 @@ impl Protein {
     pub fn get_all_accessions(&self) -> Vec<&String> {
         let mut accessions = vec![self.get_accession()];
         accessions.extend(self.get_secondary_accessions().as_slice());
-        return accessions;
+        accessions
     }
 
     /// Checks if data has changed which results in a metadata update for for proteins
@@ -213,7 +214,7 @@ impl Protein {
 
         // Genes
         let genes = self.get_genes();
-        if genes.len() > 0 {
+        if !genes.is_empty() {
             entry.push_str(&format!("GN   Name={};\n", genes[0]));
         }
         if genes.len() > 1 {
@@ -266,11 +267,11 @@ impl Protein {
     pub async fn to_json_with_peptides(
         &self,
         client: Arc<Client>,
-        partition_limits: &Vec<i64>,
+        partition_limits: &[i64],
         protease: &dyn Protease,
     ) -> Result<JsonValue> {
         let mut peptides: Vec<Peptide> =
-            PeptideTable::get_peptides_of_proteins(client, &self, protease, partition_limits)
+            PeptideTable::get_peptides_of_proteins(client, self, protease, partition_limits)
                 .await?
                 .try_collect()
                 .await?;
@@ -291,7 +292,7 @@ impl Protein {
     ///
     pub fn to_json_with_peptide_sequences(&self, protease: &dyn Protease) -> Result<JsonValue> {
         let peptides: Vec<String> = protease
-            .cleave(&self.get_sequence())?
+            .cleave(self.get_sequence())?
             .map(|pep| Ok(pep.get_sequence().to_owned()))
             .collect()?;
 

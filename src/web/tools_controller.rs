@@ -152,7 +152,7 @@ pub async fn digest(
                     .join(", "),
             );
 
-            statement_addition.push_str(")");
+            statement_addition.push(')');
 
             let partition = CqlValue::BigInt(partition as i64);
 
@@ -162,8 +162,7 @@ pub async fn digest(
             select_params_ref.extend(
                 select_params
                     .iter()
-                    .map(|params| vec![&params.0, &params.1])
-                    .flatten(),
+                    .flat_map(|params| vec![&params.0, &params.1]),
             );
 
             let db_peptides_partition = PeptideTable::select(

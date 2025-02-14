@@ -58,10 +58,10 @@ pub struct ThreadSafeDistinctFilterFunction {
 
 impl FilterFunction for ThreadSafeDistinctFilterFunction {
     fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
-        if self.bloom_filter.contains(&peptide.get_sequence())? {
+        if self.bloom_filter.contains(peptide.get_sequence())? {
             return Ok(false);
         }
-        self.bloom_filter.add(&peptide.get_sequence())?;
+        self.bloom_filter.add(peptide.get_sequence())?;
         Ok(true)
     }
 }
@@ -102,7 +102,13 @@ impl FilterFunction for ProteomeFilterFunction {
 
 pub type FalliblePeptideStream = Pin<Box<dyn Stream<Item = Result<Peptide>> + Send>>;
 
-pub trait Search<'a> {
+/// Maps PTM conditions to partitions
+/// key is the partition, value is a vector of tuples with the lower and upper mass limit and the PTM condition
+///
+pub type PtmConditionMap = HashMap<usize, Vec<(i64, i64, PTMCondition)>>;
+
+#[allow(clippy::too_many_arguments)]
+pub trait Search {
     fn search(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
@@ -156,17 +162,17 @@ pub trait Search<'a> {
     ///
     fn get_query_limits_for_partition(
         partition: usize,
-        partition_limits: &Vec<i64>,
+        partition_limits: &[i64],
         lower_mass_limit: i64,
         upper_mass_limit: i64,
     ) -> (CqlValue, CqlValue) {
         // Get mass limits for partition
         let partition_lower_mass_limit = if partition > 0 {
-            partition_limits[partition as usize - 1] + 1
+            partition_limits[partition - 1] + 1
         } else {
             0
         };
-        let partition_upper_mass_limit = partition_limits[partition as usize];
+        let partition_upper_mass_limit = partition_limits[partition];
 
         let query_lower_mass_limit =
             CqlValue::BigInt(max(lower_mass_limit, partition_lower_mass_limit));
@@ -334,12 +340,11 @@ pub trait Search<'a> {
     ///
     fn split_and_sort_ptm_conditions(
         ptm_conditions: Vec<PTMCondition>,
-        partition_limits: &Vec<i64>,
+        partition_limits: &[i64],
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
-    ) -> Result<HashMap<usize, Vec<(i64, i64, PTMCondition)>>> {
-        let mut sorted_ptm_conditions: HashMap<usize, Vec<(i64, i64, PTMCondition)>> =
-            HashMap::new();
+    ) -> Result<PtmConditionMap> {
+        let mut sorted_ptm_conditions: PtmConditionMap = HashMap::new();
         for ptm_condition in ptm_conditions {
             // Calculate mass range based on ptm condition
             let lower_mass_limit = ptm_condition.get_mass()
@@ -348,26 +353,22 @@ pub trait Search<'a> {
                 + (ptm_condition.get_mass() / 1000000 * upper_mass_tolerance_ppm);
 
             // Get partition
-            let lower_partition_index =
-                get_mass_partition(partition_limits.as_ref(), lower_mass_limit)?;
-            let upper_partition_index =
-                get_mass_partition(partition_limits.as_ref(), upper_mass_limit)?;
+            let lower_partition_index = get_mass_partition(partition_limits, lower_mass_limit)?;
+            let upper_partition_index = get_mass_partition(partition_limits, upper_mass_limit)?;
 
             if lower_partition_index == upper_partition_index {
                 sorted_ptm_conditions
                     .entry(lower_partition_index)
-                    .or_insert(Vec::new())
+                    .or_default()
                     .push((lower_mass_limit, upper_mass_limit, ptm_condition));
             } else {
+                #[allow(clippy::needless_range_loop)]
                 for partition in lower_partition_index..=upper_partition_index {
-                    sorted_ptm_conditions
-                        .entry(partition)
-                        .or_insert(Vec::new())
-                        .push((
-                            max(partition_limits[partition], lower_mass_limit),
-                            min(partition_limits[partition], upper_mass_limit),
-                            ptm_condition.clone(),
-                        ));
+                    sorted_ptm_conditions.entry(partition).or_default().push((
+                        max(partition_limits[partition], lower_mass_limit),
+                        min(partition_limits[partition], upper_mass_limit),
+                        ptm_condition.clone(),
+                    ));
                 }
             }
         }
@@ -379,7 +380,7 @@ pub trait Search<'a> {
 ///
 pub struct MultiTaskSearch;
 
-impl<'a> Search<'a> for MultiTaskSearch {
+impl Search for MultiTaskSearch {
     async fn search(
         client: Arc<Client>,
         partition_limits: Arc<Vec<i64>>,
@@ -394,14 +395,8 @@ impl<'a> Search<'a> for MultiTaskSearch {
         ptms: Vec<PTM>,
         _num_threads: Option<usize>,
     ) -> Result<FalliblePeptideStream> {
-        let taxonomy_ids = match taxonomy_ids {
-            Some(taxonomy_ids) => Some(Arc::new(taxonomy_ids)),
-            None => None,
-        };
-        let proteome_ids = match proteome_ids {
-            Some(proteome_ids) => Some(Arc::new(proteome_ids)),
-            None => None,
-        };
+        let taxonomy_ids = taxonomy_ids.map(Arc::new);
+        let proteome_ids = proteome_ids.map(Arc::new);
 
         let sorted_ptm_conditions = Self::split_and_sort_ptm_conditions(
             get_ptm_conditions(mass, max_variable_modifications, &ptms)?,
@@ -414,7 +409,7 @@ impl<'a> Search<'a> for MultiTaskSearch {
 
         Ok(Box::pin(try_stream! {
             let mut tasks: Vec<tokio::task::JoinHandle<Result<()>>> = Vec::with_capacity(max(sorted_ptm_conditions.len(), 1));
-            if sorted_ptm_conditions.len() > 0 {
+            if !sorted_ptm_conditions.is_empty() {
                 for (task_id, (partition, conditions)) in sorted_ptm_conditions.into_iter().enumerate() {
                     let filter_pipeline = Self::create_filter_pipeline(
                         distinct,
@@ -457,13 +452,8 @@ impl<'a> Search<'a> for MultiTaskSearch {
 
             drop(peptide_sender);
 
-            loop {
-                match peptide_receiver.recv().await {
-                    Some(peptide) => yield peptide?,
-                    None => {
-                        break;
-                    }
-                }
+            while let Some(peptide) = peptide_receiver.recv().await {
+                yield peptide?;
             }
 
             for task in tasks {

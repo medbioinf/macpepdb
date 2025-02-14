@@ -81,7 +81,7 @@ impl DatabaseBuild {
     ///
     pub async fn get_or_set_configuration(
         client: &mut Client,
-        protein_file_paths: &Vec<PathBuf>,
+        protein_file_paths: &[PathBuf],
         num_partitions: u64,
         allowed_ram_fraction: f64,
         partitioner_false_positive_probability: f64,
@@ -112,7 +112,7 @@ impl DatabaseBuild {
             bail!("Number partition is 0 and initial configuration has no partition limits. Without any partitions the database cannot be built.");
         }
 
-        let new_configuration = if initial_configuration.get_partition_limits().len() == 0 {
+        let new_configuration = if initial_configuration.get_partition_limits().is_empty() {
             info!("... initial configuration has no partition limits list, creating one.");
             // create digestion protease
             let protease = get_protease_by_name(
@@ -176,7 +176,7 @@ impl DatabaseBuild {
         protease: &dyn Protease,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
-        log_folder: &PathBuf,
+        log_folder: &Path,
     ) -> Result<usize> {
         debug!("Digesting proteins and inserting peptides");
 
@@ -388,7 +388,7 @@ impl DatabaseBuild {
                         return Self::update_protein(
                             client.as_ref(),
                             &protein,
-                            &existing_protein,
+                            existing_protein,
                             &protease,
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
@@ -454,20 +454,21 @@ impl DatabaseBuild {
     /// * `partition_limits` - The partition limits
     /// * `prepared` - The prepared statement for updating the peptides
     ///
+    #[allow(clippy::borrowed_box)]
     async fn update_protein(
         client: &Client,
         updated_protein: &Protein,
         stored_protein: &Protein,
         protease: &Box<dyn Protease>,
         remove_peptides_containing_unknown: bool,
-        partition_limits: &Vec<i64>,
+        partition_limits: &[i64],
     ) -> Result<()> {
         let peptides_of_stored_protein = convert_to_internal_peptide(
             match remove_peptides_containing_unknown {
                 true => Box::new(remove_unknown_from_digest(
-                    protease.cleave(&stored_protein.get_sequence())?,
+                    protease.cleave(stored_protein.get_sequence())?,
                 )),
-                false => Box::new(protease.cleave(&stored_protein.get_sequence())?),
+                false => Box::new(protease.cleave(stored_protein.get_sequence())?),
             },
             partition_limits,
             stored_protein,
@@ -477,9 +478,9 @@ impl DatabaseBuild {
         let peptides_of_updated_protein = convert_to_internal_peptide(
             match remove_peptides_containing_unknown {
                 true => Box::new(remove_unknown_from_digest(
-                    protease.cleave(&updated_protein.get_sequence())?,
+                    protease.cleave(updated_protein.get_sequence())?,
                 )),
-                false => Box::new(protease.cleave(&updated_protein.get_sequence())?),
+                false => Box::new(protease.cleave(updated_protein.get_sequence())?),
             },
             partition_limits,
             updated_protein,
@@ -556,7 +557,7 @@ impl DatabaseBuild {
         }
 
         // Update protein itself
-        ProteinTable::update(client, &stored_protein, &updated_protein).await?;
+        ProteinTable::update(client, stored_protein, updated_protein).await?;
         counter!("macpepdb_build_digestion_processed_peptides")
             .increment(peptides_of_updated_protein.len() as u64);
 
@@ -579,10 +580,10 @@ impl DatabaseBuild {
     ) -> Result<()> {
         // Disassociate all peptides from existing protein which are not contained by the new protein
         let peptides_to_deassociate = peptides_from_stored_protein
-            .difference(&peptides_from_updated_protein)
+            .difference(peptides_from_updated_protein)
             .collect::<Vec<&Peptide>>();
 
-        if peptides_to_deassociate.len() > 0 {
+        if !peptides_to_deassociate.is_empty() {
             PeptideTable::update_protein_accession(
                 client,
                 &mut peptides_to_deassociate.into_iter(),
@@ -612,7 +613,7 @@ impl DatabaseBuild {
             .difference(peptides_from_stored_protein)
             .collect::<Vec<&Peptide>>();
 
-        if peptides_to_create.len() > 0 {
+        if !peptides_to_create.is_empty() {
             PeptideTable::bulk_upsert(client, peptides_to_create.into_iter()).await?
         }
         Ok(())
@@ -628,27 +629,28 @@ impl DatabaseBuild {
     /// * `partition_limits` - The partition limits
     /// * `prepared` - The prepared statement for 'upserting' the peptides
     ///
+    #[allow(clippy::borrowed_box)]
     async fn insert_protein(
         client: &Client,
         protein: &Protein,
         protease: &Box<dyn Protease>,
         remove_peptides_containing_unknown: bool,
-        partition_limits: &Vec<i64>,
+        partition_limits: &[i64],
     ) -> Result<()> {
         // Digest protein
         let peptides = convert_to_internal_peptide(
             match remove_peptides_containing_unknown {
                 true => Box::new(remove_unknown_from_digest(
-                    protease.cleave(&protein.get_sequence())?,
+                    protease.cleave(protein.get_sequence())?,
                 )),
-                false => Box::new(protease.cleave(&protein.get_sequence())?),
+                false => Box::new(protease.cleave(protein.get_sequence())?),
             },
             partition_limits,
             protein,
         )
         .collect::<HashSet<Peptide>>()?;
 
-        ProteinTable::insert(client, &protein).await?;
+        ProteinTable::insert(client, protein).await?;
         // PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared).await?;
         trace!(
             "Protein '{}' => {} peptides",
@@ -659,7 +661,7 @@ impl DatabaseBuild {
         PeptideTable::bulk_upsert(client, &mut peptides.iter()).await?;
         counter!("macpepdb_build_digestion_processed_peptides").increment(peptides.len() as u64);
 
-        return Ok(());
+        Ok(())
     }
 
     /// Collecting peptide metadata from the proteins of origin
@@ -803,7 +805,7 @@ impl DatabaseBuild {
                 let associated_proteins =
                     ProteinTable::get_proteins_of_peptide(client.as_ref(), &peptide)
                         .await?
-                        .try_collect()
+                        .try_collect::<Vec<_>>()
                         .await?;
 
                 let (
@@ -863,9 +865,9 @@ impl DatabaseBuild {
     /// * `database_url` - URL of the database.
     ///
     pub fn new(database_url: &str) -> Self {
-        return Self {
+        Self {
             database_url: database_url.to_owned(),
-        };
+        }
     }
 
     /// Builds / Maintains the database.
@@ -885,16 +887,18 @@ impl DatabaseBuild {
     /// * `initial_configuration_opt` - Optional initial configuration.
     /// * `log_folder` - Path to the log folder.
     /// * `include_do
+    ///
+    #[allow(clippy::too_many_arguments)]
     pub async fn build(
         &self,
-        protein_file_paths: &Vec<PathBuf>,
+        protein_file_paths: &[PathBuf],
         taxonomy_file_path: &Option<PathBuf>,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
-        log_folder: &PathBuf,
+        log_folder: &Path,
         include_domains: bool,
     ) -> Result<()> {
         info!("Starting database build");
@@ -932,7 +936,7 @@ impl DatabaseBuild {
             // read, digest and insert proteins and peptides
             info!("Protein digestion ...");
 
-            let mut attempt_protein_file_path = protein_file_paths.clone();
+            let mut attempt_protein_file_path = protein_file_paths.to_owned();
             // Insert proteins/peptides until no error occurred
             for attempt in 1.. {
                 info!("Proteins digestion attempt {}", attempt);
@@ -1015,11 +1019,9 @@ mod test {
         );
     }
 
-    const EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN: [&'static str; 2] =
-        ["P07477", "DUPLIC"];
+    const EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN: [&str; 2] = ["P07477", "DUPLIC"];
     const EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN: [i64; 2] = [9922, 9606];
-    const EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN: [&'static str; 2] =
-        ["UP000005640", "UP000291000"];
+    const EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN: [&str; 2] = ["UP000005640", "UP000291000"];
 
     // Test the database building
     #[tokio::test(flavor = "multi_thread")]
@@ -1116,7 +1118,7 @@ mod test {
                 assert_eq!(proteins.len(), 1);
 
                 let expected_peptides: Vec<Peptide> = convert_to_internal_peptide(
-                    Box::new(protease.cleave(&protein.get_sequence()).unwrap()),
+                    Box::new(protease.cleave(protein.get_sequence()).unwrap()),
                     configuration.get_partition_limits(),
                     &protein,
                 )
@@ -1161,7 +1163,7 @@ mod test {
         let trypsin_duplicate = stream.try_next().await.unwrap().unwrap();
 
         let trypsin_duplicate_peptides: Vec<Peptide> = convert_to_internal_peptide(
-            Box::new(protease.cleave(&trypsin_duplicate.get_sequence()).unwrap()),
+            Box::new(protease.cleave(trypsin_duplicate.get_sequence()).unwrap()),
             configuration.get_partition_limits(),
             &trypsin_duplicate,
         )
@@ -1200,7 +1202,7 @@ mod test {
                 .iter()
                 .for_each(|x| {
                     assert!(
-                        peptide.get_taxonomy_ids().contains(&x),
+                        peptide.get_taxonomy_ids().contains(x),
                         "{} not found in taxonomy_ids",
                         x
                     )
@@ -1209,7 +1211,7 @@ mod test {
                 .iter()
                 .for_each(|x| {
                     assert!(
-                        peptide.get_unique_taxonomy_ids().contains(&x),
+                        peptide.get_unique_taxonomy_ids().contains(x),
                         "{} not found in unique_taxonomy_ids",
                         x
                     )

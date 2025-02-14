@@ -12,11 +12,11 @@ pub const MAX_BLOB_SIZE: usize = 512000;
 
 /// Table name for the blob table
 ///
-pub const TABLE_NAME: &'static str = "blobs";
+pub const TABLE_NAME: &str = "blobs";
 
 /// Columns of the blob table
 ///
-pub const COLUMNS: &'static str = "key, position, data";
+pub const COLUMNS: &str = "key, position, data";
 
 /// Max pages per select (avoids timeouts)
 ///

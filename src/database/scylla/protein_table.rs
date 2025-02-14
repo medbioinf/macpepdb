@@ -13,9 +13,9 @@ use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
 
-const TABLE_NAME: &'static str = "proteins";
+const TABLE_NAME: &str = "proteins";
 
-const SELECT_COLS: [&'static str; 11] = [
+const SELECT_COLS: [&str; 11] = [
     "accession",
     "secondary_accessions",
     "entry_name",
@@ -29,7 +29,7 @@ const SELECT_COLS: [&'static str; 11] = [
     "domains",
 ];
 
-const INSERT_COLS: [&'static str; 11] = SELECT_COLS;
+const INSERT_COLS: [&str; 11] = SELECT_COLS;
 
 lazy_static! {
     /// Select statement without WHERE clause.
@@ -83,7 +83,7 @@ impl From<TypedProteinRow> for Protein {
 pub struct ProteinTable {}
 
 impl ProteinTable {
-    pub async fn insert<'a>(client: &Client, protein: &Protein) -> Result<()> {
+    pub async fn insert(client: &Client, protein: &Protein) -> Result<()> {
         let statement = client.get_prepared_statement(&INSERT_STATEMENT).await?;
         client
             .execute_unpaged(
@@ -106,11 +106,7 @@ impl ProteinTable {
         Ok(())
     }
 
-    pub async fn update<'a>(
-        client: &Client,
-        old_prot: &Protein,
-        updated_prot: &Protein,
-    ) -> Result<()> {
+    pub async fn update(client: &Client, old_prot: &Protein, updated_prot: &Protein) -> Result<()> {
         let mut batch: Batch = Batch::default();
 
         let delete_statement = DELETE_STATEMENT.replace(":KEYSPACE:", client.get_database());
@@ -141,17 +137,17 @@ impl ProteinTable {
             )
             .await?;
 
-        return Ok(());
+        Ok(())
     }
 
-    pub async fn delete<'a>(client: &Client, protein: &Protein) -> Result<()> {
+    pub async fn delete(client: &Client, protein: &Protein) -> Result<()> {
         let statement = client.get_prepared_statement(&DELETE_STATEMENT).await?;
 
         client
             .execute_unpaged(&statement, (protein.get_accession(),))
             .await?;
 
-        return Ok(());
+        Ok(())
     }
 
     /// Searches for a protein by accession or gene name. Gene name needs to be exact,
@@ -238,10 +234,10 @@ impl ProteinTable {
     /// * `additional` - Additional statement to add to the select statement, e.g. WHERE clause
     /// * `params` - Parameters for the additional statement
     ///
-    pub async fn select<'b>(
+    pub async fn select(
         client: &Client,
         additional: &str,
-        params: &[&'b CqlValue],
+        params: &[&CqlValue],
     ) -> Result<impl Stream<Item = Result<Protein>>> {
         let statement = format!("{} {};", SELECT_STATEMENT.as_str(), additional);
         let prepared_statement = client.get_prepared_statement(&statement).await?;
@@ -389,7 +385,7 @@ mod tests {
     /// Tests selects from database.
     ///
     async fn test_select() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -398,7 +394,7 @@ mod tests {
         }
 
         let protein = ProteinTable::select(
-            &mut client,
+            &client,
             "WHERE accession = ?",
             &[&CqlValue::Text(TRYPSIN.get_accession().to_owned())],
         )
@@ -416,19 +412,19 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_update() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
             ProteinTable::insert(&client, &protein).await.unwrap();
         }
 
-        ProteinTable::update(&mut client, &TRYPSIN, &UPDATED_TRYPSIN)
+        ProteinTable::update(&client, &TRYPSIN, &UPDATED_TRYPSIN)
             .await
             .unwrap();
 
         let actual = ProteinTable::select(
-            &mut client,
+            &client,
             "WHERE accession = ? ",
             &[&CqlValue::Text(UPDATED_TRYPSIN.get_accession().to_owned())],
         )
@@ -446,17 +442,17 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_delete() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(DATABASE_URL).await.unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
             ProteinTable::insert(&client, &protein).await.unwrap();
         }
 
-        ProteinTable::delete(&mut client, &TRYPSIN).await.unwrap();
+        ProteinTable::delete(&client, &TRYPSIN).await.unwrap();
 
         let stream = ProteinTable::select(
-            &mut client,
+            &client,
             "WHERE accession = ? ",
             &[&CqlValue::Text(TRYPSIN.get_accession().to_owned())],
         )

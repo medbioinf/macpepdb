@@ -57,17 +57,17 @@ use super::app_state::AppState;
 ///             "missed_cleavages": 1,
 ///             "partition": 1,
 ///             "proteins": [
-///             	"Q9WTP6"
+///                 "Q9WTP6"
 ///             ],
 ///             "proteome_ids": [
-///             	"UP000000589"
+///                 "UP000000589"
 ///             ],
 ///             "sequence": "ALKTR",
 ///             "taxonomy_ids": [
-///             	10090
+///                 10090
 ///             ],
 ///             "unique_taxonomy_ids": [
-///             	10090
+///                 10090
 ///             ]
 ///         },
 ///         ...
@@ -125,10 +125,10 @@ pub async fn get_protein(
                 .await?,
         ));
     } else {
-        return Err(WebError::new(
+        Err(WebError::new(
             StatusCode::NOT_FOUND,
             "Protein not found".to_string(),
-        ));
+        ))
     }
 }
 

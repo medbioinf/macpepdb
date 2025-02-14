@@ -29,9 +29,9 @@ use crate::tools::peptide_partitioner::get_mass_partition;
 
 use crate::database::scylla::client::Client;
 
-pub const TABLE_NAME: &'static str = "peptides";
+pub const TABLE_NAME: &str = "peptides";
 
-pub const SELECT_COLS: [&'static str; 12] = [
+pub const SELECT_COLS: [&str; 12] = [
     "partition",
     "mass",
     "sequence",
@@ -46,9 +46,9 @@ pub const SELECT_COLS: [&'static str; 12] = [
     "domains",
 ];
 
-const INSERT_COLS: [&'static str; 12] = SELECT_COLS;
+const INSERT_COLS: [&str; 12] = SELECT_COLS;
 
-const UPDATE_COLS: [&'static str; 9] = [
+const UPDATE_COLS: [&str; 9] = [
     "missed_cleavages",
     "aa_counts",
     "proteins",
@@ -86,7 +86,7 @@ lazy_static! {
             .iter()
             .map(|col| {
                 if *col != "proteins" {
-                    return format!("{} = ?", col);
+                    format!("{} = ?", col)
                 } else {
                     format!("{} = {} + ?", col, col)
                 }
@@ -206,7 +206,7 @@ impl PeptideTable {
 
         join_all(insertion_futures).await;
 
-        return Ok(());
+        Ok(())
     }
 
     /// Updates the protein accessions of the given peptides.
@@ -267,7 +267,7 @@ impl PeptideTable {
                 .await?;
         }
 
-        return Ok(());
+        Ok(())
     }
 
     pub async fn add_proteins<'a, T>(
@@ -349,7 +349,7 @@ impl PeptideTable {
                 .await?;
         }
 
-        return Ok(());
+        Ok(())
     }
 
     /// Returns a fallible stream over the filtered peptides.
@@ -368,7 +368,8 @@ impl PeptideTable {
     /// * `ptms` - The PTMs to consider
     /// * `matching_peptides` - A bloom filter to check if a peptide was already found
     ///
-    pub async fn search<'a>(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn search(
         client: Arc<Client>,
         configuration: Arc<Configuration>,
         mass: i64,
@@ -440,13 +441,13 @@ impl PeptideTable {
         client: Arc<Client>,
         protein: &'a Protein,
         protease: &'a dyn Protease,
-        partition_limits: &'a Vec<i64>,
+        partition_limits: &'a [i64],
     ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
         Ok(try_stream! {
             // First digest the protein
             let dummy_peptides: HashSet<Peptide> = convert_to_internal_dummy_peptide(
                 Box::new(protease.cleave(protein.get_sequence())?),
-                &partition_limits,
+                partition_limits,
             )
             .collect()?;
 
@@ -465,7 +466,7 @@ impl PeptideTable {
                     ).await?;
                     pin!(stream);
 
-                    Ok(stream.try_next().await?)
+                    stream.try_next().await
                 });
             }
 
@@ -485,10 +486,10 @@ impl PeptideTable {
     /// * `additional` - Additional statement to add to the select statement, e.g. WHERE clause
     /// * `params` - Parameters for the additional statement
     ///
-    pub async fn select<'b>(
+    pub async fn select(
         client: &Client,
         additional: &str,
-        params: &[&'b CqlValue],
+        params: &[&CqlValue],
     ) -> Result<impl Stream<Item = Result<Peptide>>> {
         let statement = format!("{} {};", SELECT_STATEMENT.as_str(), additional);
         let prepared_statement = client.get_prepared_statement(&statement).await?;
@@ -517,6 +518,7 @@ impl PeptideTable {
     /// * `proteome_ids` - Proteome ids of the peptide
     /// * `domains` - Domains of the peptide
     ///
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_metadata(
         client: &Client,
         peptide: &Peptide,
@@ -576,7 +578,7 @@ mod tests {
     use crate::io::uniprot_text::reader::Reader;
     use crate::tools::omicstools::convert_to_internal_peptide;
 
-    const CONFLICTING_PEPTIDE_PROTEIN_ACCESSION: &'static str = "P41159";
+    const CONFLICTING_PEPTIDE_PROTEIN_ACCESSION: &str = "P41159";
 
     lazy_static! {
         // Peptides for Leptin (UniProt accession Q257X2, with KP on first position) digested with 3 missed cleavages, length 6 - 50
@@ -650,8 +652,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
-        prepare_database_for_tests(&mut client).await;
+        let client = Client::new(DATABASE_URL).await.unwrap();
+        prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();
@@ -672,7 +674,7 @@ mod tests {
 
         // Create a conflicting peptide which is associated with another protein
         // to trigger conflict handling when inserting the peptides.
-        let conflicting_peptides = vec![Peptide::new(
+        let conflicting_peptides = [Peptide::new(
             peptides[0].get_partition(),
             peptides[0].get_mass(),
             peptides[0].get_sequence().to_owned(),
@@ -713,7 +715,7 @@ mod tests {
 
         // Check that the conflicting peptide was inserted correctly with two protein accessions.
         let stream = PeptideTable::select(
-            &mut client,
+            &client,
             "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
             &[
                 &CqlValue::BigInt(conflicting_peptides[0].get_partition()),
@@ -761,8 +763,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_accession_update() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
-        prepare_database_for_tests(&mut client).await;
+        let client = Client::new(DATABASE_URL).await.unwrap();
+        prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();
@@ -841,8 +843,8 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_flagging_for_metadata_update() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
-        prepare_database_for_tests(&mut client).await;
+        let client = Client::new(DATABASE_URL).await.unwrap();
+        prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
         let leptin = reader.next().unwrap().unwrap();

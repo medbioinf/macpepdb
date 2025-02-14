@@ -81,14 +81,11 @@ impl ClientSettings {
         };
 
         // Extract credentials and attributes if present
-        match matches.name("credentials") {
-            Some(credentials) => {
-                let credentials = credentials.as_str().split(':').collect::<Vec<&str>>();
-                settings.user = Some(credentials[0].to_string());
-                settings.password = Some(credentials[1].to_string());
-            }
-            None => (),
-        };
+        if let Some(credentials) = matches.name("credentials") {
+            let credentials = credentials.as_str().split(':').collect::<Vec<&str>>();
+            settings.user = Some(credentials[0].to_string());
+            settings.password = Some(credentials[1].to_string());
+        }
 
         // Extract attributes if present
         let attributes = match matches.name("attributes") {

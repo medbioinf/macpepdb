@@ -15,9 +15,9 @@ use crate::database::scylla::client::Client;
 pub async fn run_migrations(client: &Client) -> Result<()> {
     info!("Running Scylla migrations");
 
-    create_keyspace_if_not_exists(&client).await;
+    create_keyspace_if_not_exists(client).await;
 
-    let latest_migration_id = get_latest_migration_id(&client).await.unwrap_or(0);
+    let latest_migration_id = get_latest_migration_id(client).await.unwrap_or(0);
     info!("Latest migration id in DB: {}", latest_migration_id);
 
     for (i, statement) in UP.iter().skip(latest_migration_id as usize).enumerate() {
@@ -65,7 +65,6 @@ pub async fn get_latest_migration_id(client: &Client) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
-    use tracing_test::traced_test;
 
     use crate::database::generic_client::GenericClient;
     use crate::database::scylla::tests::DATABASE_URL;
