@@ -9,6 +9,7 @@ use axum::extract::{Json, Path, State};
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use dihardts_omicstools::mass_spectrometry::unit_conversions::mass_to_charge_to_dalton;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::TryStreamExt;
@@ -199,11 +200,19 @@ pub async fn get_peptide_existence(
     }
 }
 
+/// Struct for mass as thompson & charge or dalton
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub enum SearchRequestMass {
+    ThompsonCharge(f64, u8),
+    Dalton(f64),
+}
+
 /// Simple struct to deserialize the request body for peptide search
 ///
 #[derive(serde::Deserialize)]
 pub struct SearchRequestBody {
-    mass: f64,
+    mass: SearchRequestMass,
     lower_mass_tolerance_ppm: i64,
     upper_mass_tolerance_ppm: i64,
     max_variable_modifications: i16,
@@ -234,6 +243,8 @@ pub struct SearchRequestBody {
 ///     {
 ///         # Mass to search for
 ///         "mass": 2006.988396539,
+///         # Mass can also be given as tuple of m/z and charge
+///         # "mass": [2006.988396539, 2],
 ///         # Lower mass tolerance in ppm
 ///         "lower_mass_tolerance_ppm": 5,
 ///         # Upper mass tolerance in ppm
@@ -290,6 +301,11 @@ pub async fn search(
     headers: HeaderMap,
     Json(payload): Json<SearchRequestBody>,
 ) -> Result<(StatusCode, Body), WebError> {
+    let calculated_mass = match payload.mass {
+        SearchRequestMass::ThompsonCharge(mass, charge) => mass_to_charge_to_dalton(mass, charge),
+        SearchRequestMass::Dalton(mass) => mass,
+    };
+
     let mut taxonomy_ids: Option<Vec<i64>> = None;
     if let Some(taxonomy_id) = payload.taxonomy_id {
         // Check if taxonomy exists
@@ -326,7 +342,7 @@ pub async fn search(
     let peptide_stream = match PeptideTable::search(
         app_state.get_db_client(),
         app_state.get_configuration(),
-        mass_to_int(payload.mass),
+        mass_to_int(calculated_mass),
         payload.lower_mass_tolerance_ppm.clone(),
         payload.upper_mass_tolerance_ppm.clone(),
         payload.max_variable_modifications.clone(),
