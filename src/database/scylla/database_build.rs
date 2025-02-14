@@ -695,6 +695,23 @@ impl DatabaseBuild {
         );
         describe_counter!("macpepdb_build_metadata_errors", "Number of errors");
 
+        let monitorable_metrics = vec![
+            MonitorableMetric::new(
+                "macpepdb_build_metadata_processed_peptides".to_string(),
+                MonitorableMetricType::Rate,
+            ),
+            MonitorableMetric::new(
+                "macpepdb_build_metadata_errors".to_string(),
+                MonitorableMetricType::Rate,
+            ),
+        ];
+
+        let mut metrics_monitor = MetricsMonitor::new(
+            "macpepdb.build.digest",
+            monitorable_metrics,
+            "http://127.0.0.1:9494/metrics".to_string(),
+        )?;
+
         // Metadata update variables
         let partition_queue: Vec<i64> =
             (0..(configuration.get_partition_limits().len() as i64)).collect();
@@ -725,6 +742,7 @@ impl DatabaseBuild {
         join_all(metadata_collector_thread_handles).await;
         debug!("... all metadata update threads stopped");
 
+        metrics_monitor.stop().await?;
         debug!("Waiting for logging threads to stop ...");
         debug!("... all logging threads stopped");
 
@@ -745,13 +763,6 @@ impl DatabaseBuild {
         protease: Box<dyn Protease>,
         include_domains: bool,
     ) -> Result<()> {
-        let update_query = format!(
-            "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
-            client.get_database(),
-            PeptideTable::table_name()
-        );
-        let update_query_prepared_statement = client.prepare(update_query).await?;
-
         let protease_cleavage_codes: Vec<char> = protease
             .get_cleavage_amino_acids()
             .iter()
