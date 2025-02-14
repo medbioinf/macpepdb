@@ -10,6 +10,7 @@ use dioxus::prelude::*;
 use crate::components::peptide::amino_acid_composition_header_cell::AminoAcidCompositionHeaderCell;
 use crate::components::protein_list::ProteinList;
 use crate::components::rounded_mass::RoundedMass;
+use crate::components::sequence_block::SequenceBlock;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::amino_acid::AminoAcid;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
@@ -97,7 +98,9 @@ pub fn Peptide(props: PeptideProps) -> Element {
                         tbody {
                             tr {
                                 td { "Sequence" }
-                                td { "{peptide.get_sequence().to_owned()}" }
+                                td {
+                                    SequenceBlock { sequence: peptide.get_sequence().to_owned() }
+                                }
                             }
                             tr { "data-partition": "{peptide.get_partition()}",
                                 td { "Theoretical mass (Da)" }

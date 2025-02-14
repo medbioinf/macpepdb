@@ -5,6 +5,7 @@ use dioxus_router::components::Link;
 
 // internal imports
 use crate::components::rounded_mass::RoundedMass;
+use crate::components::sequence_block::SequenceBlock;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
@@ -104,6 +105,12 @@ pub fn Protein(props: ProteinProps) -> Element {
                             tr {
                                 td { "Is reviewed" }
                                 td { "{protein.get_is_reviewed()}" }
+                            }
+                            tr {
+                                td { "Sequence" }
+                                td {
+                                    SequenceBlock { sequence: protein.get_sequence().to_owned() }
+                                }
                             }
                         }
                     }
