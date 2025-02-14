@@ -109,7 +109,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 }
                             }
                             tr {
-                                td { "length" }
+                                td { "Length" }
                                 td { "{peptide.get_sequence().len()}" }
                             }
                             tr {
@@ -137,7 +137,16 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 }
                             }
                             tr {
-                                td { "Unique taxonomy IDs (Taxonomies where this peptide is only present in one protein)" }
+                                td { 
+                                    span {
+                                        class: "d-block",
+                                        "Unique taxonomy IDs"
+                                    }
+                                    small {
+                                        class: "d-block",
+                                        "(Taxonomies where this peptide is only present in one protein)" 
+                                    }
+                                }
                                 td {
                                     ul {
                                         for id in peptide.get_unique_taxonomy_ids().iter() {
@@ -147,8 +156,12 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 }
                             }
                             tr {
-                                td { "SwissProt/TrEMBL " }
-                                td { "{peptide.get_is_swiss_prot()} / {peptide.get_is_trembl()}" }
+                                td { "SwissProt / TrEMBL " }
+                                td {
+                                    i { class: if peptide.get_is_swiss_prot() { "fas fa-check" } else { "fas fa-times" } }
+                                    " / "
+                                    i { class: if peptide.get_is_trembl() { "fas fa-check" } else { "fas fa-times" } }
+                                }
                             }
                         }
                     }

@@ -104,7 +104,11 @@ pub fn Protein(props: ProteinProps) -> Element {
                             }
                             tr {
                                 td { "Is reviewed" }
-                                td { "{protein.get_is_reviewed()}" }
+                                td {
+                                    i { 
+                                        class: if protein.get_is_reviewed() { "fas fa-check" } else { "fas fa-times" }
+                                    }
+                                }
                             }
                             tr {
                                 td { "Sequence" }

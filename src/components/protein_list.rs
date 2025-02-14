@@ -55,7 +55,9 @@ where
                         td { "{protein.get_entry_name()}" }
                         td { "{protein.get_name()}" }
                         td { "{protein.get_genes().join(\", \")}" }
-                        td { "{protein.get_is_reviewed()}" }
+                        td {
+                            i { class: if protein.get_is_reviewed() { "fas fa-check" } else { "fas fa-times" } }
+                        }
                     }
                 }
             }
