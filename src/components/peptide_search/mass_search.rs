@@ -21,15 +21,15 @@ use crate::{
 
 /// Default upper and lower mass tolerance
 ///
-const DEFAULT_UPPER_LOWER_MASS_TOLERANCE: i32 = 10;
+const DEFAULT_UPPER_LOWER_MASS_TOLERANCE: i64 = 10;
 
 /// Default charge
 ///
-const DEFAULT_CHARGE: i32 = 2;
+const DEFAULT_CHARGE: u8 = 2;
 
 /// Default max variable modifications
 ///
-const DEFAULT_MAX_VAR_MODIFICATIONS: i32 = 2;
+const DEFAULT_MAX_VAR_MODIFICATIONS: i16 = 2;
 
 /// As proteins contain their peptides and peptides contain their protein of origin, MaCPepDB
 /// stops the recursion on second level by only adding the Protein accession to the peptide
@@ -68,23 +68,29 @@ impl FromStr for MassUnit {
 #[allow(clippy::too_many_arguments)]
 async fn search_peptides(
     macpepdb_base_url: Signal<String>,
+    selected_mass_unit: Signal<MassUnit>,
     thompson: Signal<f64>,
-    charge: Signal<i32>,
+    charge: Signal<u8>,
     dalton: Signal<f64>,
-    lower_mass_tolerance: Signal<i32>,
-    upper_mass_tolerance: Signal<i32>,
+    lower_mass_tolerance: Signal<i64>,
+    upper_mass_tolerance: Signal<i64>,
     taxonomy: Resource<Result<Option<Taxonomy>>>,
-    max_variable_modifications: Signal<i32>,
+    max_variable_modifications: Signal<i16>,
     ptms: Signal<Vec<PostTranslationalModification>>,
 ) -> Result<Vec<PeptideEntity>> {
     let url = format!("{}/api/peptides/search", macpepdb_base_url);
+
     let mut body = json!({
-        "mass": *dalton.read(),
         "lower_mass_tolerance_ppm": *lower_mass_tolerance.read(),
         "upper_mass_tolerance_ppm": *upper_mass_tolerance.read(),
         "max_variable_modifications": *max_variable_modifications.read(),
         "modifications": *ptms.read(),
     });
+
+    match *selected_mass_unit.read() {
+        MassUnit::Thompson => body["mass"] = json!((*thompson.read(), *charge.read())),
+        MassUnit::Dalton => body["mass"] = json!(*dalton.read()),
+    };
 
     if let Some(Ok(Some(taxonomy))) = &*taxonomy.read_unchecked() {
         body["taxonomy_id"] = json!(taxonomy.id);
@@ -178,6 +184,7 @@ pub fn MassSearch() -> Element {
             peptides.set(FetchStatus::Loading);
             let peptides_result = search_peptides(
                 macpepdb_base_url,
+                selected_mass_unit,
                 thompson,
                 charge,
                 dalton,
@@ -383,7 +390,7 @@ pub fn MassSearch() -> Element {
                     value: "{max_var_modifications}",
                     oninput: move |evt| {
                         max_var_modifications
-                            .set(evt.value().parse().unwrap_or(DEFAULT_UPPER_LOWER_MASS_TOLERANCE))
+                            .set(evt.value().parse().unwrap_or(DEFAULT_MAX_VAR_MODIFICATIONS))
                     },
                 }
             }
