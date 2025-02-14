@@ -1,3 +1,4 @@
+use chrono::DateTime;
 // 3rd party import
 use serde::Deserialize;
 
@@ -81,8 +82,11 @@ where
 
     /// Returns the last update date as unix timestamp
     ///
-    pub fn get_updated_at(&self) -> i64 {
-        self.updated_at
+    pub fn get_human_readable_updated_at(&self) -> String {
+        match DateTime::from_timestamp(self.updated_at, 0) {
+            Some(date_time) => date_time.format("%Y-%m-%d").to_string(),
+            None => "N/A".to_string(),
+        }
     }
 
     /// Returns the peptides

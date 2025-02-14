@@ -109,6 +109,10 @@ pub fn Protein(props: ProteinProps) -> Element {
                                 }
                             }
                             tr {
+                                td { "Last updated at" }
+                                td { "{protein.get_human_readable_updated_at()}" }
+                            }
+                            tr {
                                 td { "Sequence" }
                                 td {
                                     SequenceBlock { sequence: protein.get_sequence().to_owned() }

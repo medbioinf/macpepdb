@@ -9,6 +9,7 @@ build = "build.rs"
 
 [dependencies]
 anyhow = "1.0.75"
+chrono = "0.4.39"
 dioxus = { version = "0.6.3", features = ["router", "logger"] }
 dioxus-logger = "0.6.2"
 futures-util = "0.3.31"
