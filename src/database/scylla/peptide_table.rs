@@ -113,6 +113,8 @@ lazy_static! {
     ///
     static ref ADD_PROTEINS_STATEMENT: String = format!("UPDATE :KEYSPACE:.{} SET proteins = proteins + ? WHERE partition = ? and mass = ? and sequence = ?", TABLE_NAME);
 
+    /// Statement to update the metadata of a peptide
+    ///
     static ref UPDATE_METADATA_STATEMENT: String = format!(
         "UPDATE :KEYSPACE:.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
         TABLE_NAME
