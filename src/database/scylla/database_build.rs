@@ -33,7 +33,6 @@ use crate::database::scylla::{
     configuration_table::ConfigurationTable, peptide_table::PeptideTable,
     protein_table::ProteinTable,
 };
-use crate::database::table::Table;
 use crate::tools::message_logger::MessageLogger;
 use crate::tools::metrics_monitor::{MetricsMonitor, MonitorableMetric, MonitorableMetricType};
 // use crate::tools::metrics_logger::MetricsLogger;
@@ -810,22 +809,17 @@ impl DatabaseBuild {
                     include_domains,
                 );
 
-                let update_result = client
-                    .execute_unpaged(
-                        &update_query_prepared_statement,
-                        (
-                            &is_swiss_prot,
-                            &is_trembl,
-                            &taxonomy_ids,
-                            &unique_taxonomy_ids,
-                            &proteome_ids,
-                            &domains,
-                            peptide.get_partition(),
-                            peptide.get_mass(),
-                            peptide.get_sequence(),
-                        ),
-                    )
-                    .await;
+                let update_result = PeptideTable::update_metadata(
+                    client.as_ref(),
+                    &peptide,
+                    is_swiss_prot,
+                    is_trembl,
+                    &taxonomy_ids,
+                    &unique_taxonomy_ids,
+                    &proteome_ids,
+                    &domains,
+                )
+                .await;
 
                 match update_result {
                     Ok(_) => {

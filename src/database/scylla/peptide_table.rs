@@ -113,6 +113,11 @@ lazy_static! {
     ///
     static ref ADD_PROTEINS_STATEMENT: String = format!("UPDATE :KEYSPACE:.{} SET proteins = proteins + ? WHERE partition = ? and mass = ? and sequence = ?", TABLE_NAME);
 
+    static ref UPDATE_METADATA_STATEMENT: String = format!(
+        "UPDATE :KEYSPACE:.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
+        TABLE_NAME
+    );
+
 }
 
 /// Type alias for typed peptide rows
@@ -498,6 +503,50 @@ impl PeptideTable {
                 yield peptide_result?.into();
             }
         })
+    }
+
+    /// Updates the metadata of the given peptides.
+    ///
+    /// # Arguments
+    /// * `client` - Database client or open transaction
+    /// * `peptide` - Peptide to update
+    /// * `is_swiss_prot` - If the peptide is from SwissProt
+    /// * `is_trembl` - If the peptide is from TrEMBL
+    /// * `taxonomy_ids` - Taxonomy ids of the peptide
+    /// * `unique_taxonomy_ids` - Unique taxonomy ids of the peptide
+    /// * `proteome_ids` - Proteome ids of the peptide
+    /// * `domains` - Domains of the peptide
+    ///
+    pub async fn update_metadata(
+        client: &Client,
+        peptide: &Peptide,
+        is_swiss_prot: bool,
+        is_trembl: bool,
+        taxonomy_ids: &Vec<i64>,
+        unique_taxonomy_ids: &Vec<i64>,
+        proteome_ids: &Vec<String>,
+        domains: &Vec<Domain>,
+    ) -> Result<()> {
+        let prepared_statement = client
+            .get_prepared_statement(&UPDATE_METADATA_STATEMENT)
+            .await?;
+        client
+            .execute_unpaged(
+                &prepared_statement,
+                (
+                    &is_swiss_prot,
+                    &is_trembl,
+                    &taxonomy_ids,
+                    &unique_taxonomy_ids,
+                    &proteome_ids,
+                    &domains,
+                    peptide.get_partition(),
+                    peptide.get_mass(),
+                    peptide.get_sequence(),
+                ),
+            )
+            .await?;
+        Ok(())
     }
 }
 
@@ -918,6 +967,7 @@ mod tests {
             SET_METADATA_TO_FALSE_STATEMENT.as_str(),
             REMOVE_PROTEINS_STATEMENT.as_str(),
             ADD_PROTEINS_STATEMENT.as_str(),
+            UPDATE_METADATA_STATEMENT.as_str(),
         ] {
             let prepared_statement = client.get_prepared_statement(statement).await.unwrap();
             assert!(
