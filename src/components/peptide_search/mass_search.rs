@@ -77,6 +77,7 @@ async fn search_peptides(
     taxonomy: Resource<Result<Option<Taxonomy>>>,
     max_variable_modifications: Signal<i16>,
     ptms: Signal<Vec<PostTranslationalModification>>,
+    is_reviewed: Signal<Option<bool>>,
 ) -> Result<Vec<PeptideEntity>> {
     let url = format!("{}/api/peptides/search", macpepdb_base_url);
 
@@ -94,6 +95,10 @@ async fn search_peptides(
 
     if let Some(Ok(Some(taxonomy))) = &*taxonomy.read_unchecked() {
         body["taxonomy_id"] = json!(taxonomy.id);
+    }
+
+    if let Some(is_reviewed) = &*is_reviewed.read() {
+        body["is_reviewed"] = json!(is_reviewed);
     }
 
     let client = reqwest::Client::new();
@@ -177,6 +182,9 @@ pub fn MassSearch() -> Element {
         Ok(amino_acids)
     });
 
+    // review filter
+    let mut is_reviewed: Signal<Option<bool>> = use_signal(|| None);
+
     // search peptides
     let mut peptides: Signal<FetchStatus<Vec<PeptideEntity>>> = use_signal(|| FetchStatus::None);
     let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
@@ -193,6 +201,7 @@ pub fn MassSearch() -> Element {
                 selected_taxonomy,
                 max_var_modifications,
                 ptms,
+                is_reviewed,
             )
             .await;
             match peptides_result {
@@ -503,6 +512,43 @@ pub fn MassSearch() -> Element {
                             i { class: "fa-solid fa-xmark" }
                         }
                     }
+                }
+            }
+            SeparatorLine { label: "Review status" }
+            div { class: "form-check form-check-inline",
+                label { class: "form-check-label", "Don't care" }
+                input {
+                    r#type: "radio",
+                    class: "form-check-input",
+                    name: "review-filter",
+                    checked: is_reviewed.read().is_none(),
+                    oninput: move |_| {
+                        is_reviewed.set(None);
+                    },
+                }
+            }
+            div { class: "form-check form-check-inline",
+                label { class: "form-check-label", "Reviewed" }
+                input {
+                    r#type: "radio",
+                    class: "form-check-input",
+                    name: "review-filter",
+                    checked: is_reviewed.read().is_some() && is_reviewed.read().unwrap(),
+                    oninput: move |_| {
+                        is_reviewed.set(Some(true));
+                    },
+                }
+            }
+            div { class: "form-check form-check-inline",
+                label { class: "form-check-label", "Unreviewed" }
+                input {
+                    r#type: "radio",
+                    class: "form-check-input",
+                    name: "review-filter",
+                    checked: is_reviewed.read().is_some() && !is_reviewed.read().unwrap(),
+                    oninput: move |_| {
+                        is_reviewed.set(Some(false));
+                    },
                 }
             }
         }
