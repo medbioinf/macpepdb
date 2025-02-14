@@ -249,7 +249,13 @@ pub struct SearchRequestBody {
 ///                 "mod_type": Static,     # Type: Static, Variable
 ///                 "position": Anywhere    # Position: Anywhere, Terminus-N, Terminus-C, Bond-C, Bond-N
 ///             }
-///         ]
+///         ],
+///         # Optional taxonomy ID to search for
+///         "taxonomy_id": 10090,
+///         # Optional proteome ID to search for
+///         "proteome_id": "UP000000589",
+///         # Optional flag to search only reviewed proteins
+///         "is_reviewed": true
 ///     }
 ///     ```
 ///     Deserialized into [SearchRequestBody](SearchRequestBody)
