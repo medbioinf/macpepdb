@@ -1,12 +1,9 @@
-// std imports
 use std::collections::HashMap;
 use std::rc::Rc;
 
-// 3rd party imports
 use anyhow::Result;
 use dioxus::prelude::*;
 
-// internal imports
 use crate::components::peptide::amino_acid_composition_header_cell::AminoAcidCompositionHeaderCell;
 use crate::components::protein_list::ProteinList;
 use crate::components::rounded_mass::RoundedMass;
@@ -137,14 +134,10 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 }
                             }
                             tr {
-                                td { 
-                                    span {
-                                        class: "d-block",
-                                        "Unique taxonomy IDs"
-                                    }
-                                    small {
-                                        class: "d-block",
-                                        "(Taxonomies where this peptide is only present in one protein)" 
+                                td {
+                                    span { class: "d-block", "Unique taxonomy IDs" }
+                                    small { class: "d-block",
+                                        "(Taxonomies where this peptide is only present in one protein)"
                                     }
                                 }
                                 td {
