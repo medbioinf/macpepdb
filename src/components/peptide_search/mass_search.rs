@@ -233,6 +233,7 @@ pub fn MassSearch() -> Element {
                     id: "charge",
                     r#type: "number",
                     class: "form-control",
+                    step: 1,
                     value: "{charge}",
                     oninput: move |evt| charge.set(evt.value().parse().unwrap_or(DEFAULT_CHARGE)),
                 }
@@ -270,6 +271,7 @@ pub fn MassSearch() -> Element {
                 input {
                     r#type: "number",
                     class: "form-control",
+                    step: 1,
                     value: "{lower_mass_tolerance}",
                     oninput: move |evt| {
                         lower_mass_tolerance
@@ -282,6 +284,7 @@ pub fn MassSearch() -> Element {
                 input {
                     r#type: "number",
                     class: "form-control",
+                    step: 1,
                     value: "{upper_mass_tolerance}",
                     oninput: move |evt| {
                         upper_mass_tolerance
@@ -376,6 +379,7 @@ pub fn MassSearch() -> Element {
                 input {
                     r#type: "number",
                     class: "form-control",
+                    step: 1,
                     value: "{max_var_modifications}",
                     oninput: move |evt| {
                         max_var_modifications

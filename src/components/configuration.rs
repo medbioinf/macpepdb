@@ -59,10 +59,7 @@ pub fn Configuration(props: ConfigurationProps) -> Element {
                     tr {
                         td { "Contain peptides with X" }
                         td {
-                            match props.macpepdb_configuration.get_remove_peptides_containing_unknown() {
-                                true => "No".to_string(),
-                                false => "Yes".to_string(),
-                            }
+                            i { class: if !props.macpepdb_configuration.get_remove_peptides_containing_unknown() { "fas fa-check" } else { "fas fa-times" } }
                         }
                     }
                 }
