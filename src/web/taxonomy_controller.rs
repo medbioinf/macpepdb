@@ -151,16 +151,10 @@ struct SerializableTaxonomy<'a> {
 /// ```json
 /// [
 ///     {
-///         "peptides": [
-///             peptide_1,
-///             peptide_2,
-///            ...
-///         ],
-///         "db_peptides": [
-///            peptide_1,
-///            peptide_2,
-///           ...
-///        ]
+///        "id": 9606,
+///        "parent_id": 9605,
+///        "rank": "species",
+///        "scientific_name": "Homo sapiens"
 ///     },
 ///     ...
 /// ]
