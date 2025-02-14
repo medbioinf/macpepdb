@@ -166,7 +166,9 @@ pub fn MassSearch() -> Element {
     let mut ptms: Signal<Vec<PostTranslationalModification>> = use_signal(Vec::new);
     let amino_acids: Resource<Result<Vec<AminoAcid>>> = use_resource(move || async move {
         let url = format!("{macpepdb_base_url}/api/chemistry/amino_acids");
-        Ok(reqwest::get(&url).await?.json().await?)
+        let mut amino_acids = reqwest::get(&url).await?.json::<Vec<AminoAcid>>().await?;
+        amino_acids.sort_by(|x, y| x.get_code().cmp(y.get_code()));
+        Ok(amino_acids)
     });
 
     // search peptides
@@ -392,7 +394,7 @@ pub fn MassSearch() -> Element {
                     match &*amino_acids.read_unchecked() {
                         Some(Ok(amino_acid)) => rsx! {
                             for aa in amino_acid {
-                                option { value: "{aa.get_code()}", "{aa.get_name()} ({aa.get_code()})" }
+                                option { value: "{aa.get_code()}", "{aa.get_code()} - {aa.get_name()}" }
                             }
                         },
                         Some(Err(e)) => rsx! {
