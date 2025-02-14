@@ -521,6 +521,7 @@ pub fn MassSearch() -> Element {
             FetchStatus::None => rsx! { "" },
             FetchStatus::Loading => rsx! { "Loading ..." },
             FetchStatus::Finished(peptides) => rsx! {
+                p { class: "mt-2 mb-1", "Found {peptides.len()} peptides" }
                 table { class: "table table-striped table-hover table-sm table-responsive",
                     thead {
                         tr {
