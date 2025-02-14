@@ -22,7 +22,7 @@ pub fn split<'a>(regex: &Regex, some_string: &'a str) -> Vec<&'a str> {
         }
     }
     sub_strings.push(&some_string[sub_string_start..some_string.len()]);
-    return sub_strings;
+    sub_strings
 }
 
 #[cfg(test)]
@@ -36,9 +36,8 @@ mod test {
         lazy_static! {
             static ref TEST_REGEX: Regex = Regex::new(r"\|").unwrap();
         }
-        const TEST_STRING: &'static str = "TEST|STRING|IS|PIPE|SEPARATED;";
-        const SPLITTED_TEST_STRING: [&'static str; 5] =
-            ["TEST", "STRING", "IS", "PIPE", "SEPARATED;"];
+        const TEST_STRING: &str = "TEST|STRING|IS|PIPE|SEPARATED;";
+        const SPLITTED_TEST_STRING: [&str; 5] = ["TEST", "STRING", "IS", "PIPE", "SEPARATED;"];
 
         let splitted_string: Vec<&str> = split(&TEST_REGEX, TEST_STRING);
         assert_eq!(SPLITTED_TEST_STRING.len(), splitted_string.len());

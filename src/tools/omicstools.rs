@@ -33,7 +33,7 @@ pub fn remove_unknown_from_digest(
 ///
 pub fn convert_to_internal_peptide<'a>(
     peptides: Box<dyn FallibleIterator<Item = CleavedPeptide, Error = anyhow::Error>>,
-    partition_limits: &'a Vec<i64>,
+    partition_limits: &'a [i64],
     protein: &'a Protein,
 ) -> impl FallibleIterator<Item = Peptide, Error = anyhow::Error> + 'a {
     peptides.map(|pep| {
@@ -62,10 +62,10 @@ pub fn convert_to_internal_peptide<'a>(
 /// * `peptides` - Peptides from protease digestion
 /// * `partition_limits` - Mass partition limits from peptide partition
 ///
-pub fn convert_to_internal_dummy_peptide<'a>(
+pub fn convert_to_internal_dummy_peptide(
     peptides: Box<dyn FallibleIterator<Item = CleavedPeptide, Error = anyhow::Error>>,
-    partition_limits: &'a Vec<i64>,
-) -> impl FallibleIterator<Item = Peptide, Error = anyhow::Error> + 'a {
+    partition_limits: &[i64],
+) -> impl FallibleIterator<Item = Peptide, Error = anyhow::Error> + '_ {
     peptides.map(|pep| {
         let mass = calc_sequence_mass_int(pep.get_sequence())?;
         let partition = get_mass_partition(partition_limits, mass)?;

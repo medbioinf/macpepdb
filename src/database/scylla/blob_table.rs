@@ -1,9 +1,10 @@
 // 3rd party imports
-use anyhow::{Context, Result};
-use futures::{StreamExt, TryStreamExt};
+use anyhow::Result;
+use futures::TryStreamExt;
+use tokio::pin;
 
 // internal imports
-use crate::database::{generic_client::GenericClient, scylla::client::Client};
+use crate::database::scylla::client::Client;
 
 /// Max size of a blob in bytes (512 kB)
 ///
@@ -11,15 +12,43 @@ pub const MAX_BLOB_SIZE: usize = 512000;
 
 /// Table name for the blob table
 ///
-pub const TABLE_NAME: &'static str = "blobs";
+pub const TABLE_NAME: &str = "blobs";
 
 /// Columns of the blob table
 ///
-pub const COLUMNS: &'static str = "key, data";
+pub const COLUMNS: &str = "key, position, data";
 
 /// Max pages per select (avoids timeouts)
 ///
 pub const MAX_PAGES_PER_SELECT: i32 = 1000;
+
+lazy_static! {
+    /// Insert statement for the blob table
+    /// Takes 3 parameters: key, position, data
+    ///
+    static ref INSERT_STATEMENT: String = format!(
+        "INSERT INTO :KEYSPACE:.{} ({}) VALUES (?, ?, ?)",
+        TABLE_NAME, COLUMNS
+    );
+
+    /// Select statement for the blob table
+    /// Takes 1 parameter: key
+    ///
+    static ref SELECT_STATEMENT: String = format!(
+        "SELECT {} FROM :KEYSPACE:.{} WHERE key = ?",
+        COLUMNS, TABLE_NAME
+    );
+
+    /// Delete statement for removing all records with a given key prefix
+    /// Takes 1 parameter: key
+    ///
+    static ref DELETE_KEY_PREFIX_STATEMENT: String = format!(
+        "DELETE FROM :KEYSPACE:.{} WHERE key = ?",
+        TABLE_NAME
+    );
+}
+
+type TypedBlobRow = (String, i64, Vec<u8>);
 
 /// Trait for using the blob table.
 /// The blob table is used to store binary data in the database like the JSON-serialized taxonomy tree.
@@ -32,26 +61,15 @@ impl BlobTable {
     ///
     /// # Arguments
     /// * `client` - The client to use for the database connection
-    /// * `key_prefix` - The key prefix to use for the data
+    /// * `key` - The key prefix to use for the data
     /// * `data` - The data to insert
     ///
-    pub async fn insert_raw(client: &Client, key_prefix: &str, data: &[u8]) -> Result<()> {
-        let num_chunks = (data.len() as f64 / MAX_BLOB_SIZE as f64).ceil() as usize;
+    pub async fn insert(client: &Client, key: &str, data: &[u8]) -> Result<()> {
+        let prepared_statement = client.get_prepared_statement(&INSERT_STATEMENT).await?;
 
-        let statement = format!(
-            "INSERT INTO {}.{} ({}) VALUES (?, ?)",
-            client.get_database(),
-            TABLE_NAME,
-            COLUMNS
-        );
-        let prepared_statement = client.prepare(statement).await?;
-
-        for (i, chunk) in data.chunks(num_chunks).enumerate() {
+        for (i, chunk) in data.chunks(MAX_BLOB_SIZE).enumerate() {
             client
-                .execute(
-                    &prepared_statement,
-                    (format!("{}_{}", key_prefix, i), Vec::from(chunk)),
-                )
+                .execute_unpaged(&prepared_statement, (key, i as i64, Vec::from(chunk)))
                 .await?;
         }
 
@@ -63,82 +81,40 @@ impl BlobTable {
     ///
     /// # Arguments
     /// * `client` - The client to use for the database connection
-    /// * `key_prefix` - The key prefix to select
+    /// * `key` - The key prefix to select
     ///
-    pub async fn select_raw(client: &Client, key_prefix: &str) -> Result<Vec<u8>> {
-        let statement = format!(
-            "SELECT {} FROM {}.{} WHERE key LIKE '{}_%' ALLOW FILTERING",
-            COLUMNS,
-            client.get_database(),
-            TABLE_NAME,
-            key_prefix
-        );
-        let mut prepared_statement = client.prepare(statement).await?;
-        prepared_statement.set_page_size(MAX_PAGES_PER_SELECT);
+    pub async fn select(client: &Client, key: &str) -> Result<Vec<u8>> {
+        let prepared_statement = client.get_prepared_statement(&SELECT_STATEMENT).await?;
 
         // Get chunks
-        let mut chunks: Vec<(usize, Vec<u8>)> = client
-            .execute_iter(prepared_statement, &[])
+        let stream = client
+            .execute_iter(prepared_statement, (key,))
             .await?
-            // Use `then` and try_collect to be able to handle errors using `?`
-            .then(|row| async move {
-                // Convert row to typed row and remote
-                let typed_row: (String, Vec<u8>) = row?
-                    .into_typed()
-                    .context("could not convert taxonomy tree chunk")?;
-                // Remove prefix + underline, and convert index to usize
-                let index = typed_row.0[key_prefix.len() + 1..].parse::<usize>()?;
-                // Return (index, data_chunk)
-                Ok::<(usize, Vec<u8>), anyhow::Error>((index, typed_row.1))
-            })
-            .try_collect()
-            .await?;
+            .rows_stream::<TypedBlobRow>()?;
+
+        pin!(stream);
+
+        let mut chunks = stream.try_collect::<Vec<_>>().await?;
+
         // Sort by index
-        chunks.sort_by(|a, b| a.0.cmp(&b.0));
+        chunks.sort_by(|a, b| a.1.cmp(&b.1));
 
         // Concat data chunks and return
-        Ok(chunks.into_iter().map(|chunk| chunk.1).flatten().collect())
+        Ok(chunks.into_iter().flat_map(|chunk| chunk.2).collect())
     }
 
     /// Deletes the records for the given key prefix.
     ///
     /// # Arguments
     /// * `client` - The client to use for the database connection
-    /// * `key_prefix` - The key prefix to delete
+    /// * `key` - The key prefix to delete
     ///
-    pub async fn delete(client: &Client, key_prefix: &str) -> Result<()> {
-        let statement = format!(
-            "SELECT key FROM {}.{} WHERE key LIKE '{}_%' ALLOW FILTERING",
-            client.get_database(),
-            TABLE_NAME,
-            key_prefix
-        );
+    pub async fn delete(client: &Client, key: &str) -> Result<()> {
+        let prepared_statement = client
+            .get_prepared_statement(&DELETE_KEY_PREFIX_STATEMENT)
+            .await?;
 
-        // Using execute_iter plays nicer with smaller database clusters and avoids consistency issues
-        // although makes it complexer as results are streamed
-        let mut prep_statement = client.prepare(statement).await?;
-        prep_statement.set_page_size(1000);
-        let keys: Vec<String> = client
-            .execute_iter(prep_statement, &[])
-            .await
-            .context("Error when selecting keys for deletion")?
-            .then(|row| async move {
-                Ok::<std::string::String, anyhow::Error>(row?.into_typed::<(String,)>()?.0)
-            })
-            .try_collect()
-            .await
-            .context("Error when collecting keys for deletion")?;
-
-        let statement = format!(
-            "DELETE FROM {}.{} WHERE key IN ?",
-            client.get_database(),
-            TABLE_NAME,
-        );
-        let prepared_statement = client.prepare(statement).await?;
-        // Delete in chunks of 10 to avoid overcome scylla partitioning limits
-        for chunk in keys.chunks(10) {
-            client.execute(&prepared_statement, (chunk,)).await?;
-        }
+        client.execute_unpaged(&prepared_statement, (key,)).await?;
         Ok(())
     }
 }
@@ -151,6 +127,7 @@ mod tests {
 
     // internal imports
     use super::*;
+    use crate::database::generic_client::GenericClient;
     use crate::database::scylla::prepare_database_for_tests;
     use crate::database::scylla::tests::DATABASE_URL;
 
@@ -165,23 +142,44 @@ mod tests {
 
         let mut lorem_ipsum = String::with_capacity(min_length);
 
-        loop {
+        while lorem_ipsum.len() < min_length {
             lorem_ipsum.push_str(lipsum(20).as_str());
-            if lorem_ipsum.len() >= min_length {
-                break;
-            }
         }
 
-        BlobTable::insert_raw(&client, "lorem_ipsum", lorem_ipsum.as_bytes())
+        let expected_num_blobs = (lorem_ipsum.len() as f64 / MAX_BLOB_SIZE as f64).ceil() as usize;
+
+        BlobTable::insert(&client, "lorem_ipsum", lorem_ipsum.as_bytes())
             .await
             .unwrap();
-        let selected_lorem_ipsum_bytes =
-            BlobTable::select_raw(&client, "lorem_ipsum").await.unwrap();
+
+        // Check if the number of blobs is correct
+        let prepared_count_statement = client
+            .prepare(format!(
+                "SELECT count(*) FROM {}.{} WHERE key = ?",
+                client.get_database(),
+                TABLE_NAME
+            ))
+            .await
+            .unwrap();
+
+        let res = client
+            .execute_unpaged(&prepared_count_statement, ("lorem_ipsum",))
+            .await
+            .unwrap()
+            .into_rows_result()
+            .unwrap();
+
+        assert_eq!(res.rows_num(), 1);
 
         assert_eq!(
-            lorem_ipsum.as_bytes(),
-            selected_lorem_ipsum_bytes.as_slice()
+            res.first_row::<(i64,)>().unwrap(),
+            (expected_num_blobs as i64,)
         );
+
+        // select and check if the data is correct
+        let selected_lorem_ipsum_bytes = BlobTable::select(&client, "lorem_ipsum").await.unwrap();
+
+        assert_eq!(selected_lorem_ipsum_bytes.len(), lorem_ipsum.len(),);
 
         assert_eq!(
             String::from_utf8(selected_lorem_ipsum_bytes)
@@ -190,16 +188,33 @@ mod tests {
             lorem_ipsum
         );
 
+        // delete and check if the number of blobs is 0
         BlobTable::delete(&client, "lorem_ipsum").await.unwrap();
 
-        let statement = format!(
-            "SELECT count(1) FROM {}.{} WHERE key LIKE 'lorem_ipsum_%' ALLOW FILTERING",
-            client.get_database(),
-            TABLE_NAME
-        );
-        let res = client.query(statement, &[]).await.unwrap();
-        assert_eq!(res.rows_num().unwrap(), 1);
+        let res = client
+            .execute_unpaged(&prepared_count_statement, ("lorem_ipsum",))
+            .await
+            .unwrap()
+            .into_rows_result()
+            .unwrap();
 
-        assert_eq!(res.first_row_typed::<(i64,)>().unwrap(), (0,));
+        assert_eq!(res.rows_num(), 1);
+
+        assert_eq!(res.first_row::<(i64,)>().unwrap(), (0,));
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_tokenawareness() {
+        let client = Client::new(DATABASE_URL).await.unwrap();
+        prepare_database_for_tests(&client).await;
+        for statement in &[
+            INSERT_STATEMENT.as_str(),
+            SELECT_STATEMENT.as_str(),
+            DELETE_KEY_PREFIX_STATEMENT.as_str(),
+        ] {
+            let prepared_statement = client.get_prepared_statement(statement).await.unwrap();
+            assert!(prepared_statement.is_token_aware());
+        }
     }
 }

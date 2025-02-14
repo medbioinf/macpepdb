@@ -10,13 +10,6 @@ use clap::{Parser, Subcommand};
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::StreamExt;
 use glob::glob;
-use macpepdb::database::generic_client::GenericClient;
-use macpepdb::database::scylla::client::Client;
-use macpepdb::database::scylla::peptide_table::{PeptideTable, SELECT_COLS};
-use macpepdb::database::table::Table;
-use macpepdb::entities::peptide::Peptide;
-use macpepdb::tools::peptide_mass_counter::PeptideMassCounter;
-use macpepdb::tools::peptide_partitioner::PeptidePartitioner;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use reqwest::Url;
 use tokio::net::TcpListener;
@@ -28,11 +21,17 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
 // internal imports
+use macpepdb::database::generic_client::GenericClient;
+use macpepdb::database::scylla::client::Client;
+use macpepdb::database::scylla::peptide_table::PeptideTable;
+use macpepdb::database::scylla::peptide_table::SELECT_COLS as PEPTIDE_SELECT_COLS;
+use macpepdb::database::table::Table;
+use macpepdb::entities::peptide::Peptide;
+use macpepdb::tools::peptide_mass_counter::PeptideMassCounter;
+use macpepdb::tools::peptide_partitioner::PeptidePartitioner;
 use macpepdb::web::server::start as start_web_server;
 use macpepdb::{
-    database::{
-        database_build::DatabaseBuild, scylla::database_build::DatabaseBuild as ScyllaBuild,
-    },
+    database::scylla::database_build::DatabaseBuild as ScyllaBuild,
     entities::configuration::Configuration,
 };
 
@@ -89,9 +88,9 @@ enum TracingLogRotation {
     Never,
 }
 
-impl Into<Rotation> for TracingLogRotation {
-    fn into(self) -> Rotation {
-        match self {
+impl From<TracingLogRotation> for Rotation {
+    fn from(rotation: TracingLogRotation) -> Self {
+        match rotation {
             TracingLogRotation::Minutely => Rotation::MINUTELY,
             TracingLogRotation::Hourly => Rotation::HOURLY,
             TracingLogRotation::Daily => Rotation::DAILY,
@@ -346,6 +345,7 @@ async fn main() -> Result<()> {
     let mut _prometheus_scrape_address = None;
 
     if args.metric_target.contains(&MetricTarget::Prometheus)
+        || args.metric_target.contains(&MetricTarget::Terminal)
         || args.metric_target.contains(&MetricTarget::All)
     {
         let prometheus_metrics_builder = PrometheusBuilder::new();
@@ -395,10 +395,8 @@ async fn main() -> Result<()> {
 
             let protein_file_paths = convert_str_paths_and_resolve_globs(protein_file_paths)?;
 
-            let taxonomy_file_path = match taxonomy_file {
-                Some(taxonomy_file) => Some(Path::new(&taxonomy_file).to_path_buf()),
-                None => None,
-            };
+            let taxonomy_file_path =
+                taxonomy_file.map(|taxonomy_file| Path::new(&taxonomy_file).to_path_buf());
 
             let log_folder = Path::new(&log_folder).to_path_buf();
 
@@ -485,32 +483,31 @@ async fn main() -> Result<()> {
 
                 for partition in 0_i64..100_i64 {
                     let query_statement = format!(
-                "SELECT {} FROM {}.{} WHERE partition = ? AND is_metadata_updated = true ALLOW FILTERING",
-                SELECT_COLS,
-                client.get_database(),
+                "SELECT {} FROM {} WHERE partition = ? AND is_metadata_updated = true ALLOW FILTERING",
+                PEPTIDE_SELECT_COLS.join(","),
                 PeptideTable::table_name()
             );
 
                     debug!("Streaming rows of partition {}", partition);
 
-                    let mut rows_stream = client
+                    let mut row_stream = client
                         .query_iter(query_statement, (partition,))
-                        .await
-                        .unwrap();
+                        .await?
+                        .rows_stream::<(Peptide,)>()?;
 
-                    while let Some(row_opt) = rows_stream.next().await {
+                    while let Some(row_opt) = row_stream.next().await {
                         if row_opt.is_err() {
                             debug!("Row opt err");
                             sleep(Duration::from_millis(100)).await;
                             continue;
                         }
-                        let row = row_opt.unwrap();
-                        let peptide = Peptide::from(row);
+                        let row = row_opt.unwrap().0;
+                        let peptide = row;
 
                         let a = peptide.get_domains().iter().map(|x| x.get_name());
 
                         for name in a {
-                            if name == "" {
+                            if name.is_empty() {
                                 info!("{:?}", peptide.get_proteins());
                             }
                             domains.insert(name.to_string());

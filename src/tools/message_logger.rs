@@ -60,24 +60,19 @@ impl MessageLogger {
         }
 
         let mut log_file = BufWriter::new(File::create(log_file_path).await?);
-        loop {
-            match receiver.recv().await {
-                Some(message) => {
-                    let bytes = match message.to_message() {
-                        Ok(bytes) => bytes,
-                        Err(e) => {
-                            error!("Could not convert message to bytes: {:?}", e);
-                            continue;
-                        }
-                    };
-                    log_file.write_all(&bytes).await?;
-                    log_file.write_all(b"\n").await?;
-                    message_counter += 1;
-                    if message_counter % flush_interval == 0 {
-                        log_file.flush().await?;
-                    }
+        while let Some(message) = receiver.recv().await {
+            let bytes = match message.to_message() {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    error!("Could not convert message to bytes: {:?}", e);
+                    continue;
                 }
-                None => break,
+            };
+            log_file.write_all(&bytes).await?;
+            log_file.write_all(b"\n").await?;
+            message_counter += 1;
+            if message_counter % flush_interval == 0 {
+                log_file.flush().await?;
             }
         }
 
