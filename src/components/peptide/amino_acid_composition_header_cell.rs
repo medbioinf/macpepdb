@@ -20,7 +20,7 @@ pub struct AminoAcidCompositionHeaderCellProps {
 /// Renders the table header cell for an amino acid in the amino acid composition table
 /// Shown is the one letter code of the amino acid to safe space but it is also rendered with a tooltip on hover
 ///
-pub fn AminoAcidCompositionHeaderCell<'a>(props: AminoAcidCompositionHeaderCellProps) -> Element {
+pub fn AminoAcidCompositionHeaderCell(props: AminoAcidCompositionHeaderCellProps) -> Element {
     let code = (props.index as u8 + 65) as char;
     let amino_acid = props.amino_acid_map.get(&code).unwrap();
     let rounded_amino_acid_mass = format!("{:.4}", amino_acid.get_mono_mass());

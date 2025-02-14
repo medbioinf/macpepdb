@@ -8,13 +8,12 @@ use serde_json::json;
 
 use crate::{
     api_helpers::fetch_status::FetchStatus,
-    components::{peptide_search, rounded_mass::RoundedMass, separator_line::SeparatorLine},
+    components::{rounded_mass::RoundedMass, separator_line::SeparatorLine},
     configuration::Configuration as AppConfiguration,
     entities::{
         amino_acid::AminoAcid,
         peptide::Peptide as MaCPepDBPeptide,
         post_translational_modification::{PostTranslationalModification, PtmPosition, PtmType},
-        protein::Protein as MaCPepDBProtein,
         taxonomy::Taxonomy,
     },
     routes::Routes,
@@ -66,6 +65,7 @@ impl FromStr for MassUnit {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn search_peptides(
     macpepdb_base_url: Signal<String>,
     thompson: Signal<f64>,

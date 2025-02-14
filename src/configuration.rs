@@ -3,7 +3,7 @@ use serde::Deserialize;
 /// TOML formatted configuration file copied/selected via build.rs
 /// Once compiled the application is deployed into a browser where without any access to the file system   
 ///
-const COMPILED_CONFIG: &'static str = include_str!(concat!(env!("OUT_DIR"), "/config.toml"));
+const COMPILED_CONFIG: &str = include_str!(concat!(env!("OUT_DIR"), "/config.toml"));
 
 /// Configuration for the frontend app
 ///
