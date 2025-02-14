@@ -120,6 +120,13 @@ lazy_static! {
         TABLE_NAME
     );
 
+    /// Statement to select peptides by mass range
+    ///
+    static ref SELECT_BY_MASS_RANGE_STATEMENT: String = format!(
+        "{} WHERE partition = ? AND mass >= ? AND mass <= ?",
+        SELECT_STATEMENT.as_str(),
+    );
+
 }
 
 /// Type alias for typed peptide rows
@@ -552,6 +559,68 @@ impl PeptideTable {
             .await?;
         Ok(())
     }
+
+    /// Selectes peptides between the given mass range
+    /// and streams them back.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `lower_mass` - The lower mass limit
+    /// * `upper_mass` - The upper mass limit
+    ///
+    ///
+    pub async fn select_by_mass_range<'a>(
+        client: &'a Client,
+        lower_mass: i64,
+        upper_mass: i64,
+        partition_limits: &'a [i64],
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
+        let prepared_statement = client
+            .get_prepared_statement(&SELECT_BY_MASS_RANGE_STATEMENT)
+            .await?;
+
+        // Check which partitions are affected
+        let lower_partition_index = get_mass_partition(partition_limits, lower_mass)?;
+        let upper_partition_index = get_mass_partition(partition_limits, upper_mass)?;
+
+        Ok(try_stream! {
+
+            if lower_partition_index == upper_partition_index {
+                // If the mass range is within one partition query it directly
+                let stream = client
+                    .execute_iter(prepared_statement, (lower_partition_index as i64, lower_mass, upper_mass))
+                    .await?
+                    .rows_stream::<TypedPeptideRow>()?;
+                for await peptide_result in stream {
+                    yield peptide_result?.into();
+                }
+            } else {
+                // If the mass range spans multiple partitions query each partition
+                #[allow(clippy::needless_range_loop)]
+                for partition in lower_partition_index..=upper_partition_index {
+                    let partition_limit = partition_limits[partition];
+                    let lower_mass = if partition == lower_partition_index {
+                        lower_mass
+                    } else {
+                        partition_limit
+                    };
+                    let upper_mass = if partition == upper_partition_index {
+                        upper_mass
+                    } else {
+                        partition_limit
+                    };
+
+                    let stream = client
+                        .execute_iter(prepared_statement.clone(), (lower_partition_index as i64, lower_mass, upper_mass))
+                        .await?
+                        .rows_stream::<TypedPeptideRow>()?;
+                    for await peptide_result in stream {
+                        yield peptide_result?.into();
+                    }
+                }
+            }
+        })
+    }
 }
 
 impl Table for PeptideTable {
@@ -972,6 +1041,7 @@ mod tests {
             REMOVE_PROTEINS_STATEMENT.as_str(),
             ADD_PROTEINS_STATEMENT.as_str(),
             UPDATE_METADATA_STATEMENT.as_str(),
+            SELECT_BY_MASS_RANGE_STATEMENT.as_str(),
         ] {
             let prepared_statement = client.get_prepared_statement(statement).await.unwrap();
             assert!(

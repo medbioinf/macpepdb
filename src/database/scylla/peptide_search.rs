@@ -152,35 +152,6 @@ pub trait Search {
         Ok(filter_pipeline)
     }
 
-    /// In case the mass range exceeds on partition, this function will calculate the mass range for the partition.
-    ///
-    /// # Arguments
-    /// * `partition` - The partition to calculate the mass range for
-    /// * `partition_limits` - The partition limits
-    /// * `lower_mass_limit` - The lower mass limit
-    /// * `upper_mass_limit` - The upper mass limit
-    ///
-    fn get_query_limits_for_partition(
-        partition: usize,
-        partition_limits: &[i64],
-        lower_mass_limit: i64,
-        upper_mass_limit: i64,
-    ) -> (CqlValue, CqlValue) {
-        // Get mass limits for partition
-        let partition_lower_mass_limit = if partition > 0 {
-            partition_limits[partition - 1] + 1
-        } else {
-            0
-        };
-        let partition_upper_mass_limit = partition_limits[partition];
-
-        let query_lower_mass_limit =
-            CqlValue::BigInt(max(lower_mass_limit, partition_lower_mass_limit));
-        let query_upper_mass_limit =
-            CqlValue::BigInt(min(upper_mass_limit, partition_upper_mass_limit));
-        (query_lower_mass_limit, query_upper_mass_limit)
-    }
-
     /// Query PTM condition which needs more work prior to the actual query than just querying the mass.
     ///
     /// # Arguments
@@ -279,55 +250,24 @@ pub trait Search {
             let lower_mass_limit = mass - (mass / 1000000 * lower_mass_tolerance_ppm);
             let upper_mass_limit = mass + (mass / 1000000 * upper_mass_tolerance_ppm);
 
-            // Get partition
-            let lower_partition_index =
-                get_mass_partition(partition_limits.as_ref(), lower_mass_limit)?;
-            let upper_partition_index =
-                get_mass_partition(partition_limits.as_ref(), upper_mass_limit)?;
-
-            for partition in lower_partition_index..=upper_partition_index {
-                let (query_lower_mass_limit, query_upper_mass_limit) =
-                    if lower_partition_index != upper_partition_index {
-                        // in case we have to query multiple partitions make sure only query the mass range for the partition
-                        // E.g s`lower_mass_limit` might by in partition n but no in n+1 as
-                        Self::get_query_limits_for_partition(
-                            partition,
-                            partition_limits.as_ref(),
-                            lower_mass_limit,
-                            upper_mass_limit,
-                        )
-                    } else {
-                        // If everything is in one partition, just query the mass range
-                        (
-                            CqlValue::BigInt(lower_mass_limit),
-                            CqlValue::BigInt(upper_mass_limit),
-                        )
-                    };
-
-                let partition_cql_value = CqlValue::BigInt(partition as i64);
-                let query_params = vec![
-                    &partition_cql_value,
-                    &query_lower_mass_limit,
-                    &query_upper_mass_limit,
-                ];
-
-                let peptide_stream = PeptideTable::select(
-                    client.as_ref(),
-                    "WHERE partition = ? AND mass >= ? AND mass <= ?",
-                    &query_params,
-                )
-                .await?;
-                pin_mut!(peptide_stream);
-                'peptide_loop: while let Some(peptide) = peptide_stream.next().await {
-                    let peptide = peptide?;
-                    for filter in filter_pipeline.iter_mut() {
-                        if !filter.is_match(&peptide)? {
-                            continue 'peptide_loop;
-                        }
+            let peptide_stream = PeptideTable::select_by_mass_range(
+                client.as_ref(),
+                lower_mass_limit,
+                upper_mass_limit,
+                partition_limits.as_ref(),
+            )
+            .await?;
+            pin_mut!(peptide_stream);
+            'peptide_loop: while let Some(peptide) = peptide_stream.next().await {
+                let peptide = peptide?;
+                for filter in filter_pipeline.iter_mut() {
+                    if !filter.is_match(&peptide)? {
+                        continue 'peptide_loop;
                     }
-                    peptide_sender.send(Ok(peptide))?;
                 }
+                peptide_sender.send(Ok(peptide))?;
             }
+
             Ok(())
         }
     }
