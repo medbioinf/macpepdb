@@ -1,9 +1,7 @@
-// 3rd party imports
 use anyhow::Result;
 use dioxus::prelude::*;
 use dioxus_router::components::Link;
 
-// internal imports
 use crate::components::rounded_mass::RoundedMass;
 use crate::components::sequence_block::SequenceBlock;
 use crate::configuration::Configuration as AppConfiguration;
@@ -44,6 +42,8 @@ pub fn Protein(props: ProteinProps) -> Element {
     let protein_id = use_signal(|| props.protein_id.to_owned());
 
     let protein = use_resource(move || get_protein(macpepdb_base_url, protein_id));
+
+    let uniprot_link = use_signal(|| format!("https://www.uniprot.org/uniprot/{}", protein_id));
 
     rsx! {
         div {
@@ -105,15 +105,22 @@ pub fn Protein(props: ProteinProps) -> Element {
                             tr {
                                 td { "Is reviewed" }
                                 td {
-                                    i { 
-                                        class: if protein.get_is_reviewed() { "fas fa-check" } else { "fas fa-times" }
-                                    }
+                                    i { class: if protein.get_is_reviewed() { "fas fa-check" } else { "fas fa-times" } }
                                 }
                             }
                             tr {
                                 td { "Sequence" }
                                 td {
                                     SequenceBlock { sequence: protein.get_sequence().to_owned() }
+                                }
+                            }
+                            tr {
+                                td { "UniProt" }
+                                td {
+                                    a { href: uniprot_link, target: "_blank",
+                                        "{uniprot_link}"
+                                        i { class: "fas fa-external-link-alt ms-2" }
+                                    }
                                 }
                             }
                         }
