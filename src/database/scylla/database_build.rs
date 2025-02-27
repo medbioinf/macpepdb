@@ -234,6 +234,10 @@ impl DatabaseBuild {
                 MonitorableMetricType::Rate,
             ),
             MonitorableMetric::new(
+                "macpepdb_build_digestion_unrecoverable_errors".to_string(),
+                MonitorableMetricType::Rate,
+            ),
+            MonitorableMetric::new(
                 "macpepdb_build_digestion_protein_queue_size".to_string(),
                 MonitorableMetricType::Queue(protein_queue_size as u64),
             ),
@@ -413,15 +417,16 @@ impl DatabaseBuild {
                         break;
                     }
                     Err(err) => {
-                        counter!("macpepdb_build_digestion_errors").increment(1);
                         let error_msg = format!(
                             "Upsert failed for `{}` (attempt {})",
                             protein.get_accession(),
                             tries
                         );
                         if tries <= MAX_INSERT_TRIES {
+                            counter!("macpepdb_build_digestion_errors").increment(1);
                             warn!("{}", error_msg);
                         } else {
+                            counter!("macpepdb_build_digestion_unrecoverable_errors").increment(1);
                             error!("{}\n{:?}\n", error_msg, err);
                         }
                         sleep(Duration::from_millis(100));
