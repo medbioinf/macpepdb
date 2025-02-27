@@ -9,6 +9,7 @@ use axum::extract::{Json, Path, State};
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use dihardts_omicstools::mass_spectrometry::unit_conversions::mass_to_charge_to_dalton;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::TryStreamExt;
@@ -19,7 +20,6 @@ use tracing::error;
 use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::scylla::protein_table::ProteinTable;
-use crate::database::selectable_table::SelectableTable;
 use crate::entities::peptide::TsvPeptide;
 use crate::entities::protein::Protein;
 use crate::mass::convert::to_int as mass_to_int;
@@ -108,7 +108,10 @@ pub async fn get_peptide(
             &CqlValue::Text(sequence),
         ],
     )
-    .await?;
+    .await?
+    .try_collect::<Vec<_>>()
+    .await?
+    .pop();
 
     if peptide_opt.is_none() {
         return Err(WebError::new(
@@ -161,7 +164,7 @@ pub async fn get_peptide(
             ))
         }
     };
-    return Ok(Json(peptide_json));
+    Ok(Json(peptide_json))
 }
 
 /// Returns if a peptide exists.
@@ -197,11 +200,19 @@ pub async fn get_peptide_existence(
     }
 }
 
+/// Struct for mass as thompson & charge or dalton
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+pub enum SearchRequestMass {
+    ThompsonCharge(f64, u8),
+    Dalton(f64),
+}
+
 /// Simple struct to deserialize the request body for peptide search
 ///
 #[derive(serde::Deserialize)]
 pub struct SearchRequestBody {
-    mass: f64,
+    mass: SearchRequestMass,
     lower_mass_tolerance_ppm: i64,
     upper_mass_tolerance_ppm: i64,
     max_variable_modifications: i16,
@@ -211,6 +222,7 @@ pub struct SearchRequestBody {
     is_reviewed: Option<bool>,
 }
 
+#[allow(clippy::tabs_in_doc_comments)]
 /// Returns a stream of peptides matching the given parameters.
 /// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
 /// Important: Peptides only contain the accession of the proteins of origin.
@@ -232,6 +244,8 @@ pub struct SearchRequestBody {
 ///     {
 ///         # Mass to search for
 ///         "mass": 2006.988396539,
+///         # Mass can also be given as tuple of m/z and charge
+///         # "mass": [2006.988396539, 2],
 ///         # Lower mass tolerance in ppm
 ///         "lower_mass_tolerance_ppm": 5,
 ///         # Upper mass tolerance in ppm
@@ -247,7 +261,13 @@ pub struct SearchRequestBody {
 ///                 "mod_type": Static,     # Type: Static, Variable
 ///                 "position": Anywhere    # Position: Anywhere, Terminus-N, Terminus-C, Bond-C, Bond-N
 ///             }
-///         ]
+///         ],
+///         # Optional taxonomy ID to search for
+///         "taxonomy_id": 10090,
+///         # Optional proteome ID to search for
+///         "proteome_id": "UP000000589",
+///         # Optional flag to search only reviewed proteins
+///         "is_reviewed": true
 ///     }
 ///     ```
 ///     Deserialized into [SearchRequestBody](SearchRequestBody)
@@ -282,6 +302,11 @@ pub async fn search(
     headers: HeaderMap,
     Json(payload): Json<SearchRequestBody>,
 ) -> Result<(StatusCode, Body), WebError> {
+    let calculated_mass = match payload.mass {
+        SearchRequestMass::ThompsonCharge(mass, charge) => mass_to_charge_to_dalton(mass, charge),
+        SearchRequestMass::Dalton(mass) => mass,
+    };
+
     let mut taxonomy_ids: Option<Vec<i64>> = None;
     if let Some(taxonomy_id) = payload.taxonomy_id {
         // Check if taxonomy exists
@@ -310,21 +335,18 @@ pub async fn search(
         taxonomy_ids = Some(ids);
     }
 
-    let proteome_ids = match payload.proteome_id {
-        Some(proteome_id) => Some(vec![proteome_id]),
-        None => None,
-    };
+    let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
 
     let peptide_stream = match PeptideTable::search(
         app_state.get_db_client(),
         app_state.get_configuration(),
-        mass_to_int(payload.mass),
-        payload.lower_mass_tolerance_ppm.clone(),
-        payload.upper_mass_tolerance_ppm.clone(),
-        payload.max_variable_modifications.clone(),
+        mass_to_int(calculated_mass),
+        payload.lower_mass_tolerance_ppm,
+        payload.upper_mass_tolerance_ppm,
+        payload.max_variable_modifications,
         taxonomy_ids,
         proteome_ids,
-        payload.is_reviewed.clone(),
+        payload.is_reviewed,
         payload.modifications,
     )
     .await

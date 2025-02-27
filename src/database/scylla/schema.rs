@@ -54,5 +54,9 @@ const CREATE_PEPTIDES_TABLE: &str = "CREATE TABLE IF NOT EXISTS :KEYSPACE:.pepti
         PRIMARY KEY (partition, mass, sequence)
     );";
 
-const CREATE_BLOBS_TABLE: &str =
-    "CREATE TABLE IF NOT EXISTS :KEYSPACE:.blobs (key text PRIMARY KEY, data blob);";
+const CREATE_BLOBS_TABLE: &str = "CREATE TABLE IF NOT EXISTS :KEYSPACE:.blobs (
+        key text, 
+        position bigint, 
+        data blob,
+        PRIMARY KEY (key, position)
+    );";

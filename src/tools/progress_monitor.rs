@@ -16,11 +16,11 @@ const UPDATE_INTERVAL: u64 = 1000;
 
 /// Progress bar style. Used when a maximum value is given
 ///
-const PROGRESS_BAR_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len} {per_sec} ";
+const PROGRESS_BAR_STYLE: &str = "        {msg} {wide_bar} {pos}/{len} {per_sec} ";
 
 /// Progress style, used when no maximum value is given
 ///
-const PROGRESS_PLAIN_STYLE: &'static str = "        {msg} {pos} {per_sec} ";
+const PROGRESS_PLAIN_STYLE: &str = "        {msg} {pos} {per_sec} ";
 
 /// Creats a tracing span with multiple progress (bars)
 pub struct ProgressMonitor {
@@ -105,7 +105,7 @@ impl ProgressMonitor {
             })
             .collect::<Result<Vec<Span>>>()?;
 
-        while stop_flag.load(std::sync::atomic::Ordering::Relaxed) == false {
+        while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
             for (progress_idx, progress) in progresses.iter().enumerate() {
                 let progress_span = &progress_spans[progress_idx];
                 let _ = progress_span.enter();
@@ -122,9 +122,8 @@ impl ProgressMonitor {
     pub async fn stop(&mut self) -> Result<()> {
         self.stop_flag
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        match self.thread_handle.take() {
-            Some(handle) => handle.await??,
-            None => {}
+        if let Some(handle) = self.thread_handle.take() {
+            handle.await??
         }
         Ok(())
     }

@@ -40,6 +40,7 @@ struct MassCountThread {
 }
 
 impl MassCountThread {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tid: usize,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
@@ -84,6 +85,7 @@ impl MassCountThread {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn work(
         tid: usize,
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
@@ -120,11 +122,11 @@ impl MassCountThread {
 
             // Digest protein, keep only sequences
             let peptides: Vec<String> = match remove_peptides_containing_unknown {
-                true => remove_unknown_from_digest(protease.cleave(&protein.get_sequence())?)
+                true => remove_unknown_from_digest(protease.cleave(protein.get_sequence())?)
                     .map(|pep| Ok(pep.get_sequence().to_string()))
                     .collect()?,
                 false => protease
-                    .cleave(&protein.get_sequence())?
+                    .cleave(protein.get_sequence())?
                     .map(|pep| Ok(pep.get_sequence().to_string()))
                     .collect()?,
             };
@@ -177,8 +179,8 @@ impl PeptideMassCounter {
     /// * `num_threads` - Number of threads to use
     /// * `initial_num_partitions` - Initial number of partitions for counting
     ///
-    pub async fn count<'a>(
-        protein_file_paths: &'a Vec<PathBuf>,
+    pub async fn count(
+        protein_file_paths: &[PathBuf],
         protease: &dyn Protease,
         remove_peptides_containing_unknown: bool,
         false_positive_probability: f64,
@@ -191,7 +193,7 @@ impl PeptideMassCounter {
 
         let mut protein_ctr: usize = 0;
 
-        let protein_file_path_queue = Arc::new(Mutex::new(protein_file_paths.clone()));
+        let protein_file_path_queue = Arc::new(Mutex::new(protein_file_paths.to_owned()));
         let processed_files = Arc::new(AtomicUsize::new(0));
         let stop_flag = Arc::new(AtomicBool::new(false));
 
@@ -204,7 +206,6 @@ impl PeptideMassCounter {
         )?;
 
         let thread_handles: Vec<std::thread::JoinHandle<Result<usize>>> = (0..num_threads)
-            .into_iter()
             .map(|_| {
                 let thread_protein_file_path_queue = protein_file_path_queue.clone();
                 let thread_processed_files = processed_files.clone();
@@ -254,11 +255,8 @@ impl PeptideMassCounter {
         debug!("mass step: {}", mass_step);
 
         // Create partition_limits
-        let mut partition_limits: Vec<i64> = (mass_step..=max_mass)
-            .step_by(mass_step as usize)
-            .into_iter()
-            .map(|i| i)
-            .collect();
+        let mut partition_limits: Vec<i64> =
+            (mass_step..=max_mass).step_by(mass_step as usize).collect();
         // Add last partition limit if it is not already max_mass
         if partition_limits.last().unwrap() != &max_mass {
             partition_limits.push(max_mass);
@@ -285,12 +283,8 @@ impl PeptideMassCounter {
         // Put everything in Arcs
         let partition_limits = Arc::new(partition_limits);
         let partitions_counters = Arc::new(partitions_counters);
-        let bloom_filters: Arc<Vec<Mutex<BloomFilter>>> = Arc::new(
-            bloom_filters
-                .into_iter()
-                .map(|bloom_filter| Mutex::new(bloom_filter))
-                .collect(),
-        );
+        let bloom_filters: Arc<Vec<Mutex<BloomFilter>>> =
+            Arc::new(bloom_filters.into_iter().map(Mutex::new).collect());
 
         // Create the the protein queue
         let protein_queue_size = num_threads * 300;
@@ -412,7 +406,7 @@ mod test {
         let protease = get_protease_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
 
         let mass_counts = PeptideMassCounter::count(
-            &vec![PathBuf::from("test_files/mouse.txt")],
+            &[PathBuf::from("test_files/mouse.txt")],
             protease.as_ref(),
             true,
             0.02,

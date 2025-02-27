@@ -15,14 +15,14 @@ use crate::database::scylla::client::Client;
 
 /// Progress bar style. Used when a maximum value is given
 ///
-const PROGRESS_BAR_STYLE: &'static str = "        {msg} {pos} ";
+const PROGRESS_BAR_STYLE: &str = "        {msg} {pos} ";
 
 /// update interval for the progress bar in ms
 ///
 const UPDATE_INTERVAL: u64 = 1000;
 
 /// Labels
-const LABELS: [&'static str; 7] = [
+const LABELS: [&str; 7] = [
     "Queries requested",
     "Iter queries requested",
     "Errors occurred",
@@ -95,7 +95,7 @@ impl ScyllaClientMetricsMonitor {
             })
             .collect::<Result<Vec<Span>>>()?;
 
-        while stop_flag.load(std::sync::atomic::Ordering::Relaxed) == false {
+        while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
             let metrics = Self::get_metrics_vec(client.as_ref());
             for (span_idx, metric) in metrics.iter().enumerate() {
                 let progress_span = &status_spans[span_idx];
@@ -125,9 +125,8 @@ impl ScyllaClientMetricsMonitor {
     pub async fn stop(&mut self) -> Result<()> {
         self.stop_flag
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        match self.thread_handle.take() {
-            Some(handle) => handle.await??,
-            None => {}
+        if let Some(handle) = self.thread_handle.take() {
+            handle.await??
         }
         Ok(())
     }
