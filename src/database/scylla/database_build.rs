@@ -57,6 +57,30 @@ const MAX_INSERT_TRIES: u64 = 5;
 ///
 const UNPROCESSABLE_PROTEINS_LOG_FILE_NAME: &str = "unprocessable_proteins.txt";
 
+/// Counter name for processed proteins
+///
+pub const PROCESSED_PROTEINS_COUNTER_NAME: &str = "macpepdb_build_digestion_processed_proteins";
+
+/// Counter name for processed peptides
+///
+pub const PROCESSED_PEPTIDES_COUNTER_NAME: &str = "macpepdb_build_digestion_processed_peptides";
+
+/// Counter name for errors
+///
+pub const ERRORS_COUNTER_NAME: &str = "macpepdb_build_digestion_errors";
+
+/// Counter name for unrecoverable errors
+///
+pub const UNRECOVERABLE_ERRORS_COUNTER_NAME: &str = "macpepdb_build_digestion_unrecoverable_errors";
+
+/// Counter name for protein queue size
+///
+pub const PROTEIN_QUEUE_SIZE_COUNTER_NAME: &str = "macpepdb_build_digestion_protein_queue_size";
+
+pub const METADATA_PROCESSED_PEPTIDES_COUNTER_NAME: &str =
+    "macpepdb_build_metadata_processed_peptides";
+pub const METADATA_ERRORS_COUNTER_NAME: &str = "macpepdb_build_metadata_errors";
+
 /// Struct which maintains the database content.
 /// * Inserts and updates proteins from given files
 /// * Maintains associations between proteins and peptides
@@ -193,21 +217,17 @@ impl DatabaseBuild {
 
         // Logging variable
         describe_counter!(
-            "macpepdb_build_digestion_processed_proteins",
+            PROCESSED_PROTEINS_COUNTER_NAME,
             "Number of inserted/updated proteins"
         );
         describe_counter!(
-            "macpepdb_build_digestion_processed_peptides",
+            PROCESSED_PEPTIDES_COUNTER_NAME,
             Unit::Count,
             "Number of inserted/updated peptides"
         );
-        describe_counter!(
-            "macpepdb_build_digestion_errors",
-            Unit::Count,
-            "Number of errors"
-        );
+        describe_counter!(ERRORS_COUNTER_NAME, Unit::Count, "Number of errors");
         describe_gauge!(
-            "macpepdb_build_digestion_protein_queue_size",
+            PROTEIN_QUEUE_SIZE_COUNTER_NAME,
             Unit::Count,
             "Size of the protein queue"
         );
@@ -222,23 +242,20 @@ impl DatabaseBuild {
 
         let monitorable_metrics = vec![
             MonitorableMetric::new(
-                "macpepdb_build_digestion_processed_proteins".to_string(),
+                PROCESSED_PROTEINS_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Rate,
             ),
             MonitorableMetric::new(
-                "macpepdb_build_digestion_processed_peptides".to_string(),
+                PROCESSED_PEPTIDES_COUNTER_NAME.to_string(),
+                MonitorableMetricType::Rate,
+            ),
+            MonitorableMetric::new(ERRORS_COUNTER_NAME.to_string(), MonitorableMetricType::Rate),
+            MonitorableMetric::new(
+                UNRECOVERABLE_ERRORS_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Rate,
             ),
             MonitorableMetric::new(
-                "macpepdb_build_digestion_errors".to_string(),
-                MonitorableMetricType::Rate,
-            ),
-            MonitorableMetric::new(
-                "macpepdb_build_digestion_unrecoverable_errors".to_string(),
-                MonitorableMetricType::Rate,
-            ),
-            MonitorableMetric::new(
-                "macpepdb_build_digestion_protein_queue_size".to_string(),
+                PROTEIN_QUEUE_SIZE_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Queue(protein_queue_size as u64),
             ),
         ];
@@ -289,7 +306,7 @@ impl DatabaseBuild {
                 loop {
                     match protein_queue_arc.push(next_protein) {
                         Ok(_) => {
-                            gauge!("macpepdb_build_digestion_protein_queue_size")
+                            gauge!(PROTEIN_QUEUE_SIZE_COUNTER_NAME)
                                 .set(protein_queue_arc.len() as f64);
                             break;
                         }
@@ -413,7 +430,7 @@ impl DatabaseBuild {
 
                 match upsert_result {
                     Ok(_) => {
-                        counter!("macpepdb_build_digestion_processed_proteins").increment(1);
+                        counter!(PROCESSED_PROTEINS_COUNTER_NAME).increment(1);
                         break;
                     }
                     Err(err) => {
@@ -423,10 +440,10 @@ impl DatabaseBuild {
                             tries
                         );
                         if tries <= MAX_INSERT_TRIES {
-                            counter!("macpepdb_build_digestion_errors").increment(1);
+                            counter!(ERRORS_COUNTER_NAME).increment(1);
                             warn!("{}", error_msg);
                         } else {
-                            counter!("macpepdb_build_digestion_unrecoverable_errors").increment(1);
+                            counter!(UNRECOVERABLE_ERRORS_COUNTER_NAME).increment(1);
                             error!("{}\n{:?}\n", error_msg, err);
                         }
                         sleep(Duration::from_millis(100));
@@ -563,7 +580,7 @@ impl DatabaseBuild {
 
         // Update protein itself
         ProteinTable::update(client, stored_protein, updated_protein).await?;
-        counter!("macpepdb_build_digestion_processed_peptides")
+        counter!(PROCESSED_PEPTIDES_COUNTER_NAME)
             .increment(peptides_of_updated_protein.len() as u64);
 
         Ok(())
@@ -664,7 +681,7 @@ impl DatabaseBuild {
         );
 
         PeptideTable::bulk_upsert(client, &mut peptides.iter()).await?;
-        counter!("macpepdb_build_digestion_processed_peptides").increment(peptides.len() as u64);
+        counter!(PROCESSED_PEPTIDES_COUNTER_NAME).increment(peptides.len() as u64);
 
         Ok(())
     }
@@ -697,18 +714,18 @@ impl DatabaseBuild {
 
         // (Metrics) logging variables
         describe_counter!(
-            "macpepdb_build_metadata_processed_peptides",
+            METADATA_PROCESSED_PEPTIDES_COUNTER_NAME,
             "Number of processed peptides"
         );
-        describe_counter!("macpepdb_build_metadata_errors", "Number of errors");
+        describe_counter!(METADATA_ERRORS_COUNTER_NAME, "Number of errors");
 
         let monitorable_metrics = vec![
             MonitorableMetric::new(
-                "macpepdb_build_metadata_processed_peptides".to_string(),
+                METADATA_PROCESSED_PEPTIDES_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Rate,
             ),
             MonitorableMetric::new(
-                "macpepdb_build_metadata_errors".to_string(),
+                METADATA_ERRORS_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Rate,
             ),
         ];
@@ -841,10 +858,10 @@ impl DatabaseBuild {
 
                 match update_result {
                     Ok(_) => {
-                        counter!("macpepdb_build_metadata_processed_peptides").increment(1);
+                        counter!(METADATA_PROCESSED_PEPTIDES_COUNTER_NAME).increment(1);
                     }
                     Err(err) => {
-                        counter!("macpepdb_build_metadata_errors").increment(1);
+                        counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
                         error!(
                             "Metadata update failed `{}`\n{:?}\n",
                             peptide.get_sequence(),
