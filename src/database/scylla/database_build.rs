@@ -180,7 +180,7 @@ impl DatabaseBuild {
     ) -> Result<usize> {
         debug!("Digesting proteins and inserting peptides");
 
-        let protein_queue_size = num_threads * 300;
+        let protein_queue_size = num_threads * 10;
 
         // Database client
         let client = Arc::new(Client::new(database_url).await?);
