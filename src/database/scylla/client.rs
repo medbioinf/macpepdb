@@ -165,23 +165,23 @@ impl Client {
         &self,
         query: &str,
     ) -> Result<scylla::prepared_statement::PreparedStatement> {
-        // Closure to make sure read guard is dropped
-        {
-            let read_guard = self.prepared_statement_cache.read().await;
-            if let Some(statement) = read_guard.get(query) {
-                return Ok(statement.clone());
-            }
+        let read_guard = self.prepared_statement_cache.read().await;
+        if let Some(statement) = read_guard.get(query) {
+            return Ok(statement.clone());
+        }
+        drop(read_guard);
+
+        let mut write_guard = self.prepared_statement_cache.write().await;
+        // Check if statement was added while waiting for the write guard
+        if let Some(statement) = write_guard.get(query) {
+            return Ok(statement.clone());
         }
 
         let statement = self
             .prepare(query.replace(":KEYSPACE:", &self.database))
             .await?;
 
-        // Closure to make sure write guard is dropped
-        {
-            let mut write_guard = self.prepared_statement_cache.write().await;
-            write_guard.insert(query.to_string(), statement.clone());
-        }
+        write_guard.insert(query.to_string(), statement.clone());
 
         Ok(statement)
     }
