@@ -9,7 +9,6 @@ use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use fallible_iterator::FallibleIterator;
 use flate2::read::GzDecoder;
-use log::error;
 use tracing::warn;
 
 use crate::entities::domain::Domain;
@@ -307,7 +306,7 @@ impl FallibleIterator for Reader {
                                     .split("..")
                                     .map(|s| {
                                         s.parse::<i64>()
-                                            .map_err(|x| error!("{} {} {:?}", x, line, accessions))
+                                            .map_err(|x| warn!("{} {} {:?}", x, line, accessions))
                                     })
                                     .collect();
 
