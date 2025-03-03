@@ -205,22 +205,12 @@ impl ProteinTable {
         peptide: &'a Peptide,
     ) -> Result<impl Stream<Item = Result<Protein>> + 'a> {
         Ok(try_stream! {
-            let accession_placeholder = peptide
-                .get_proteins()
-                .iter()
-                .map(|_| "?")
-                .collect::<Vec<&str>>()
-                .join(",");
-
-            let statement_addition = format!("WHERE accession IN ({})", accession_placeholder.as_str());
-
-            let params: Vec<CqlValue> = peptide.get_proteins().iter().map(|accession| CqlValue::Text(accession.to_owned())).collect();
-            let param_refs: Vec<&CqlValue> = params.iter().collect();
-
             for await protein in Self::select(
                 client,
-                &statement_addition,
-                param_refs.as_slice(),
+                "WHERE accession IN ?",
+                &[&CqlValue::List(
+                    peptide.get_proteins().iter().map(|x| CqlValue::Text(x.to_owned())).collect(),
+                )],
             ).await? {
                 yield protein?;
             }
@@ -263,17 +253,16 @@ impl Table for ProteinTable {
 
 #[cfg(test)]
 mod tests {
-    // std imports
+    use std::collections::HashMap;
     use std::path::Path;
 
-    // external imports
     use fallible_iterator::FallibleIterator;
     use futures::TryStreamExt;
     use serial_test::serial;
     use tokio::pin;
 
-    // internal imports
     use super::*;
+    use crate::chemistry::amino_acid::calc_sequence_mass_int;
     use crate::database::generic_client::GenericClient;
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
@@ -464,6 +453,57 @@ mod tests {
         let row_opt = stream.try_next().await.unwrap();
 
         assert!(row_opt.is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_get_proteins_of_peptides() {
+        let client = Client::new(DATABASE_URL).await.unwrap();
+        prepare_database_for_tests(&client).await;
+
+        let mut reader = Reader::new(Path::new("test_files/mouse.txt"), 1024).unwrap();
+        while let Some(protein) = reader.next().unwrap() {
+            ProteinTable::insert(&client, &protein).await.unwrap();
+        }
+
+        // LDDTERKIK from test_files/mouse.txt
+        let peptide = Peptide::new(
+            0,
+            calc_sequence_mass_int("LDDTERKIK").unwrap(),
+            "LDDTERKIK".to_string(),
+            2,
+            vec![
+                "A0A087WRS6".to_string(),
+                "G5E886".to_string(),
+                "G5E887".to_string(),
+            ],
+            true,
+            true,
+            vec![10090],
+            vec![],
+            vec!["UP000000589".to_string()],
+            vec![],
+        )
+        .unwrap();
+
+        // Fetch all proteins of the peptide
+        let protein_stream = ProteinTable::get_proteins_of_peptide(&client, &peptide)
+            .await
+            .unwrap();
+        pin!(protein_stream);
+        let proteins = protein_stream.try_collect::<Vec<Protein>>().await.unwrap();
+
+        // Check if all proteins of the peptide are in the fetched proteins
+        assert_eq!(proteins.len(), peptide.get_proteins().len());
+
+        let proteins_map: HashMap<String, Protein> = proteins
+            .iter()
+            .map(|protein| (protein.get_accession().to_owned(), protein.to_owned()))
+            .collect();
+
+        for expected_protein in peptide.get_proteins().iter() {
+            assert!(proteins_map.contains_key(expected_protein))
+        }
     }
 
     #[tokio::test]
