@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 // 3rd party imports
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_stream::try_stream;
 use dihardts_omicstools::proteomics::peptide::calculate_mass_of_peptide_sequence;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
@@ -12,6 +12,7 @@ use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{Stream, TryStreamExt};
 use scylla::frame::response::result::CqlValue;
+use scylla::transport::errors::QueryError;
 use tokio::pin;
 use tokio::task::JoinSet;
 
@@ -213,9 +214,14 @@ impl PeptideTable {
             })
             .collect::<Vec<_>>();
 
-        join_all(insertion_futures).await;
-
-        Ok(())
+        match join_all(insertion_futures)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, QueryError>>()
+        {
+            Ok(_) => Ok(()),
+            Err(e) => bail!("Error while upserting peptides into the database: {:?}", e),
+        }
     }
 
     /// Updates the protein accessions of the given peptides.
