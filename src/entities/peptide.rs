@@ -1,6 +1,7 @@
 // std imports
+#[cfg(feature = "domains")]
+use std::cmp;
 use std::{
-    cmp,
     collections::HashMap,
     fmt::Display,
     hash::{Hash, Hasher},
@@ -12,6 +13,7 @@ use scylla::macros::{DeserializeValue, SerializeValue};
 use serde::{Deserialize, Serialize};
 
 // internal imports
+#[cfg(feature = "domains")]
 use super::domain::Domain;
 use crate::entities::protein::Protein;
 use crate::tools::serde::{deserialize_mass_from_int, serialize_mass_to_float};
@@ -33,7 +35,8 @@ pub struct Peptide {
     taxonomy_ids: Vec<i64>,
     unique_taxonomy_ids: Vec<i64>,
     proteome_ids: Vec<String>,
-    #[serde(skip_serializing)]
+    #[cfg(feature = "domains")]
+    #[serde(skip_serializing)] // Domain is node serializable now
     domains: Vec<Domain>,
 }
 
@@ -51,6 +54,7 @@ impl Peptide {
     /// * `taxonomy_ids` - The taxonomy IDs
     /// * `unique_taxonomy_ids` - Taxonomy IDs where the peptide is only contained in one protein
     /// * `proteome_ids` - The proteome IDs
+    /// * `domains` - The domains (only available if the feature "domains" is enabled)
     ///
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -64,7 +68,7 @@ impl Peptide {
         taxonomy_ids: Vec<i64>,
         unique_taxonomy_ids: Vec<i64>,
         proteome_ids: Vec<String>,
-        domains: Vec<Domain>,
+        #[cfg(feature = "domains")] domains: Vec<Domain>,
     ) -> Result<Peptide> {
         let mut aa_counts = vec![0; 26];
         for one_letter_code in sequence.chars() {
@@ -83,6 +87,7 @@ impl Peptide {
             taxonomy_ids,
             unique_taxonomy_ids,
             proteome_ids,
+            #[cfg(feature = "domains")]
             domains,
         })
     }
@@ -101,6 +106,7 @@ impl Peptide {
     /// * `taxonomy_ids` - The taxonomy IDs
     /// * `unique_taxonomy_ids` - Taxonomy IDs where the peptide is only contained in one protein
     /// * `proteome_ids` - The proteome IDs
+    /// * `domains` - The domains (only available if the feature "domains" is enabled)
     ///
     #[allow(clippy::too_many_arguments)]
     pub fn new_full(
@@ -115,7 +121,7 @@ impl Peptide {
         taxonomy_ids: Vec<i64>,
         unique_taxonomy_ids: Vec<i64>,
         proteome_ids: Vec<String>,
-        domains: Vec<Domain>,
+        #[cfg(feature = "domains")] domains: Vec<Domain>,
     ) -> Peptide {
         Peptide {
             partition,
@@ -129,6 +135,7 @@ impl Peptide {
             taxonomy_ids,
             unique_taxonomy_ids,
             proteome_ids,
+            #[cfg(feature = "domains")]
             domains,
         }
     }
@@ -223,6 +230,7 @@ impl Peptide {
         &self.proteome_ids
     }
 
+    #[cfg(feature = "domains")]
     /// Returns the proteome IDs
     ///
     pub fn get_domains(&self) -> &Vec<Domain> {
@@ -234,20 +242,17 @@ impl Peptide {
     ///
     /// # Arguments
     /// * `proteins` - The proteins
-    /// * `protease_cleavage_codes` - The protease cleavage codes
-    /// * `protease_cleavage_blocker_codes` - The protease cleavage blocker codes
-    /// * `include_domains` - True if domains should not be extracted
+    ///
+    ///
+    /// * `protease_cleavage_codes` - The protease cleavage codes (only available if the feature "domains" is enabled)
+    /// * `protease_cleavage_blocker_codes` - The protease cleavage blocker codes (only available if the feature "domains" is enabled))
     ///
     pub fn get_metadata_from_proteins(
         &self,
         proteins: &[Protein],
-        protease_cleavage_codes: &[char],
-        protease_cleavage_blocker_codes: &[char],
-        include_domains: bool,
-    ) -> (bool, bool, Vec<i64>, Vec<i64>, Vec<String>, Vec<Domain>) {
-        let is_swiss_prot = proteins.iter().any(|protein| protein.get_is_reviewed());
-        let is_trembl = proteins.iter().any(|protein| !protein.get_is_reviewed());
-
+        #[cfg(feature = "domains")] protease_cleavage_codes: &[char],
+        #[cfg(feature = "domains")] protease_cleavage_blocker_codes: &[char],
+    ) -> CollectedMetadata {
         let mut taxonomy_ids: Vec<i64> = proteins
             .iter()
             .map(|protein| *protein.get_taxonomy_id())
@@ -260,20 +265,26 @@ impl Peptide {
                 .and_modify(|counter| *counter += 1)
                 .or_insert(1);
         }
-        let unique_taxonomy_ids: Vec<i64> = taxonomy_counters
+        let unique_taxonomy_ids = taxonomy_counters
             .iter()
             .filter(|(_, counter)| **counter == 1)
             .map(|(taxonomy_id, _)| *taxonomy_id)
             .collect();
 
-        let proteome_ids: Vec<String> = proteins
-            .iter()
-            .map(|protein| protein.get_proteome_id().to_owned())
-            .collect();
+        taxonomy_ids.sort();
+        taxonomy_ids.dedup();
 
-        let mut domains: Vec<Domain> = Vec::new();
-        if include_domains {
-            domains = proteins
+        CollectedMetadata {
+            is_swiss_prot: proteins.iter().any(|protein| protein.get_is_reviewed()),
+            is_trembl: proteins.iter().any(|protein| !protein.get_is_reviewed()),
+            proteome_ids: proteins
+                .iter()
+                .map(|protein| protein.get_proteome_id().to_owned())
+                .collect(),
+            taxonomy_ids,
+            unique_taxonomy_ids,
+            #[cfg(feature = "domains")]
+            domains: proteins
                 .iter()
                 .flat_map(|p| {
                     let dom = p.get_domains();
@@ -340,20 +351,8 @@ impl Peptide {
 
                     domains
                 })
-                .collect();
+                .collect(),
         }
-
-        taxonomy_ids.sort();
-        taxonomy_ids.dedup();
-
-        (
-            is_swiss_prot,
-            is_trembl,
-            taxonomy_ids,
-            unique_taxonomy_ids,
-            proteome_ids,
-            domains,
-        )
     }
 }
 
@@ -396,7 +395,7 @@ pub struct TsvPeptide {
     taxonomy_ids: String,
     unique_taxonomy_ids: String,
     proteome_ids: String,
-    // domains: String,
+    // domains: String, // TODO: should be implemented if domains feature is stabilized at some point and added to the domains-feature
 }
 
 impl From<Peptide> for TsvPeptide {
@@ -429,5 +428,55 @@ impl From<Peptide> for TsvPeptide {
                 .join(","),
             proteome_ids: peptide.proteome_ids.join(","),
         }
+    }
+}
+
+#[derive(Default)]
+pub struct CollectedMetadata {
+    pub(self) is_swiss_prot: bool,
+    pub(self) is_trembl: bool,
+    pub(self) taxonomy_ids: Vec<i64>,
+    pub(self) unique_taxonomy_ids: Vec<i64>,
+    pub(self) proteome_ids: Vec<String>,
+    #[cfg(feature = "domains")]
+    pub(self) domains: Vec<Domain>,
+}
+
+impl CollectedMetadata {
+    /// Returns true if the peptide is contained in a Swiss-Prot protein
+    ///
+    pub fn get_is_swiss_prot(&self) -> bool {
+        self.is_swiss_prot
+    }
+
+    /// Returns true if the peptide is contained in a TrEMBL protein
+    ///
+    pub fn get_is_trembl(&self) -> bool {
+        self.is_trembl
+    }
+
+    /// Returns the taxonomy IDs
+    ///
+    pub fn get_taxonomy_ids(&self) -> &Vec<i64> {
+        &self.taxonomy_ids
+    }
+
+    /// Returns the unique taxonomy IDs
+    ///
+    pub fn get_unique_taxonomy_ids(&self) -> &Vec<i64> {
+        &self.unique_taxonomy_ids
+    }
+
+    /// Returns the proteome IDs
+    ///
+    pub fn get_proteome_ids(&self) -> &Vec<String> {
+        &self.proteome_ids
+    }
+
+    #[cfg(feature = "domains")]
+    /// Returns the domains
+    ///
+    pub fn get_domains(&self) -> &Vec<Domain> {
+        &self.domains
     }
 }

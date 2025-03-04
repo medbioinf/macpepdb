@@ -1,3 +1,5 @@
+#[cfg(feature = "domains")]
+use std::borrow::Cow;
 // std imports
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -11,7 +13,9 @@ use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{Stream, TryStreamExt};
-use scylla::frame::response::result::CqlValue;
+use scylla::deserialize::row::ColumnIterator;
+use scylla::deserialize::{DeserializationError, DeserializeRow, TypeCheckError};
+use scylla::frame::response::result::{ColumnSpec, ColumnType, CqlValue};
 use scylla::transport::errors::QueryError;
 use tokio::pin;
 use tokio::task::JoinSet;
@@ -21,47 +25,60 @@ use crate::database::generic_client::GenericClient;
 use crate::database::scylla::peptide_search::{FalliblePeptideStream, MultiTaskSearch, Search};
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
+#[cfg(feature = "domains")]
 use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
 use crate::mass::convert::to_int as mass_to_int;
+use crate::tools::cql::convert_raw_col;
 use crate::tools::omicstools::convert_to_internal_dummy_peptide;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
 use crate::database::scylla::client::Client;
 
+use super::errors::{ColumnTypeMismatchError, UnexpectedEndOfRowError, UnknownColumnError};
+
 pub const TABLE_NAME: &str = "peptides";
 
-pub const SELECT_COLS: [&str; 12] = [
-    "partition",
-    "mass",
-    "sequence",
-    "missed_cleavages",
-    "aa_counts",
-    "proteins",
-    "is_swiss_prot",
-    "is_trembl",
-    "taxonomy_ids",
-    "unique_taxonomy_ids",
-    "proteome_ids",
-    "domains",
-];
-
-const INSERT_COLS: [&str; 12] = SELECT_COLS;
-
-const UPDATE_COLS: [&str; 9] = [
-    "missed_cleavages",
-    "aa_counts",
-    "proteins",
-    "is_swiss_prot",
-    "is_trembl",
-    "taxonomy_ids",
-    "unique_taxonomy_ids",
-    "proteome_ids",
-    "domains",
-];
-
 lazy_static! {
+    pub static ref SELECT_COLS: Vec<&'static str> = vec![
+        "partition",
+        "mass",
+        "sequence",
+        "missed_cleavages",
+        "aa_counts",
+        "proteins",
+        "is_swiss_prot",
+        "is_trembl",
+        "taxonomy_ids",
+        "unique_taxonomy_ids",
+        "proteome_ids",
+        #[cfg(feature = "domains")] "domains",
+    ];
+
+    static ref INSERT_COLS: Vec<&'static str> = SELECT_COLS.clone();
+
+    static ref UPDATE_COLS: Vec<&'static str> = vec![
+        "missed_cleavages",
+        "aa_counts",
+        "proteins",
+        "is_swiss_prot",
+        "is_trembl",
+        "taxonomy_ids",
+        "unique_taxonomy_ids",
+        "proteome_ids",
+        #[cfg(feature = "domains")] "domains",
+    ];
+
+    static ref METADATA_UPDATE_COLS: Vec<&'static str> = vec![
+        "is_swiss_prot",
+        "is_trembl",
+        "taxonomy_ids",
+        "unique_taxonomy_ids",
+        "proteome_ids",
+        #[cfg(feature = "domains")] "domains",
+    ];
+
     /// Select statement with any additional where-clause
     ///
     static ref SELECT_STATEMENT: String =
@@ -117,8 +134,13 @@ lazy_static! {
     /// Statement to update the metadata of a peptide
     ///
     static ref UPDATE_METADATA_STATEMENT: String = format!(
-        "UPDATE :KEYSPACE:.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
-        TABLE_NAME
+        "UPDATE :KEYSPACE:.{} SET is_metadata_updated = true, {} WHERE partition = ? AND mass = ? and sequence = ?",
+        TABLE_NAME,
+        METADATA_UPDATE_COLS
+            .iter()
+            .map(|col| format!("{} = ?", col))
+            .collect::<Vec<String>>()
+            .join(", ")
     );
 
     /// Statement to select peptides by mass range
@@ -130,41 +152,200 @@ lazy_static! {
 
 }
 
-/// Type alias for typed peptide rows
-///
-pub type TypedPeptideRow = (
-    i64,
-    i64,
-    String,
-    i16,
-    Vec<i16>,
-    HashSet<String>,
-    bool,
-    bool,
-    HashSet<i64>,
-    HashSet<i64>,
-    HashSet<String>,
-    HashSet<Domain>,
-);
+impl<'frame, 'metadata> DeserializeRow<'frame, 'metadata> for Peptide {
+    fn type_check(specs: &[ColumnSpec]) -> Result<(), TypeCheckError> {
+        for spec in specs {
+            match spec.name() {
+                "partition" => {
+                    if *spec.typ() != ColumnType::BigInt {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "mass" => {
+                    if *spec.typ() != ColumnType::BigInt {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "sequence" => {
+                    if *spec.typ() != ColumnType::Text {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "missed_cleavages" => {
+                    if *spec.typ() != ColumnType::SmallInt {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "aa_counts" => {
+                    if *spec.typ() != ColumnType::List(Box::new(ColumnType::SmallInt)) {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "proteins" => {
+                    if *spec.typ() != ColumnType::Set(Box::new(ColumnType::Text)) {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "is_swiss_prot" => {
+                    if *spec.typ() != ColumnType::Boolean {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "is_trembl" => {
+                    if *spec.typ() != ColumnType::Boolean {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "taxonomy_ids" => {
+                    if *spec.typ() != ColumnType::Set(Box::new(ColumnType::BigInt)) {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "unique_taxonomy_ids" => {
+                    if *spec.typ() != ColumnType::Set(Box::new(ColumnType::BigInt)) {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "proteome_ids" => {
+                    if *spec.typ() != ColumnType::Set(Box::new(ColumnType::Text)) {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "is_metadata_updated" => {
+                    if *spec.typ() != ColumnType::Boolean {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                #[cfg(feature = "domains")]
+                "domains" => {
+                    if *spec.typ()
+                        != ColumnType::Set(Box::new(Domain::get_user_defined_type(Cow::Owned(
+                            spec.table_spec().ks_name().to_string(),
+                        ))))
+                    {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: Domain::get_user_defined_type(Cow::Owned(
+                                spec.table_spec().ks_name().to_string(),
+                            )),
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                _ => {
+                    return Err(TypeCheckError::new(UnknownColumnError {
+                        name: spec.name().to_string(),
+                        typ: spec.typ().clone().into_owned(),
+                    }))
+                }
+            }
+        }
 
-/// Implementation to convert TypedPeptideRow into a Peptide
-///
-impl From<TypedPeptideRow> for Peptide {
-    fn from(row: TypedPeptideRow) -> Self {
-        Peptide::new_full(
-            row.0,
-            row.1,
-            row.2,
-            row.3,
-            row.4,
-            row.5.into_iter().collect(),
-            row.6,
-            row.7,
-            row.8.into_iter().collect(),
-            row.9.into_iter().collect(),
-            row.10.into_iter().collect(),
-            row.11.into_iter().collect(),
-        )
+        Ok(())
+    }
+
+    fn deserialize(
+        mut row: ColumnIterator<'frame, 'metadata>,
+    ) -> Result<Self, DeserializationError> {
+        Ok(Peptide::new_full(
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            #[cfg(feature = "domains")]
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+        ))
     }
 }
 
@@ -205,6 +386,7 @@ impl PeptideTable {
                         x.get_taxonomy_ids(),
                         x.get_unique_taxonomy_ids(),
                         x.get_proteome_ids(),
+                        #[cfg(feature = "domains")]
                         x.get_domains(),
                         x.get_partition(),
                         x.get_mass(),
@@ -512,7 +694,7 @@ impl PeptideTable {
         let stream = client
             .execute_iter(prepared_statement, params)
             .await?
-            .rows_stream::<TypedPeptideRow>()?;
+            .rows_stream::<Peptide>()?;
 
         Ok(try_stream! {
             for await peptide_result in stream {
@@ -531,7 +713,7 @@ impl PeptideTable {
     /// * `taxonomy_ids` - Taxonomy ids of the peptide
     /// * `unique_taxonomy_ids` - Unique taxonomy ids of the peptide
     /// * `proteome_ids` - Proteome ids of the peptide
-    /// * `domains` - Domains of the peptide
+    /// * `domains` - Domains of the peptide (only available when feature `domains` is enabled)
     ///
     #[allow(clippy::too_many_arguments)]
     pub async fn update_metadata(
@@ -542,7 +724,7 @@ impl PeptideTable {
         taxonomy_ids: &Vec<i64>,
         unique_taxonomy_ids: &Vec<i64>,
         proteome_ids: &Vec<String>,
-        domains: &Vec<Domain>,
+        #[cfg(feature = "domains")] domains: &Vec<Domain>,
     ) -> Result<()> {
         let prepared_statement = client
             .get_prepared_statement(&UPDATE_METADATA_STATEMENT)
@@ -556,6 +738,7 @@ impl PeptideTable {
                     &taxonomy_ids,
                     &unique_taxonomy_ids,
                     &proteome_ids,
+                    #[cfg(feature = "domains")]
                     &domains,
                     peptide.get_partition(),
                     peptide.get_mass(),
@@ -596,7 +779,7 @@ impl PeptideTable {
                 let stream = client
                     .execute_iter(prepared_statement, (lower_partition_index as i64, lower_mass, upper_mass))
                     .await?
-                    .rows_stream::<TypedPeptideRow>()?;
+                    .rows_stream::<Peptide>()?;
                 for await peptide_result in stream {
                     yield peptide_result?.into();
                 }
@@ -619,7 +802,7 @@ impl PeptideTable {
                     let stream = client
                         .execute_iter(prepared_statement.clone(), (lower_partition_index as i64, lower_mass, upper_mass))
                         .await?
-                        .rows_stream::<TypedPeptideRow>()?;
+                        .rows_stream::<Peptide>()?;
                     for await peptide_result in stream {
                         yield peptide_result?.into();
                     }
@@ -762,6 +945,8 @@ mod tests {
             vec![9925],
             vec![9925],
             vec!["UP000291000".to_owned()],
+            #[cfg(feature = "domains")]
+            #[cfg(feature = "domains")]
             vec![],
         )
         .unwrap()];

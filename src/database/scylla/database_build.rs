@@ -81,6 +81,8 @@ pub const METADATA_PROCESSED_PEPTIDES_COUNTER_NAME: &str =
     "macpepdb_build_metadata_processed_peptides";
 pub const METADATA_ERRORS_COUNTER_NAME: &str = "macpepdb_build_metadata_errors";
 
+pub const CONCURRENT_PEPTIDE_INSERTIONS: usize = 2000;
+
 /// Struct which maintains the database content.
 /// * Inserts and updates proteins from given files
 /// * Maintains associations between proteins and peptides
@@ -92,7 +94,7 @@ pub struct DatabaseBuild {
 
 impl DatabaseBuild {
     /// Reads the saved configuration from the database or sets a new configuration if no configuration is saved.
-    /// If no initial configuration is given and no configuration is saved in the database an error is thrown.  
+    /// If no initial configuration is given and no configuration is saved in the database an error is thrown.
     /// If the initial configuration is used and has no partition limits, the partition limits are calculated.
     ///
     /// # Arguments
@@ -680,8 +682,16 @@ impl DatabaseBuild {
             peptides.len()
         );
 
-        PeptideTable::bulk_upsert(client, &mut peptides.iter()).await?;
-        counter!(PROCESSED_PEPTIDES_COUNTER_NAME).increment(peptides.len() as u64);
+        for peptide_chunk in peptides
+            .into_iter()
+            .collect::<Vec<_>>()
+            .chunks(CONCURRENT_PEPTIDE_INSERTIONS)
+        {
+            PeptideTable::bulk_upsert(client, &mut peptide_chunk.iter()).await?;
+            counter!(PROCESSED_PEPTIDES_COUNTER_NAME).increment(peptide_chunk.len() as u64);
+        }
+        // PeptideTable::bulk_upsert(client, &mut peptides.iter()).await?;
+        // counter!(PROCESSED_PEPTIDES_COUNTER_NAME).increment(peptides.len() as u64);
 
         Ok(())
     }
@@ -700,8 +710,7 @@ impl DatabaseBuild {
         num_threads: usize,
         database_url: &str,
         configuration: &Configuration,
-        protease: &dyn Protease,
-        include_domains: bool,
+        #[cfg(feature = "domains")] protease: &dyn Protease,
     ) -> Result<()> {
         debug!("Collecting peptide metadata");
         // Process num_threads but max 2/3 of the partitions in parallel
@@ -745,18 +754,17 @@ impl DatabaseBuild {
         let client = Arc::new(Client::new(database_url).await?);
         let metadata_collector_thread_handles: Vec<_> = (0..num_threads * 2)
             .map(|_| {
-                let protease = get_protease_by_name(
-                    protease.get_name(),
-                    protease.get_min_length(),
-                    protease.get_max_length(),
-                    protease.get_max_missed_cleavages(),
-                )?;
                 // Start digestion thread
                 Ok(spawn(Self::collect_peptide_metadata_thread(
                     client.clone(),
                     partition_queue.clone(),
-                    protease,
-                    include_domains,
+                    #[cfg(feature = "domains")]
+                    get_protease_by_name(
+                        protease.get_name(),
+                        protease.get_min_length(),
+                        protease.get_max_length(),
+                        protease.get_max_missed_cleavages(),
+                    )?,
                 )))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -778,20 +786,21 @@ impl DatabaseBuild {
     /// # Arguments
     /// * `database_url` - The database url
     /// * `partitions` - The partitions
-    /// * `protease` - The digestion protease
-    /// * `include_domains` - If true, domains are collected
+    /// * `protease` - The digestion protease, only available with feature `domains` enabled
     ///
     async fn collect_peptide_metadata_thread(
         client: Arc<Client>,
         partition_queue: Arc<Mutex<Vec<i64>>>,
-        protease: Box<dyn Protease>,
-        include_domains: bool,
+        #[cfg(feature = "domains")] protease: Box<dyn Protease>,
     ) -> Result<()> {
+        #[cfg(feature = "domains")]
         let protease_cleavage_codes: Vec<char> = protease
             .get_cleavage_amino_acids()
             .iter()
             .map(|aa| *aa.get_code())
             .collect();
+
+        #[cfg(feature = "domains")]
         let protease_cleavage_blocker_codes: Vec<char> = protease
             .get_cleavage_blocking_amino_acids()
             .iter()
@@ -830,29 +839,24 @@ impl DatabaseBuild {
                         .try_collect::<Vec<_>>()
                         .await?;
 
-                let (
-                    is_swiss_prot,
-                    is_trembl,
-                    taxonomy_ids,
-                    unique_taxonomy_ids,
-                    proteome_ids,
-                    domains,
-                ) = peptide.get_metadata_from_proteins(
+                let collected_metadata = peptide.get_metadata_from_proteins(
                     &associated_proteins,
+                    #[cfg(feature = "domains")]
                     &protease_cleavage_codes,
+                    #[cfg(feature = "domains")]
                     &protease_cleavage_blocker_codes,
-                    include_domains,
                 );
 
                 let update_result = PeptideTable::update_metadata(
                     client.as_ref(),
                     &peptide,
-                    is_swiss_prot,
-                    is_trembl,
-                    &taxonomy_ids,
-                    &unique_taxonomy_ids,
-                    &proteome_ids,
-                    &domains,
+                    collected_metadata.get_is_swiss_prot(),
+                    collected_metadata.get_is_trembl(),
+                    collected_metadata.get_taxonomy_ids(),
+                    collected_metadata.get_unique_taxonomy_ids(),
+                    collected_metadata.get_proteome_ids(),
+                    #[cfg(feature = "domains")]
+                    collected_metadata.get_domains(),
                 )
                 .await;
 
@@ -921,7 +925,6 @@ impl DatabaseBuild {
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
         log_folder: &Path,
-        include_domains: bool,
     ) -> Result<()> {
         info!("Starting database build");
 
@@ -1002,8 +1005,8 @@ impl DatabaseBuild {
             num_threads,
             &self.database_url,
             &configuration,
+            #[cfg(feature = "domains")]
             protease.as_ref(),
-            include_domains,
         )
         .await?;
 
@@ -1072,7 +1075,6 @@ mod test {
                 0.0002,
                 None,
                 &log_folder,
-                true,
             )
             .await;
         assert!(build_res.is_err());
@@ -1108,7 +1110,6 @@ mod test {
                 0.0002,
                 Some(CONFIGURATION.clone()),
                 &log_folder,
-                true,
             )
             .await
             .unwrap();

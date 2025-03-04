@@ -1,5 +1,4 @@
 // std imports
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::process;
 use std::{path::Path, time::Duration};
@@ -8,25 +7,18 @@ use std::{path::Path, time::Duration};
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
-use futures::StreamExt;
 use glob::glob;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use reqwest::Url;
 use tokio::net::TcpListener;
 use tokio::time::sleep;
-use tracing::{debug, error, info, info_span, Instrument, Level};
+use tracing::{error, info, info_span, Instrument, Level};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_indicatif::IndicatifLayer;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{layer::SubscriberExt, EnvFilter};
 
 // internal imports
-use macpepdb::database::generic_client::GenericClient;
-use macpepdb::database::scylla::client::Client;
-use macpepdb::database::scylla::peptide_table::PeptideTable;
-use macpepdb::database::scylla::peptide_table::SELECT_COLS as PEPTIDE_SELECT_COLS;
-use macpepdb::database::table::Table;
-use macpepdb::entities::peptide::Peptide;
 use macpepdb::tools::peptide_mass_counter::PeptideMassCounter;
 use macpepdb::tools::peptide_partitioner::PeptidePartitioner;
 use macpepdb::web::server::start as start_web_server;
@@ -125,9 +117,6 @@ enum Commands {
         /// 0 and searches might be incorrect
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         keep_peptides_containing_unknown: bool,
-        /// If set, domains will be added to the database
-        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
-        include_domains: bool, // this is a flag now `--include-domains`
         /// Protease used for digestion
         #[arg(long, value_enum, default_value_t = DEFAULT_PROTEASE)]
         protease: ProteaseChoice,
@@ -165,10 +154,6 @@ enum Commands {
         interface: String,
         /// Port to bind the web server to
         port: u16,
-    },
-    DomainTypes {
-        /// Database URL to connect e.g. scylla://host1,host2/keyspace
-        database_url: String,
     },
     MassCounter {
         // Optional arguments
@@ -385,7 +370,6 @@ async fn main() -> Result<()> {
             max_number_of_missed_cleavages,
             partitioner_false_positive_probability,
             keep_peptides_containing_unknown,
-            include_domains,
             protease,
             protein_file_paths,
         } => {
@@ -448,7 +432,6 @@ async fn main() -> Result<()> {
                             partition_limits,
                         )),
                         &log_folder,
-                        include_domains,
                     )
                     .await
                 {
@@ -468,56 +451,6 @@ async fn main() -> Result<()> {
         } => {
             if database_url.starts_with("scylla://") {
                 start_web_server(&database_url, interface, port, !no_taxonomy_search).await?;
-            } else {
-                error!("Unsupported database protocol: {}", database_url);
-            }
-        }
-        Commands::DomainTypes { database_url } => {
-            if database_url.starts_with("scylla://") {
-                let client = Client::new(&database_url).await?;
-
-                let not_updated_peptides = info_span!("not_updated_peptides");
-                let not_updated_peptides_enter = not_updated_peptides.enter();
-
-                let mut domains: HashSet<String> = HashSet::new();
-
-                for partition in 0_i64..100_i64 {
-                    let query_statement = format!(
-                "SELECT {} FROM {} WHERE partition = ? AND is_metadata_updated = true ALLOW FILTERING",
-                PEPTIDE_SELECT_COLS.join(","),
-                PeptideTable::table_name()
-            );
-
-                    debug!("Streaming rows of partition {}", partition);
-
-                    let mut row_stream = client
-                        .query_iter(query_statement, (partition,))
-                        .await?
-                        .rows_stream::<(Peptide,)>()?;
-
-                    while let Some(row_opt) = row_stream.next().await {
-                        if row_opt.is_err() {
-                            debug!("Row opt err");
-                            sleep(Duration::from_millis(100)).await;
-                            continue;
-                        }
-                        let row = row_opt.unwrap().0;
-                        let peptide = row;
-
-                        let a = peptide.get_domains().iter().map(|x| x.get_name());
-
-                        for name in a {
-                            if name.is_empty() {
-                                info!("{:?}", peptide.get_proteins());
-                            }
-                            domains.insert(name.to_string());
-                        }
-                    }
-                }
-
-                info!("{:?}", domains);
-                std::mem::drop(not_updated_peptides_enter);
-                std::mem::drop(not_updated_peptides);
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }

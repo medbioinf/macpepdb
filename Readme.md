@@ -83,8 +83,8 @@ Table: proteins
 | taxonomy_ids        | set<bigint>         | IDs of containing taxonomies                                    |
 | unique_taxonomy_ids | set<bigint>         | IDs of taxonomies with only one protein containing this peptide |
 | proteome_ids        | set<text>           | IDs of containing proteomes                                     |
-| domains             | frozen<set<domain>> | Set of domains in which the peptide occured                     |
 | is_metadata_updated | Boolean             | `true` if metadata is up to date (internal use only)            |
+| domains             | frozen<set<domain>> | Set of domains in which the peptide occured (only availabe with activated feature `domains`) |
 
 \* primary key is bold
 
@@ -151,6 +151,15 @@ You can try using io tuner for your disk, however in some cases the performance 
 
 ### Build
 To build the database use `cargo run -r -- build ...`. Use `--help` for all options.
+
+### #Features
+
+* `domains`: Add positional/positional doamins to proteins and peptides. Each peptide might have multiple domains as it can be stret accross multipe.
+  This feature is highly experimental and not fully covered by tests
+  Once the database is build with domains, you have to stick with it unless you build the database from scratch without that feature.
+
+*Hint*: Each feature can be enabled individually during compilation using: `-F <feature name>`
+
 
 ### Database URL
 Connection settings to database given via an URL: `scylla://[user:password@]<comma_separated_list_of_hosts>/<keyspace>[?attirbute1=foo&attribute2=bar&...]`

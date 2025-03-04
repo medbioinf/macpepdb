@@ -50,6 +50,7 @@ pub fn convert_to_internal_peptide<'a>(
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            #[cfg(feature = "domains")]
             Vec::new(),
         )
     })
@@ -80,6 +81,7 @@ pub fn convert_to_internal_dummy_peptide(
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            #[cfg(feature = "domains")]
             Vec::new(),
         )
     })

@@ -1,6 +1,12 @@
-// 3rd party imports
-use scylla::macros::{DeserializeValue, SerializeValue};
+use std::borrow::Cow;
+
+use scylla::{
+    frame::response::result::ColumnType,
+    macros::{DeserializeValue, SerializeValue},
+};
 use serde::{Deserialize, Serialize};
+
+const DOMAIN_TYPE_NAME: &str = "domain";
 
 #[derive(
     Debug, Clone, Hash, Eq, PartialEq, DeserializeValue, SerializeValue, Serialize, Deserialize,
@@ -70,5 +76,22 @@ impl Domain {
 
     pub fn get_peptide_offset(self) -> Option<i64> {
         self.peptide_offset
+    }
+
+    pub fn get_user_defined_type(keyspace: Cow<'_, str>) -> ColumnType<'_> {
+        ColumnType::UserDefinedType {
+            keyspace,
+            type_name: Cow::Borrowed(DOMAIN_TYPE_NAME),
+            field_types: vec![
+                (Cow::Borrowed("name"), ColumnType::Text),
+                (Cow::Borrowed("evidence"), ColumnType::Text),
+                (Cow::Borrowed("start_index"), ColumnType::BigInt),
+                (Cow::Borrowed("end_index"), ColumnType::BigInt),
+                (Cow::Borrowed("protein"), ColumnType::Text),
+                (Cow::Borrowed("start_index_protein"), ColumnType::BigInt),
+                (Cow::Borrowed("end_index_protein"), ColumnType::BigInt),
+                (Cow::Borrowed("peptide_offset"), ColumnType::BigInt),
+            ],
+        }
     }
 }

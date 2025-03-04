@@ -5,13 +5,15 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 
 // 3rd party imports
+#[cfg(feature = "domains")]
+use crate::entities::domain::Domain;
 use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use fallible_iterator::FallibleIterator;
 use flate2::read::GzDecoder;
+#[cfg(feature = "domains")]
 use tracing::warn;
 
-use crate::entities::domain::Domain;
 // internal imports
 use crate::entities::protein::Protein;
 
@@ -126,16 +128,23 @@ impl FallibleIterator for Reader {
         let mut is_reviewed: bool = false;
         let mut sequence: String = String::new();
         let mut updated_at: i64 = -1;
-        let mut domains: Vec<Domain> = Vec::new();
 
         let mut in_entry: bool = false;
         let mut last_de_line_category: String = String::new();
 
+        #[cfg(feature = "domains")]
+        let mut domains: Vec<Domain> = Vec::new();
+        #[cfg(feature = "domains")]
         let mut domain_start_idx: i64 = 0;
+        #[cfg(feature = "domains")]
         let mut domain_end_idx: i64 = 0;
+        #[cfg(feature = "domains")]
         let mut domain_name: String = "".to_string();
+        #[cfg(feature = "domains")]
         let mut domain_evidence: String;
+        #[cfg(feature = "domains")]
         let mut is_building_domain = false;
+        #[cfg(feature = "domains")]
         let mut ft_type: String = "".to_string();
 
         loop {
@@ -290,6 +299,7 @@ impl FallibleIterator for Reader {
                             genes.extend(synonyms);
                         }
                     }
+                    #[cfg(feature = "domains")]
                     "FT" => {
                         if !is_building_domain {
                             ft_type = line[5..13].to_string();
@@ -377,6 +387,7 @@ impl FallibleIterator for Reader {
                             is_reviewed,
                             sequence,
                             updated_at,
+                            #[cfg(feature = "domains")]
                             domains,
                         )));
                     }

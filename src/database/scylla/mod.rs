@@ -13,6 +13,9 @@ pub mod schema;
 /// Database API for (de-)serializing the taxonomy tree
 pub mod taxonomy_tree_table;
 
+/// Custom errors for failed database interactions
+pub mod errors;
+
 // internal imports
 use crate::database::scylla::client::Client;
 use crate::database::scylla::schema::{CREATE_KEYSPACE, DROP_KEYSPACE, UP};
@@ -36,7 +39,7 @@ pub async fn prepare_database_for_tests(client: &Client) {
     drop_keyspace(client).await;
     create_keyspace_if_not_exists(client).await;
 
-    for statement in UP {
+    for statement in UP.iter() {
         let statement = statement.replace(":KEYSPACE:", client.get_database());
         client
             .query_unpaged(statement.to_owned(), &[])

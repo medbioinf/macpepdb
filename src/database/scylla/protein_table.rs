@@ -1,37 +1,45 @@
+#[cfg(feature = "domains")]
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_stream::try_stream;
 use futures::Stream;
 use scylla::batch::Batch;
-use scylla::frame::response::result::CqlValue;
+use scylla::deserialize::row::ColumnIterator;
+use scylla::deserialize::{DeserializationError, DeserializeRow, TypeCheckError};
+use scylla::frame::response::result::{ColumnSpec, ColumnType, CqlValue};
 
 use super::client::Client;
+use super::errors::{ColumnTypeMismatchError, UnexpectedEndOfRowError};
 use crate::database::generic_client::GenericClient;
+use crate::database::scylla::errors::UnknownColumnError;
 use crate::database::table::Table;
+#[cfg(feature = "domains")]
 use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
+use crate::tools::cql::convert_raw_col;
 
 const TABLE_NAME: &str = "proteins";
 
-const SELECT_COLS: [&str; 11] = [
-    "accession",
-    "secondary_accessions",
-    "entry_name",
-    "name",
-    "genes",
-    "taxonomy_id",
-    "proteome_id",
-    "is_reviewed",
-    "sequence",
-    "updated_at",
-    "domains",
-];
-
-const INSERT_COLS: [&str; 11] = SELECT_COLS;
-
 lazy_static! {
+    static ref SELECT_COLS: Vec<&'static str> = vec![
+        "accession",
+        "secondary_accessions",
+        "entry_name",
+        "name",
+        "genes",
+        "taxonomy_id",
+        "proteome_id",
+        "is_reviewed",
+        "sequence",
+        "updated_at",
+        #[cfg(feature = "domains")] "domains",
+    ];
+
+    static ref INSERT_COLS: Vec<&'static str> = SELECT_COLS.clone();
+
     /// Select statement without WHERE clause.
     ///
     static ref SELECT_STATEMENT: String = format!(
@@ -56,27 +64,178 @@ lazy_static! {
         format!("DELETE FROM :KEYSPACE:.{} WHERE accession = ?", TABLE_NAME);
 }
 
-/// Tuoel which represents a row of the protein table.
-///
-type TypedProteinRow = (
-    String,
-    Vec<String>,
-    String,
-    String,
-    Vec<String>,
-    i64,
-    String,
-    bool,
-    String,
-    i64,
-    Vec<Domain>,
-);
+impl<'frame, 'metadata> DeserializeRow<'frame, 'metadata> for Protein {
+    fn type_check(specs: &[ColumnSpec]) -> Result<(), TypeCheckError> {
+        for spec in specs {
+            match spec.name() {
+                "accession" => {
+                    if *spec.typ() != ColumnType::Text {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "secondary_accessions" => {
+                    if *spec.typ() != ColumnType::List(Box::new(ColumnType::Text)) {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "entry_name" => {
+                    if *spec.typ() != ColumnType::Text {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "name" => {
+                    if *spec.typ() != ColumnType::Text {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "genes" => {
+                    if *spec.typ() != ColumnType::List(Box::new(ColumnType::Text)) {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "taxonomy_id" => {
+                    if *spec.typ() != ColumnType::BigInt {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "proteome_id" => {
+                    if *spec.typ() != ColumnType::Text {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "is_reviewed" => {
+                    if *spec.typ() != ColumnType::Boolean {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "sequence" => {
+                    if *spec.typ() != ColumnType::Text {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                "updated_at" => {
+                    if *spec.typ() != ColumnType::BigInt {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: ColumnType::Text,
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                #[cfg(feature = "domains")]
+                "domains" => {
+                    if *spec.typ()
+                        != ColumnType::Set(Box::new(Domain::get_user_defined_type(Cow::Owned(
+                            spec.table_spec().ks_name().to_string(),
+                        ))))
+                    {
+                        return Err(TypeCheckError::new(ColumnTypeMismatchError {
+                            name: spec.name().to_string(),
+                            expected: Domain::get_user_defined_type(Cow::Owned(
+                                spec.table_spec().ks_name().to_string(),
+                            )),
+                            actual: spec.typ().clone().into_owned(),
+                        }));
+                    }
+                }
+                _ => {
+                    return Err(TypeCheckError::new(UnknownColumnError {
+                        name: spec.name().to_string(),
+                        typ: spec.typ().clone().into_owned(),
+                    }))
+                }
+            }
+        }
 
-impl From<TypedProteinRow> for Protein {
-    fn from(row: TypedProteinRow) -> Self {
-        Protein::new(
-            row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8, row.9, row.10,
-        )
+        Ok(())
+    }
+
+    fn deserialize(
+        mut row: ColumnIterator<'frame, 'metadata>,
+    ) -> Result<Self, DeserializationError> {
+        Ok(Protein::new(
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+            #[cfg(feature = "domains")]
+            convert_raw_col(
+                row.next()
+                    .ok_or(DeserializationError::new(UnexpectedEndOfRowError))??,
+            )?,
+        ))
     }
 }
 
@@ -99,6 +258,7 @@ impl ProteinTable {
                     &protein.get_is_reviewed(),
                     protein.get_sequence(),
                     &protein.get_updated_at(),
+                    #[cfg(feature = "domains")]
                     protein.get_domains(),
                 ),
             )
@@ -131,6 +291,7 @@ impl ProteinTable {
                         &updated_prot.get_is_reviewed(),
                         updated_prot.get_sequence(),
                         &updated_prot.get_updated_at(),
+                        #[cfg(feature = "domains")]
                         updated_prot.get_domains(),
                     ),
                 ),
@@ -220,7 +381,7 @@ impl ProteinTable {
         let stream = client
             .execute_iter(prepared_statement, params)
             .await?
-            .rows_stream::<TypedProteinRow>()?;
+            .rows_stream::<Protein>()?;
 
         Ok(try_stream! {
             for await protein_result in stream  {
@@ -252,6 +413,7 @@ mod tests {
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
     use crate::database::scylla::tests::DATABASE_URL;
+    #[cfg(feature = "domains")]
     use crate::entities::domain::Domain;
     use crate::io::uniprot_text::reader::Reader;
 
@@ -286,8 +448,7 @@ mod tests {
             true,
             "MNPLLILTFVAAALAAPFDDDDKIVGGYNCEENSVPYQVSLNSGYHFCGGSLINEQWVVSAGHCYKSRIQVRLGEHNIEVLEGNEQFINAAKIIRHPQYDRKTLNNDIMLIKLSSRAVINARVSTISLPTAPPATGTKCLISGWGNTASSGADYPDELQCLDAPVLSQAKCEASYPGKITSNMFCVGFLEGGKDSCQGDSGGPVVCNGQLQGVVSWGDGCAQKNKPGVYTKVYNYVKWIKNTIAANS".to_string(),
             1677024000,
-            vec![]
-
+            #[cfg(feature = "domains")] vec![],
         );
 
         static ref UPDATED_TRYPSIN: Protein = Protein::new(
@@ -320,7 +481,7 @@ mod tests {
             true,
             "RUSTISAWESOME".to_string(),
             0,
-            vec![Domain::new( 23, 243,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(), None, None, None, None)]
+            #[cfg(feature = "domains")] vec![Domain::new( 23, 243,  "Peptidase S1".to_string(),  "ECO:0000255|PROSITE-ProRule:PRU00274".to_string(), None, None, None, None)]
         );
     }
 
@@ -467,6 +628,7 @@ mod tests {
             vec![10090],
             vec![],
             vec!["UP000000589".to_string()],
+            #[cfg(feature = "domains")]
             vec![],
         )
         .unwrap();

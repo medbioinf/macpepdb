@@ -14,8 +14,10 @@ use serde_json::Value as JsonValue;
 
 // internal imports
 use crate::database::scylla::client::Client;
+use crate::database::scylla::peptide_table::PeptideTable;
+#[cfg(feature = "domains")]
+use crate::entities::domain::Domain;
 use crate::tools::message_logger::ToLogMessage;
-use crate::{database::scylla::peptide_table::PeptideTable, entities::domain::Domain};
 
 use super::peptide::Peptide;
 
@@ -33,6 +35,7 @@ pub struct Protein {
     is_reviewed: bool,
     sequence: String,
     updated_at: i64,
+    #[cfg(feature = "domains")]
     domains: Vec<Domain>,
 }
 
@@ -51,6 +54,8 @@ impl Protein {
     /// * `sequence` - The amino acid sequence
     /// * `updated_at` - The last update date as unix timestamp
     ///
+    /// * `domains` - The protein domains (available only when feature `domains` is enabled)
+    ///
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         accession: String,
@@ -63,7 +68,7 @@ impl Protein {
         is_reviewed: bool,
         sequence: String,
         updated_at: i64,
-        domains: Vec<Domain>,
+        #[cfg(feature = "domains")] domains: Vec<Domain>,
     ) -> Self {
         Self {
             accession,
@@ -76,6 +81,7 @@ impl Protein {
             is_reviewed,
             sequence,
             updated_at,
+            #[cfg(feature = "domains")]
             domains,
         }
     }
@@ -140,6 +146,10 @@ impl Protein {
         self.updated_at
     }
 
+    #[cfg(feature = "domains")]
+    /// Returns the protein domains
+    /// Available only when feature `domains` is enabled
+    ///
     pub fn get_domains(&self) -> &Vec<Domain> {
         &self.domains
     }
