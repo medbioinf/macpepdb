@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 
 use crate::api_helpers::fetch_status::FetchStatus;
 use crate::components::protein_list::ProteinList;
+use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
@@ -81,24 +82,42 @@ pub fn ProteinSearch() -> Element {
                 "Search"
             }
         }
-
-        match &*proteins.read_unchecked() {
-            Some(Ok(None)) => {
+        match &*fetch_status.read_unchecked() {
+            FetchStatus::None => {
                 rsx! { "" }
             }
-            Some(Ok(Some(proteins))) => {
+            FetchStatus::Loading => {
                 rsx! {
-                    ProteinList { proteins: proteins.clone() }
+                    Spinner {}
                 }
             }
-            Some(Err(err)) => {
+            FetchStatus::Finished(()) => {
+                rsx! {
+                    match &*proteins.read_unchecked() {
+                        Some(Ok(None)) => {
+                            rsx! { "" }
+                        }
+                        Some(Ok(Some(proteins))) => {
+                            rsx! {
+                                ProteinList { proteins: proteins.clone() }
+                            }
+                        }
+                        Some(Err(err)) => {
+                            rsx! {
+                                div { "Error fetching proteins: {err}" }
+                            }
+                        }
+                        None => {
+                            rsx! {
+                                div { "Loading..." }
+                            }
+                        }
+                    }
+                }
+            },
+            FetchStatus::Error(err) => {
                 rsx! {
                     div { "Error fetching proteins: {err}" }
-                }
-            }
-            None => {
-                rsx! {
-                    div { "Loading..." }
                 }
             }
         }

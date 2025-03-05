@@ -3,6 +3,7 @@ use dioxus::prelude::*;
 use reqwest::StatusCode;
 
 use crate::components::rounded_mass::RoundedMass;
+use crate::components::spinner::Spinner;
 use crate::entities::configuration::Configuration as MacPepDBConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
@@ -99,45 +100,65 @@ pub fn SequenceSearch() -> Element {
             }
         }
 
-        match &*peptide.read_unchecked() {
-            Some(Ok(None)) => {
+        match &*fetch_status.read_unchecked() {
+            FetchStatus::None => {
                 rsx! { "" }
             }
-            Some(Ok(Some(peptide))) => {
+            FetchStatus::Loading => {
                 rsx! {
-                    table { class: "table table-striped table-hover table-sm table-responsive",
-                        thead {
-                            tr {
-                                th { "Mass (Da)" }
-                                th { "Sequence" }
-                            }
+                    Spinner {}
+                }
+            }
+            FetchStatus::Finished(()) => {
+                rsx! {
+
+                    match &*peptide.read_unchecked() {
+                        Some(Ok(None)) => {
+                            rsx! { "" }
                         }
-                        tbody {
-                            tr {
-                                td {
-                                    RoundedMass { mass: peptide.get_mass() }
-                                }
-                                td { class: "text-break",
-                                    Link {
-                                        to: Routes::Peptide {
-                                            peptide_sequence: peptide.get_sequence().to_owned(),
-                                        },
-                                        "{peptide.get_sequence()}"
+                        Some(Ok(Some(peptide))) => {
+                            rsx! {
+                                table { class: "table table-striped table-hover table-sm table-responsive",
+                                    thead {
+                                        tr {
+                                            th { "Mass (Da)" }
+                                            th { "Sequence" }
+                                        }
+                                    }
+                                    tbody {
+                                        tr {
+                                            td {
+                                                RoundedMass { mass: peptide.get_mass() }
+                                            }
+                                            td { class: "text-break",
+                                                Link {
+                                                    to: Routes::Peptide {
+                                                        peptide_sequence: peptide.get_sequence().to_owned(),
+                                                    },
+                                                    "{peptide.get_sequence()}"
+                                                }
+                                            }
+                                        }
                                     }
                                 }
+                            }
+                        }
+                        Some(Err(err)) => {
+                            rsx! {
+                                div { "Error fetching proteins: {err}" }
+                            }
+                        }
+                        None => {
+                            rsx! {
+                                div { "Loading..." }
                             }
                         }
                     }
                 }
             }
-            Some(Err(err)) => {
+            FetchStatus::Error(err) => {
                 rsx! {
                     div { "Error fetching proteins: {err}" }
-                }
-            }
-            None => {
-                rsx! {
-                    div { "Loading..." }
                 }
             }
         }

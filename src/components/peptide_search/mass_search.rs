@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::{
     api_helpers::fetch_status::FetchStatus,
-    components::{rounded_mass::RoundedMass, separator_line::SeparatorLine},
+    components::{rounded_mass::RoundedMass, separator_line::SeparatorLine, spinner::Spinner},
     configuration::Configuration as AppConfiguration,
     entities::{
         amino_acid::AminoAcid,
@@ -565,7 +565,7 @@ pub fn MassSearch() -> Element {
         }
         match &*peptides.read_unchecked() {
             FetchStatus::None => rsx! { "" },
-            FetchStatus::Loading => rsx! { "Loading ..." },
+            FetchStatus::Loading => rsx! { Spinner{} },
             FetchStatus::Finished(peptides) => rsx! {
                 p { class: "mt-2 mb-1", "Found {peptides.len()} peptides" }
                 table { class: "table table-striped table-hover table-sm table-responsive",

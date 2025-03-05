@@ -13,3 +13,6 @@ pub mod separator_line;
 
 /// Component for displaying a sequence
 pub mod sequence_block;
+
+/// Component for displaying a loading spinner
+pub mod spinner;
