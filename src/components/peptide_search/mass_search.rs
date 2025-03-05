@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr};
+use std::{fmt::Display, rc::Rc, str::FromStr};
 
 use anyhow::{bail, Result};
 use dioxus::prelude::*;
@@ -8,7 +8,10 @@ use serde_json::json;
 
 use crate::{
     api_helpers::fetch_status::FetchStatus,
-    components::{rounded_mass::RoundedMass, separator_line::SeparatorLine, spinner::Spinner},
+    components::{
+        paginated_peptide_list::PaginatedPeptideList, separator_line::SeparatorLine,
+        spinner::Spinner,
+    },
     configuration::Configuration as AppConfiguration,
     entities::{
         amino_acid::AminoAcid,
@@ -16,7 +19,6 @@ use crate::{
         post_translational_modification::{PostTranslationalModification, PtmPosition, PtmType},
         taxonomy::Taxonomy,
     },
-    routes::Routes,
 };
 
 /// Default upper and lower mass tolerance
@@ -186,7 +188,8 @@ pub fn MassSearch() -> Element {
     let mut is_reviewed: Signal<Option<bool>> = use_signal(|| None);
 
     // search peptides
-    let mut peptides: Signal<FetchStatus<Vec<PeptideEntity>>> = use_signal(|| FetchStatus::None);
+    let mut peptides: Signal<FetchStatus<Rc<Vec<PeptideEntity>>>> =
+        use_signal(|| FetchStatus::None);
     let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
         while rx.next().await.is_some() {
             peptides.set(FetchStatus::Loading);
@@ -205,7 +208,7 @@ pub fn MassSearch() -> Element {
             )
             .await;
             match peptides_result {
-                Ok(new_peptides) => peptides.set(FetchStatus::Finished(new_peptides)),
+                Ok(new_peptides) => peptides.set(FetchStatus::Finished(Rc::new(new_peptides))),
                 Err(e) => peptides.set(FetchStatus::Error(e)),
             }
         }
@@ -569,32 +572,7 @@ pub fn MassSearch() -> Element {
                 Spinner {}
             },
             FetchStatus::Finished(peptides) => rsx! {
-                p { class: "mt-2 mb-1", "Found {peptides.len()} peptides" }
-                table { class: "table table-striped table-hover table-sm table-responsive",
-                    thead {
-                        tr {
-                            th { "Mass (Da)" }
-                            th { "Sequence" }
-                        }
-                    }
-                    tbody {
-                        for peptide in peptides {
-                            tr {
-                                td {
-                                    RoundedMass { mass: peptide.get_mass() }
-                                }
-                                td { class: "text-break",
-                                    Link {
-                                        to: Routes::Peptide {
-                                            peptide_sequence: peptide.get_sequence().to_owned(),
-                                        },
-                                        "{peptide.get_sequence()}"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                PaginatedPeptideList { peptides_per_page: 100, peptides: peptides.clone() }
             },
             FetchStatus::Error(err) => rsx! {
                 div { class: "alert alert-danger", "Error fetching peptides: {err}" }

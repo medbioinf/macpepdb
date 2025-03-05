@@ -16,3 +16,6 @@ pub mod sequence_block;
 
 /// Component for displaying a loading spinner
 pub mod spinner;
+
+/// Pagination
+pub mod paginated_peptide_list;
