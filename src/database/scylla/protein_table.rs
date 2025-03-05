@@ -162,34 +162,19 @@ impl ProteinTable {
     ) -> Result<impl Stream<Item = Result<Protein>> + 'a> {
         Ok(try_stream! {
 
-
-            let like_attribute = format!("%{}%", &attribute);
-            let attr_cql_value = CqlValue::Text(like_attribute);
-            let param = vec![
-                &attr_cql_value
-            ];
-
-
             for await protein in Self::select(
                 client.as_ref(),
-                "WHERE accession LIKE ? ALLOW FILTERING",
-                param.as_slice()
-            )
-            .await? {
+                "WHERE accession = ?",
+                &[&CqlValue::Text(attribute.clone())],
+            ).await? {
                 yield protein?;
             }
 
-            let attr_cql_value = CqlValue::Text(attribute);
-            let param = vec![
-                &attr_cql_value
-            ];
-
             for await protein in Self::select(
                 client.as_ref(),
-                "WHERE genes CONTAINS ? ALLOW FILTERING",
-                param.as_slice(),
-            )
-            .await? {
+                "WHERE genes contains ?",
+                &[&CqlValue::Text(attribute.clone())],
+            ).await? {
                 yield protein?;
             }
         })
