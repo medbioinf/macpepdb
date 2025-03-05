@@ -1,8 +1,9 @@
 use std::rc::Rc;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use dioxus::html::input_data::keyboard_types::Code;
 use dioxus::prelude::*;
+use futures_util::StreamExt;
 
 use crate::api_helpers::fetch_status::FetchStatus;
 use crate::components::protein_list::ProteinList;
@@ -44,21 +45,30 @@ pub fn ProteinSearch() -> Element {
     let app_config = use_context::<AppConfiguration>();
     let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
     let mut protein_id = use_signal(|| "".to_string());
-    let mut fetch_status: Signal<FetchStatus<()>> = use_signal(|| FetchStatus::None);
 
-    // Event handler for fetching proteins on button click or on enter
-    //
-    let mut proteins: Resource<Result<Option<Rc<Vec<ProteinEntity>>>>> =
-        use_resource(move || async move {
-            if protein_id.read_unchecked().len() < MIN_SEARCH_TERM_LENGTH {
-                fetch_status.set(FetchStatus::None);
-                return Ok(None);
+    // search peptides
+    let mut proteins = use_signal(|| FetchStatus::None);
+    let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
+        while rx.next().await.is_some() {
+            if protein_id.read().len() < MIN_SEARCH_TERM_LENGTH {
+                proteins.set(FetchStatus::Error(anyhow!(
+                    "Search term too short, must be at least {} characters",
+                    MIN_SEARCH_TERM_LENGTH
+                )));
+                continue;
             }
-            fetch_status.set(FetchStatus::Loading);
-            let proteins = get_proteins(macpepdb_base_url, protein_id).await?;
-            fetch_status.set(FetchStatus::Finished(()));
-            Ok(Some(proteins))
-        });
+
+            proteins.set(FetchStatus::Loading);
+            match get_proteins(macpepdb_base_url, protein_id).await {
+                Ok(fetched_proteins) => {
+                    proteins.set(FetchStatus::Finished(fetched_proteins));
+                }
+                Err(err) => {
+                    proteins.set(FetchStatus::Error(err));
+                }
+            }
+        }
+    });
 
     rsx! {
         h3 { "Search for proteins" }
@@ -71,18 +81,18 @@ pub fn ProteinSearch() -> Element {
                 oninput: move |evt| protein_id.set(evt.value()),
                 onkeyup: move |evt| {
                     if evt.code() == Code::Enter || evt.code() == Code::NumpadEnter {
-                        proteins.restart()
+                        search_coroutine.send(())
                     }
                 },
             }
             button {
                 class: "btn btn-primary",
                 r#type: "button",
-                onclick: move |_| proteins.restart(),
+                onclick: move |_| search_coroutine.send(()),
                 "Search"
             }
         }
-        match &*fetch_status.read_unchecked() {
+        match &*proteins.read_unchecked() {
             FetchStatus::None => {
                 rsx! { "" }
             }
@@ -91,33 +101,14 @@ pub fn ProteinSearch() -> Element {
                     Spinner {}
                 }
             }
-            FetchStatus::Finished(()) => {
+            FetchStatus::Finished(proteins) => {
                 rsx! {
-                    match &*proteins.read_unchecked() {
-                        Some(Ok(None)) => {
-                            rsx! { "" }
-                        }
-                        Some(Ok(Some(proteins))) => {
-                            rsx! {
-                                ProteinList { proteins: proteins.clone() }
-                            }
-                        }
-                        Some(Err(err)) => {
-                            rsx! {
-                                div { "Error fetching proteins: {err}" }
-                            }
-                        }
-                        None => {
-                            rsx! {
-                                div { "Loading..." }
-                            }
-                        }
-                    }
+                    ProteinList { proteins: proteins.clone() }
                 }
-            },
+            }
             FetchStatus::Error(err) => {
                 rsx! {
-                    div { "Error fetching proteins: {err}" }
+                    div { class: "alert alert-danger", "Error getting proteins: {err}" }
                 }
             }
         }

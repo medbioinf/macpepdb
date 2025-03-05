@@ -565,7 +565,9 @@ pub fn MassSearch() -> Element {
         }
         match &*peptides.read_unchecked() {
             FetchStatus::None => rsx! { "" },
-            FetchStatus::Loading => rsx! { Spinner{} },
+            FetchStatus::Loading => rsx! {
+                Spinner {}
+            },
             FetchStatus::Finished(peptides) => rsx! {
                 p { class: "mt-2 mb-1", "Found {peptides.len()} peptides" }
                 table { class: "table table-striped table-hover table-sm table-responsive",
@@ -595,7 +597,7 @@ pub fn MassSearch() -> Element {
                 }
             },
             FetchStatus::Error(err) => rsx! {
-                div { "Error fetching peptides: {err}" }
+                div { class: "alert alert-danger", "Error fetching peptides: {err}" }
             },
         }
     }

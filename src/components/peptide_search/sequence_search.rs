@@ -1,5 +1,6 @@
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use dioxus::prelude::*;
+use futures_util::StreamExt;
 use reqwest::StatusCode;
 
 use crate::components::rounded_mass::RoundedMass;
@@ -52,7 +53,6 @@ pub fn SequenceSearch() -> Element {
     let app_config = use_context::<AppConfiguration>();
     let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
     let mut sequence = use_signal(|| "".to_string());
-    let mut fetch_status: Signal<FetchStatus<()>> = use_signal(|| FetchStatus::None);
 
     let minimum_sequence_length_to_search = use_resource(move || async move {
         match get_macpepdb_configuration(macpepdb_base_url).await {
@@ -63,19 +63,36 @@ pub fn SequenceSearch() -> Element {
 
     // Event handler for fetching proteins on button click or on enter
     //
-    let mut peptide: Resource<Result<Option<PeptideEntity>>> = use_resource(move || async move {
-        if sequence.read_unchecked().len()
-            < minimum_sequence_length_to_search
-                .read_unchecked()
-                .unwrap_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH)
-        {
-            fetch_status.set(FetchStatus::None);
-            return Ok(None);
+    let mut peptide: Signal<FetchStatus<PeptideEntity>> = use_signal(|| FetchStatus::None);
+    let get_peptide_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
+        while rx.next().await.is_some() {
+            if sequence.read_unchecked().len()
+                < minimum_sequence_length_to_search
+                    .read_unchecked()
+                    .unwrap_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH)
+            {
+                peptide.set(FetchStatus::Error(anyhow!(
+                    "Sequence is too short, must be at least {} characters",
+                    minimum_sequence_length_to_search
+                        .read_unchecked()
+                        .unwrap_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH)
+                )));
+                continue;
+            }
+
+            peptide.set(FetchStatus::Loading);
+            match get_peptide(macpepdb_base_url, sequence).await {
+                Ok(Some(fetched_peptide)) => {
+                    peptide.set(FetchStatus::Finished(fetched_peptide));
+                }
+                Ok(None) => {
+                    peptide.set(FetchStatus::None);
+                }
+                Err(err) => {
+                    peptide.set(FetchStatus::Error(err));
+                }
+            }
         }
-        fetch_status.set(FetchStatus::Loading);
-        let peptide = get_peptide(macpepdb_base_url, sequence).await?;
-        fetch_status.set(FetchStatus::Finished(()));
-        Ok(peptide)
     });
 
     rsx! {
@@ -88,19 +105,19 @@ pub fn SequenceSearch() -> Element {
                 oninput: move |evt| sequence.set(evt.value()),
                 onkeyup: move |evt| {
                     if evt.code() == Code::Enter || evt.code() == Code::NumpadEnter {
-                        peptide.restart()
+                        get_peptide_coroutine.send(());
                     }
                 },
             }
             button {
                 class: "btn btn-primary",
                 r#type: "button",
-                onclick: move |_| peptide.restart(),
+                onclick: move |_| get_peptide_coroutine.send(()),
                 "Search"
             }
         }
 
-        match &*fetch_status.read_unchecked() {
+        match &*peptide.read_unchecked() {
             FetchStatus::None => {
                 rsx! { "" }
             }
@@ -109,48 +126,28 @@ pub fn SequenceSearch() -> Element {
                     Spinner {}
                 }
             }
-            FetchStatus::Finished(()) => {
+            FetchStatus::Finished(peptide) => {
                 rsx! {
-
-                    match &*peptide.read_unchecked() {
-                        Some(Ok(None)) => {
-                            rsx! { "" }
+                    table { class: "table table-striped table-hover table-sm table-responsive",
+                        thead {
+                            tr {
+                                th { "Mass (Da)" }
+                                th { "Sequence" }
+                            }
                         }
-                        Some(Ok(Some(peptide))) => {
-                            rsx! {
-                                table { class: "table table-striped table-hover table-sm table-responsive",
-                                    thead {
-                                        tr {
-                                            th { "Mass (Da)" }
-                                            th { "Sequence" }
-                                        }
-                                    }
-                                    tbody {
-                                        tr {
-                                            td {
-                                                RoundedMass { mass: peptide.get_mass() }
-                                            }
-                                            td { class: "text-break",
-                                                Link {
-                                                    to: Routes::Peptide {
-                                                        peptide_sequence: peptide.get_sequence().to_owned(),
-                                                    },
-                                                    "{peptide.get_sequence()}"
-                                                }
-                                            }
-                                        }
+                        tbody {
+                            tr {
+                                td {
+                                    RoundedMass { mass: peptide.get_mass() }
+                                }
+                                td { class: "text-break",
+                                    Link {
+                                        to: Routes::Peptide {
+                                            peptide_sequence: peptide.get_sequence().to_owned(),
+                                        },
+                                        "{peptide.get_sequence()}"
                                     }
                                 }
-                            }
-                        }
-                        Some(Err(err)) => {
-                            rsx! {
-                                div { "Error fetching proteins: {err}" }
-                            }
-                        }
-                        None => {
-                            rsx! {
-                                div { "Loading..." }
                             }
                         }
                     }
@@ -158,7 +155,7 @@ pub fn SequenceSearch() -> Element {
             }
             FetchStatus::Error(err) => {
                 rsx! {
-                    div { "Error fetching proteins: {err}" }
+                    div { class: "alert alert-danger", "Error getting peptide: {err}" }
                 }
             }
         }
