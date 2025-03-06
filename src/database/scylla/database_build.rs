@@ -299,22 +299,42 @@ impl DatabaseBuild {
         // Drop the original sender its not needed anymore
         drop(unprocessable_proteins_sender);
 
-        for protein_file_path in protein_file_paths {
-            let mut reader = Reader::new(protein_file_path, 4096)?;
-            while let Some(protein) = reader.next()? {
-                let mut next_protein = protein;
-                loop {
-                    match protein_queue_arc.push(next_protein) {
-                        Ok(_) => {
-                            gauge!(PROTEIN_QUEUE_SIZE_COUNTER_NAME)
-                                .set(protein_queue_arc.len() as f64);
-                            break;
-                        }
-                        Err(protein) => {
-                            next_protein = protein;
+        // Reader is not async (yet) so it needs to run in a separate thread
+        // so the queue is not stareved
+        let thread_protein_file_paths = protein_file_paths.clone();
+        let reader_thread: std::thread::JoinHandle<Result<()>> = std::thread::spawn(move || {
+            for protein_file_path in thread_protein_file_paths {
+                let mut reader = Reader::new(&protein_file_path, 4096)?;
+                while let Some(protein) = reader.next()? {
+                    let mut next_protein = protein;
+                    loop {
+                        match protein_queue_arc.push(next_protein) {
+                            Ok(_) => {
+                                gauge!(PROTEIN_QUEUE_SIZE_COUNTER_NAME)
+                                    .set(protein_queue_arc.len() as f64);
+                                break;
+                            }
+                            Err(protein) => {
+                                next_protein = protein;
+                            }
                         }
                     }
                 }
+            }
+            Ok(())
+        });
+
+        match reader_thread.join() {
+            Ok(Ok(_)) => {
+                info!("Proteins queued, waiting for digestion threads to finish ...");
+            }
+            Ok(Err(err)) => {
+                error!("Error reading protein files: {:?}", err);
+                return Err(err);
+            }
+            Err(err) => {
+                error!("Error reading protein files: {:?}", err);
+                return Err(anyhow::anyhow!("Error reading protein files"));
             }
         }
 
