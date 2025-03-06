@@ -1,10 +1,13 @@
 use std::{fmt::Display, rc::Rc, str::FromStr};
 
+use ::web_sys::window;
 use anyhow::{bail, Result};
+use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
 use dioxus::prelude::*;
 use dioxus_logger::tracing::info;
 use futures_util::StreamExt;
 use serde_json::json;
+use urlencoding::encode as urlencode;
 
 use crate::{
     api_helpers::fetch_status::FetchStatus,
@@ -68,8 +71,7 @@ impl FromStr for MassUnit {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn search_peptides(
-    macpepdb_base_url: Signal<String>,
+fn create_search_body(
     selected_mass_unit: Signal<MassUnit>,
     thompson: Signal<f64>,
     charge: Signal<u8>,
@@ -80,9 +82,7 @@ async fn search_peptides(
     max_variable_modifications: Signal<i16>,
     ptms: Signal<Vec<PostTranslationalModification>>,
     is_reviewed: Signal<Option<bool>>,
-) -> Result<Vec<PeptideEntity>> {
-    let url = format!("{}/api/peptides/search", macpepdb_base_url);
-
+) -> serde_json::Value {
     let mut body = json!({
         "lower_mass_tolerance_ppm": *lower_mass_tolerance.read(),
         "upper_mass_tolerance_ppm": *upper_mass_tolerance.read(),
@@ -103,11 +103,20 @@ async fn search_peptides(
         body["is_reviewed"] = json!(is_reviewed);
     }
 
+    body
+}
+
+async fn search_peptides(
+    macpepdb_base_url: Signal<String>,
+    search_body: serde_json::Value,
+) -> Result<Vec<PeptideEntity>> {
+    let url = format!("{}/api/peptides/search", macpepdb_base_url);
+
     let client = reqwest::Client::new();
     let response = client
         .post(&url)
         .header("Accept", "application/json")
-        .json(&body)
+        .json(&search_body)
         .send()
         .await?;
     if !response.status().is_success() {
@@ -115,6 +124,10 @@ async fn search_peptides(
     }
 
     Ok(response.json().await?)
+}
+
+fn base64_urlsafe_encode(input: &str) -> String {
+    urlencode(&Base64Standard.encode(input.as_bytes())).into_owned()
 }
 
 pub fn MassSearch() -> Element {
@@ -193,8 +206,7 @@ pub fn MassSearch() -> Element {
     let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
         while rx.next().await.is_some() {
             peptides.set(FetchStatus::Loading);
-            let peptides_result = search_peptides(
-                macpepdb_base_url,
+            let search_body = create_search_body(
                 selected_mass_unit,
                 thompson,
                 charge,
@@ -205,12 +217,38 @@ pub fn MassSearch() -> Element {
                 max_var_modifications,
                 ptms,
                 is_reviewed,
-            )
-            .await;
+            );
+            let peptides_result = search_peptides(macpepdb_base_url, search_body).await;
             match peptides_result {
                 Ok(new_peptides) => peptides.set(FetchStatus::Finished(Rc::new(new_peptides))),
                 Err(e) => peptides.set(FetchStatus::Error(e)),
             }
+        }
+    });
+
+    // Coroutine to intiate download with the last search parameters
+    //
+    let download_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
+        while rx.next().await.is_some() {
+            let search_body = create_search_body(
+                selected_mass_unit,
+                thompson,
+                charge,
+                dalton,
+                lower_mass_tolerance,
+                upper_mass_tolerance,
+                selected_taxonomy,
+                max_var_modifications,
+                ptms,
+                is_reviewed,
+            );
+            let url = format!(
+                "{}/api/peptides/search/{}/{}?is_download=true",
+                macpepdb_base_url,
+                base64_urlsafe_encode(serde_json::to_string(&search_body).unwrap().as_str()),
+                urlencode("text/csv")
+            );
+            window().unwrap().location().assign(&url).unwrap();
         }
     });
 
@@ -555,14 +593,25 @@ pub fn MassSearch() -> Element {
                 }
             }
         }
-        div { class: "row d-flex justify-content-start mt-3",
-            div { class: "col",
+        div { class: "row mt-3",
+            div { class: "col d-flex justify-content-between",
                 button {
                     class: "btn btn-primary",
                     r#type: "button",
                     onclick: move |_| { search_coroutine.send(()) },
                     i { class: "fa-solid fa-search me-2" }
                     "Search"
+                }
+                if let FetchStatus::Finished(_) = &*peptides.read_unchecked() {
+                    button {
+                        class: "btn btn-primary",
+                        r#type: "button",
+                        onclick: move |_| {
+                            download_coroutine.send(());
+                        },
+                        i { class: "fa-solid fa-download me-2" }
+                        "Download"
+                    }
                 }
             }
         }
