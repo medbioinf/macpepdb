@@ -22,9 +22,10 @@ Per default the application uses the configuration `frontend.config.toml`. If yo
 2. Run: `env MDBF_CONFIG=<PATH_TO_NEW_CONFIG> dx serve`
 
 ## Configuration
-While a WASM application has not access to any filesystem, the configuration is compiled into the binary. Therefore it needs to be selected during compiling.
+While a WASM application has no access to any filesystem, the configuration is compiled into the binary. Therefore it needs to be selected during compiling.
 
 ## Deplyoment
-1. `dx build --release`
-2. Serve the created `dist` folder with any web server, e.g. NginX
+1. `sass assets/sass/index.sass public/index.css`
+2. `dx build --release`
+2. Serve the created `target/dx/macpepdb-frontend/release/web/public` folder with any web server, e.g. NginX
 
