@@ -5,16 +5,19 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_stream::stream;
 use axum::body::Body;
-use axum::extract::{Json, Path, State};
+use axum::extract::{Json, Path, Query, State};
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
 use dihardts_omicstools::mass_spectrometry::unit_conversions::mass_to_charge_to_dalton;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::TryStreamExt;
+use http::header;
 use scylla::frame::response::result::CqlValue;
 use tracing::error;
+use urlencoding::decode as urldecode;
 
 // internal imports
 use crate::chemistry::amino_acid::calc_sequence_mass_int;
@@ -26,6 +29,8 @@ use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::web::app_state::AppState;
 use crate::web::web_error::WebError;
+
+const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
 
 /// Returns the peptide for given sequence.
 /// Important: This endpoint will return the the peptide inclduing a list of full records of the proteins of origin. The proteins will include only the contained peptide sequences. Not the entire peptide records.
@@ -222,6 +227,14 @@ pub struct SearchRequestBody {
     is_reviewed: Option<bool>,
 }
 
+/// Struct to deserialize the query parameters for peptide search
+///
+#[derive(serde::Deserialize)]
+pub struct SearchRequestQuery {
+    #[serde(default)]
+    is_download: bool,
+}
+
 #[allow(clippy::tabs_in_doc_comments)]
 /// Returns a stream of peptides matching the given parameters.
 /// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
@@ -239,6 +252,8 @@ pub struct SearchRequestBody {
 /// * Headers:
 ///     * `Content-Type`: `application/json`
 ///     * `Accept`: `application/json`, `text/tsv`, `text/plain` (optional, default: `application/json`, controls the output format)
+/// * Query:
+///     * `is_download`: `bool` (optional, default: `false`, if true set the Content-Disposition header to download the response instead of showing it in the browser)
 /// * Body:
 ///     ```json
 ///     {
@@ -297,11 +312,132 @@ pub struct SearchRequestBody {
 /// ...
 /// ```
 ///
-pub async fn search(
+pub async fn post_search(
     State(app_state): State<Arc<AppState>>,
     headers: HeaderMap,
+    Query(query): Query<SearchRequestQuery>,
     Json(payload): Json<SearchRequestBody>,
-) -> Result<(StatusCode, Body), WebError> {
+) -> Result<(StatusCode, HeaderMap, Body), WebError> {
+    let default_header: HeaderValue = match HeaderValue::from_str(DEFAULT_POST_SEARCH_ACCEPT_HEADER)
+    {
+        Ok(header) => header,
+        Err(err) => {
+            return Ok((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                HeaderMap::new(),
+                Body::from(format!("!!! Error while setting default header: {:?}", err)),
+            ));
+        }
+    };
+
+    let accept_header = headers
+        .get(ACCEPT)
+        .unwrap_or(&default_header)
+        .to_str()
+        .unwrap_or(DEFAULT_POST_SEARCH_ACCEPT_HEADER)
+        .to_string();
+
+    search(app_state, payload, accept_header, query.is_download).await
+}
+
+/// This is basically the same as [post_search](post_search), but the payload and mime type are base64 encoded in the URL.
+/// This is useful for GET requests, where the body is not allowed. E.g. for initializing browser downloads via JS or WASM
+/// where the usual blob-download is not possible or would be too large
+///
+/// # API
+/// ## Request
+/// * Path: `/api/peptides/search/:playload/:accept`
+///     * `:accept`: Allowed are the same values like in [post_search](post_search) Accept-header, but urlsafe encoded
+///     * `:payload`: The payload as urlsafe base64 encoded JSON string, see [post_search](post_search)
+/// * Method: `GET`
+///
+///
+pub async fn get_search(
+    State(app_state): State<Arc<AppState>>,
+    Query(query): Query<SearchRequestQuery>,
+    Path((payload, accept)): Path<(String, String)>,
+) -> Result<(StatusCode, HeaderMap, Body), WebError> {
+    // Decode payload from URL saftyness
+    let payload: String = match urldecode(payload.as_str()) {
+        Ok(payload) => payload.into_owned(),
+        Err(err) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                Body::from(format!(
+                    "!!! Error while decoding payload form URL: {:?}",
+                    err
+                )),
+            ));
+        }
+    };
+
+    // Decode payload from base64
+    let payload: Vec<u8> = match Base64Standard.decode(payload.as_bytes()) {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                Body::from(format!(
+                    "!!! Error while decoding payload from base64: {:?}",
+                    err
+                )),
+            ));
+        }
+    };
+
+    // Create string from decoded bytes
+    let payload = match String::from_utf8(payload) {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                Body::from(format!(
+                    "!!! Error while decoding payload from bytes: {:?}",
+                    err
+                )),
+            ));
+        }
+    };
+
+    // Deserialize payload
+    let payload: SearchRequestBody = match serde_json::from_str(payload.as_str()) {
+        Ok(payload) => payload,
+        Err(err) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                Body::from(format!("!!! Error while deserializing payload: {:?}", err)),
+            ));
+        }
+    };
+
+    // Decode accept from URL saftyness
+    let accept: String = match urldecode(accept.as_str()) {
+        Ok(accept) => accept.into_owned(),
+        Err(err) => {
+            return Ok((
+                StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
+                Body::from(format!(
+                    "!!! Error while decoding payload form URL: {:?}",
+                    err
+                )),
+            ));
+        }
+    };
+
+    search(app_state, payload, accept, query.is_download).await
+}
+
+async fn search(
+    app_state: Arc<AppState>,
+    payload: SearchRequestBody,
+    accept_header: String,
+    is_download: bool,
+) -> Result<(StatusCode, HeaderMap, Body), WebError> {
     let calculated_mass = match payload.mass {
         SearchRequestMass::ThompsonCharge(mass, charge) => mass_to_charge_to_dalton(mass, charge),
         SearchRequestMass::Dalton(mass) => mass,
@@ -317,6 +453,7 @@ pub async fn search(
         {
             return Ok((
                 StatusCode::BAD_REQUEST,
+                HeaderMap::new(),
                 Body::from(format!(
                     "!!! Taxonomy with id {} does not exist",
                     taxonomy_id
@@ -355,26 +492,38 @@ pub async fn search(
         Err(err) => {
             return Ok((
                 StatusCode::INTERNAL_SERVER_ERROR,
+                HeaderMap::new(),
                 Body::from(format!("Error while searching for peptides: {:?}", err)),
             ));
         }
     };
 
-    let default_header = match HeaderValue::from_str("application/json") {
-        Ok(header) => header,
-        Err(err) => {
-            return Ok((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Body::from(format!("!!! Error while setting default header: {:?}", err)),
-            ));
-        }
-    };
+    let mut headers = HeaderMap::new();
+    if is_download {
+        let file_extension = match accept_header.as_str() {
+            "application/json" => ".json",
+            "text/csv" => ".tsv",
+            "text/plain" => ".txt",
+            _ => "",
+        };
 
-    let accept_header = headers.get(ACCEPT).unwrap_or(&default_header);
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_str(
+                format!(
+                    "attachment; filename=\"macpepdb_peptides_download{}\"",
+                    file_extension
+                )
+                .as_str(),
+            )
+            .unwrap(),
+        );
+    }
 
-    let (status_code, body) = match accept_header.to_str().unwrap() {
+    let (status_code, headers, body) = match accept_header.as_str() {
         "application/json" => (
             StatusCode::OK,
+            headers,
             Body::from_stream(stream! {
                 // start json array
                 yield Ok("[".to_string());
@@ -407,6 +556,7 @@ pub async fn search(
         ),
         "text/csv" => (
             StatusCode::OK,
+            headers,
             Body::from_stream(stream! {
                 let mut has_headers = true;
                 for await peptide in peptide_stream {
@@ -441,6 +591,7 @@ pub async fn search(
         ),
         "text/plain" => (
             StatusCode::OK,
+            headers,
             Body::from_stream(stream! {
                 let mut delimiter = "".to_string();
                 for await peptide in peptide_stream {
@@ -456,10 +607,11 @@ pub async fn search(
         ),
         _ => (
             StatusCode::NOT_ACCEPTABLE,
+            HeaderMap::new(),
             Body::from_stream(stream! {
                 yield Err::<String, String>("!!! Unsupported accept header".to_string());
             }),
         ),
     };
-    Ok((status_code, body))
+    Ok((status_code, headers, body))
 }
