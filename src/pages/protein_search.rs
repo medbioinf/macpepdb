@@ -76,7 +76,7 @@ pub fn ProteinSearch() -> Element {
             input {
                 class: "form-control",
                 r#type: "text",
-                placeholder: "Partial protein accession or full gene name",
+                placeholder: "Protein accession or gene name",
                 value: "{protein_id}",
                 oninput: move |evt| protein_id.set(evt.value()),
                 onkeyup: move |evt| {
