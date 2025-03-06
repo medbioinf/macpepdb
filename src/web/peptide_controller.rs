@@ -251,7 +251,7 @@ pub struct SearchRequestQuery {
 /// * Method: `POST`
 /// * Headers:
 ///     * `Content-Type`: `application/json`
-///     * `Accept`: `application/json`, `text/tsv`, `text/plain` (optional, default: `application/json`, controls the output format)
+///     * `Accept`: `application/json`, `text/tab-separated-values`, `text/plain` (optional, default: `application/json`, controls the output format)
 /// * Query:
 ///     * `is_download`: `bool` (optional, default: `false`, if true set the Content-Disposition header to download the response instead of showing it in the browser)
 /// * Body:
@@ -502,7 +502,7 @@ async fn search(
     if is_download {
         let file_extension = match accept_header.as_str() {
             "application/json" => ".json",
-            "text/csv" => ".tsv",
+            "text/tab-separated-values" => ".tsv",
             "text/plain" => ".txt",
             _ => "",
         };
@@ -554,7 +554,7 @@ async fn search(
                 yield Ok("]".to_string());
             }),
         ),
-        "text/csv" => (
+        "text/tab-separated-values" => (
             StatusCode::OK,
             headers,
             Body::from_stream(stream! {
