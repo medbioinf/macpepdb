@@ -62,7 +62,7 @@ pub fn TwoPanes() -> Element {
                 }
                 div { class: "application-menu d-flex flex-column flex-fill",
                     nav { class: "internal-pages flex-fill px-3",
-                        div { class: "separator", "Explore the database" }
+                        div { class: "separator fw-bold", "Explore the database" }
                         ul { class: "navbar-nav mx-3",
                             li { class: "nav-item",
                                 Link {
@@ -83,7 +83,18 @@ pub fn TwoPanes() -> Element {
                                 }
                             }
                         }
-                        div { class: "separator", "Tools" }
+                        div { class: "separator fw-bold", "Publications" }
+                        ul { class: "navbar-nav mx-3",
+                            li { class: "nav-item",
+                                a {
+                                    class: "nav-link",
+                                    href: "https://doi.org/10.1021/acs.jproteome.0c00967",
+                                    target: "_blank",
+                                    "DOI: 10.1021/acs.jproteome.0c00967"
+                                    i { class: "fa-solid fa-external-link-alt ms-2" }
+                                }
+                            }
+                        }
                     }
                     nav { class: "external-pages p-3",
                         div { class: "row mb-3",
