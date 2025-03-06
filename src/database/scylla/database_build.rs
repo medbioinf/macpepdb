@@ -200,7 +200,7 @@ impl DatabaseBuild {
     async fn protein_digestion(
         database_url: &str,
         num_threads: usize,
-        protein_file_paths: &Vec<PathBuf>,
+        protein_file_paths: &[PathBuf],
         protease: &dyn Protease,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
@@ -305,7 +305,7 @@ impl DatabaseBuild {
 
         // Reader is not async (yet) so it needs to run in a separate thread
         // so the queue is not stareved
-        let thread_protein_file_paths = protein_file_paths.clone();
+        let thread_protein_file_paths = protein_file_paths.to_vec();
         let reader_thread: std::thread::JoinHandle<Result<()>> = std::thread::spawn(move || {
             for protein_file_path in thread_protein_file_paths {
                 let mut reader = Reader::new(&protein_file_path, 4096)?;
