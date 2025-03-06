@@ -246,7 +246,7 @@ pub fn MassSearch() -> Element {
                 "{}/api/peptides/search/{}/{}?is_download=true",
                 macpepdb_base_url,
                 base64_urlsafe_encode(serde_json::to_string(&search_body).unwrap().as_str()),
-                urlencode("text/csv")
+                urlencode("text/tab-separated-values")
             );
             window().unwrap().location().assign(&url).unwrap();
         }
