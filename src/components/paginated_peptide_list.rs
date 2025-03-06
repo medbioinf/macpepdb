@@ -111,6 +111,8 @@ where
                                 let value = evt.value().parse::<usize>().unwrap_or(0);
                                 if value > number_of_pages {
                                     current_page.set(number_of_pages - 1);
+                                } else {
+                                    current_page.set(value - 1);
                                 }
                             },
                         }
