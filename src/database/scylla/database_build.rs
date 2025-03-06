@@ -81,6 +81,10 @@ pub const METADATA_PROCESSED_PEPTIDES_COUNTER_NAME: &str =
     "macpepdb_build_metadata_processed_peptides";
 pub const METADATA_ERRORS_COUNTER_NAME: &str = "macpepdb_build_metadata_errors";
 
+/// Number of proteins per thread in queue
+///
+pub const PROTEIN_QUEUE_MULTIPLICATOR: usize = 10;
+
 /// Struct which maintains the database content.
 /// * Inserts and updates proteins from given files
 /// * Maintains associations between proteins and peptides
@@ -204,7 +208,7 @@ impl DatabaseBuild {
     ) -> Result<usize> {
         debug!("Digesting proteins and inserting peptides");
 
-        let protein_queue_size = num_threads * 10;
+        let protein_queue_size = num_threads * PROTEIN_QUEUE_MULTIPLICATOR;
 
         // Database client
         let client = Arc::new(Client::new(database_url).await?);
