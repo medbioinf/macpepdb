@@ -85,7 +85,67 @@ pub fn TwoPanes() -> Element {
                         }
                         div { class: "separator", "Tools" }
                     }
-                    nav { class: "external-pages p-3", "External links coming soon" }
+                    nav { class: "external-pages p-3",
+                        div { class: "row mb-3",
+                            div { class: "col-4 offset-1",
+                                a {
+                                    href: "https://www.medbioinf.ruhr-uni-bochum.de/",
+                                    target: "_blank",
+                                    img {
+                                        class: "w-100",
+                                        src: asset!("assets/images/medbioinf_logo.png"),
+                                        alt: "Medical Bioinformatics logo",
+                                    }
+                                }
+                            }
+                            div { class: "col-4 offset-1",
+                                a {
+                                    href: "https://www.mpc.ruhr-uni-bochum.de/",
+                                    target: "_blank",
+                                    img {
+                                        class: "w-100",
+                                        src: asset!("assets/images/mpc_logo.png"),
+                                        alt: "Medizinisches Proteom-Center logo",
+                                    }
+                                }
+                            }
+                        }
+                        div { class: "row align-items-center",
+                            div { class: "col-4",
+                                a {
+                                    href: "https://www.cubimed.ruhr-uni-bochum.de",
+                                    target: "_blank",
+                                    img {
+                                        class: "w-100",
+                                        src: asset!("assets/images/cubimed_logo.png"),
+                                        alt: "CUBiMed.RUB logo",
+                                    }
+                                }
+                            }
+                            div { class: "col-4",
+                                a {
+                                    href: "https://www.medizin.ruhr-uni-bochum.de/index.html.de",
+                                    target: "_blank",
+                                    img {
+                                        class: "w-100",
+                                        src: asset!("assets/images/med_faculty_logo.png"),
+                                        alt: "Medical Faculty logo",
+                                    }
+                                }
+                            }
+                            div { class: "col-4",
+                                a {
+                                    href: "https://www.ruhr-uni-bochum.de/",
+                                    target: "_blank",
+                                    img {
+                                        class: "w-100",
+                                        src: asset!("assets/images/rub_logo.jpg"),
+                                        alt: "Ruhr-University Bochum logo",
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             div { class: "pane-content col-12 col-lg-10 p-3", Outlet::<Routes> {} }
