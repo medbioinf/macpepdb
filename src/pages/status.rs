@@ -6,6 +6,7 @@ use dioxus::prelude::*;
 
 // internal imports
 use crate::components::configuration::*;
+use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::configuration::Configuration as MacPepDBConfiguration;
 
@@ -44,14 +45,14 @@ pub fn Status() -> Element {
                     Configuration { macpepdb_configuration: macpepdb_config.clone() }
                 }
             }
-            Some(Err(e)) => {
+            Some(Err(err)) => {
                 rsx! {
-                    div { "Error loading the configuration {e}" }
+                    div { class: "alert alert-danger", "Error loading the configuration: {err}" }
                 }
             }
             None => {
                 rsx! {
-                    div { "Loading ..." }
+                    Spinner {}
                 }
             }
         }
