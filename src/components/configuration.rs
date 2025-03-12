@@ -1,10 +1,12 @@
 use std::rc::Rc;
-
 // 3rd party imports
 use dioxus::prelude::*;
+use plotly::{layout::Axis, Layout, Plot, Scatter};
 
 // internal imports
 use crate::entities::configuration::Configuration as MacPepDBConfiguration;
+
+const PARTITION_PLOT_ID: &str = "partition-plot";
 
 #[derive(Clone, PartialEq, Props)]
 pub struct ConfigurationProps {
@@ -14,6 +16,40 @@ pub struct ConfigurationProps {
 /// Component for rendering MaCPepDB configuration
 ///
 pub fn Configuration(props: ConfigurationProps) -> Element {
+    // Rc clone to send to the use_effect closure
+    let macpepdb_config = props.macpepdb_configuration.clone();
+    // Need to be made reactive to be trigger the effect
+    use_effect(use_reactive(
+        (macpepdb_config.as_ref(),),
+        |(macpepdb_config,)| {
+            document::eval(&format!(
+                r#"
+                        var c = document.getElementById("{}");
+                        console.log(c);
+                        "#,
+                PARTITION_PLOT_ID
+            ));
+            let mut plot = Plot::new();
+            let trace = Scatter::new(
+                macpepdb_config
+                    .get_partition_limits()
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _)| idx)
+                    .collect::<Vec<usize>>(),
+                macpepdb_config.get_partition_limits().clone(),
+            );
+            plot.add_trace(trace);
+            let x_axis = Axis::new().title("Partition Index");
+            let y_axis = Axis::new().title("Mass limit (Da)");
+            let layout = Layout::new().x_axis(x_axis).y_axis(y_axis);
+            plot.set_layout(layout);
+            spawn(async move {
+                plotly::bindings::new_plot(PARTITION_PLOT_ID, &plot).await;
+            });
+        },
+    ));
+
     rsx! {
         div {
             h2 { "Settings" }
@@ -66,23 +102,13 @@ pub fn Configuration(props: ConfigurationProps) -> Element {
             }
         }
         div {
-            h2 { "Distribution" }
-            table { class: "table table-striped table-sm",
-                thead {
-                    tr {
-                        th { "Partition" }
-                        th { "Upper limit" }
-                    }
-                }
-                tbody {
-                    for (i , limit) in props.macpepdb_configuration.get_partition_limits().iter().enumerate() {
-                        tr {
-                            td { "{(i + 1)}" }
-                            td { "{limit}" }
-                        }
-                    }
-                }
+            h2 { "Mass partitions" }
+            p {
+                r#"Peptides in MaCPepDB are partitioned and distributed equally over the scylla cluster based on their theoretical mass in Dalton.
+                The number of partitions and mass limits can be different for each MaCPepDB instance and depends on the number of initial proteins
+                and the used protease."#
             }
+            div { id: PARTITION_PLOT_ID }
         }
     }
 }
