@@ -21,7 +21,7 @@ jobs:
       - name: Start containers
         run: docker-compose up -d --build
       - name: Toolchain fix
-        run: rustup toolchain install nightly
+        run: rustup toolchain install stable
       - name: Build
         run: cargo build -r --verbose
       - name: Run tests
