@@ -9,13 +9,13 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum_streams::StreamBodyAs;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
+use futures::TryStreamExt;
 use scylla::frame::response::result::CqlValue;
 use serde_json::Value as JsonValue;
 use tracing::error;
 
 // internal imports
 use crate::database::scylla::protein_table::ProteinTable;
-use crate::database::selectable_table::SelectableTable;
 use crate::web::web_error::WebError;
 
 use super::app_state::AppState;
@@ -57,17 +57,17 @@ use super::app_state::AppState;
 ///             "missed_cleavages": 1,
 ///             "partition": 1,
 ///             "proteins": [
-///             	"Q9WTP6"
+///                 "Q9WTP6"
 ///             ],
 ///             "proteome_ids": [
-///             	"UP000000589"
+///                 "UP000000589"
 ///             ],
 ///             "sequence": "ALKTR",
 ///             "taxonomy_ids": [
-///             	10090
+///                 10090
 ///             ],
 ///             "unique_taxonomy_ids": [
-///             	10090
+///                 10090
 ///             ]
 ///         },
 ///         ...
@@ -94,7 +94,10 @@ pub async fn get_protein(
         "WHERE accession = ?",
         &[&CqlValue::Text(accession)],
     )
-    .await?;
+    .await?
+    .try_collect::<Vec<_>>()
+    .await?
+    .pop();
 
     if let Some(protein) = protein_opt {
         // Proteases are not saved in the database, so we have to create them
@@ -122,10 +125,10 @@ pub async fn get_protein(
                 .await?,
         ));
     } else {
-        return Err(WebError::new(
+        Err(WebError::new(
             StatusCode::NOT_FOUND,
             "Protein not found".to_string(),
-        ));
+        ))
     }
 }
 

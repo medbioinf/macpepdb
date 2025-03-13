@@ -1,11 +1,29 @@
 services:
   # ScyllaDB
-  node1:
-    image: scylladb/scylla
-    ports:
-      - "9042:9042"
+  scylla-node1:
+    container_name: scylla-node1
+    image: scylladb/scylla:6.1
     restart: always
-    command: --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0 --developer-mode 1
+    command: --seeds=scylla-node1,scylla-node2 --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
+    ports:
+      - 9042:9042
+    volumes:
+      - "./docker/compose/scylla/scylla.yaml:/etc/scylla/scylla.yaml"
+      - "./docker/compose/scylla/cassandra-rackdc.properties:/etc/scylla/cassandra-rackdc.properties"
+    networks:
+      web:
+  scylla-node2:
+    container_name: scylla-node2
+    image: scylladb/scylla:6.1
+    restart: always
+    command: --seeds=scylla-node1,scylla-node2 --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
+    ports:
+      - 9043:9042
+    volumes:
+      - "./docker/compose/scylla/scylla.yaml:/etc/scylla/scylla.yaml"
+      - "./docker/compose/scylla/cassandra-rackdc.properties:/etc/scylla/cassandra-rackdc.properties"
+    networks:
+      web:
   prometheus:
     image: prom/prometheus
     ports:
@@ -30,5 +48,7 @@ services:
     volumes:
       - ./docker/compose/grafana/provisioning:/grafana/provisioning
       - ./docker/compose/grafana/dashboards:/grafana-custom-dashboards
-volumes:
-  healthcheck-volume:
+
+networks:
+  web:
+    driver: bridge

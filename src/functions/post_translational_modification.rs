@@ -15,7 +15,7 @@ use crate::mass::convert::{to_float as mass_to_float, to_int as mass_to_int};
 /// Validates a list of PTMs:
 /// Makes sure that there are no static and variable PTMs for the same amino acid
 ///
-pub fn validate_ptm_vec(ptms: &Vec<PTM>) -> Result<()> {
+pub fn validate_ptm_vec(ptms: &[PTM]) -> Result<()> {
     let static_ptms: Vec<&PTM> = ptms.iter().filter(|ptm| ptm.is_static()).collect();
     let variable_ptms: Vec<&PTM> = ptms.iter().filter(|ptm| ptm.is_variable()).collect();
     // Check if there are any static/variable PTMs for the same amino acid
@@ -32,7 +32,7 @@ pub fn validate_ptm_vec(ptms: &Vec<PTM>) -> Result<()> {
             }
         }
     }
-    if errors.len() > 0 {
+    if !errors.is_empty() {
         bail!(errors);
     }
     Ok(())
@@ -139,24 +139,23 @@ impl PTMCondition {
     }
 
     pub fn get_mass(&self) -> &i64 {
-        return &self.mass;
+        &self.mass
     }
 
     pub fn get_amino_acid_occurrences(&self) -> &HashMap<usize, AminoAcidOccurrence> {
-        return &self.amino_acid_occurrences;
+        &self.amino_acid_occurrences
     }
 
     pub fn get_n_terminus_amino_acid(&self) -> &Option<&'static InternalAminoAcid> {
-        return &self.n_terminus_amino_acid;
+        &self.n_terminus_amino_acid
     }
 
     pub fn get_c_terminus_amino_acid(&self) -> &Option<&'static InternalAminoAcid> {
-        return &self.c_terminus_amino_acid;
+        &self.c_terminus_amino_acid
     }
 
     pub fn check_peptide(&self, peptide: &Peptide) -> bool {
-        return self
-            .amino_acid_occurrences
+        self.amino_acid_occurrences
             .iter()
             .all(|(amino_acid_idx, amino_acid_occurence)| {
                 amino_acid_occurence.check(&peptide.get_aa_counts()[*amino_acid_idx])
@@ -174,7 +173,7 @@ impl PTMCondition {
                         == *amino_acid.get_one_letter_code()
                 }
                 None => true,
-            };
+            }
     }
 }
 
@@ -219,7 +218,7 @@ struct PTMCounter<'a> {
 
 impl PTMCounter<'_> {
     pub fn new(ptm: &PTM) -> PTMCounter {
-        PTMCounter { ptm: ptm, count: 0 }
+        PTMCounter { ptm, count: 0 }
     }
 }
 
@@ -235,7 +234,7 @@ impl PTMCounter<'_> {
 pub fn get_ptm_conditions(
     mass: i64,
     max_variable_modifications: i16,
-    ptms: &Vec<PTM>,
+    ptms: &[PTM],
 ) -> Result<Vec<PTMCondition>> {
     validate_ptm_vec(ptms)?;
     // Create counter and a vector for the conditions
@@ -256,7 +255,7 @@ pub fn get_ptm_conditions(
         false,
         &mut ptm_conditions,
     )?;
-    return Ok(ptm_conditions);
+    Ok(ptm_conditions)
 }
 
 /// Recursively calculates the combinations of PTMs
@@ -276,6 +275,7 @@ pub fn get_ptm_conditions(
 /// * `is_c_bond_used` - True if the c-bond already has a PTM used
 /// * `ptm_conditions` - The vector to store the PTMConditions in
 ///
+#[allow(clippy::too_many_arguments)]
 fn recursively_apply_ptms(
     mass: f64,
     counter_idx: usize,
@@ -396,6 +396,7 @@ fn recursively_apply_ptms(
     // Increase the counter for the current modification until maximum is reached
     for count in 0..=mod_max_count {
         // Reset all following modification counts to zero
+        #[allow(clippy::needless_range_loop)]
         for i in (counter_idx + 1)..counters.len() {
             counters[i].count = 0;
         }
@@ -454,7 +455,7 @@ fn recursively_apply_ptms(
 
         // Add current counter state to matrix, if get current counter is last counter or precursor is reached
         if counter_idx == counters.len() - 1 || is_mass_reached {
-            ptm_conditions.push(PTMCondition::new(mass, &counters)?);
+            ptm_conditions.push(PTMCondition::new(mass, counters)?);
         }
 
         // Stop iteration if precursor is reached

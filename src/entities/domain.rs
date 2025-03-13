@@ -1,9 +1,9 @@
 // 3rd party imports
-use scylla::FromUserType;
-use scylla::IntoUserType;
+use scylla::macros::{DeserializeValue, SerializeValue};
+use serde::{Deserialize, Serialize};
 
 #[derive(
-    Clone, PartialEq, Debug, IntoUserType, FromUserType, serde::Deserialize, serde::Serialize,
+    Debug, Clone, Hash, Eq, PartialEq, DeserializeValue, SerializeValue, Serialize, Deserialize,
 )]
 pub struct Domain {
     name: String,
@@ -17,6 +17,7 @@ pub struct Domain {
 }
 
 impl Domain {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         start_index: i64,
         end_index: i64,

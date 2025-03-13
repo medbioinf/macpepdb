@@ -19,26 +19,20 @@ use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{pin_mut, StreamExt, TryStreamExt};
 use metrics::{counter, describe_counter, describe_gauge, gauge, Unit};
-use scylla::prepared_statement::PreparedStatement;
 use tokio::fs::create_dir_all;
-use tokio::spawn;
 use tokio::sync::mpsc::{channel, Sender};
+use tokio::{pin, spawn};
 use tracing::{debug, error, info, trace, warn};
 
 // internal imports
-use crate::database::configuration_table::{
-    ConfigurationIncompleteError, ConfigurationTable as ConfigurationTableTrait,
-};
-use crate::database::database_build::DatabaseBuild as DatabaseBuildTrait;
 use crate::database::generic_client::GenericClient;
 use crate::database::scylla::client::Client;
+use crate::database::scylla::configuration_table::ConfigurationIncompleteError;
 use crate::database::scylla::migrations::run_migrations;
 use crate::database::scylla::{
     configuration_table::ConfigurationTable, peptide_table::PeptideTable,
     protein_table::ProteinTable,
 };
-use crate::database::selectable_table::SelectableTable;
-use crate::database::table::Table;
 use crate::tools::message_logger::MessageLogger;
 use crate::tools::metrics_monitor::{MetricsMonitor, MonitorableMetric, MonitorableMetricType};
 // use crate::tools::metrics_logger::MetricsLogger;
@@ -50,7 +44,6 @@ use crate::entities::{configuration::Configuration, peptide::Peptide, protein::P
 use crate::io::uniprot_text::reader::Reader;
 use crate::tools::peptide_partitioner::PeptidePartitioner;
 
-use super::peptide_table::{TABLE_NAME, UPDATE_SET_PLACEHOLDER};
 use super::taxonomy_tree_table::TaxonomyTreeTable;
 
 lazy_static! {
@@ -64,6 +57,34 @@ const MAX_INSERT_TRIES: u64 = 5;
 ///
 const UNPROCESSABLE_PROTEINS_LOG_FILE_NAME: &str = "unprocessable_proteins.txt";
 
+/// Counter name for processed proteins
+///
+pub const PROCESSED_PROTEINS_COUNTER_NAME: &str = "macpepdb_build_digestion_processed_proteins";
+
+/// Counter name for processed peptides
+///
+pub const PROCESSED_PEPTIDES_COUNTER_NAME: &str = "macpepdb_build_digestion_processed_peptides";
+
+/// Counter name for errors
+///
+pub const ERRORS_COUNTER_NAME: &str = "macpepdb_build_digestion_errors";
+
+/// Counter name for unrecoverable errors
+///
+pub const UNRECOVERABLE_ERRORS_COUNTER_NAME: &str = "macpepdb_build_digestion_unrecoverable_errors";
+
+/// Counter name for protein queue size
+///
+pub const PROTEIN_QUEUE_SIZE_COUNTER_NAME: &str = "macpepdb_build_digestion_protein_queue_size";
+
+pub const METADATA_PROCESSED_PEPTIDES_COUNTER_NAME: &str =
+    "macpepdb_build_metadata_processed_peptides";
+pub const METADATA_ERRORS_COUNTER_NAME: &str = "macpepdb_build_metadata_errors";
+
+/// Number of proteins per thread in queue
+///
+pub const PROTEIN_QUEUE_MULTIPLICATOR: usize = 10;
+
 /// Struct which maintains the database content.
 /// * Inserts and updates proteins from given files
 /// * Maintains associations between proteins and peptides
@@ -75,7 +96,7 @@ pub struct DatabaseBuild {
 
 impl DatabaseBuild {
     /// Reads the saved configuration from the database or sets a new configuration if no configuration is saved.
-    /// If no initial configuration is given and no configuration is saved in the database an error is thrown.  
+    /// If no initial configuration is given and no configuration is saved in the database an error is thrown.
     /// If the initial configuration is used and has no partition limits, the partition limits are calculated.
     ///
     /// # Arguments
@@ -88,7 +109,7 @@ impl DatabaseBuild {
     ///
     pub async fn get_or_set_configuration(
         client: &mut Client,
-        protein_file_paths: &Vec<PathBuf>,
+        protein_file_paths: &[PathBuf],
         num_partitions: u64,
         allowed_ram_fraction: f64,
         partitioner_false_positive_probability: f64,
@@ -119,7 +140,7 @@ impl DatabaseBuild {
             bail!("Number partition is 0 and initial configuration has no partition limits. Without any partitions the database cannot be built.");
         }
 
-        let new_configuration = if initial_configuration.get_partition_limits().len() == 0 {
+        let new_configuration = if initial_configuration.get_partition_limits().is_empty() {
             info!("... initial configuration has no partition limits list, creating one.");
             // create digestion protease
             let protease = get_protease_by_name(
@@ -179,15 +200,15 @@ impl DatabaseBuild {
     async fn protein_digestion(
         database_url: &str,
         num_threads: usize,
-        protein_file_paths: &Vec<PathBuf>,
-        protease: &dyn Protease,
+        protein_file_paths: &[PathBuf],
+        protease: Arc<dyn Protease>,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
-        log_folder: &PathBuf,
+        log_folder: &Path,
     ) -> Result<usize> {
         debug!("Digesting proteins and inserting peptides");
 
-        let protein_queue_size = num_threads * 300;
+        let protein_queue_size = num_threads * PROTEIN_QUEUE_MULTIPLICATOR;
 
         // Database client
         let client = Arc::new(Client::new(database_url).await?);
@@ -200,21 +221,17 @@ impl DatabaseBuild {
 
         // Logging variable
         describe_counter!(
-            "macpepdb_build_digestion_processed_proteins",
+            PROCESSED_PROTEINS_COUNTER_NAME,
             "Number of inserted/updated proteins"
         );
         describe_counter!(
-            "macpepdb_build_digestion_processed_peptides",
+            PROCESSED_PEPTIDES_COUNTER_NAME,
             Unit::Count,
             "Number of inserted/updated peptides"
         );
-        describe_counter!(
-            "macpepdb_build_digestion_errors",
-            Unit::Count,
-            "Number of errors"
-        );
+        describe_counter!(ERRORS_COUNTER_NAME, Unit::Count, "Number of errors");
         describe_gauge!(
-            "macpepdb_build_digestion_protein_queue_size",
+            PROTEIN_QUEUE_SIZE_COUNTER_NAME,
             Unit::Count,
             "Size of the protein queue"
         );
@@ -229,19 +246,20 @@ impl DatabaseBuild {
 
         let monitorable_metrics = vec![
             MonitorableMetric::new(
-                "macpepdb_build_digestion_processed_proteins".to_string(),
+                PROCESSED_PROTEINS_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Rate,
             ),
             MonitorableMetric::new(
-                "macpepdb_build_digestion_processed_peptides".to_string(),
+                PROCESSED_PEPTIDES_COUNTER_NAME.to_string(),
+                MonitorableMetricType::Rate,
+            ),
+            MonitorableMetric::new(ERRORS_COUNTER_NAME.to_string(), MonitorableMetricType::Rate),
+            MonitorableMetric::new(
+                UNRECOVERABLE_ERRORS_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Rate,
             ),
             MonitorableMetric::new(
-                "macpepdb_build_digestion_errors".to_string(),
-                MonitorableMetricType::Rate,
-            ),
-            MonitorableMetric::new(
-                "macpepdb_build_digestion_protein_queue_size".to_string(),
+                PROTEIN_QUEUE_SIZE_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Queue(protein_queue_size as u64),
             ),
         ];
@@ -262,20 +280,13 @@ impl DatabaseBuild {
 
         let digestion_thread_handles = (0..num_threads)
             .map(|_| {
-                // Create a boxed protease
-                let protease_box = get_protease_by_name(
-                    protease.get_name(),
-                    protease.get_min_length(),
-                    protease.get_max_length(),
-                    protease.get_max_missed_cleavages(),
-                )?;
                 // Start digestion thread
                 Ok(spawn(Self::digestion_thread(
                     client.clone(),
                     protein_queue_arc.clone(),
                     partition_limits_arc.clone(),
                     stop_flag.clone(),
-                    protease_box,
+                    protease.clone(),
                     remove_peptides_containing_unknown,
                     unprocessable_proteins_sender.clone(),
                 )))
@@ -285,22 +296,42 @@ impl DatabaseBuild {
         // Drop the original sender its not needed anymore
         drop(unprocessable_proteins_sender);
 
-        for protein_file_path in protein_file_paths {
-            let mut reader = Reader::new(protein_file_path, 4096)?;
-            while let Some(protein) = reader.next()? {
-                let mut next_protein = protein;
-                loop {
-                    match protein_queue_arc.push(next_protein) {
-                        Ok(_) => {
-                            gauge!("macpepdb_build_digestion_protein_queue_size")
-                                .set(protein_queue_arc.len() as f64);
-                            break;
-                        }
-                        Err(protein) => {
-                            next_protein = protein;
+        // Reader is not async (yet) so it needs to run in a separate thread
+        // so the queue is not stareved
+        let thread_protein_file_paths = protein_file_paths.to_vec();
+        let reader_thread: std::thread::JoinHandle<Result<()>> = std::thread::spawn(move || {
+            for protein_file_path in thread_protein_file_paths {
+                let mut reader = Reader::new(&protein_file_path, 4096)?;
+                while let Some(protein) = reader.next()? {
+                    let mut next_protein = protein;
+                    loop {
+                        match protein_queue_arc.push(next_protein) {
+                            Ok(_) => {
+                                gauge!(PROTEIN_QUEUE_SIZE_COUNTER_NAME)
+                                    .set(protein_queue_arc.len() as f64);
+                                break;
+                            }
+                            Err(protein) => {
+                                next_protein = protein;
+                            }
                         }
                     }
                 }
+            }
+            Ok(())
+        });
+
+        match reader_thread.join() {
+            Ok(Ok(_)) => {
+                info!("Proteins queued, waiting for digestion threads to finish ...");
+            }
+            Ok(Err(err)) => {
+                error!("Error reading protein files: {:?}", err);
+                return Err(err);
+            }
+            Err(err) => {
+                error!("Error reading protein files: {:?}", err);
+                return Err(anyhow::anyhow!("Error reading protein files"));
             }
         }
 
@@ -337,18 +368,10 @@ impl DatabaseBuild {
         protein_queue_arc: Arc<ArrayQueue<Protein>>,
         partition_limits_arc: Arc<Vec<i64>>,
         stop_flag: Arc<AtomicBool>,
-        protease: Box<dyn Protease>,
+        protease: Arc<dyn Protease>,
         remove_peptides_containing_unknown: bool,
         unprocessable_proteins_sender: Sender<Protein>,
     ) -> Result<()> {
-        let statement = format!(
-            "UPDATE {}.{} SET {}, is_metadata_updated = false WHERE partition = ? and mass = ? and sequence = ?",
-            client.get_database(),
-            TABLE_NAME,
-            UPDATE_SET_PLACEHOLDER.as_str()
-        );
-        let prepared = client.prepare(statement).await?;
-
         loop {
             let protein = protein_queue_arc.pop();
             if protein.is_none() {
@@ -361,12 +384,12 @@ impl DatabaseBuild {
             }
 
             let protein = protein.unwrap();
-            trace!("Processing protein {}", protein.get_accession());
+            debug!("Processing protein {}", protein.get_accession());
 
             let mut accession_list = protein.get_secondary_accessions().clone();
             accession_list.push(protein.get_accession().to_owned());
 
-            let existing_protein = ProteinTable::select(
+            let stream = ProteinTable::select(
                 client.as_ref(),
                 "WHERE accession IN ?",
                 &[&CqlValue::List(
@@ -377,8 +400,14 @@ impl DatabaseBuild {
                 )],
             )
             .await?;
-            let mut tries: u64 = 0;
 
+            pin!(stream);
+
+            let existing_protein = stream.try_next().await?;
+
+            debug!("Existing protein {:?}", existing_protein);
+
+            let mut tries: u64 = 0;
             loop {
                 tries += 1;
                 // After MAX_INSERT_TRIES is reached, we log the proteins as something may seem wrong
@@ -397,21 +426,19 @@ impl DatabaseBuild {
                         return Self::update_protein(
                             client.as_ref(),
                             &protein,
-                            &existing_protein,
-                            &protease,
+                            existing_protein,
+                            protease.as_ref(),
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
-                            &prepared,
                         )
                         .await;
                     } else {
                         return Self::insert_protein(
                             client.as_ref(),
                             &protein,
-                            &protease,
+                            protease.as_ref(),
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
-                            &prepared,
                         )
                         .await;
                     };
@@ -420,19 +447,20 @@ impl DatabaseBuild {
 
                 match upsert_result {
                     Ok(_) => {
-                        counter!("macpepdb_build_digestion_processed_proteins").increment(1);
+                        counter!(PROCESSED_PROTEINS_COUNTER_NAME).increment(1);
                         break;
                     }
                     Err(err) => {
-                        counter!("macpepdb_build_digestion_errors").increment(1);
                         let error_msg = format!(
                             "Upsert failed for `{}` (attempt {})",
                             protein.get_accession(),
                             tries
                         );
                         if tries <= MAX_INSERT_TRIES {
+                            counter!(ERRORS_COUNTER_NAME).increment(1);
                             warn!("{}", error_msg);
                         } else {
+                            counter!(UNRECOVERABLE_ERRORS_COUNTER_NAME).increment(1);
                             error!("{}\n{:?}\n", error_msg, err);
                         }
                         sleep(Duration::from_millis(100));
@@ -465,21 +493,21 @@ impl DatabaseBuild {
     /// * `partition_limits` - The partition limits
     /// * `prepared` - The prepared statement for updating the peptides
     ///
+    #[allow(clippy::borrowed_box)]
     async fn update_protein(
         client: &Client,
         updated_protein: &Protein,
         stored_protein: &Protein,
-        protease: &Box<dyn Protease>,
+        protease: &dyn Protease,
         remove_peptides_containing_unknown: bool,
-        partition_limits: &Vec<i64>,
-        prepared: &PreparedStatement,
+        partition_limits: &[i64],
     ) -> Result<()> {
         let peptides_of_stored_protein = convert_to_internal_peptide(
             match remove_peptides_containing_unknown {
                 true => Box::new(remove_unknown_from_digest(
-                    protease.cleave(&stored_protein.get_sequence())?,
+                    protease.cleave(stored_protein.get_sequence())?,
                 )),
-                false => Box::new(protease.cleave(&stored_protein.get_sequence())?),
+                false => Box::new(protease.cleave(stored_protein.get_sequence())?),
             },
             partition_limits,
             stored_protein,
@@ -489,9 +517,9 @@ impl DatabaseBuild {
         let peptides_of_updated_protein = convert_to_internal_peptide(
             match remove_peptides_containing_unknown {
                 true => Box::new(remove_unknown_from_digest(
-                    protease.cleave(&updated_protein.get_sequence())?,
+                    protease.cleave(updated_protein.get_sequence())?,
                 )),
-                false => Box::new(protease.cleave(&updated_protein.get_sequence())?),
+                false => Box::new(protease.cleave(updated_protein.get_sequence())?),
             },
             partition_limits,
             updated_protein,
@@ -531,7 +559,6 @@ impl DatabaseBuild {
                 client,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
-                prepared,
             )
             .await?;
         } else if updated_protein.get_accession() != stored_protein.get_accession() {
@@ -556,7 +583,6 @@ impl DatabaseBuild {
                 client,
                 &peptides_of_stored_protein,
                 &peptides_of_updated_protein,
-                prepared,
             )
             .await?;
         }
@@ -570,8 +596,8 @@ impl DatabaseBuild {
         }
 
         // Update protein itself
-        ProteinTable::update(client, &stored_protein, &updated_protein).await?;
-        counter!("macpepdb_build_digestion_processed_peptides")
+        ProteinTable::update(client, stored_protein, updated_protein).await?;
+        counter!(PROCESSED_PEPTIDES_COUNTER_NAME)
             .increment(peptides_of_updated_protein.len() as u64);
 
         Ok(())
@@ -593,10 +619,10 @@ impl DatabaseBuild {
     ) -> Result<()> {
         // Disassociate all peptides from existing protein which are not contained by the new protein
         let peptides_to_deassociate = peptides_from_stored_protein
-            .difference(&peptides_from_updated_protein)
+            .difference(peptides_from_updated_protein)
             .collect::<Vec<&Peptide>>();
 
-        if peptides_to_deassociate.len() > 0 {
+        if !peptides_to_deassociate.is_empty() {
             PeptideTable::update_protein_accession(
                 client,
                 &mut peptides_to_deassociate.into_iter(),
@@ -620,15 +646,14 @@ impl DatabaseBuild {
         client: &Client,
         peptides_from_stored_protein: &HashSet<Peptide>,
         peptides_from_updated_protein: &HashSet<Peptide>,
-        prepared: &PreparedStatement,
     ) -> Result<()> {
         // Disassociate all peptides from existing protein which are not contained by the new protein
         let peptides_to_create: Vec<&Peptide> = peptides_from_updated_protein
             .difference(peptides_from_stored_protein)
             .collect::<Vec<&Peptide>>();
 
-        if peptides_to_create.len() > 0 {
-            PeptideTable::bulk_insert(client, peptides_to_create.into_iter(), prepared).await?
+        if !peptides_to_create.is_empty() {
+            PeptideTable::bulk_upsert(client, peptides_to_create.into_iter()).await?
         }
         Ok(())
     }
@@ -643,28 +668,28 @@ impl DatabaseBuild {
     /// * `partition_limits` - The partition limits
     /// * `prepared` - The prepared statement for 'upserting' the peptides
     ///
+    #[allow(clippy::borrowed_box)]
     async fn insert_protein(
         client: &Client,
         protein: &Protein,
-        protease: &Box<dyn Protease>,
+        protease: &dyn Protease,
         remove_peptides_containing_unknown: bool,
-        partition_limits: &Vec<i64>,
-        prepared: &PreparedStatement,
+        partition_limits: &[i64],
     ) -> Result<()> {
         // Digest protein
         let peptides = convert_to_internal_peptide(
             match remove_peptides_containing_unknown {
                 true => Box::new(remove_unknown_from_digest(
-                    protease.cleave(&protein.get_sequence())?,
+                    protease.cleave(protein.get_sequence())?,
                 )),
-                false => Box::new(protease.cleave(&protein.get_sequence())?),
+                false => Box::new(protease.cleave(protein.get_sequence())?),
             },
             partition_limits,
             protein,
         )
         .collect::<HashSet<Peptide>>()?;
 
-        ProteinTable::insert(client, &protein).await?;
+        ProteinTable::insert(client, protein).await?;
         // PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared).await?;
         trace!(
             "Protein '{}' => {} peptides",
@@ -672,10 +697,10 @@ impl DatabaseBuild {
             peptides.len()
         );
 
-        PeptideTable::bulk_insert(client, &mut peptides.iter(), prepared).await?;
-        counter!("macpepdb_build_digestion_processed_peptides").increment(peptides.len() as u64);
+        PeptideTable::bulk_upsert(client, &mut peptides.iter()).await?;
+        counter!(PROCESSED_PEPTIDES_COUNTER_NAME).increment(peptides.len() as u64);
 
-        return Ok(());
+        Ok(())
     }
 
     /// Collecting peptide metadata from the proteins of origin
@@ -692,7 +717,7 @@ impl DatabaseBuild {
         num_threads: usize,
         database_url: &str,
         configuration: &Configuration,
-        protease: &dyn Protease,
+        protease: Arc<dyn Protease>,
         include_domains: bool,
     ) -> Result<()> {
         debug!("Collecting peptide metadata");
@@ -706,10 +731,27 @@ impl DatabaseBuild {
 
         // (Metrics) logging variables
         describe_counter!(
-            "macpepdb_build_metadata_processed_peptides",
+            METADATA_PROCESSED_PEPTIDES_COUNTER_NAME,
             "Number of processed peptides"
         );
-        describe_counter!("macpepdb_build_metadata_errors", "Number of errors");
+        describe_counter!(METADATA_ERRORS_COUNTER_NAME, "Number of errors");
+
+        let monitorable_metrics = vec![
+            MonitorableMetric::new(
+                METADATA_PROCESSED_PEPTIDES_COUNTER_NAME.to_string(),
+                MonitorableMetricType::Rate,
+            ),
+            MonitorableMetric::new(
+                METADATA_ERRORS_COUNTER_NAME.to_string(),
+                MonitorableMetricType::Rate,
+            ),
+        ];
+
+        let mut metrics_monitor = MetricsMonitor::new(
+            "macpepdb.build.digest",
+            monitorable_metrics,
+            "http://127.0.0.1:9494/metrics".to_string(),
+        )?;
 
         // Metadata update variables
         let partition_queue: Vec<i64> =
@@ -720,17 +762,11 @@ impl DatabaseBuild {
         let client = Arc::new(Client::new(database_url).await?);
         let metadata_collector_thread_handles: Vec<_> = (0..num_threads * 2)
             .map(|_| {
-                let protease = get_protease_by_name(
-                    protease.get_name(),
-                    protease.get_min_length(),
-                    protease.get_max_length(),
-                    protease.get_max_missed_cleavages(),
-                )?;
                 // Start digestion thread
                 Ok(spawn(Self::collect_peptide_metadata_thread(
                     client.clone(),
                     partition_queue.clone(),
-                    protease,
+                    protease.clone(),
                     include_domains,
                 )))
             })
@@ -741,6 +777,7 @@ impl DatabaseBuild {
         join_all(metadata_collector_thread_handles).await;
         debug!("... all metadata update threads stopped");
 
+        metrics_monitor.stop().await?;
         debug!("Waiting for logging threads to stop ...");
         debug!("... all logging threads stopped");
 
@@ -758,16 +795,9 @@ impl DatabaseBuild {
     async fn collect_peptide_metadata_thread(
         client: Arc<Client>,
         partition_queue: Arc<Mutex<Vec<i64>>>,
-        protease: Box<dyn Protease>,
+        protease: Arc<dyn Protease>,
         include_domains: bool,
     ) -> Result<()> {
-        let update_query = format!(
-            "UPDATE {}.{} SET is_metadata_updated = true, is_swiss_prot = ?, is_trembl = ?, taxonomy_ids = ?, unique_taxonomy_ids = ?, proteome_ids = ?, domains = ? WHERE partition = ? AND mass = ? and sequence = ?",
-            client.get_database(),
-            PeptideTable::table_name()
-        );
-        let update_query_prepared_statement = client.prepare(update_query).await?;
-
         let protease_cleavage_codes: Vec<char> = protease
             .get_cleavage_amino_acids()
             .iter()
@@ -794,11 +824,10 @@ impl DatabaseBuild {
             let partition_cql = CqlValue::BigInt(partition);
             let select_args_refs = vec![&partition_cql];
 
-            let peptide_stream = PeptideTable::stream(
+            let peptide_stream = PeptideTable::select(
                 client.as_ref(),
                 "WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
                 &select_args_refs,
-                10000,
             )
             .await?;
 
@@ -809,7 +838,7 @@ impl DatabaseBuild {
                 let associated_proteins =
                     ProteinTable::get_proteins_of_peptide(client.as_ref(), &peptide)
                         .await?
-                        .try_collect()
+                        .try_collect::<Vec<_>>()
                         .await?;
 
                 let (
@@ -826,29 +855,24 @@ impl DatabaseBuild {
                     include_domains,
                 );
 
-                let update_result = client
-                    .execute(
-                        &update_query_prepared_statement,
-                        (
-                            &is_swiss_prot,
-                            &is_trembl,
-                            &taxonomy_ids,
-                            &unique_taxonomy_ids,
-                            &proteome_ids,
-                            &domains,
-                            peptide.get_partition(),
-                            peptide.get_mass(),
-                            peptide.get_sequence(),
-                        ),
-                    )
-                    .await;
+                let update_result = PeptideTable::update_metadata(
+                    client.as_ref(),
+                    &peptide,
+                    is_swiss_prot,
+                    is_trembl,
+                    &taxonomy_ids,
+                    &unique_taxonomy_ids,
+                    &proteome_ids,
+                    &domains,
+                )
+                .await;
 
                 match update_result {
                     Ok(_) => {
-                        counter!("macpepdb_build_metadata_processed_peptides").increment(1);
+                        counter!(METADATA_PROCESSED_PEPTIDES_COUNTER_NAME).increment(1);
                     }
                     Err(err) => {
-                        counter!("macpepdb_build_metadata_errors").increment(1);
+                        counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
                         error!(
                             "Metadata update failed `{}`\n{:?}\n",
                             peptide.get_sequence(),
@@ -867,27 +891,47 @@ impl DatabaseBuild {
         TaxonomyTreeTable::insert(client, &taxonomy_tree).await?;
         Ok(())
     }
-}
 
-/// TODO: Trait and this struct should be merged as they only existed separately when
-/// another database engine was supported.
-impl DatabaseBuildTrait for DatabaseBuild {
-    fn new(database_url: &str) -> Self {
-        return Self {
+    /// Creates a new instance of the database builder for the given database
+    ///
+    /// # Arguments
+    /// * `database_url` - URL of the database.
+    ///
+    pub fn new(database_url: &str) -> Self {
+        Self {
             database_url: database_url.to_owned(),
-        };
+        }
     }
 
-    async fn build(
+    /// Builds / Maintains the database.
+    /// 1. Builds the deserializes the taxonomy tree and saves it to the database.
+    /// 2. Inserts / updates the proteins and peptides from the files
+    /// 3. Collects and updates peptide metadata like taxonomies, proteomes and review status
+    ///
+    /// Will panic if database contains not configuration and not initial configuration is provided.
+    ///
+    /// # Arguments
+    /// * `protein_file_paths` - Paths to the protein files.
+    /// * `taxonomy_file_path` - Path to the taxonomy file.
+    /// * `num_threads` - Number of threads to use.
+    /// * `num_partitions` - Number of partitions to use.
+    /// * `allowed_ram_usage` - Allowed RAM usage in GB for the partitioner Bloom filter.
+    /// * `partitioner_false_positive_probability` - False positive probability of the partitioners Bloom filters.
+    /// * `initial_configuration_opt` - Optional initial configuration.
+    /// * `log_folder` - Path to the log folder.
+    /// * `include_do
+    ///
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build(
         &self,
-        protein_file_paths: &Vec<PathBuf>,
+        protein_file_paths: &[PathBuf],
         taxonomy_file_path: &Option<PathBuf>,
         num_threads: usize,
         num_partitions: u64,
         allowed_ram_usage: f64,
         partitioner_false_positive_probability: f64,
         initial_configuration_opt: Option<Configuration>,
-        log_folder: &PathBuf,
+        log_folder: &Path,
         include_domains: bool,
     ) -> Result<()> {
         info!("Starting database build");
@@ -909,12 +953,13 @@ impl DatabaseBuildTrait for DatabaseBuild {
             initial_configuration_opt,
         )
         .await?;
-        let protease = get_protease_by_name(
+        let protease: Arc<dyn Protease> = get_protease_by_name(
             configuration.get_protease_name(),
             configuration.get_min_peptide_length(),
             configuration.get_max_peptide_length(),
             configuration.get_max_number_of_missed_cleavages(),
-        )?;
+        )?
+        .into();
 
         if let Some(taxonomy_file_path) = taxonomy_file_path {
             info!("Taxonomy tree build...");
@@ -925,7 +970,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             // read, digest and insert proteins and peptides
             info!("Protein digestion ...");
 
-            let mut attempt_protein_file_path = protein_file_paths.clone();
+            let mut attempt_protein_file_path = protein_file_paths.to_owned();
             // Insert proteins/peptides until no error occurred
             for attempt in 1.. {
                 info!("Proteins digestion attempt {}", attempt);
@@ -942,7 +987,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
                     &self.database_url,
                     attempt_num_threads,
                     &attempt_protein_file_path,
-                    protease.as_ref(),
+                    protease.clone(),
                     configuration.get_remove_peptides_containing_unknown(),
                     configuration.get_partition_limits().to_vec(),
                     &attempt_log_folder,
@@ -969,7 +1014,7 @@ impl DatabaseBuildTrait for DatabaseBuild {
             num_threads,
             &self.database_url,
             &configuration,
-            protease.as_ref(),
+            protease.clone(),
             include_domains,
         )
         .await?;
@@ -987,14 +1032,13 @@ mod test {
 
     // 3rd party imports
     use serial_test::serial;
-    use tracing_test::traced_test;
 
     // internal imports
     use super::*;
     use crate::database::scylla::drop_keyspace;
     use crate::database::scylla::tests::DATABASE_URL;
     use crate::database::scylla::{peptide_table::PeptideTable, protein_table::ProteinTable};
-    use crate::database::selectable_table::SelectableTable;
+
     use crate::io::uniprot_text::reader::Reader;
     use crate::tools::tests::get_taxdmp_zip;
 
@@ -1009,15 +1053,12 @@ mod test {
         );
     }
 
-    const EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN: [&'static str; 2] =
-        ["P07477", "DUPLIC"];
+    const EXPECTED_ASSOCIATED_PROTEINS_FOR_DUPLICATED_TRYPSIN: [&str; 2] = ["P07477", "DUPLIC"];
     const EXPECTED_ASSOCIATED_TAXONOMY_IDS_FOR_DUPLICATED_TRYPSIN: [i64; 2] = [9922, 9606];
-    const EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN: [&'static str; 2] =
-        ["UP000005640", "UP000291000"];
+    const EXPECTED_PROTEOME_IDS_FOR_DUPLICATED_TRYPSIN: [&str; 2] = ["UP000005640", "UP000291000"];
 
     // Test the database building
     #[tokio::test(flavor = "multi_thread")]
-    #[traced_test]
     #[serial]
     async fn test_database_build_without_initial_config() {
         let taxdmp_zip_path = Some(get_taxdmp_zip().await.unwrap());
@@ -1050,7 +1091,6 @@ mod test {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    #[traced_test]
     #[serial]
     async fn test_database_build() {
         let taxdmp_zip_path = Some(get_taxdmp_zip().await.unwrap());
@@ -1099,17 +1139,20 @@ mod test {
         for protein_file_path in protein_file_paths {
             let mut reader = Reader::new(&protein_file_path, 4096).unwrap();
             while let Some(protein) = reader.next().unwrap() {
-                let proteins = ProteinTable::select_multiple(
+                let proteins = ProteinTable::select(
                     &client,
                     "WHERE accession = ?",
                     &[&CqlValue::Text(protein.get_accession().to_owned())],
                 )
                 .await
+                .unwrap()
+                .try_collect::<Vec<Protein>>()
+                .await
                 .unwrap();
                 assert_eq!(proteins.len(), 1);
 
                 let expected_peptides: Vec<Peptide> = convert_to_internal_peptide(
-                    Box::new(protease.cleave(&protein.get_sequence()).unwrap()),
+                    Box::new(protease.cleave(protein.get_sequence()).unwrap()),
                     configuration.get_partition_limits(),
                     &protein,
                 )
@@ -1117,15 +1160,18 @@ mod test {
                 .unwrap();
 
                 for peptide in expected_peptides {
-                    let peptides = PeptideTable::select_multiple(
+                    let peptides = PeptideTable::select(
                         &client,
-                        "WHERE partition = ? AND mass = ? AND sequence = ?",
+                        "WHERE partition = ? AND mass = ? AND sequence = ? LIMIT 1",
                         &[
                             &CqlValue::BigInt(peptide.get_partition().to_owned()),
                             &CqlValue::BigInt(peptide.get_mass_as_ref().to_owned()),
                             &CqlValue::Text(peptide.get_sequence().to_owned()),
                         ],
                     )
+                    .await
+                    .unwrap()
+                    .try_collect::<Vec<Peptide>>()
                     .await
                     .unwrap();
 
@@ -1138,17 +1184,20 @@ mod test {
 
         // Select the duplicated trpsin protein
         // Digest it again, and check the metadata fit to the original trypsin and the duplicated trypsin
-        let trypsin_duplicate = ProteinTable::select(
+        let stream = ProteinTable::select(
             &client,
             "WHERE accession = ?",
             &[&CqlValue::Text("DUPLIC".to_string())],
         )
         .await
-        .unwrap()
         .unwrap();
 
+        pin!(stream);
+
+        let trypsin_duplicate = stream.try_next().await.unwrap().unwrap();
+
         let trypsin_duplicate_peptides: Vec<Peptide> = convert_to_internal_peptide(
-            Box::new(protease.cleave(&trypsin_duplicate.get_sequence()).unwrap()),
+            Box::new(protease.cleave(trypsin_duplicate.get_sequence()).unwrap()),
             configuration.get_partition_limits(),
             &trypsin_duplicate,
         )
@@ -1158,7 +1207,7 @@ mod test {
         for peptide in trypsin_duplicate_peptides {
             let peptide = PeptideTable::select(
                 &client,
-                "WHERE partition = ? AND mass = ? AND sequence = ?",
+                "WHERE partition = ? AND mass = ? AND sequence = ? LIMIT 1",
                 &[
                     &CqlValue::BigInt(peptide.get_partition().to_owned()),
                     &CqlValue::BigInt(peptide.get_mass_as_ref().to_owned()),
@@ -1167,6 +1216,10 @@ mod test {
             )
             .await
             .unwrap()
+            .try_collect::<Vec<Peptide>>()
+            .await
+            .unwrap()
+            .pop()
             .unwrap();
             assert_eq!(peptide.get_proteins().len(), 2);
 
@@ -1183,7 +1236,7 @@ mod test {
                 .iter()
                 .for_each(|x| {
                     assert!(
-                        peptide.get_taxonomy_ids().contains(&x),
+                        peptide.get_taxonomy_ids().contains(x),
                         "{} not found in taxonomy_ids",
                         x
                     )
@@ -1192,7 +1245,7 @@ mod test {
                 .iter()
                 .for_each(|x| {
                     assert!(
-                        peptide.get_unique_taxonomy_ids().contains(&x),
+                        peptide.get_unique_taxonomy_ids().contains(x),
                         "{} not found in unique_taxonomy_ids",
                         x
                     )

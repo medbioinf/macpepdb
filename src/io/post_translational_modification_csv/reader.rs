@@ -28,7 +28,6 @@ impl Reader {
 
         reader
             .into_deserialize::<PTM>()
-            .into_iter()
             .map(|ptm_result| match ptm_result {
                 Ok(ptm) => Ok(ptm),
                 Err(e) => Err(anyhow::Error::new(e)),

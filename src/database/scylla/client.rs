@@ -8,6 +8,7 @@ use scylla::{
     transport::session::{PoolSize, Session},
     SessionBuilder,
 };
+use tokio::sync::RwLock;
 
 // local imports
 use crate::database::generic_client::GenericClient;
@@ -80,14 +81,11 @@ impl ClientSettings {
         };
 
         // Extract credentials and attributes if present
-        match matches.name("credentials") {
-            Some(credentials) => {
-                let credentials = credentials.as_str().split(':').collect::<Vec<&str>>();
-                settings.user = Some(credentials[0].to_string());
-                settings.password = Some(credentials[1].to_string());
-            }
-            None => (),
-        };
+        if let Some(credentials) = matches.name("credentials") {
+            let credentials = credentials.as_str().split(':').collect::<Vec<&str>>();
+            settings.user = Some(credentials[0].to_string());
+            settings.password = Some(credentials[1].to_string());
+        }
 
         // Extract attributes if present
         let attributes = match matches.name("attributes") {
@@ -152,11 +150,44 @@ pub struct Client {
     session: Session,
     database: String,
     url: String,
+    prepared_statement_cache:
+        RwLock<HashMap<String, scylla::prepared_statement::PreparedStatement>>,
 }
 
 impl Client {
     pub fn get_url(&self) -> &str {
         &self.url
+    }
+
+    /// Get a prepared statement from the cache
+    /// if the statement is not in the cache it be added and returned
+    pub async fn get_prepared_statement(
+        &self,
+        query: &str,
+    ) -> Result<scylla::prepared_statement::PreparedStatement> {
+        let read_guard = self.prepared_statement_cache.read().await;
+        if let Some(statement) = read_guard.get(query) {
+            return Ok(statement.clone());
+        }
+        drop(read_guard);
+
+        let mut write_guard = self.prepared_statement_cache.write().await;
+        // Check if statement was added while waiting for the write guard
+        if let Some(statement) = write_guard.get(query) {
+            return Ok(statement.clone());
+        }
+
+        let statement = self
+            .prepare(query.replace(":KEYSPACE:", &self.database))
+            .await?;
+
+        write_guard.insert(query.to_string(), statement.clone());
+
+        Ok(statement)
+    }
+
+    pub async fn reset_prepared_statement_cache(&self) {
+        self.prepared_statement_cache.write().await.clear();
     }
 }
 
@@ -183,6 +214,7 @@ impl GenericClient<Session> for Client {
             session: settings.to_session().await?,
             database: settings.keyspace.clone(),
             url: database_url.to_string(),
+            prepared_statement_cache: RwLock::new(HashMap::new()),
         })
     }
 

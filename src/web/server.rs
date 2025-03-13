@@ -11,7 +11,6 @@ use indicium::simple::SearchIndex;
 use tower_http::cors::{Any, CorsLayer};
 
 // internal imports
-use crate::database::configuration_table::ConfigurationTable as ConfigurationTableTrait;
 use crate::database::generic_client::GenericClient;
 use crate::database::scylla::client::Client;
 use crate::database::scylla::configuration_table::ConfigurationTable;
@@ -22,7 +21,8 @@ use crate::web::chemistry_controller::{get_all_amino_acids, get_amino_acid};
 use crate::web::configuration_controller::get_configuration;
 use crate::web::error_controller::page_not_found;
 use crate::web::peptide_controller::{
-    get_peptide, get_peptide_existence, search as peptide_search,
+    get_peptide, get_peptide_existence, get_search as get_peptide_search,
+    post_search as post_peptide_search,
 };
 use crate::web::protein_controller::{get_protein, search_protein};
 use crate::web::taxonomy_controller::{get_sub_taxonomies, get_taxonomy, search_taxonomies};
@@ -87,7 +87,11 @@ pub async fn start(
     // Build our application with route
     let app = Router::new()
         // Peptide routes
-        .route("/api/peptides/search", post(peptide_search))
+        .route(
+            "/api/peptides/search/:payload/:accept",
+            get(get_peptide_search),
+        )
+        .route("/api/peptides/search", post(post_peptide_search))
         .route("/api/peptides/:sequence/exists", get(get_peptide_existence))
         .route("/api/peptides/:sequence", get(get_peptide))
         // Protein routes

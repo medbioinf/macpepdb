@@ -1,6 +1,3 @@
-/// Contains formatting functions for displaying data in a (human-)readable format.
-///
-
 /// Converts a number of bytes into a human-readable format.
 /// E.g. 11811160064 -> "11.00 GB"
 ///

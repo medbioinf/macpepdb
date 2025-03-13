@@ -1,6 +1,3 @@
-/// Module for mass conversion. Conversion is necessary as as all masses will be stored as integer
-/// in the database due to predictable size.
-
 /// Constant factor for float conversion to integer.
 pub const MASS_CONVERT_FACTOR: f64 = 1000000000.0;
 
@@ -11,7 +8,7 @@ pub const MASS_CONVERT_FACTOR: f64 = 1000000000.0;
 /// * `mass` - Mass in Dalton
 ///
 pub fn to_int(mass: f64) -> i64 {
-    return (mass * MASS_CONVERT_FACTOR) as i64;
+    (mass * MASS_CONVERT_FACTOR) as i64
 }
 
 /// Makro for mass to integer conversion. The `to_int`-method is intentionally not used, so the macro can be used in assignments of constants.
@@ -32,7 +29,7 @@ macro_rules! mass_to_int {
 /// * `mass` - Mass in Dalton
 ///
 pub fn to_float(mass: i64) -> f64 {
-    return mass as f64 / MASS_CONVERT_FACTOR;
+    mass as f64 / MASS_CONVERT_FACTOR
 }
 
 #[cfg(test)]

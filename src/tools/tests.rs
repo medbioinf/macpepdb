@@ -13,7 +13,7 @@ use reqwest::header::USER_AGENT;
 
 /// URL of the test `taxdmp.zip` file (original acquired from: https://ftp.ncbi.nih.gov/pub/taxonomy/taxdmp.zip)
 ///
-pub const TAXDMP_URL: &'static str = "https://ruhr-uni-bochum.sciebo.de/s/dUPkrKiV80137S9/download";
+pub const TAXDMP_URL: &str = "https://ruhr-uni-bochum.sciebo.de/s/dUPkrKiV80137S9/download";
 
 /// Downloads the latest taxdmp.zip if not given by env var
 /// `TAXDMP_ZIP_PATH` or already downloaded.

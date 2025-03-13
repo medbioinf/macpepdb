@@ -49,5 +49,5 @@ pub fn calc_sequence_mass_int(sequence: &str) -> Result<i64> {
     for c in sequence.chars() {
         mass += get_internal_amino_acid_by_one_letter_code(c)?.get_mono_mass_int();
     }
-    return Ok(mass);
+    Ok(mass)
 }

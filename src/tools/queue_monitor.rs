@@ -18,7 +18,7 @@ const UPDATE_INTERVAL: u64 = 300;
 
 /// Progress bar style. Used when a maximum value is given
 ///
-const PROGRESS_BAR_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len}";
+const PROGRESS_BAR_STYLE: &str = "        {msg} {wide_bar} {pos}/{len}";
 
 /// Trait for a monitorable queue
 ///
@@ -26,6 +26,11 @@ pub trait MonitorableQueue: Send + Sync + 'static {
     /// Returns the length of the queue
     ///
     fn len(&self) -> impl Future<Output = usize> + Send;
+
+    /// Returns if the queue is empty
+    fn is_empty(&self) -> impl Future<Output = bool> + Send {
+        async { self.len().await == 0 }
+    }
 }
 
 impl<T> MonitorableQueue for Arc<Mutex<Vec<T>>>
@@ -140,7 +145,7 @@ impl QueueMonitor {
             })
             .collect::<Result<Vec<Span>>>()?;
 
-        while stop_flag.load(std::sync::atomic::Ordering::Relaxed) == false {
+        while !stop_flag.load(std::sync::atomic::Ordering::Relaxed) {
             for (queue, status_span) in queues.iter().zip(status_spans.iter()) {
                 let _ = status_span.enter();
                 status_span.pb_set_position(queue.len().await as u64);
@@ -155,9 +160,8 @@ impl QueueMonitor {
     pub async fn stop(&mut self) -> Result<()> {
         self.stop_flag
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        match self.thread_handle.take() {
-            Some(handle) => handle.await??,
-            None => {}
+        if let Some(handle) = self.thread_handle.take() {
+            handle.await??
         }
         Ok(())
     }

@@ -41,10 +41,7 @@ where
 /// * `value` - Mass as integer
 /// * `serializer` - Serializer
 ///
-pub fn serialize_mass_vec_to_float_vec<S>(
-    value: &Vec<i64>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
+pub fn serialize_mass_vec_to_float_vec<S>(value: &[i64], serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -64,6 +61,6 @@ where
 {
     Ok(Vec::<f64>::deserialize(deserializer)?
         .into_iter()
-        .map(|v| mass_as_int(v))
+        .map(mass_as_int)
         .collect())
 }

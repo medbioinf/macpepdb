@@ -16,15 +16,15 @@ const REFRESH_INTERVAL: u64 = 1000;
 
 /// Progress style, used when no maximum value is given
 ///
-const SIMPLE_STYLE: &'static str = "        {msg} {pos} {per_sec} ";
+const SIMPLE_STYLE: &str = "        {msg} {pos} {per_sec} ";
 
 /// Progress bar style
 ///
-const PROGRESS_BAR_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len} {per_sec} ";
+const PROGRESS_BAR_STYLE: &str = "        {msg} {wide_bar} {pos}/{len} {per_sec} ";
 
 /// Progress bar style
 ///
-const QUEUE_STYLE: &'static str = "        {msg} {wide_bar} {pos}/{len}  ";
+const QUEUE_STYLE: &str = "        {msg} {wide_bar} {pos}/{len}  ";
 
 /// Struct for defining a monitorable metric
 pub struct MonitorableMetric {
@@ -128,7 +128,17 @@ impl MetricsMonitor {
         while !stop_flag.load(Ordering::Relaxed) {
             let next_refresh =
                 tokio::time::Instant::now() + tokio::time::Duration::from_millis(REFRESH_INTERVAL);
-            let body = reqwest::get(&scrape_url).await?.text().await?;
+            let body = match reqwest::get(&scrape_url).await {
+                Ok(response) => response.text().await?,
+                Err(e) => {
+                    warn!(
+                        "Failed to get metrics from Prometheus scrape endpoint: {:?}",
+                        e
+                    );
+                    tokio::time::sleep_until(next_refresh).await;
+                    continue;
+                }
+            };
             let lines: Vec<_> = body.lines().map(|s| Ok(s.to_owned())).collect();
             let metrics = Scrape::parse(lines.into_iter())?;
             for sample in metrics.samples.iter() {

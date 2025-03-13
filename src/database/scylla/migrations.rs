@@ -5,12 +5,9 @@ use scylla::_macro_internal::CqlValue;
 use tracing::{debug, info};
 
 // internal imports
-use crate::{
-    database::{
-        generic_client::GenericClient,
-        scylla::{create_keyspace_if_not_exists, schema::UP},
-    },
-    tools::cql::get_cql_value,
+use crate::database::{
+    generic_client::GenericClient,
+    scylla::{create_keyspace_if_not_exists, schema::UP},
 };
 
 use crate::database::scylla::client::Client;
@@ -18,9 +15,9 @@ use crate::database::scylla::client::Client;
 pub async fn run_migrations(client: &Client) -> Result<()> {
     info!("Running Scylla migrations");
 
-    create_keyspace_if_not_exists(&client).await;
+    create_keyspace_if_not_exists(client).await;
 
-    let latest_migration_id = get_latest_migration_id(&client).await.unwrap_or(0);
+    let latest_migration_id = get_latest_migration_id(client).await.unwrap_or(0);
     info!("Latest migration id in DB: {}", latest_migration_id);
 
     for (i, statement) in UP.iter().skip(latest_migration_id as usize).enumerate() {
@@ -34,9 +31,9 @@ pub async fn run_migrations(client: &Client) -> Result<()> {
 
         let statement = statement.replace(":KEYSPACE:", client.get_database());
         // Have to do it consecutively because batch statements dont allow CREATE
-        client.query(statement.as_str(), &[]).await.unwrap();
+        client.query_unpaged(statement.as_str(), &[]).await.unwrap();
         client
-            .query(
+            .query_unpaged(
                 migration_history_statement,
                 (
                     CqlValue::Int(1 + latest_migration_id + i as i32),
@@ -57,19 +54,17 @@ pub async fn get_latest_migration_id(client: &Client) -> Result<i32> {
     );
 
     let row = client
-        .query(latest_migration_id_query, [])
+        .query_unpaged(latest_migration_id_query, [])
         .await?
-        .first_row()?;
+        .into_rows_result()?
+        .first_row::<(i32,)>()?;
 
-    let id: i32 = get_cql_value(&row.columns, 0).unwrap().as_int().unwrap();
-
-    Ok(id)
+    Ok(row.0 as i32)
 }
 
 #[cfg(test)]
 mod tests {
     use serial_test::serial;
-    use tracing_test::traced_test;
 
     use crate::database::generic_client::GenericClient;
     use crate::database::scylla::tests::DATABASE_URL;
@@ -96,17 +91,17 @@ mod tests {
             .unwrap();
 
         client
-            .execute(&prepared, ("pk1", 1, 123, "yo"))
+            .execute_unpaged(&prepared, ("pk1", 1, "123", "yo"))
             .await
             .unwrap();
 
         client
-            .execute(&prepared, ("pk1", 2, 123, "zzz"))
+            .execute_unpaged(&prepared, ("pk1", 2, "123", "zzz"))
             .await
             .unwrap();
 
         client
-            .execute(&prepared, ("pk1", 3, 123, "oy"))
+            .execute_unpaged(&prepared, ("pk1", 3, "123", "oy"))
             .await
             .unwrap();
 
@@ -115,7 +110,6 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    #[traced_test]
     pub async fn test_run_migrations() {
         let client = Client::new(DATABASE_URL).await.unwrap();
         drop_keyspace(&client).await;
