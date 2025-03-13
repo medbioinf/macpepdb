@@ -96,7 +96,7 @@ pub struct DatabaseBuild {
 
 impl DatabaseBuild {
     /// Reads the saved configuration from the database or sets a new configuration if no configuration is saved.
-    /// If no initial configuration is given and no configuration is saved in the database an error is thrown.  
+    /// If no initial configuration is given and no configuration is saved in the database an error is thrown.
     /// If the initial configuration is used and has no partition limits, the partition limits are calculated.
     ///
     /// # Arguments
@@ -201,7 +201,7 @@ impl DatabaseBuild {
         database_url: &str,
         num_threads: usize,
         protein_file_paths: &[PathBuf],
-        protease: &dyn Protease,
+        protease: Arc<dyn Protease>,
         remove_peptides_containing_unknown: bool,
         partition_limits: Vec<i64>,
         log_folder: &Path,
@@ -280,20 +280,13 @@ impl DatabaseBuild {
 
         let digestion_thread_handles = (0..num_threads)
             .map(|_| {
-                // Create a boxed protease
-                let protease_box = get_protease_by_name(
-                    protease.get_name(),
-                    protease.get_min_length(),
-                    protease.get_max_length(),
-                    protease.get_max_missed_cleavages(),
-                )?;
                 // Start digestion thread
                 Ok(spawn(Self::digestion_thread(
                     client.clone(),
                     protein_queue_arc.clone(),
                     partition_limits_arc.clone(),
                     stop_flag.clone(),
-                    protease_box,
+                    protease.clone(),
                     remove_peptides_containing_unknown,
                     unprocessable_proteins_sender.clone(),
                 )))
@@ -375,7 +368,7 @@ impl DatabaseBuild {
         protein_queue_arc: Arc<ArrayQueue<Protein>>,
         partition_limits_arc: Arc<Vec<i64>>,
         stop_flag: Arc<AtomicBool>,
-        protease: Box<dyn Protease>,
+        protease: Arc<dyn Protease>,
         remove_peptides_containing_unknown: bool,
         unprocessable_proteins_sender: Sender<Protein>,
     ) -> Result<()> {
@@ -434,7 +427,7 @@ impl DatabaseBuild {
                             client.as_ref(),
                             &protein,
                             existing_protein,
-                            &protease,
+                            protease.as_ref(),
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
                         )
@@ -443,7 +436,7 @@ impl DatabaseBuild {
                         return Self::insert_protein(
                             client.as_ref(),
                             &protein,
-                            &protease,
+                            protease.as_ref(),
                             remove_peptides_containing_unknown,
                             &partition_limits_arc,
                         )
@@ -505,7 +498,7 @@ impl DatabaseBuild {
         client: &Client,
         updated_protein: &Protein,
         stored_protein: &Protein,
-        protease: &Box<dyn Protease>,
+        protease: &dyn Protease,
         remove_peptides_containing_unknown: bool,
         partition_limits: &[i64],
     ) -> Result<()> {
@@ -679,7 +672,7 @@ impl DatabaseBuild {
     async fn insert_protein(
         client: &Client,
         protein: &Protein,
-        protease: &Box<dyn Protease>,
+        protease: &dyn Protease,
         remove_peptides_containing_unknown: bool,
         partition_limits: &[i64],
     ) -> Result<()> {
@@ -724,7 +717,7 @@ impl DatabaseBuild {
         num_threads: usize,
         database_url: &str,
         configuration: &Configuration,
-        protease: &dyn Protease,
+        protease: Arc<dyn Protease>,
         include_domains: bool,
     ) -> Result<()> {
         debug!("Collecting peptide metadata");
@@ -769,17 +762,11 @@ impl DatabaseBuild {
         let client = Arc::new(Client::new(database_url).await?);
         let metadata_collector_thread_handles: Vec<_> = (0..num_threads * 2)
             .map(|_| {
-                let protease = get_protease_by_name(
-                    protease.get_name(),
-                    protease.get_min_length(),
-                    protease.get_max_length(),
-                    protease.get_max_missed_cleavages(),
-                )?;
                 // Start digestion thread
                 Ok(spawn(Self::collect_peptide_metadata_thread(
                     client.clone(),
                     partition_queue.clone(),
-                    protease,
+                    protease.clone(),
                     include_domains,
                 )))
             })
@@ -808,7 +795,7 @@ impl DatabaseBuild {
     async fn collect_peptide_metadata_thread(
         client: Arc<Client>,
         partition_queue: Arc<Mutex<Vec<i64>>>,
-        protease: Box<dyn Protease>,
+        protease: Arc<dyn Protease>,
         include_domains: bool,
     ) -> Result<()> {
         let protease_cleavage_codes: Vec<char> = protease
@@ -966,12 +953,13 @@ impl DatabaseBuild {
             initial_configuration_opt,
         )
         .await?;
-        let protease = get_protease_by_name(
+        let protease: Arc<dyn Protease> = get_protease_by_name(
             configuration.get_protease_name(),
             configuration.get_min_peptide_length(),
             configuration.get_max_peptide_length(),
             configuration.get_max_number_of_missed_cleavages(),
-        )?;
+        )?
+        .into();
 
         if let Some(taxonomy_file_path) = taxonomy_file_path {
             info!("Taxonomy tree build...");
@@ -999,7 +987,7 @@ impl DatabaseBuild {
                     &self.database_url,
                     attempt_num_threads,
                     &attempt_protein_file_path,
-                    protease.as_ref(),
+                    protease.clone(),
                     configuration.get_remove_peptides_containing_unknown(),
                     configuration.get_partition_limits().to_vec(),
                     &attempt_log_folder,
@@ -1026,7 +1014,7 @@ impl DatabaseBuild {
             num_threads,
             &self.database_url,
             &configuration,
-            protease.as_ref(),
+            protease.clone(),
             include_domains,
         )
         .await?;
