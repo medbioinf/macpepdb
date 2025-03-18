@@ -190,14 +190,18 @@ impl ProteinTable {
         peptide: &'a Peptide,
     ) -> Result<impl Stream<Item = Result<Protein>> + 'a> {
         Ok(try_stream! {
-            for await protein in Self::select(
-                client,
-                "WHERE accession IN ?",
-                &[&CqlValue::List(
-                    peptide.get_proteins().iter().map(|x| CqlValue::Text(x.to_owned())).collect(),
-                )],
-            ).await? {
-                yield protein?;
+            // Scylla limiting the tuples per IN query. 100 per default.
+            // Chunking by 99 to be on the safe side.
+            for proteins in peptide.get_proteins().as_slice().chunks(99) {
+                for await protein in Self::select(
+                    client,
+                    "WHERE accession IN ?",
+                    &[&CqlValue::List(
+                        proteins.iter().map(|x| CqlValue::Text(x.to_owned())).collect(),
+                    )],
+                ).await? {
+                    yield protein?;
+                }
             }
         })
     }
