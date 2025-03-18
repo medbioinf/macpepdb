@@ -10,7 +10,7 @@ use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
 use scylla::macros::{DeserializeValue, SerializeValue};
 use serde::Serialize;
-use serde_json::Value as JsonValue;
+use serde_json::{json, Value as JsonValue};
 
 // internal imports
 use crate::database::scylla::client::Client;
@@ -269,6 +269,7 @@ impl Protein {
         client: Arc<Client>,
         partition_limits: &[i64],
         protease: &dyn Protease,
+        include_protein_accessions: bool,
     ) -> Result<JsonValue> {
         let mut peptides: Vec<Peptide> =
             PeptideTable::get_peptides_of_proteins(client, self, protease, partition_limits)
@@ -277,6 +278,13 @@ impl Protein {
                 .await?;
 
         peptides.sort_by(|pep_x, pep_y| pep_x.get_mass().partial_cmp(&pep_y.get_mass()).unwrap());
+
+        if !include_protein_accessions {
+            peptides = peptides
+                .into_iter()
+                .map(|pep| pep.into_proteinless_peptide())
+                .collect();
+        }
 
         let mut protein_json: JsonValue = serde_json::to_value(self)?;
         protein_json["peptides"] = serde_json::to_value(peptides)?;
@@ -298,6 +306,18 @@ impl Protein {
 
         let mut protein_json: JsonValue = serde_json::to_value(self)?;
         protein_json["peptides"] = serde_json::to_value(peptides)?;
+        Ok(protein_json)
+    }
+
+    /// Creates a JSON value of this protein with an empty peptides attribute
+    /// for faster loading
+    ///
+    /// # Arguments
+    /// * `protease` - The protease used to generate the peptides
+    ///
+    pub fn to_json_without_peptides(&self) -> Result<JsonValue> {
+        let mut protein_json: JsonValue = serde_json::to_value(self)?;
+        protein_json["peptides"] = json!([]);
         Ok(protein_json)
     }
 }

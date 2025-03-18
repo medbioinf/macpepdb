@@ -32,6 +32,14 @@ use crate::web::web_error::WebError;
 
 const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
 
+/// Struct to deserialize the query parameters for get peptide
+///
+#[derive(serde::Deserialize)]
+pub struct GetPeptideRequestQuery {
+    #[serde(default)]
+    include_protein_peptides_sequences: bool,
+}
+
 /// Returns the peptide for given sequence.
 /// Important: This endpoint will return the the peptide inclduing a list of full records of the proteins of origin. The proteins will include only the contained peptide sequences. Not the entire peptide records.
 ///
@@ -44,6 +52,9 @@ const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
 /// ## Request
 /// * Path: `/api/peptides/:sequence`
 /// * Method: `GET`
+///
+/// ## Query
+/// * `include_protein_peptides_sequences`: `bool` (optional, default: `false`, if true, the peptide sequence will be included in the proteins)
 ///
 /// ## Response
 /// ```json
@@ -96,6 +107,7 @@ const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
 pub async fn get_peptide(
     State(app_state): State<Arc<AppState>>,
     Path(sequence): Path<String>,
+    Query(query): Query<GetPeptideRequestQuery>,
 ) -> Result<Json<serde_json::Value>, WebError> {
     let sequence = sequence.to_uppercase();
     let mass = calc_sequence_mass_int(sequence.as_str())?;
@@ -146,10 +158,17 @@ pub async fn get_peptide(
             .try_collect()
             .await?;
 
-    let protein_jsons = proteins
-        .into_iter()
-        .map(|protein| protein.to_json_with_peptide_sequences(protease.as_ref()))
-        .collect::<Result<Vec<_>>>()?;
+    let protein_jsons = if !query.include_protein_peptides_sequences {
+        proteins
+            .into_iter()
+            .map(|protein| protein.to_json_without_peptides())
+            .collect::<Result<Vec<_>>>()?
+    } else {
+        proteins
+            .into_iter()
+            .map(|protein| protein.to_json_with_peptide_sequences(protease.as_ref()))
+            .collect::<Result<Vec<_>>>()?
+    };
 
     let mut peptide_json = match serde_json::to_value(peptide) {
         Ok(json) => json,

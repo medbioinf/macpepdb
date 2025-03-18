@@ -355,6 +355,17 @@ impl Peptide {
             domains,
         )
     }
+
+    /// Returns the peptide with an empty protein vector.
+    /// Makes it more lightweight for serialization,
+    /// when proteins are not necessary.
+    ///
+    pub fn into_proteinless_peptide(self) -> Self {
+        Self {
+            proteins: vec![],
+            ..self
+        }
+    }
 }
 
 impl PartialEq for Peptide {

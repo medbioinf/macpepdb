@@ -4,7 +4,7 @@ use std::sync::Arc;
 // 3rd party imports
 use anyhow::Result;
 use async_stream::stream;
-use axum::extract::{Json, Path, State};
+use axum::extract::{Json, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum_streams::StreamBodyAs;
@@ -20,6 +20,14 @@ use crate::web::web_error::WebError;
 
 use super::app_state::AppState;
 
+/// Struct to deserialize the query parameters for get_protein
+///
+#[derive(serde::Deserialize)]
+pub struct GetProteinRequestQuery {
+    #[serde(default)]
+    include_peptide_protein_accession: bool,
+}
+
 /// Returns the protein for given accession.
 /// Important: This endpoint will return the the protein including a list of full records of the contained peptides. The peptides will contain just the protein accession. Not the entire protein record.
 ///
@@ -32,6 +40,9 @@ use super::app_state::AppState;
 /// ## Request
 /// * Path: `/api/proteins/:sequence`
 /// * Method: `GET`
+///
+/// ## Query parameters
+/// * `include_peptide_protein_accession` - Include the protein accession in the peptide record. Default: falses
 ///
 /// ## Response
 /// ```json
@@ -86,6 +97,7 @@ use super::app_state::AppState;
 pub async fn get_protein(
     State(app_state): State<Arc<AppState>>,
     Path(accession): Path<String>,
+    Query(query): Query<GetProteinRequestQuery>,
 ) -> Result<Json<JsonValue>, WebError> {
     let accession = accession.to_uppercase();
 
@@ -121,6 +133,7 @@ pub async fn get_protein(
                     app_state.get_db_client().clone(),
                     app_state.get_configuration_as_ref().get_partition_limits(),
                     protease.as_ref(),
+                    query.include_peptide_protein_accession,
                 )
                 .await?,
         ));
@@ -231,6 +244,7 @@ pub async fn search_protein(
                     app_state.get_db_client().clone(),
                     app_state.get_configuration_as_ref().get_partition_limits(),
                     protease.as_ref(),
+                    true
                 ).await {
                     Ok(json) => json,
                     Err(err) => {
