@@ -11,6 +11,7 @@ use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{Stream, TryStreamExt};
+use itertools::Itertools;
 use scylla::frame::response::result::CqlValue;
 use scylla::transport::errors::QueryError;
 use tokio::pin;
@@ -460,35 +461,47 @@ impl PeptideTable {
     ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
         Ok(try_stream! {
             // First digest the protein
-            let dummy_peptides: HashSet<Peptide> = convert_to_internal_dummy_peptide(
+            let dummy_peptides: Vec<Peptide> = convert_to_internal_dummy_peptide(
                 Box::new(protease.cleave(protein.get_sequence())?),
                 partition_limits,
             )
-            .collect()?;
+            .collect::<HashSet<Peptide>>()?
+            .into_iter()
+            .collect();
 
-            let mut join: JoinSet<Result<Option<Peptide>>> = JoinSet::new();
-            for peptide in dummy_peptides.into_iter() {
-                let task_client = client.clone();
-                join.spawn(async move {
-                    let stream = PeptideTable::select(
-                        task_client.as_ref(),
-                        "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
-                        &[
-                            &CqlValue::BigInt(peptide.get_partition()),
-                            &CqlValue::BigInt(peptide.get_mass()),
-                            &CqlValue::Text(peptide.get_sequence().to_owned()),
-                        ],
-                    ).await?;
-                    pin!(stream);
+            // Chunking the peptides to 2 * number of nodes which seem to be a good
+            // value of concurrent peptide-SELECT. For sure this should not be linear.
+            let chunk_size = dummy_peptides.len() / client.get_num_nodes() * 2;
+            let dummy_peptides: Vec<Vec<Peptide>> = dummy_peptides.into_iter()
+                .chunks(chunk_size)
+                .into_iter()
+                .map(Iterator::collect)
+                .collect();
 
-                    stream.try_next().await
-                });
-            }
+            for peptide_chunk in dummy_peptides {
+                let mut join: JoinSet<Result<Option<Peptide>>> = JoinSet::new();
+                for peptide in peptide_chunk {
+                    let task_client = client.clone();
+                    join.spawn(async move {
+                        let stream = PeptideTable::select(
+                            task_client.as_ref(),
+                            "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
+                            &[
+                                &CqlValue::BigInt(peptide.get_partition()),
+                                &CqlValue::BigInt(peptide.get_mass()),
+                                &CqlValue::Text(peptide.get_sequence().to_owned()),
+                            ],
+                        ).await?;
+                        pin!(stream);
 
-            while let Some(peptide) = join.join_next().await {
-                yield match peptide?? {
-                    Some(peptide) => peptide,
-                    None => continue,
+                        stream.try_next().await
+                    });
+                }
+                while let Some(peptide) = join.join_next().await {
+                    yield match peptide?? {
+                        Some(peptide) => peptide,
+                        None => continue,
+                    }
                 }
             }
         })

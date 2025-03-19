@@ -152,11 +152,16 @@ pub struct Client {
     url: String,
     prepared_statement_cache:
         RwLock<HashMap<String, scylla::prepared_statement::PreparedStatement>>,
+    num_nodes: usize,
 }
 
 impl Client {
     pub fn get_url(&self) -> &str {
         &self.url
+    }
+
+    pub fn get_num_nodes(&self) -> usize {
+        self.num_nodes
     }
 
     /// Get a prepared statement from the cache
@@ -215,6 +220,7 @@ impl GenericClient<Session> for Client {
             database: settings.keyspace.clone(),
             url: database_url.to_string(),
             prepared_statement_cache: RwLock::new(HashMap::new()),
+            num_nodes: settings.hosts.len(),
         })
     }
 
