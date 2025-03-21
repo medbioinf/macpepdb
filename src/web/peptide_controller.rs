@@ -503,7 +503,7 @@ async fn search(
         taxonomy_ids,
         proteome_ids,
         payload.is_reviewed,
-        payload.modifications,
+        &payload.modifications,
     )
     .await
     {

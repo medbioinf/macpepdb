@@ -395,7 +395,7 @@ impl PeptideTable {
         taxonomy_ids: Option<Vec<i64>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
-        ptms: Vec<PTM>,
+        ptms: &[PTM],
     ) -> Result<FalliblePeptideStream> {
         let partition_limits = Arc::new(configuration.get_partition_limits().clone());
         MultiTaskSearch::search(

@@ -120,7 +120,7 @@ pub trait Search {
         taxonomy_ids: Option<Vec<i64>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
-        ptms: Vec<PTM>,
+        ptms: &[PTM],
         num_threads: Option<usize>,
     ) -> impl std::future::Future<Output = Result<FalliblePeptideStream>> + Send;
 
@@ -332,14 +332,14 @@ impl Search for MultiTaskSearch {
         taxonomy_ids: Option<Vec<i64>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
-        ptms: Vec<PTM>,
+        ptms: &[PTM],
         _num_threads: Option<usize>,
     ) -> Result<FalliblePeptideStream> {
         let taxonomy_ids = taxonomy_ids.map(Arc::new);
         let proteome_ids = proteome_ids.map(Arc::new);
 
         let sorted_ptm_conditions = Self::split_and_sort_ptm_conditions(
-            get_ptm_conditions(mass, max_variable_modifications, &ptms)?,
+            get_ptm_conditions(mass, max_variable_modifications, ptms)?,
             partition_limits.as_ref(),
             lower_mass_tolerance_ppm,
             upper_mass_tolerance_ppm,
