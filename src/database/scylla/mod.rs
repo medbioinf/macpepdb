@@ -48,4 +48,8 @@ pub async fn prepare_database_for_tests(client: &Client) {
 #[cfg(test)]
 pub mod tests {
     pub const DATABASE_URL: &str = "scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb";
+
+    pub fn get_test_database_url() -> String {
+        std::env::var("MACPEPDB_TEST_DB_URL").unwrap_or_else(|_| DATABASE_URL.to_string())
+    }
 }

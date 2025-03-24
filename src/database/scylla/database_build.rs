@@ -1036,7 +1036,7 @@ mod test {
     // internal imports
     use super::*;
     use crate::database::scylla::drop_keyspace;
-    use crate::database::scylla::tests::DATABASE_URL;
+    use crate::database::scylla::tests::get_test_database_url;
     use crate::database::scylla::{peptide_table::PeptideTable, protein_table::ProteinTable};
 
     use crate::io::uniprot_text::reader::Reader;
@@ -1062,7 +1062,7 @@ mod test {
     #[serial]
     async fn test_database_build_without_initial_config() {
         let taxdmp_zip_path = Some(get_taxdmp_zip().await.unwrap());
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
 
         drop_keyspace(&client).await;
 
@@ -1073,7 +1073,7 @@ mod test {
         }
         create_dir_all(&log_folder).unwrap();
 
-        let database_builder = DatabaseBuild::new(DATABASE_URL);
+        let database_builder = DatabaseBuild::new(&get_test_database_url());
         let build_res = database_builder
             .build(
                 &protein_file_paths,
@@ -1094,7 +1094,7 @@ mod test {
     #[serial]
     async fn test_database_build() {
         let taxdmp_zip_path = Some(get_taxdmp_zip().await.unwrap());
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
 
         drop_keyspace(&client).await;
 
@@ -1109,7 +1109,7 @@ mod test {
         }
         create_dir_all(&log_folder).unwrap();
 
-        let database_builder = DatabaseBuild::new(DATABASE_URL);
+        let database_builder = DatabaseBuild::new(&get_test_database_url());
         database_builder
             .build(
                 &protein_file_paths,

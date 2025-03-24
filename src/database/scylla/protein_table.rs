@@ -255,7 +255,7 @@ mod tests {
     use crate::database::generic_client::GenericClient;
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
-    use crate::database::scylla::tests::DATABASE_URL;
+    use crate::database::scylla::tests::get_test_database_url;
     use crate::entities::domain::Domain;
     use crate::io::uniprot_text::reader::Reader;
 
@@ -333,7 +333,7 @@ mod tests {
     /// Prepares database for testing and inserts proteins from test file.
     ///
     async fn test_insert() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -363,7 +363,7 @@ mod tests {
     /// Tests selects from database.
     ///
     async fn test_select() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
@@ -390,7 +390,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_update() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
@@ -420,7 +420,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_delete() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
 
         let mut reader = Reader::new(Path::new("test_files/uniprot.txt"), 1024).unwrap();
         while let Some(protein) = reader.next().unwrap() {
@@ -447,7 +447,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_proteins_of_peptides() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/mouse.txt"), 1024).unwrap();
@@ -498,7 +498,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_tokenawareness() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
         for statement in &[INSERT_STATEMENT.as_str(), DELETE_STATEMENT.as_str()] {
             let prepared_statement = client.get_prepared_statement(statement).await.unwrap();

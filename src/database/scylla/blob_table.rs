@@ -129,12 +129,12 @@ mod tests {
     use super::*;
     use crate::database::generic_client::GenericClient;
     use crate::database::scylla::prepare_database_for_tests;
-    use crate::database::scylla::tests::DATABASE_URL;
+    use crate::database::scylla::tests::get_test_database_url;
 
     #[tokio::test]
     #[serial]
     async fn test_insert_select_delete() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         // Test with at least 4 blob chunks
@@ -206,7 +206,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_tokenawareness() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
         for statement in &[
             INSERT_STATEMENT.as_str(),

@@ -67,7 +67,7 @@ mod tests {
     use serial_test::serial;
 
     use crate::database::generic_client::GenericClient;
-    use crate::database::scylla::tests::DATABASE_URL;
+    use crate::database::scylla::tests::get_test_database_url;
     use crate::database::scylla::{
         client::Client, drop_keyspace, migrations::get_latest_migration_id,
         prepare_database_for_tests, schema::UP,
@@ -78,7 +78,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_get_latest_migration_id() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
 
         prepare_database_for_tests(&client).await;
 
@@ -111,7 +111,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     pub async fn test_run_migrations() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         drop_keyspace(&client).await;
 
         run_migrations(&client).await.unwrap();

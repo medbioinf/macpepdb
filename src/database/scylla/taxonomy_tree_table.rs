@@ -65,15 +65,16 @@ mod tests {
     // internal imports
     use super::*;
     use crate::database::generic_client::GenericClient;
+    use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
-    use crate::database::scylla::{client::Client, tests::DATABASE_URL};
+    use crate::database::scylla::tests::get_test_database_url;
     use crate::tools::tests::get_taxdmp_zip;
 
     #[tokio::test]
     #[serial]
     async fn test_serialization() {
         let taxdmp_zip_path = get_taxdmp_zip().await.unwrap();
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let taxonomy_tree = TaxonomyReader::new(&taxdmp_zip_path)

@@ -258,7 +258,7 @@ mod tests {
     use crate::database::generic_client::GenericClient;
     use crate::database::scylla::client::Client;
     use crate::database::scylla::prepare_database_for_tests;
-    use crate::database::scylla::tests::DATABASE_URL;
+    use crate::database::scylla::tests::get_test_database_url;
 
     const EXPECTED_ENZYME_NAME: &str = "Trypsin";
     const EXPECTED_MAX_MISSED_CLEAVAGES: Option<usize> = Some(2);
@@ -277,7 +277,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select_without_insert() {
-        let client = Client::new(DATABASE_URL).await.unwrap();
+        let client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let configuration_res = ConfigurationTable::select(&client).await;
@@ -295,7 +295,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_insert() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
+        let mut client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let configuration = Configuration::new(
@@ -317,7 +317,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select() {
-        let mut client = Client::new(DATABASE_URL).await.unwrap();
+        let mut client = Client::new(&get_test_database_url()).await.unwrap();
         prepare_database_for_tests(&client).await;
 
         let expected_configuration = Configuration::new(
