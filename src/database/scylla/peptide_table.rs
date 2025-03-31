@@ -1,8 +1,6 @@
-// std imports
 use std::collections::HashSet;
 use std::sync::Arc;
 
-// 3rd party imports
 use anyhow::{bail, Result};
 use async_stream::try_stream;
 use dihardts_omicstools::proteomics::peptide::calculate_mass_of_peptide_sequence;
@@ -17,8 +15,8 @@ use scylla::transport::errors::QueryError;
 use tokio::pin;
 use tokio::task::JoinSet;
 
+use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::generic_client::GenericClient;
-// internal imports
 use crate::database::scylla::peptide_search::{FalliblePeptideStream, MultiTaskSearch, Search};
 use crate::database::table::Table;
 use crate::entities::configuration::Configuration;
@@ -640,6 +638,37 @@ impl PeptideTable {
             }
         })
     }
+
+    /// Selects a peptide by its sequence.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `sequence` - The sequence of the peptide
+    /// * `partition_limits` - The partition limits
+    ///
+    pub async fn select_by_sequence(
+        client: &Client,
+        sequence: &str,
+        partition_limits: &[i64],
+    ) -> Result<Option<Peptide>> {
+        let mass = calc_sequence_mass_int(sequence)?;
+        let partition = get_mass_partition(partition_limits, mass)?;
+
+        let stream = PeptideTable::select(
+            client,
+            "WHERE partition = ? AND mass = ? AND sequence = ? LIMIT 1",
+            &[
+                &CqlValue::BigInt(partition as i64),
+                &CqlValue::BigInt(mass),
+                &CqlValue::Text(sequence.to_string()),
+            ],
+        )
+        .await?;
+
+        pin!(stream);
+
+        stream.try_next().await
+    }
 }
 
 impl Table for PeptideTable {
@@ -1046,6 +1075,44 @@ mod tests {
         while let Some(row) = stream.try_next().await.unwrap() {
             assert!(!row.0);
         }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_select_by_sequence() {
+        let client = Client::new(&get_test_database_url()).await.unwrap();
+        prepare_database_for_tests(&client).await;
+
+        let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
+        let leptin = reader.next().unwrap().unwrap();
+
+        let protease = get_protease_by_name("Trypsin", Some(6), Some(50), Some(3)).unwrap();
+
+        let peptides = convert_to_internal_peptide(
+            Box::new(protease.cleave(leptin.get_sequence()).unwrap()),
+            &PARTITION_LIMITS,
+            &leptin,
+        )
+        .collect::<HashSet<Peptide>>()
+        .unwrap();
+
+        PeptideTable::bulk_upsert(&client, &mut peptides.iter())
+            .await
+            .unwrap();
+
+        let peptides = Vec::from_iter(peptides.into_iter());
+        // this will pick the 10. peptide, which is a bit random as
+        // the order of the peptides is not guaranteed when the HashSet is cast
+        // to Vec.
+        let unsafed_peptide_sequence = peptides[10].get_sequence().to_string();
+
+        let peptide =
+            PeptideTable::select_by_sequence(&client, &unsafed_peptide_sequence, &PARTITION_LIMITS)
+                .await
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(peptide.get_sequence(), &unsafed_peptide_sequence);
     }
 
     #[tokio::test]
