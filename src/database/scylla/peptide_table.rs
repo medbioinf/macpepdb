@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use async_stream::try_stream;
-use dihardts_omicstools::proteomics::peptide::calculate_mass_of_peptide_sequence;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
@@ -23,7 +22,6 @@ use crate::entities::configuration::Configuration;
 use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
-use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::omicstools::convert_to_internal_dummy_peptide;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
@@ -1113,6 +1111,103 @@ mod tests {
                 .unwrap();
 
         assert_eq!(peptide.get_sequence(), &unsafed_peptide_sequence);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_metadata_update() {
+        // Prepare DB and
+        let client = Client::new(&get_test_database_url()).await.unwrap();
+        prepare_database_for_tests(&client).await;
+
+        let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();
+        let leptin = reader.next().unwrap().unwrap();
+
+        let protease = get_protease_by_name("Trypsin", Some(6), Some(50), Some(3)).unwrap();
+
+        let peptides = convert_to_internal_peptide(
+            Box::new(protease.cleave(leptin.get_sequence()).unwrap()),
+            &PARTITION_LIMITS,
+            &leptin,
+        )
+        .collect::<HashSet<Peptide>>()
+        .unwrap();
+
+        PeptideTable::bulk_upsert(&client, &mut peptides.iter())
+            .await
+            .unwrap();
+
+        // Convert to vector
+        let peptides = Vec::from_iter(peptides.into_iter());
+
+        // this will pick the 10. peptide, which is a bit random as
+        // the order of the peptides is not guaranteed when the HashSet is cast
+        // to Vec. But the updates should work regardless of the peptide
+        // as only dummy data is used.
+        let peptide = PeptideTable::select_by_sequence(
+            &client,
+            peptides[10].get_sequence(),
+            &PARTITION_LIMITS,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        PeptideTable::update_metadata(
+            &client,
+            &peptide,
+            true,
+            false,
+            &vec![9606],
+            &vec![9606],
+            &vec!["UP000005640".to_owned()],
+            &vec![], // no domains
+        )
+        .await
+        .unwrap();
+
+        let peptide = PeptideTable::select_by_sequence(
+            &client,
+            peptides[10].get_sequence(),
+            &PARTITION_LIMITS,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        assert!(peptide.get_is_swiss_prot());
+        assert!(!peptide.get_is_trembl());
+        assert_eq!(peptide.get_taxonomy_ids(), &vec![9606]);
+        assert_eq!(peptide.get_unique_taxonomy_ids(), &vec![9606]);
+        assert_eq!(peptide.get_proteome_ids(), &vec!["UP000005640".to_owned()]);
+        assert_eq!(peptide.get_domains(), &vec![]);
+
+        let is_metadata_up_to_date_query = format!(
+            "SELECT is_metadata_updated FROM {}.{} WHERE partition = ? AND mass = ? AND sequence = ?;",
+            client.get_database(),
+            PeptideTable::table_name()
+        );
+
+        let is_metadata_up_to_date_query_params = vec![
+            CqlValue::BigInt(peptide.get_partition()),
+            CqlValue::BigInt(peptide.get_mass()),
+            CqlValue::Text(peptide.get_sequence().to_owned()),
+        ];
+
+        let is_metadata_up_to_date = client
+            .query_unpaged(
+                is_metadata_up_to_date_query,
+                is_metadata_up_to_date_query_params.as_slice(),
+            )
+            .await
+            .unwrap()
+            .into_rows_result()
+            .unwrap()
+            .first_row::<(bool,)>()
+            .unwrap()
+            .0;
+
+        assert!(is_metadata_up_to_date);
     }
 
     #[tokio::test]
