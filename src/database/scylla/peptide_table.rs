@@ -424,7 +424,7 @@ impl PeptideTable {
         configuration: &Configuration,
     ) -> Result<bool> {
         let sequence = sequence.to_uppercase();
-        let mass = mass_to_int(calculate_mass_of_peptide_sequence(sequence.as_str())?);
+        let mass = calc_sequence_mass_int(sequence.as_str())?;
         let partition = get_mass_partition(configuration.get_partition_limits(), mass)?;
 
         let stream = PeptideTable::select(
