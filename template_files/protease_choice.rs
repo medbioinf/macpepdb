@@ -1,4 +1,6 @@
-// 3rd party imports
+use std::str::FromStr;
+
+use anyhow::Error;
 use clap::builder::PossibleValue;
 use clap::ValueEnum;
 use dihardts_omicstools::proteomics::proteases::functions::ALL as ALL_PROTEASES;
@@ -11,16 +13,21 @@ pub enum ProteaseChoice {
 }
 
 impl ProteaseChoice {
-    pub fn from_str(name: &str) -> Result<Self> {
-        match name.to_lowercase().as_str() {
-            <<FROM_STR>>
-            _ => bail!("Unknown protease: {}", name),
-        }
-    }
-
     pub fn to_str(&self) -> &'static str {
         match self {
             <<TO_STR>>
+        }
+    }
+}
+
+impl FromStr for ProteaseChoice {
+    type Err = Error;
+
+    // Required method
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_lowercase().as_str() {
+            <<FROM_STR>>
+            _ => bail!("Unknown protease: {}", s),
         }
     }
 }
