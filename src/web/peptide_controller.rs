@@ -15,7 +15,7 @@ use dihardts_omicstools::proteomics::post_translational_modifications::PostTrans
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::TryStreamExt;
 use http::header;
-use scylla::frame::response::result::CqlValue;
+use scylla::value::CqlValue;
 use tracing::error;
 use urlencoding::decode as urldecode;
 

@@ -8,7 +8,7 @@ use chrono::DateTime;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
-use scylla::macros::{DeserializeValue, SerializeValue};
+use scylla::{DeserializeValue, SerializeValue};
 use serde::Serialize;
 use serde_json::{json, Value as JsonValue};
 

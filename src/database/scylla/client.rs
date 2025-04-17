@@ -4,10 +4,9 @@ use std::{collections::HashMap, num::NonZeroUsize, ops::Deref, time::Duration};
 // 3rd party imports
 use anyhow::{anyhow, Result};
 use fancy_regex::Regex;
-use scylla::{
-    transport::session::{PoolSize, Session},
-    SessionBuilder,
-};
+use scylla::{client::{
+    session::Session, session_builder::SessionBuilder, PoolSize
+}, statement::prepared::PreparedStatement};
 use tokio::sync::RwLock;
 
 // local imports
@@ -151,7 +150,7 @@ pub struct Client {
     database: String,
     url: String,
     prepared_statement_cache:
-        RwLock<HashMap<String, scylla::prepared_statement::PreparedStatement>>,
+        RwLock<HashMap<String, PreparedStatement>>,
     num_nodes: usize,
 }
 
@@ -169,7 +168,7 @@ impl Client {
     pub async fn get_prepared_statement(
         &self,
         query: &str,
-    ) -> Result<scylla::prepared_statement::PreparedStatement> {
+    ) -> Result<PreparedStatement> {
         let read_guard = self.prepared_statement_cache.read().await;
         if let Some(statement) = read_guard.get(query) {
             return Ok(statement.clone());

@@ -8,7 +8,7 @@ use std::{
 
 // 3rd party imports
 use anyhow::Result;
-use scylla::macros::{DeserializeValue, SerializeValue};
+use scylla::{DeserializeValue, SerializeValue};
 use serde::{Deserialize, Serialize};
 
 // internal imports

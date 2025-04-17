@@ -10,7 +10,7 @@ use async_stream::try_stream;
 use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::{pin_mut, Stream, StreamExt};
-use scylla::frame::response::result::CqlValue;
+use scylla::value::CqlValue;
 use tokio::sync::mpsc::{unbounded_channel as channel, UnboundedSender as Sender};
 use tracing::error;
 

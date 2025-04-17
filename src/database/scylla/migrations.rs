@@ -1,7 +1,7 @@
 // 3rd party imports
 use anyhow::{Context, Ok, Result};
 use chrono::Utc;
-use scylla::_macro_internal::CqlValue;
+use scylla::value::CqlValue;
 use tracing::{debug, info};
 
 // internal imports
