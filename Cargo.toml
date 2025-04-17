@@ -36,7 +36,7 @@ clap = { version = "4.3.0", features = ["derive"] }
 crossbeam-queue = "0.3.11"
 csv = "1.2.2"
 dihardts_cstools = "~1.0.0"
-dihardts_omicstools = "~3.0.0"
+dihardts_omicstools = "~3.1.0"
 env_logger = "0.10.0"
 fallible-iterator = "0.3.0"
 fancy-regex = "0.11.0"
@@ -81,4 +81,5 @@ reqwest = { version = "0.11.22" }
 serial_test = "*"
 
 [build-dependencies]
-dihardts_omicstools = "~3.0.0"
+# dihardts_omicstools = "~3.0.0"
+dihardts_omicstools = "~3.1.0"
