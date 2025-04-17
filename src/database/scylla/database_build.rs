@@ -38,7 +38,7 @@ use crate::tools::metrics_monitor::{MetricsMonitor, MonitorableMetric, Monitorab
 // use crate::tools::metrics_logger::MetricsLogger;
 use crate::tools::omicstools::{convert_to_internal_peptide, remove_unknown_from_digest};
 use crate::tools::peptide_mass_counter::PeptideMassCounter;
-use scylla::frame::response::result::CqlValue;
+use scylla::value::CqlValue;
 
 use crate::entities::{configuration::Configuration, peptide::Peptide, protein::Protein};
 use crate::io::uniprot_text::reader::Reader;

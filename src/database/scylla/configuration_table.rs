@@ -1,6 +1,6 @@
 // 3rd party imports
 use anyhow::{anyhow, Result};
-use scylla::transport::query_result::FirstRowError;
+use scylla::response::query_result::FirstRowError;
 use serde::{de::DeserializeOwned, ser::Serialize};
 use serde_json::{from_value as from_json_value, json, Value as JsonValue};
 

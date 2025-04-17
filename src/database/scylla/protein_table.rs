@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_stream::try_stream;
 use futures::Stream;
-use scylla::batch::Batch;
-use scylla::frame::response::result::CqlValue;
+use scylla::statement::batch::Batch;
+use scylla::value::CqlValue;
 
 use super::client::Client;
 use crate::database::generic_client::GenericClient;

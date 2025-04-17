@@ -1,5 +1,5 @@
 // 3rd party imports
-use scylla::macros::{DeserializeValue, SerializeValue};
+use scylla::{DeserializeValue, SerializeValue};
 use serde::{Deserialize, Serialize};
 
 #[derive(

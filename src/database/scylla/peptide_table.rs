@@ -9,8 +9,8 @@ use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{Stream, TryStreamExt};
 use itertools::Itertools;
-use scylla::frame::response::result::CqlValue;
-use scylla::transport::errors::QueryError;
+use scylla::value::CqlValue;
+use scylla::errors::ExecutionError;
 use tokio::pin;
 use tokio::task::JoinSet;
 
@@ -214,7 +214,7 @@ impl PeptideTable {
         match join_all(insertion_futures)
             .await
             .into_iter()
-            .collect::<Result<Vec<_>, QueryError>>()
+            .collect::<Result<Vec<_>, ExecutionError>>()
         {
             Ok(_) => Ok(()),
             Err(e) => bail!("Error while upserting peptides into the database: {:?}", e),

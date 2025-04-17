@@ -10,7 +10,7 @@ use dihardts_omicstools::proteomics::proteases::functions::{
 };
 use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
-use scylla::frame::response::result::CqlValue;
+use scylla::value::CqlValue;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 

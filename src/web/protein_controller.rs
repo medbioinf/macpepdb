@@ -10,7 +10,7 @@ use axum::response::IntoResponse;
 use axum_streams::StreamBodyAs;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::TryStreamExt;
-use scylla::frame::response::result::CqlValue;
+use scylla::value::CqlValue;
 use serde_json::Value as JsonValue;
 use tracing::error;
 
