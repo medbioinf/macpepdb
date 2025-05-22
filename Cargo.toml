@@ -12,6 +12,17 @@ license-file = "LICENSE"
 
 build = "build.rs"
 
+exclude = [
+    "*docker-compose.*",
+    "/docker",
+    "/.github",
+    "/test_files",
+    "Makefile",
+    "rust-toolchain.toml",
+    ".dockerignore",
+    "/.vscode",
+]
+
 [lib]
 name = "macpepdb"
 path = "src/lib.rs"
