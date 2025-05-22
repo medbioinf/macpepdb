@@ -135,7 +135,7 @@ impl SearchRequestBody {
 ///         name_query: "*sapiens*"
 ///     }
 ///     ```
-///     Deserialized into [SearchRequestBody](SearchRequestBody)
+///     Deserialized into [SearchRequestBody]
 ///
 ///
 /// ## Response

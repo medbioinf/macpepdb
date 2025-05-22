@@ -5,7 +5,9 @@ MaCPepDB creates and maintains a peptide database and provides a web API for acc
 Note: This is the next iteration of MaCPepDB, moving from the [previous Python-implementation](https://github.com/mpc-bioinformatics/macpepdb) to Rust and using ScyllaDB instead of PostgreSQL / Citus, in order to get better performance and make MaCPepDB ready to include more data.
 
 ## Ambiguous amino acids
+This was a feature in MaCPepDB Gen 2 and is currently missing in Gen3 as it lead to some confusion.
 
+```text
 Some UniProt entries contain one letter codes which encode multiple amino acids. Usually the encoded amino acids
 have a similar or equal mass. Ambiguous one letter codes are:
 
@@ -25,6 +27,7 @@ Because the amino acids encoded by `B` & `Z` have a different mass and only a fe
 `J` encodes Leucine and Isoleucine, both have the same mass. Resolving those would not make the peptides better distinguishable by mass.
 
 In theory `X` is also ambiguous, encoding **all** amino acids. Practically a lot more entries containing `X` than the previous mentioned ambiguous amino acids, sometimes with a high abundance of `X`. Resolving these would increase the amount of peptides significantly and slowing down MaCPepDB's search functionality.
+```
 
 ## Input
 
@@ -43,48 +46,48 @@ MaCPepDB utilizes a denormalized database structure for efficient record storage
 
 Table: config
 
-| Column   | Type                     | Data                                                                       |
-| -------- | ------------------------ | -------------------------------------------------------------------------- |
-| conf_key | String (max. length 256) | key to find configuration value                                            |
-| value    | JSON                     | Value of configuration key wrapped in a JSON object: `{"wrapper": value>}` |
+| Column   | Type                       | Data                                                                         |
+| -------- | -------------------------- | ---------------------------------------------------------------------------- |
+| conf_key | `text` (max. length 256)   | key to find configuration value                                              |
+| value    | `text` (JSON formatted)    | Value of configuration key wrapped in a JSON object: `{"wrapper": value>}`   |
 
 ### Proteins
 
 Table: proteins
 
-| Column               | Type                | Data                                          |
-| -------------------- | ------------------- | --------------------------------------------- |
-| **accession**        | text                | Primary accession in UniProt                  |
-| secondary_accessions | list<text>          | Secondary or old accessions after merges      |
-| entry_name           | text                | Entry name in UniProt                         |
-| name                 | text                | Human readable name                           |
-| genes                | list<text>          | Containing genes                              |
-| taxonomy_id          | bigint              | Taxonomy ID                                   |
-| proteome_id          | text                | Proteome ID                                   |
-| is_reviewed          | boolean             | `true` if SwissProt otherwise `false`         |
-| sequence             | text                | Amino acid sequence                           |
-| updated_at           | bigint              | Last entry update in UniProt (Unix timestamp) |
-| domains              | frozen<set<Domain>> | Set of domains associated with the protein    |
+| Column               | Type                  | Data                                          |
+| -------------------- | --------------------- | --------------------------------------------- |
+| **accession**        | `text`                | Primary accession in UniProt                  |
+| secondary_accessions | `list<text>`          | Secondary or old accessions after merges      |
+| entry_name           | `text`                | Entry name in UniProt                         |
+| name                 | `text`                | Human readable name                           |
+| genes                | `list<text>`          | Containing genes                              |
+| taxonomy_id          | `bigint`              | Taxonomy ID                                   |
+| proteome_id          | `text`                | Proteome ID                                   |
+| is_reviewed          | `boolean`             | `true` if SwissProt otherwise `false`         |
+| sequence             | `text`                | Amino acid sequence                           |
+| updated_at           | `bigint`              | Last entry update in UniProt (Unix timestamp) |
+| domains              | `frozen<set<domain>>` | Set of domains associated with the protein    |
 
 \* primary key is bold
 
 ### Peptides
 
-| Column              | Type                | Data                                                            |
-| ------------------- | ------------------- | --------------------------------------------------------------- |
-| **partition**       | bigint              | A partition key based on the mass to cluster peptides           |
-| **mass**            | bigint              | Theoretical mass as integer                                     |
-| **sequence**        | text                | Amino acid sequence                                             |
-| missed_cleavages    | smallint            | Number of missed cleavages                                      |
-| aa_counts           | list<smallint>      | Containing the amino acid counts                                |
-| proteins            | set<text>           | Primary accession of containing proteins                        |
-| is_swiss_prot       | boolean             | `true` if contained by a protein in SwissProt                   |
-| is_trembl           | boolean             | `true` if contained by a protein in TrEMBL                      |
-| taxonomy_ids        | set<bigint>         | IDs of containing taxonomies                                    |
-| unique_taxonomy_ids | set<bigint>         | IDs of taxonomies with only one protein containing this peptide |
-| proteome_ids        | set<text>           | IDs of containing proteomes                                     |
-| domains             | frozen<set<domain>> | Set of domains in which the peptide occured                     |
-| is_metadata_updated | Boolean             | `true` if metadata is up to date (internal use only)            |
+| Column              | Type                  | Data                                                            |
+| ------------------- | --------------------- | --------------------------------------------------------------- |
+| **partition**       | `bigint`              | A partition key based on the mass to cluster peptides           |
+| **mass**            | `bigint`              | Theoretical mass as integer                                     |
+| **sequence**        | `text`                | Amino acid sequence                                             |
+| missed_cleavages    | `smallint`            | Number of missed cleavages                                      |
+| aa_counts           | `list<smallint>`      | Containing the amino acid counts                                |
+| proteins            | `set<text>`           | Primary accession of containing proteins                        |
+| is_swiss_prot       | `boolean`             | `true` if contained by a protein in SwissProt                   |
+| is_trembl           | `boolean`             | `true` if contained by a protein in TrEMBL                      |
+| taxonomy_ids        | `set<bigint>`         | IDs of containing taxonomies                                    |
+| unique_taxonomy_ids | `set<bigint>`         | IDs of taxonomies with only one protein containing this peptide |
+| proteome_ids        | `set<text>`           | IDs of containing proteomes                                     |
+| domains             | `frozen<set<domain>>` | Set of domains in which the peptide occured                     |
+| is_metadata_updated | `boolean`             | `true` if metadata is up to date (internal use only)            |
 
 \* primary key is bold
 
@@ -92,25 +95,25 @@ Table: proteins
 
 This is a ScyllaDB user defined datatype.
 
-| Column              | Type   | Data                                                                                                                                                 |
-| ------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| name                | text   | Name                                                                                                                                                 |
-| evidence            | text   | Evidence reference                                                                                                                                   |
-| start_index         | bigint | Start offset at which the domain begins (relative to the overall protein/peptide sequence)                                                           |
-| end_index           | bigint | End index (^)                                                                                                                                        |
-| protein             | text   | The protein accession of the protein that contains the peptide and domain that is within the peptide range (this column empty for the Protein table) |
-| start_index_protein | bigint | Start index of domain for the protein sequence (this column empty for the Protein table)                                                             |
-| end_index_protein   | bigint | End index of domain for the protein sequence (this column empty for the Protein table)                                                               |
-| peptide_offset      | bigint | Start index of the peptide sequence within the protein           
+| Column              | Type     | Data                                                                                                                                                 |
+| ------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| name                | `text`   | Name                                                                                                                                                 |
+| evidence            | `text`   | Evidence reference                                                                                                                                   |
+| start_index         | `bigint` | Start offset at which the domain begins (relative to the overall protein/peptide sequence)                                                           |
+| end_index           | `bigint` | End index (^)                                                                                                                                        |
+| protein             | `text`   | The protein accession of the protein that contains the peptide and domain that is within the peptide range (this column empty for the Protein table) |
+| start_index_protein | `bigint` | Start index of domain for the protein sequence (this column empty for the Protein table)                                                             |
+| end_index_protein   | `bigint` | End index of domain for the protein sequence (this column empty for the Protein table)                                                               |
+| peptide_offset      | `bigint` | Start index of the peptide sequence within the protein           
 
 ### Blobs
 
 Table to store several binary data. Scylla blob type has in practice a limit of < 1MB, therefore data is stored in multiple chunks of max 512KB. Each chunk has a prefix and chunk index as key.
 
-| Column               | Type                | Data                                    |
-| -------------------- | ------------------- | --------------------------------------- |
-| **key**              | string              | `prefix`_`<CHUNK_NUMBER>`               |
-| data                 | blob                | Chunk of binary data with max. 512 KB   |    
+| Column               | Type                  | Data                                      |
+| -------------------- | --------------------- | ----------------------------------------- |
+| **key**              | `string`              | `prefix`_`<CHUNK_NUMBER>`                 |
+| data                 | `blob`                | Chunk of binary data with max. 512 KB     |    
 
 
 \* primary key is bold
@@ -155,7 +158,7 @@ To build the database use `cargo run -r -- build ...`. Use `--help` for all opti
 ### Database URL
 Connection settings to database given via an URL: `scylla://[user:password@]<comma_separated_list_of_hosts>/<keyspace>[?attirbute1=foo&attribute2=bar&...]`
 
-Supported attributes (see: https://docs.rs/scylla/latest/scylla/transport/session_builder/type.SessionBuilder.html)
+Supported attributes (see: <https://docs.rs/scylla/latest/scylla/transport/session_builder/type.SessionBuilder.html>)
 
 | Attribute | Type | Description |
 | --- | --- | --- |

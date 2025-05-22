@@ -159,7 +159,7 @@ impl Protein {
     }
 
     /// Creates UniProt-txt-file entry of this protein
-    /// See https://web.expasy.org/docs/userman.html for more information
+    /// See <https://web.expasy.org/docs/userman.html> for more information
     ///
     pub fn to_uniprot_txt_entry(&self) -> Result<String> {
         let mut entry = String::new();

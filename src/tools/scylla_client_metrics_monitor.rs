@@ -19,7 +19,7 @@ const PROGRESS_BAR_STYLE: &str = "        {msg} {pos} ";
 
 /// update interval for the progress bar in ms
 ///
-const UPDATE_INTERVAL: u64 = 1000;
+pub const UPDATE_INTERVAL: u64 = 1000;
 
 /// Labels
 const LABELS: [&str; 7] = [
@@ -40,7 +40,7 @@ pub struct ScyllaClientMetricsMonitor {
 
 impl ScyllaClientMetricsMonitor {
     /// Creates a progress view for the given progress values
-    /// Make sure to call it with '.instrument(<span>)' to make sure the progress bar is displayed
+    /// Make sure to call it with `.instrument(<span>)` to make sure the progress bar is displayed
     ///
     /// # Arguments
     /// * `title` - Title for the progress bar

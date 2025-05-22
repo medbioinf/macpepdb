@@ -304,7 +304,7 @@ pub struct SearchRequestQuery {
 ///         "is_reviewed": true
 ///     }
 ///     ```
-///     Deserialized into [SearchRequestBody](SearchRequestBody)
+///     Deserialized into [SearchRequestBody]
 ///
 /// ## Response
 /// ### `application/json`
@@ -359,15 +359,15 @@ pub async fn post_search(
     search(app_state, payload, accept_header, query.is_download).await
 }
 
-/// This is basically the same as [post_search](post_search), but the payload and mime type are base64 encoded in the URL.
+/// This is basically the same as [post_search], but the payload and mime type are base64 encoded in the URL.
 /// This is useful for GET requests, where the body is not allowed. E.g. for initializing browser downloads via JS or WASM
 /// where the usual blob-download is not possible or would be too large
 ///
 /// # API
 /// ## Request
 /// * Path: `/api/peptides/search/:playload/:accept`
-///     * `:accept`: Allowed are the same values like in [post_search](post_search) Accept-header, but urlsafe encoded
-///     * `:payload`: The payload as urlsafe base64 encoded JSON string, see [post_search](post_search)
+///     * `:accept`: Allowed are the same values like in [post_search] Accept-header, but urlsafe encoded
+///     * `:payload`: The payload as urlsafe base64 encoded JSON string, see [post_search]
 /// * Method: `GET`
 ///
 ///

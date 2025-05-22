@@ -12,7 +12,7 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 /// update interval for the progress bar in ms
 ///
-const UPDATE_INTERVAL: u64 = 1000;
+pub const UPDATE_INTERVAL: u64 = 1000;
 
 /// Progress bar style. Used when a maximum value is given
 ///
@@ -30,7 +30,7 @@ pub struct ProgressMonitor {
 
 impl ProgressMonitor {
     /// Creates a progress view for the given progress values
-    /// Make sure to call it with '.instrument(<span>)' to make sure the progress bar is displayed
+    /// Make sure to call it with `.instrument(<span>)` to make sure the progress bar is displayed
     ///
     /// # Arguments
     /// * `progresses` - Vector of progress values

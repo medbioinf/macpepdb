@@ -52,7 +52,7 @@ type TypedBlobRow = (String, i64, Vec<u8>);
 
 /// Trait for using the blob table.
 /// The blob table is used to store binary data in the database like the JSON-serialized taxonomy tree.
-/// As Scylla has a limit 'below' 1 MB each chunk has a maximum size of [MAX_BLOB_SIZE][MAX_BLOB_SIZE].
+/// As Scylla has a limit 'below' 1 MB each chunk has a maximum size of [MAX_BLOB_SIZE].
 ///
 pub struct BlobTable;
 

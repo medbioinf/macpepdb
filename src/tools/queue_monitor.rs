@@ -14,7 +14,7 @@ use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 /// update interval for the progress bar in ms
 ///
-const UPDATE_INTERVAL: u64 = 300;
+pub const UPDATE_INTERVAL: u64 = 300;
 
 /// Progress bar style. Used when a maximum value is given
 ///
@@ -67,7 +67,7 @@ pub struct QueueMonitor {
 
 impl QueueMonitor {
     /// Shows the size of the given queues in a progress bar
-    /// Make sure to call it with '.instrument(<span>)' to make sure the progress bar is displayed
+    /// Make sure to call it with `.instrument(<span>)` to make sure the progress bar is displayed
     ///
     /// # Arguments
     /// * `queues` - Vector of queues to monitor

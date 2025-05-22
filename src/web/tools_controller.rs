@@ -76,7 +76,7 @@ pub struct DigestionRequestBody {
 ///         "max_peptide_length": "50",
 ///     }
 ///     ```
-///     Deserialized into [DigestionRequestBody](DigestionRequestBody)
+///     Deserialized into [DigestionRequestBody]
 ///
 /// ## Response
 /// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](crate::web::peptide_controller::get_peptide).
