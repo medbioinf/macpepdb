@@ -1,0 +1,13 @@
+# Ignore all files and directories, to make the images as clean as possible
+*
+
+# Allow the following files and directories
+!/build.rs
+!/Cargo.toml
+!/Cargo.lock
+!/logo.txt
+!/Readme.md
+!/rust-toolchain.toml
+!/src/**/*
+!/test_files/**/*
+!/template_files/**/*
