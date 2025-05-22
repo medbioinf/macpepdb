@@ -1,0 +1,25 @@
+services:
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    command: --config.file=/etc/prometheus/prometheus.yaml
+    volumes:
+      - ./docker/compose/prometheus/prometheus.yml:/etc/prometheus/prometheus.yaml
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+  grafana:
+    image: grafana/grafana:latest
+    restart: always
+    ports:
+      - '3000:3000'
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_PATHS_PROVISIONING: /grafana/provisioning
+    volumes:
+      - ./docker/compose/grafana/provisioning:/grafana/provisioning
+      - ./docker/compose/grafana/dashboards:/grafana-custom-dashboards
