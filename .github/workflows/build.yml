@@ -2,9 +2,11 @@ name: Rust
 
 on:
   push:
-    branches: ["main"]
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
   pull_request:
-    branches: ["main"]
+    branches:
+      - main
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,18 +16,42 @@ permissions:
 
 jobs:
   build:
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v3
+
       - name: Start containers
-        run: docker-compose up -d --build
-      - name: Toolchain fix
-        run: rustup toolchain install stable
+        run: docker compose up -d --build
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
       - name: Build
-        run: cargo build -r --verbose
-      - name: Run tests
-        run: cargo test -r --verbose
+        id: build
+        uses: actions-rs/cargo@v1
+        with:
+          command: build
+          args: --release --verbose --all-features
+
+      - name: Test
+        id: test
+        if: steps.build.outcome == 'success'
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --verbose --all-features
+
       - name: Stop containers
         if: always()
-        run: docker-compose down
+        run: docker compose down --remove-orphans
+
+      - name: Publish
+        if: steps.test.outcome == 'success' && github.event_name != 'pull_request'
+        run : cargo publish --token ${CRATESIO_TOKEN}
+        env:
+          CRATESIO_TOKEN: ${{ secrets.CRATESIO_TOKEN }}
