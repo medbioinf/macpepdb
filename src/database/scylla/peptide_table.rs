@@ -3,7 +3,6 @@ use std::sync::Arc;
 
 use anyhow::{bail, Result};
 use async_stream::try_stream;
-use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
@@ -13,6 +12,7 @@ use scylla::errors::ExecutionError;
 use scylla::value::CqlValue;
 use tokio::pin;
 use tokio::task::JoinSet;
+use tracing::debug;
 
 use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::generic_client::GenericClient;
@@ -22,6 +22,7 @@ use crate::entities::configuration::Configuration;
 use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
+use crate::functions::post_translational_modification::PTMCollection;
 use crate::tools::omicstools::convert_to_internal_dummy_peptide;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
@@ -377,26 +378,26 @@ impl PeptideTable {
     /// * `taxonomy_id` - Optional: The taxonomy id to filter for
     /// * `proteome_id` - Optional: The proteome id to filter for
     /// * `is_reviewed` - Optional: If the peptides should be reviewed or unreviewed
-    /// * `ptms` - The PTMs to consider
-    /// * `matching_peptides` - A bloom filter to check if a peptide was already found
+    /// * `ptm_collection` - The PTMs to consider
+    /// * `resolve_modifications` - If the modifications should be resolved
     ///
     #[allow(clippy::too_many_arguments)]
-    pub async fn search(
+    pub async fn search<'a>(
         client: Arc<Client>,
         configuration: Arc<Configuration>,
         mass: i64,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
-        max_variable_modifications: i16,
+        max_variable_modifications: usize,
         taxonomy_ids: Option<Vec<i64>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
-        ptms: &[PTM],
+        ptm_collection: &'a PTMCollection<'a>,
+        resolve_modifications: bool,
     ) -> Result<FalliblePeptideStream> {
-        let partition_limits = Arc::new(configuration.get_partition_limits().clone());
         MultiTaskSearch::search(
             client,
-            partition_limits,
+            configuration,
             mass,
             lower_mass_tolerance_ppm,
             upper_mass_tolerance_ppm,
@@ -405,7 +406,8 @@ impl PeptideTable {
             taxonomy_ids,
             proteome_ids,
             is_reviewed,
-            ptms,
+            ptm_collection,
+            resolve_modifications,
             None,
         )
         .await

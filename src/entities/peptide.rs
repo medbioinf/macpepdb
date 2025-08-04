@@ -4,6 +4,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     hash::{Hash, Hasher},
+    ops::Deref,
 };
 
 // 3rd party imports
@@ -229,6 +230,20 @@ impl Peptide {
         &self.domains
     }
 
+    /// Get occurrences of an amino acid in the peptide
+    ///
+    /// # Arguments
+    /// * `one_letter_code` - The one letter code of the amino acid
+    ///
+    pub fn get_aa_count(&self, one_letter_code: char) -> i16 {
+        let index = one_letter_code as usize % 65;
+        if index < self.aa_counts.len() {
+            self.aa_counts[index]
+        } else {
+            0
+        }
+    }
+
     /// Returns the peptide metadata from the given proteins, format:
     /// (is_swiss_prot, is_trembl, taxonomy_ids, unique_taxonomy_ids, proteome_ids)
     ///
@@ -388,6 +403,53 @@ impl Display for Peptide {
     }
 }
 
+/// Peptide plus the option to add multiple sequences, e.g. modified sequences
+///
+#[derive(Serialize)]
+pub struct MatchingPeptide {
+    /// The databse peptide peptide itself
+    #[serde(flatten)]
+    inner_peptide: Peptide,
+    /// Additional sequences, e.g. modified sequences
+    additional_sequences: Vec<String>,
+}
+
+impl MatchingPeptide {
+    /// Creates a new MatchingPeptide with the given peptide and additional sequences.
+    ///
+    pub fn new(peptide: Peptide, additional_sequences: Vec<String>) -> Self {
+        Self {
+            inner_peptide: peptide,
+            additional_sequences,
+        }
+    }
+
+    /// Returns the peptide.
+    pub fn get_inner_peptide(&self) -> &Peptide {
+        &self.inner_peptide
+    }
+
+    /// Returns the additional sequences.
+    pub fn get_additional_sequences(&self) -> &[String] {
+        &self.additional_sequences
+    }
+}
+
+impl Deref for MatchingPeptide {
+    type Target = Peptide;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner_peptide
+    }
+}
+
+#[allow(clippy::from_over_into)] // don't need the from implementation
+impl Into<(Peptide, Vec<String>)> for MatchingPeptide {
+    fn into(self) -> (Peptide, Vec<String>) {
+        (self.inner_peptide, self.additional_sequences)
+    }
+}
+
 /// Peptide which can be serialized to a TSV file, where Vectors are comma separated lists
 ///
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -407,6 +469,8 @@ pub struct TsvPeptide {
     taxonomy_ids: String,
     unique_taxonomy_ids: String,
     proteome_ids: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    additional_sequences: Option<String>,
     // domains: String,
 }
 
@@ -439,6 +503,16 @@ impl From<Peptide> for TsvPeptide {
                 .collect::<Vec<String>>()
                 .join(","),
             proteome_ids: peptide.proteome_ids.join(","),
+            additional_sequences: None, // This will be set later if needed
         }
+    }
+}
+
+impl From<MatchingPeptide> for TsvPeptide {
+    fn from(peptide: MatchingPeptide) -> Self {
+        let (peptide, additional_sequnces): (Peptide, Vec<String>) = peptide.into();
+        let mut peptide = TsvPeptide::from(peptide);
+        peptide.additional_sequences = Some(additional_sequnces.join(","));
+        peptide
     }
 }
