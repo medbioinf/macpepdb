@@ -25,6 +25,7 @@ use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::scylla::protein_table::ProteinTable;
 use crate::entities::peptide::TsvPeptide;
 use crate::entities::protein::Protein;
+use crate::functions::post_translational_modification::PTMCollection;
 use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::web::app_state::AppState;
@@ -244,6 +245,7 @@ pub struct SearchRequestBody {
     taxonomy_id: Option<i64>,
     proteome_id: Option<String>,
     is_reviewed: Option<bool>,
+    resolve_modifications: Option<bool>,
 }
 
 /// Struct to deserialize the query parameters for peptide search
@@ -270,7 +272,7 @@ pub struct SearchRequestQuery {
 /// * Method: `POST`
 /// * Headers:
 ///     * `Content-Type`: `application/json`
-///     * `Accept`: `application/json`, `text/tab-separated-values`, `text/plain` (optional, default: `application/json`, controls the output format)
+///     * `Accept`: `application/json`, `text/tab-separated-values`, `text/plain`, `text/proforma` (optional, default: `application/json`, controls the output format)
 /// * Query:
 ///     * `is_download`: `bool` (optional, default: `false`, if true set the Content-Disposition header to download the response instead of showing it in the browser)
 /// * Body:
@@ -302,6 +304,8 @@ pub struct SearchRequestQuery {
 ///         "proteome_id": "UP000000589",
 ///         # Optional flag to search only reviewed proteins
 ///         "is_reviewed": true
+///         # Optional: If the PTMs in seqeunces should be resolved
+///         "resolve_modifications": true
 ///     }
 ///     ```
 ///     Deserialized into [SearchRequestBody]
@@ -315,7 +319,7 @@ pub struct SearchRequestQuery {
 ///    ...
 /// ]
 /// ```
-/// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](get_peptide).
+/// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](get_peptide) + attribute `additional_sequences` if `resolve_modifications` is true.
 ///
 /// ### `text/tsv`
 /// ```tsv
@@ -328,6 +332,14 @@ pub struct SearchRequestQuery {
 /// ```text
 /// sequence_1
 /// sequence_2
+/// ...
+///
+/// ### `text/proforma`
+/// Note: The output will only contain the mass shifts but not the modification ID.
+///
+/// ```text
+/// <57.021464@C>NCLETPSCKNGFLLDGFPR
+/// <57.021464@C>NCLETPSCKNGFLLM[+15.994915]DGFPR
 /// ...
 /// ```
 ///
@@ -493,17 +505,29 @@ async fn search(
 
     let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
 
+    let ptm_collection = match PTMCollection::new(&payload.modifications) {
+        Ok(collection) => collection,
+        Err(err) => {
+            return Ok((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                HeaderMap::new(),
+                Body::from(format!("Error while validating PTMs: {:?}", err)),
+            ));
+        }
+    };
+
     let peptide_stream = match PeptideTable::search(
         app_state.get_db_client(),
         app_state.get_configuration(),
         mass_to_int(calculated_mass),
         payload.lower_mass_tolerance_ppm,
         payload.upper_mass_tolerance_ppm,
-        payload.max_variable_modifications,
+        payload.max_variable_modifications as usize,
         taxonomy_ids,
         proteome_ids,
         payload.is_reviewed,
-        &payload.modifications,
+        &ptm_collection,
+        payload.resolve_modifications.unwrap_or(false),
     )
     .await
     {
@@ -585,7 +609,15 @@ async fn search(
                         yield Err(format!("!!! {:?}", err));
                         break;
                     }
-                    let peptide = TsvPeptide::from(peptide.unwrap());
+                    let peptide = match peptide {
+                        Ok(peptide) => peptide,
+                        Err(err) => {
+                            error!("{:?}", err);
+                            yield Err(format!("!!! {:?}", err));
+                            break;
+                        }
+                    };
+                    let peptide = TsvPeptide::from(peptide);
                     let mut writer = csv::WriterBuilder::new().has_headers(has_headers).delimiter(b'\t').from_writer(vec![]);
                     match writer.serialize(peptide) {
                         Ok(_) => (),
@@ -622,6 +654,31 @@ async fn search(
                     delimiter = "\n".to_string();
                 }
                 yield Ok(delimiter);
+            }),
+        ),
+        "text/proforma" => (
+            StatusCode::OK,
+            headers,
+            Body::from_stream(stream! {
+                let mut delimiter = "".to_string();
+                for await peptide in peptide_stream {
+                    yield Ok(delimiter.to_owned());
+                    match peptide {
+                        Ok(peptide) => {
+                            if !peptide.get_additional_sequences().is_empty() {
+                                yield Ok(peptide.get_additional_sequences().join("\n"));
+                            } else {
+                                yield Ok(peptide.get_sequence().to_owned());
+                            }
+                        }
+                        Err(err) => {
+                            error!("{:?}", err);
+                            yield Err(format!("!!! {:?}", err));
+                            break;
+                        }
+                    };
+                    delimiter = "\n".to_string();
+                }
             }),
         ),
         _ => (
