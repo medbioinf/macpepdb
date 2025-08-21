@@ -12,7 +12,6 @@ use scylla::errors::ExecutionError;
 use scylla::value::CqlValue;
 use tokio::pin;
 use tokio::task::JoinSet;
-use tracing::debug;
 
 use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::generic_client::GenericClient;
@@ -45,6 +44,7 @@ pub const SELECT_COLS: [&str; 12] = [
     "domains",
 ];
 
+#[allow(dead_code)] // Used in the lazy_static! macro and exists in case of future differences between select and insert cols
 const INSERT_COLS: [&str; 12] = SELECT_COLS;
 
 const UPDATE_COLS: [&str; 9] = [

@@ -377,7 +377,7 @@ pub trait Search {
                     }
 
                     let additional_sequences = if resolve_modifications {
-                        ptm_condition.modify_sequence(&peptide.get_sequence())
+                        ptm_condition.modify_sequence(peptide.get_sequence())
                     } else {
                         Vec::new()
                     };
