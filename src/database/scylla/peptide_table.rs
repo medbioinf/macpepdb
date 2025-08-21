@@ -9,8 +9,8 @@ use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{Stream, TryStreamExt};
 use itertools::Itertools;
-use scylla::value::CqlValue;
 use scylla::errors::ExecutionError;
+use scylla::value::CqlValue;
 use tokio::pin;
 use tokio::task::JoinSet;
 
@@ -613,20 +613,8 @@ impl PeptideTable {
                 // If the mass range spans multiple partitions query each partition
                 #[allow(clippy::needless_range_loop)]
                 for partition in lower_partition_index..=upper_partition_index {
-                    let partition_limit = partition_limits[partition];
-                    let lower_mass = if partition == lower_partition_index {
-                        lower_mass
-                    } else {
-                        partition_limit
-                    };
-                    let upper_mass = if partition == upper_partition_index {
-                        upper_mass
-                    } else {
-                        partition_limit
-                    };
-
                     let stream = client
-                        .execute_iter(prepared_statement.clone(), (lower_partition_index as i64, lower_mass, upper_mass))
+                        .execute_iter(prepared_statement.clone(), (partition as i64, lower_mass, upper_mass))
                         .await?
                         .rows_stream::<TypedPeptideRow>()?;
                     for await peptide_result in stream {

@@ -305,8 +305,8 @@ pub trait Search {
                 #[allow(clippy::needless_range_loop)]
                 for partition in lower_partition_index..=upper_partition_index {
                     sorted_ptm_conditions.entry(partition).or_default().push((
-                        max(partition_limits[partition], lower_mass_limit),
-                        min(partition_limits[partition], upper_mass_limit),
+                        lower_mass_limit,
+                        upper_mass_limit,
                         ptm_condition.clone(),
                     ));
                 }
