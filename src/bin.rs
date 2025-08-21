@@ -400,10 +400,7 @@ async fn main() -> Result<()> {
 
             let log_folder = Path::new(&log_folder).to_path_buf();
 
-            let num_partitions = match partitions.parse::<u64>() {
-                Ok(num_partitions) => Some(num_partitions),
-                Err(_) => None,
-            };
+            let num_partitions = partitions.parse::<u64>().ok();
 
             // Default partition limits (empty if created)
             let mut partition_limits: Vec<i64> = Vec::with_capacity(0);
