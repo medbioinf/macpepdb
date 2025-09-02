@@ -145,6 +145,19 @@ impl<'a> PTMCollection<'a> {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    pub fn all(&self) -> Vec<&'a PTM> {
+        let mut all_ptms: Vec<&'a PTM> = Vec::with_capacity(self.len());
+
+        all_ptms.extend(self.static_ptms.iter());
+        all_ptms.extend(self.variable_ptms.iter());
+        all_ptms.extend(self.n_terminal_ptms.iter());
+        all_ptms.extend(self.c_terminal_ptms.iter());
+        all_ptms.extend(self.n_bond_ptms.iter());
+        all_ptms.extend(self.c_bond_ptms.iter());
+
+        all_ptms
+    }
 }
 
 impl Display for PTMCollection<'_> {
