@@ -1,6 +1,6 @@
 [package]
 name = "macpepdb"
-version = "1.0.1"
+version = "1.1.0"
 authors = ["Dirk Winkelhardt <dirk.winkelhardt@rub.de>"] 
 edition = "2021"
 readme = "README.md"
