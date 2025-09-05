@@ -26,7 +26,7 @@ use crate::web::peptide_controller::{
 };
 use crate::web::protein_controller::{get_protein, search_protein};
 use crate::web::taxonomy_controller::{get_sub_taxonomies, get_taxonomy, search_taxonomies};
-use crate::web::tools_controller::{digest, get_mass, get_proteases};
+use crate::web::tools_controller::{digest, get_mass, get_partition, get_proteases};
 
 /// Starts the MaCPepDB web server on the given interface and port.
 ///
@@ -103,6 +103,7 @@ pub async fn start(
         .route("/api/tools/digest", post(digest))
         .route("/api/tools/mass/:sequence", get(get_mass))
         .route("/api/tools/proteases", get(get_proteases))
+        .route("/api/tools/partition", get(get_partition))
         // taxonomy
         .route("/api/taxonomies/search", post(search_taxonomies))
         .route("/api/taxonomies/:id/sub", get(get_sub_taxonomies))

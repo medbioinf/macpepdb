@@ -3,23 +3,26 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 // 3rd party imports
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::Json;
 use dihardts_omicstools::proteomics::proteases::functions::{
     get_by_name as get_protease_by_name, ALL as AVAILABLE_PROTEASES,
 };
 use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
+use http::StatusCode;
+use rustyms::CompoundPeptidoformIon;
 use scylla::value::CqlValue;
 use serde::Deserialize;
 use serde_json::{json, Value as JsonValue};
 
 // internal imports
-use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::scylla::peptide_table::PeptideTable;
 use crate::entities::peptide::Peptide;
 use crate::mass::convert::to_float as mass_to_float;
+use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::omicstools::convert_to_internal_dummy_peptide;
+use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::web::web_error::WebError;
 
 use super::app_state::AppState;
@@ -188,10 +191,13 @@ pub async fn digest(
     }
 }
 
-/// Calculates the mass of the given sequence
+/// Calculates the mass of the given sequence.
+/// Thanks to rustyms this ProForma 2.1 compliant but will return only the minimum mass
+/// if the sequence produces a mass bound the max value is not returned.
 ///
 /// # Arguments
-/// * `sequence` - The sequence to calculate the mass for, extracted from URL path
+/// * `sequence` - Proforma sequence of the peptide, e.g. `<[+57.021464]@C>MFCQLAKTCPVQLWVDSTPPPGTRVR`
+///   url encoded `%3C%5B%2B57.021464%5D%40C%3EMFCQLAKTCPVQLWVDSTPPPGTRVR``
 ///
 /// # API
 /// ## Request
@@ -201,15 +207,26 @@ pub async fn digest(
 /// ## Response
 /// ```json
 /// {
-///     "mass": 2006.981002959
+///     "mass": 3043.519423982504
 /// }
 /// ```
 ///
 pub async fn get_mass(Path(sequence): Path<String>) -> Result<Json<JsonValue>, WebError> {
-    let mass = calc_sequence_mass_int(&sequence)?;
+    let peptide = CompoundPeptidoformIon::pro_forma(&sequence, None)
+        .map_err(|err| WebError::new(StatusCode::UNPROCESSABLE_ENTITY, format!("{}", err)))?;
+
+    let mass = match peptide.formulas().mass_bounds().into_option() {
+        Some((min, _)) => min.monoisotopic_mass().value,
+        None => {
+            return Err(WebError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Could not calculate mass for the given sequence".to_string(),
+            ));
+        }
+    };
 
     Ok(Json(json!({
-        "mass": mass_to_float(mass),
+        "mass": mass,
     })))
 }
 
@@ -235,4 +252,42 @@ pub async fn get_proteases() -> Result<Json<JsonValue>, WebError> {
     let mut protease_names: Vec<&str> = Vec::from(AVAILABLE_PROTEASES);
     protease_names.sort();
     Ok(Json(json!(protease_names)))
+}
+
+/// Query parameters for the partition endpoint
+///
+#[derive(Deserialize)]
+pub struct GetPartitionQuery {
+    /// Mass to get the partition for
+    mass: f64,
+}
+
+/// Lists all available proteases
+///
+/// # API
+/// ## Request
+/// * Path: `/api/tools/proteases?mass=2929.4765`
+/// * Method: `GET`
+///
+/// ## Response
+/// List of name of all available proteases
+/// ```json
+/// {
+///    "partition": 2,
+///    "partition_limit": 3000.0
+/// }
+/// ```
+///
+///
+pub async fn get_partition(
+    State(app_state): State<Arc<AppState>>,
+    Query(query_payload): Query<GetPartitionQuery>,
+) -> Result<Json<JsonValue>, WebError> {
+    let partition_limits = app_state.get_configuration_as_ref().get_partition_limits();
+    let partition_index = get_mass_partition(partition_limits, mass_to_int(query_payload.mass))?;
+
+    Ok(Json(json!({
+        "partition": partition_index,
+        "partition_limit": mass_to_float(partition_limits[partition_index]),
+    })))
 }
