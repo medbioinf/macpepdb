@@ -88,29 +88,32 @@ pub async fn start(
     let app = Router::new()
         // Peptide routes
         .route(
-            "/api/peptides/search/:payload/:accept",
+            "/api/peptides/search/{payload}/{accept}",
             get(get_peptide_search),
         )
         .route("/api/peptides/search", post(post_peptide_search))
-        .route("/api/peptides/:sequence/exists", get(get_peptide_existence))
-        .route("/api/peptides/:sequence", get(get_peptide))
+        .route(
+            "/api/peptides/{sequence}/exists",
+            get(get_peptide_existence),
+        )
+        .route("/api/peptides/{sequence}", get(get_peptide))
         // Protein routes
-        .route("/api/proteins/search/:attribute", get(search_protein))
-        .route("/api/proteins/:accession", get(get_protein))
+        .route("/api/proteins/search/{attribute}", get(search_protein))
+        .route("/api/proteins/{accession}", get(get_protein))
         // Configuration routes
         .route("/api/configuration", get(get_configuration))
         // tools
         .route("/api/tools/digest", post(digest))
-        .route("/api/tools/mass/:sequence", get(get_mass))
+        .route("/api/tools/mass/{sequence}", get(get_mass))
         .route("/api/tools/proteases", get(get_proteases))
         .route("/api/tools/partition", get(get_partition))
         // taxonomy
         .route("/api/taxonomies/search", post(search_taxonomies))
-        .route("/api/taxonomies/:id/sub", get(get_sub_taxonomies))
-        .route("/api/taxonomies/:id", get(get_taxonomy))
+        .route("/api/taxonomies/{id}/sub", get(get_sub_taxonomies))
+        .route("/api/taxonomies/{id}", get(get_taxonomy))
         // chemistry
         .route("/api/chemistry/amino_acids", get(get_all_amino_acids))
-        .route("/api/chemistry/amino_acids/:code", get(get_amino_acid))
+        .route("/api/chemistry/amino_acids/{code}", get(get_amino_acid))
         .with_state(app_state.clone())
         .fallback(page_not_found)
         .layer(cors);

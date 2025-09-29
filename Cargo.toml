@@ -37,9 +37,9 @@ path = "src/bin.rs"
 
 [dependencies]
 anyhow = "~1.0.69"
-async-stream = "0.3.5"
-axum = { version = "0.7.2", features = ["json"] }
-axum-streams = { version = "0.15", features = ["json", "csv", "text"] }
+async-stream = "0.3.6"
+axum = { version = "0.8.5", features = ["json"] }
+axum-streams = { version = "0.23.1", features = ["json", "csv", "text"] }
 base64 = "0.22.1"
 chrono = "0.4.23"
 clap = { version = "4.3.0", features = ["derive"] }
@@ -50,7 +50,7 @@ dihardts_omicstools = "~3.1.0"
 fallible-iterator = "0.3.0"
 fancy-regex = "0.11.0"
 flate2 = "1.0.28"
-futures = "0.3.28"
+futures = "0.3.31"
 glob = "0.3.1"
 http = "1.0.0"
 indicatif = "0.17.6"
@@ -63,14 +63,14 @@ prometheus-parse = "0.2.5"
 rand = "0.8.5"
 reqwest = { version = "0.11.22", features = ["json", "stream"] }
 rustyms = "0.10.0"
-scylla = { version = "1.1.0", features = ["metrics"] }
+scylla = { version = "1.3.1", features = ["metrics"] }
 serde = "1.0.160"
 serde_json = "1.0.95"
 sysinfo = "0.28.2"
 thiserror = "2.0.12"
-tokio = { version = "1.44.2", features = ["full"] }
-tokio-util = "0.7.14"
-tower-http = { version = "0.5.0", features = ["cors", "trace"] }
+tokio = { version = "1.47.1", features = ["full"] }
+tokio-util = "0.7.16"
+tower-http = { version = "0.6.6", features = ["cors", "trace"] }
 tracing = "0.1.37"
 tracing-appender = "0.2.3"
 tracing-indicatif = "0.3.4"
