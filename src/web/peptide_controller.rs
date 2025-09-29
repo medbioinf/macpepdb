@@ -14,7 +14,6 @@ use dihardts_omicstools::mass_spectrometry::unit_conversions::mass_to_charge_to_
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::TryStreamExt;
 use http::header;
-use scylla::value::CqlValue;
 use tracing::error;
 use urlencoding::decode as urldecode;
 
@@ -121,11 +120,7 @@ pub async fn get_peptide(
     let peptide_opt = PeptideTable::select(
         app_state.get_db_client_as_ref(),
         "WHERE partition = ? AND mass = ? and sequence = ?",
-        &[
-            &CqlValue::BigInt(partition as i64),
-            &CqlValue::BigInt(mass),
-            &CqlValue::Text(sequence),
-        ],
+        (partition as i64, mass, sequence),
     )
     .await?
     .try_collect::<Vec<_>>()

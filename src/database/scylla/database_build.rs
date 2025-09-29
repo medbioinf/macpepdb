@@ -1249,11 +1249,11 @@ mod test {
                     let peptides = PeptideTable::select(
                         &client,
                         "WHERE partition = ? AND mass = ? AND sequence = ? LIMIT 1",
-                        &[
-                            &CqlValue::BigInt(peptide.get_partition().to_owned()),
-                            &CqlValue::BigInt(peptide.get_mass_as_ref().to_owned()),
-                            &CqlValue::Text(peptide.get_sequence().to_owned()),
-                        ],
+                        (
+                            peptide.get_partition(),
+                            peptide.get_mass(),
+                            peptide.get_sequence(),
+                        ),
                     )
                     .await
                     .unwrap()
@@ -1294,11 +1294,11 @@ mod test {
             let peptide = PeptideTable::select(
                 &client,
                 "WHERE partition = ? AND mass = ? AND sequence = ? LIMIT 1",
-                &[
-                    &CqlValue::BigInt(peptide.get_partition().to_owned()),
-                    &CqlValue::BigInt(peptide.get_mass_as_ref().to_owned()),
-                    &CqlValue::Text(peptide.get_sequence().to_owned()),
-                ],
+                (
+                    peptide.get_partition(),
+                    peptide.get_mass_as_ref(),
+                    peptide.get_sequence(),
+                ),
             )
             .await
             .unwrap()

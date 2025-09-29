@@ -9,6 +9,7 @@ use futures::future::join_all;
 use futures::{Stream, TryStreamExt};
 use itertools::Itertools;
 use scylla::errors::ExecutionError;
+use scylla::serialize::row::SerializeRow;
 use scylla::value::CqlValue;
 use tokio::pin;
 use tokio::task::JoinSet;
@@ -445,11 +446,11 @@ impl PeptideTable {
         let stream = PeptideTable::select(
             client,
             "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
-            &[
-                &CqlValue::BigInt(partition as i64),
-                &CqlValue::BigInt(mass),
-                &CqlValue::Text(sequence),
-            ],
+            (
+                CqlValue::BigInt(partition as i64),
+                CqlValue::BigInt(mass),
+                CqlValue::Text(sequence),
+            ),
         )
         .await?;
 
@@ -497,11 +498,11 @@ impl PeptideTable {
                         let stream = PeptideTable::select(
                             task_client.as_ref(),
                             "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
-                            &[
-                                &CqlValue::BigInt(peptide.get_partition()),
-                                &CqlValue::BigInt(peptide.get_mass()),
-                                &CqlValue::Text(peptide.get_sequence().to_owned()),
-                            ],
+                            (
+                                peptide.get_partition(),
+                                peptide.get_mass(),
+                                peptide.get_sequence(),
+                            )
                         ).await?;
                         pin!(stream);
 
@@ -525,20 +526,20 @@ impl PeptideTable {
     /// * `additional` - Additional statement to add to the select statement, e.g. WHERE clause
     /// * `params` - Parameters for the additional statement
     ///
-    pub async fn select(
-        client: &Client,
-        additional: &str,
-        params: &[&CqlValue],
-    ) -> Result<impl Stream<Item = Result<Peptide>>> {
-        let statement = format!("{} {};", SELECT_STATEMENT.as_str(), additional);
-        let prepared_statement = client.get_prepared_statement(&statement).await?;
-
-        let stream = client
-            .execute_iter(prepared_statement, params)
-            .await?
-            .rows_stream::<TypedPeptideRow>()?;
-
+    pub async fn select<'a>(
+        client: &'a Client,
+        additional: &'a str,
+        params: impl SerializeRow + 'a,
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
         Ok(try_stream! {
+            let statement = format!("{} {};", SELECT_STATEMENT.as_str(), additional);
+            let prepared_statement = client.get_prepared_statement(&statement).await?;
+
+            let stream = client
+                .execute_iter(prepared_statement, params)
+                .await?
+                .rows_stream::<TypedPeptideRow>()?;
+
             for await peptide_result in stream {
                 yield peptide_result?.into();
             }
@@ -605,15 +606,14 @@ impl PeptideTable {
         upper_mass: i64,
         partition_limits: &'a [i64],
     ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
-        let prepared_statement = client
-            .get_prepared_statement(&SELECT_BY_MASS_RANGE_STATEMENT)
-            .await?;
-
         // Check which partitions are affected
         let lower_partition_index = get_mass_partition(partition_limits, lower_mass)?;
         let upper_partition_index = get_mass_partition(partition_limits, upper_mass)?;
 
         Ok(try_stream! {
+            let prepared_statement = client
+                .get_prepared_statement(&SELECT_BY_MASS_RANGE_STATEMENT)
+                .await?;
 
             if lower_partition_index == upper_partition_index {
                 // If the mass range is within one partition query it directly
@@ -658,11 +658,7 @@ impl PeptideTable {
         let stream = PeptideTable::select(
             client,
             "WHERE partition = ? AND mass = ? AND sequence = ? LIMIT 1",
-            &[
-                &CqlValue::BigInt(partition as i64),
-                &CqlValue::BigInt(mass),
-                &CqlValue::Text(sequence.to_string()),
-            ],
+            (partition as i64, mass, sequence),
         )
         .await?;
 
@@ -875,11 +871,11 @@ mod tests {
         let stream = PeptideTable::select(
             &client,
             "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
-            &[
-                &CqlValue::BigInt(conflicting_peptides[0].get_partition()),
-                &CqlValue::BigInt(conflicting_peptides[0].get_mass()),
-                &CqlValue::Text(conflicting_peptides[0].get_sequence().to_owned()),
-            ],
+            (
+                CqlValue::BigInt(conflicting_peptides[0].get_partition()),
+                CqlValue::BigInt(conflicting_peptides[0].get_mass()),
+                CqlValue::Text(conflicting_peptides[0].get_sequence().to_owned()),
+            ),
         )
         .await
         .unwrap();
@@ -1119,7 +1115,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn test_select_by_sequence() {
-        let client = Client::new(&get_test_database_url()).await.unwrap();
+        let client = Arc::new(Client::new(&get_test_database_url()).await.unwrap());
         prepare_database_for_tests(&client).await;
 
         let mut reader = Reader::new(Path::new("test_files/leptin.txt"), 1024).unwrap();

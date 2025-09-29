@@ -141,7 +141,7 @@ pub async fn digest(
 
         let mut db_peptides: Vec<Peptide> = Vec::with_capacity(peptides.len());
 
-        for (partition, select_params) in select_params_by_partition.iter().enumerate() {
+        for (partition, select_params) in select_params_by_partition.into_iter().enumerate() {
             if select_params.is_empty() {
                 continue;
             }
@@ -157,21 +157,20 @@ pub async fn digest(
 
             statement_addition.push(')');
 
-            let partition = CqlValue::BigInt(partition as i64);
-
-            let mut select_params_ref: Vec<&CqlValue> =
+            let mut final_select_params: Vec<CqlValue> =
                 Vec::with_capacity(select_params.len() * 2 + 1);
-            select_params_ref.push(&partition);
-            select_params_ref.extend(
+            final_select_params.push(CqlValue::BigInt(partition as i64));
+
+            final_select_params.extend(
                 select_params
-                    .iter()
-                    .flat_map(|params| vec![&params.0, &params.1]),
+                    .into_iter()
+                    .flat_map(|params| vec![params.0, params.1]),
             );
 
             let db_peptides_partition = PeptideTable::select(
                 app_state.get_db_client_as_ref(),
                 &statement_addition,
-                select_params_ref.as_slice(),
+                final_select_params.as_slice(),
             )
             .await?
             .try_collect::<Vec<_>>()

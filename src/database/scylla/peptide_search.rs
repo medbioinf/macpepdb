@@ -11,7 +11,6 @@ use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::chemistry::amino_acid::{AminoAcid, CANONICAL_AMINO_ACIDS};
 use futures::{pin_mut, Stream, StreamExt};
 use itertools::Itertools;
-use scylla::value::CqlValue;
 use tokio::sync::mpsc::{unbounded_channel as channel, UnboundedSender as Sender};
 use tracing::error;
 
@@ -339,17 +338,12 @@ pub trait Search {
         peptide_sender: Sender<Result<MatchingPeptide>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
-            let partition = CqlValue::BigInt(partition as i64);
-            for (lower_mass_limit, upper_mass_limit, ptm_condition) in conditions.iter_mut() {
-                let lower_mass_limit = CqlValue::BigInt(*lower_mass_limit);
-                let upper_mass_limit = CqlValue::BigInt(*upper_mass_limit);
-
-                let query_params = vec![&partition, &lower_mass_limit, &upper_mass_limit];
-
+            let partition = partition as i64;
+            for (lower_mass_limit, upper_mass_limit, mut ptm_condition) in conditions.iter_mut() {
                 let peptide_stream = match PeptideTable::select(
                     client.as_ref(),
                     "WHERE partition = ? AND mass >= ? AND mass <= ?",
-                    &query_params,
+                    (partition, lower_mass_limit, upper_mass_limit),
                 )
                 .await
                 {
