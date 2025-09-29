@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: Uszkoreit
+  given-names: Julian
+  orcid: https://orcid.org/0000-0001-7522-4007
+- family-names: Winkelhardt
+  given-names: Dirk
+  orcid: https://orcid.org/0000-0001-8770-2221
+- family-names: Barkovits
+  given-names: Katalin
+  orcid: https://orcid.org/0000-0003-2554-8796
+- family-names: Wulf
+  given-names: Maximilian
+- family-names: Roocke
+  given-names: Sascha
+- family-names: Marcus
+  given-names: Katrin
+- family-names: Eisenacher
+  given-names: Martin
+  orcid: https://orcid.org/0000-0003-2687-7444
+title: "MaCPepDB: A Database to Quickly Access All Tryptic Peptides of the UniProtKB"
+version: "1.0.1"
+doi: 10.1021/acs.jproteome.0c00967 
+date-released: 2021-03-16
+url: "https://github.com/medbioinf/macpepdb"
+license: BSD-3-Clause
