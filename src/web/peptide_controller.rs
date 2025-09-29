@@ -667,9 +667,9 @@ async fn search(
                     match peptide {
                         Ok(peptide) => {
                             if !peptide.get_additional_sequences().is_empty() {
-                                yield Ok(peptide.get_additional_sequences().join("\n"));
+                                yield Ok(peptide.take_additional_sequences().join("\n"));
                             } else {
-                                yield Ok(peptide.get_sequence().to_owned());
+                                yield Ok(peptide.take_sequence());
                             }
                         }
                         Err(err) => {

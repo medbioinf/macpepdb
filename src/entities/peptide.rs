@@ -435,6 +435,14 @@ impl MatchingPeptide {
     pub fn get_additional_sequences(&self) -> &[String] {
         &self.additional_sequences
     }
+
+    pub fn take_additional_sequences(self) -> Vec<String> {
+        self.additional_sequences
+    }
+
+    pub fn take_sequence(self) -> String {
+        self.inner_peptide.sequence
+    }
 }
 
 impl Deref for MatchingPeptide {
