@@ -21,7 +21,9 @@ use crate::entities::configuration::Configuration;
 use crate::entities::domain::Domain;
 use crate::entities::peptide::Peptide;
 use crate::entities::protein::Protein;
-use crate::functions::post_translational_modification::PTMCollection;
+use crate::functions::post_translational_modification::{
+    PTMCollection, PostTranslationalModification,
+};
 use crate::tools::omicstools::convert_to_internal_dummy_peptide;
 use crate::tools::peptide_partitioner::get_mass_partition;
 
@@ -393,7 +395,7 @@ impl PeptideTable {
     /// * `resolve_modifications` - If the modifications should be resolved
     ///
     #[allow(clippy::too_many_arguments)]
-    pub async fn search<'a>(
+    pub async fn search(
         client: Arc<Client>,
         configuration: Arc<Configuration>,
         mass: i64,
@@ -403,7 +405,7 @@ impl PeptideTable {
         taxonomy_ids: Option<Vec<i64>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
-        ptm_collection: &'a PTMCollection<'a>,
+        ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
     ) -> Result<FalliblePeptideStream> {
         MultiTaskSearch::search(

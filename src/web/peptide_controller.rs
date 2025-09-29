@@ -11,7 +11,6 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
 use dihardts_omicstools::mass_spectrometry::unit_conversions::mass_to_charge_to_dalton;
-use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use dihardts_omicstools::proteomics::proteases::functions::get_by_name as get_protease_by_name;
 use futures::TryStreamExt;
 use http::header;
@@ -25,7 +24,9 @@ use crate::database::scylla::peptide_table::PeptideTable;
 use crate::database::scylla::protein_table::ProteinTable;
 use crate::entities::peptide::TsvPeptide;
 use crate::entities::protein::Protein;
-use crate::functions::post_translational_modification::PTMCollection;
+use crate::functions::post_translational_modification::{
+    PTMCollection, PostTranslationalModification,
+};
 use crate::mass::convert::to_int as mass_to_int;
 use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::web::app_state::AppState;
@@ -241,7 +242,7 @@ pub struct SearchRequestBody {
     lower_mass_tolerance_ppm: i64,
     upper_mass_tolerance_ppm: i64,
     max_variable_modifications: i16,
-    modifications: Vec<PTM>,
+    modifications: Vec<PostTranslationalModification>,
     taxonomy_id: Option<i64>,
     proteome_id: Option<String>,
     is_reviewed: Option<bool>,
@@ -505,8 +506,8 @@ async fn search(
 
     let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
 
-    let ptm_collection = match PTMCollection::new(&payload.modifications) {
-        Ok(collection) => collection,
+    let ptm_collection = match PTMCollection::new(payload.modifications.into_iter().map(Arc::new)) {
+        Ok(collection) => Arc::new(collection),
         Err(err) => {
             return Ok((
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -526,7 +527,7 @@ async fn search(
         taxonomy_ids,
         proteome_ids,
         payload.is_reviewed,
-        &ptm_collection,
+        ptm_collection,
         payload.resolve_modifications.unwrap_or(false),
     )
     .await

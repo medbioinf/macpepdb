@@ -9,7 +9,6 @@ use anyhow::Result;
 use async_stream::try_stream;
 use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::chemistry::amino_acid::{AminoAcid, CANONICAL_AMINO_ACIDS};
-use dihardts_omicstools::proteomics::post_translational_modifications::PostTranslationalModification as PTM;
 use futures::{pin_mut, Stream, StreamExt};
 use itertools::Itertools;
 use scylla::value::CqlValue;
@@ -19,7 +18,9 @@ use tracing::error;
 use crate::chemistry::amino_acid::INTERNAL_GLYCINE;
 use crate::entities::configuration::Configuration;
 use crate::entities::peptide::MatchingPeptide;
-use crate::functions::post_translational_modification::PTMCollection;
+use crate::functions::post_translational_modification::{
+    PTMCollection, PostTranslationalModification,
+};
 use crate::mass::convert::{to_float as mass_to_float, to_int as mass_to_int};
 use crate::tools::peptide_partitioner::get_mass_partition;
 use crate::{database::scylla::peptide_table::PeptideTable, entities::peptide::Peptide};
@@ -241,7 +242,8 @@ pub type FalliblePeptideStream = Pin<Box<dyn Stream<Item = Result<MatchingPeptid
 /// Maps peptide conditions to partitions
 /// key is the partition, value is a vector of tuples with the lower and upper mass limit and the PTM condition
 ///
-pub type FinalizedPeptideConditionMap = HashMap<usize, Vec<(i64, i64, FinalizedPeptideCondition)>>;
+pub type FinalizedPeptideConditionMap<'a> =
+    HashMap<usize, Vec<(i64, i64, FinalizedPeptideCondition)>>;
 
 /// Defines the search for peptides in the database and provides some helper functions
 ///
@@ -275,7 +277,7 @@ pub trait Search {
         taxonomy_ids: Option<Vec<i64>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
-        ptm_collection: &PTMCollection,
+        ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
         num_threads: Option<usize>,
     ) -> impl std::future::Future<Output = Result<FalliblePeptideStream>> + Send;
@@ -453,13 +455,13 @@ pub trait Search {
     /// * lower_mass_tolerance_ppm - The lower mass tolerance in ppm
     /// * upper_mass_tolerance_ppm - The upper mass tolerance in ppm
     ///
-    fn split_and_sort_peptide_conditions(
+    fn split_and_sort_peptide_conditions<'a>(
         peptide_conditions: Vec<PeptideCondition>,
         partition_limits: &[i64],
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
-    ) -> Result<FinalizedPeptideConditionMap> {
-        let mut sorted_peptide_conditions: FinalizedPeptideConditionMap = HashMap::new();
+    ) -> Result<FinalizedPeptideConditionMap<'a>> {
+        let mut sorted_peptide_conditions: FinalizedPeptideConditionMap<'a> = HashMap::new();
         for peptide_condition in peptide_conditions {
             // Calculate mass range based on ptm condition
             let lower_mass_limit = peptide_condition.query_mass
@@ -510,7 +512,7 @@ impl Search for MultiTaskSearch {
         taxonomy_ids: Option<Vec<i64>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
-        ptm_collection: &PTMCollection<'_>,
+        ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
         _num_threads: Option<usize>,
     ) -> Result<FalliblePeptideStream> {
@@ -557,7 +559,7 @@ impl Search for MultiTaskSearch {
 
         let sorted_ptm_conditions = Self::split_and_sort_peptide_conditions(
             PeptideCondition::from_ptm_collection(
-                ptm_collection,
+                &ptm_collection,
                 mass,
                 min_mass,
                 max_mass,
@@ -636,17 +638,17 @@ pub struct PeptideCondition {
     /// Mass to query
     query_mass: i64,
     /// Considered static PTMs
-    static_ptms: Vec<PTM>,
+    static_ptms: Vec<Arc<PostTranslationalModification>>,
     /// Considered variable PTMs
-    variable_ptms: Vec<PTM>,
+    variable_ptms: Vec<Arc<PostTranslationalModification>>,
     /// N-terminal PTM
-    n_terminal_ptm: Option<PTM>,
+    n_terminal_ptm: Option<Arc<PostTranslationalModification>>,
     /// C-terminal PTM
-    c_terminal_ptm: Option<PTM>,
+    c_terminal_ptm: Option<Arc<PostTranslationalModification>>,
     /// N-terminal bond PTM
-    n_bond_ptm: Option<PTM>,
+    n_bond_ptm: Option<Arc<PostTranslationalModification>>,
     /// C-terminal bond PTM
-    c_bond_ptm: Option<PTM>,
+    c_bond_ptm: Option<Arc<PostTranslationalModification>>,
     /// Excluded amino acids
     excluded_amino_acids: HashSet<char>,
 }
@@ -674,62 +676,62 @@ impl PeptideCondition {
 
     /// Adds a static PTM to the PeptideCondition.
     ///
-    pub fn add_static_ptm(&mut self, ptm: &PTM) -> bool {
+    pub fn add_static_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = mass_to_int(*ptm.get_mass_delta());
         if mass_delta_int > self.query_mass {
             return false;
         }
 
-        self.static_ptms.push(ptm.clone());
+        self.static_ptms.push(ptm);
         self.query_mass -= mass_delta_int;
         true
     }
 
-    pub fn add_variable_ptm(&mut self, ptm: &PTM) -> bool {
+    pub fn add_variable_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = mass_to_int(*ptm.get_mass_delta());
         if mass_delta_int > self.query_mass {
             return false;
         }
 
-        self.variable_ptms.push(ptm.clone());
+        self.variable_ptms.push(ptm);
         self.query_mass -= mass_delta_int;
         true
     }
 
-    pub fn set_n_terminal_ptm(&mut self, ptm: &PTM) -> bool {
+    pub fn set_n_terminal_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = mass_to_int(*ptm.get_mass_delta());
         if self.n_terminal_ptm.is_some() || mass_delta_int > self.query_mass {
             return false;
         }
 
-        self.n_terminal_ptm = Some(ptm.clone());
+        self.n_terminal_ptm = Some(ptm);
         self.query_mass -= mass_delta_int;
         true
     }
 
-    pub fn set_c_terminal_ptm(&mut self, ptm: &PTM) -> bool {
+    pub fn set_c_terminal_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = mass_to_int(*ptm.get_mass_delta());
         if self.c_terminal_ptm.is_some() || mass_delta_int > self.query_mass {
             return false;
         }
 
-        self.c_terminal_ptm = Some(ptm.clone());
+        self.c_terminal_ptm = Some(ptm);
         self.query_mass -= mass_delta_int;
         true
     }
 
-    pub fn set_n_bond_ptm(&mut self, ptm: &PTM) -> bool {
+    pub fn set_n_bond_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = mass_to_int(*ptm.get_mass_delta());
         if self.n_bond_ptm.is_some() || mass_delta_int > self.query_mass {
             return false;
         }
 
-        self.n_bond_ptm = Some(ptm.clone());
+        self.n_bond_ptm = Some(ptm);
         self.query_mass -= mass_delta_int;
         true
     }
 
-    pub fn set_c_bond_ptm(&mut self, ptm: &PTM) -> bool {
+    pub fn set_c_bond_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = mass_to_int(*ptm.get_mass_delta());
         // if ptm is positive but larger than the remaining mass or  smaller than the minimum mass, skip it
         // a negative delta would increase the remaining mass, so we do not check for it
@@ -737,7 +739,7 @@ impl PeptideCondition {
             return false;
         }
 
-        self.c_bond_ptm = Some(ptm.clone());
+        self.c_bond_ptm = Some(ptm);
         self.query_mass -= mass_delta_int;
         true
     }
@@ -755,7 +757,8 @@ impl PeptideCondition {
     ///
     pub fn modify_sequence(&self, sequence: &str) -> Vec<String> {
         // Map for fast access to variable modifications by amino acid
-        let mut variable_modifications_map: HashMap<char, Vec<&PTM>> = HashMap::new();
+        let mut variable_modifications_map: HashMap<char, Vec<&PostTranslationalModification>> =
+            HashMap::new();
         for ptm in self.variable_ptms.iter() {
             variable_modifications_map
                 .entry(*ptm.get_amino_acid().get_one_letter_code())
@@ -822,7 +825,7 @@ impl PeptideCondition {
         &self,
         peptide: &str,
         mut modified_peptide: String,
-        variable_modifications_map: &HashMap<char, Vec<&PTM>>,
+        variable_modifications_map: &HashMap<char, Vec<&PostTranslationalModification>>,
         position: usize,
         applied_vmods: usize,
         proforma_sequences: &mut HashSet<String>,
@@ -938,7 +941,7 @@ impl PeptideCondition {
     ///  
     /// * `max_variable_modifications` - The maximum number of variable modifications to apply
     pub fn from_ptm_collection(
-        ptm_collection: &PTMCollection,
+        ptm_collection: &PTMCollection<Arc<PostTranslationalModification>>,
         targeted_mass: i64,
         min_mass: i64,
         max_mass: i64,
@@ -988,7 +991,7 @@ impl PeptideCondition {
         for i in 0..current_len {
             let mut condition = resulting_conditions[i].clone();
             for modification in ptm_collection.get_n_terminal_ptms() {
-                if condition.set_n_terminal_ptm(modification) {
+                if condition.set_n_terminal_ptm(modification.clone()) {
                     resulting_conditions.push(condition.clone());
                 }
             }
@@ -999,7 +1002,7 @@ impl PeptideCondition {
         for i in 0..current_len {
             let mut condition = resulting_conditions[i].clone();
             for modification in ptm_collection.get_c_terminal_ptms() {
-                if condition.set_c_terminal_ptm(modification) {
+                if condition.set_c_terminal_ptm(modification.clone()) {
                     resulting_conditions.push(condition.clone());
                 }
             }
@@ -1010,7 +1013,7 @@ impl PeptideCondition {
         for i in 0..current_len {
             let mut condition = resulting_conditions[i].clone();
             for modification in ptm_collection.get_n_bond_ptms() {
-                if condition.set_n_bond_ptm(modification) {
+                if condition.set_n_bond_ptm(modification.clone()) {
                     resulting_conditions.push(condition.clone());
                 }
             }
@@ -1021,7 +1024,7 @@ impl PeptideCondition {
         for i in 0..current_len {
             let mut condition = resulting_conditions[i].clone();
             for modification in ptm_collection.get_c_bond_ptms() {
-                if condition.set_c_bond_ptm(modification) {
+                if condition.set_c_bond_ptm(modification.clone()) {
                     resulting_conditions.push(condition.clone());
                 }
             }
@@ -1031,7 +1034,7 @@ impl PeptideCondition {
     }
 
     fn calculate_peptide_conditions_for_static_modifications(
-        ptm_collection: &PTMCollection,
+        ptm_collection: &PTMCollection<Arc<PostTranslationalModification>>,
         min_mass: i64,
         max_mass: i64,
         mut condition: PeptideCondition,
@@ -1052,7 +1055,9 @@ impl PeptideCondition {
             resulting_conditions,
         );
 
-        while condition.add_static_ptm(ptm_collection.get_static_ptms()[modification_position]) {
+        while condition
+            .add_static_ptm(ptm_collection.get_static_ptms()[modification_position].clone())
+        {
             if condition.query_mass < min_mass || condition.query_mass > max_mass {
                 break;
             }
@@ -1070,7 +1075,7 @@ impl PeptideCondition {
     }
 
     fn calculate_peptide_conditions_for_variable_modifications(
-        ptm_collection: &PTMCollection,
+        ptm_collection: &PTMCollection<Arc<PostTranslationalModification>>,
         min_mass: i64,
         max_mass: i64,
         max_variable_modifications: usize,
@@ -1094,7 +1099,8 @@ impl PeptideCondition {
         );
 
         // # Apply this modification until we run out of mass
-        while condition.add_variable_ptm(ptm_collection.get_variable_ptms()[modification_position])
+        while condition
+            .add_variable_ptm(ptm_collection.get_variable_ptms()[modification_position].clone())
         {
             if condition.variable_ptms.len() > max_variable_modifications
                 || condition.query_mass < min_mass
@@ -1328,50 +1334,50 @@ mod tests {
     #[tokio::test]
     async fn test_peptide_condition_from_ptm_collection() {
         let ptms = vec![
-            PTM::new(
+            Arc::new(PostTranslationalModification::new(
                 "carba of C",
                 get_amino_acid_by_one_letter_code('C').unwrap(),
                 57.021464,
                 ModificationType::Static,
                 Position::Anywhere,
-            ),
-            PTM::new(
+            )),
+            Arc::new(PostTranslationalModification::new(
                 "oxi of M",
                 get_amino_acid_by_one_letter_code('M').unwrap(),
                 15.99491,
                 ModificationType::Variable,
                 Position::Anywhere,
-            ),
-            PTM::new(
+            )),
+            Arc::new(PostTranslationalModification::new(
                 "oxi of term M",
                 get_amino_acid_by_one_letter_code('M').unwrap(),
                 16.99491,
                 ModificationType::Variable,
                 Position::Terminus(dihardts_omicstools::proteomics::peptide::Terminus::N),
-            ),
-            PTM::new(
+            )),
+            Arc::new(PostTranslationalModification::new(
                 "oxi of term K",
                 get_amino_acid_by_one_letter_code('K').unwrap(),
                 20.3,
                 ModificationType::Variable,
                 Position::Terminus(dihardts_omicstools::proteomics::peptide::Terminus::C),
-            ),
-            PTM::new(
+            )),
+            Arc::new(PostTranslationalModification::new(
                 "something on N-bond",
                 get_amino_acid_by_one_letter_code('X').unwrap(),
                 10.0,
                 ModificationType::Variable,
                 Position::Terminus(dihardts_omicstools::proteomics::peptide::Terminus::N),
-            ),
-            PTM::new(
+            )),
+            Arc::new(PostTranslationalModification::new(
                 "something on N-bond",
                 get_amino_acid_by_one_letter_code('X').unwrap(),
                 40.3,
                 ModificationType::Variable,
                 Position::Terminus(dihardts_omicstools::proteomics::peptide::Terminus::C),
-            ),
+            )),
         ];
-        let ptm_collection = PTMCollection::new(&ptms).unwrap();
+        let ptm_collection = PTMCollection::new(ptms).unwrap();
         let mass: f64 = 839.403366202; // MFCQLAK
 
         let conditions = PeptideCondition::from_ptm_collection(
@@ -1432,58 +1438,58 @@ mod tests {
         )
         .unwrap();
 
-        let carbamidomethylation_c = PTM::new(
+        let carbamidomethylation_c = Arc::new(PostTranslationalModification::new(
             "carba of C",
             get_amino_acid_by_one_letter_code('C').unwrap(),
             57.021464,
             ModificationType::Static,
             Position::Anywhere,
-        );
+        ));
 
-        let oxidation_m = PTM::new(
+        let oxidation_m = Arc::new(PostTranslationalModification::new(
             "oxi of M",
             get_amino_acid_by_one_letter_code('M').unwrap(),
             15.99491,
             ModificationType::Variable,
             Position::Anywhere,
-        );
+        ));
 
-        let something_terminal_m = PTM::new(
+        let something_terminal_m = Arc::new(PostTranslationalModification::new(
             "oxi of term M",
             get_amino_acid_by_one_letter_code('M').unwrap(),
             16.99491,
             ModificationType::Variable,
             Position::Terminus(dihardts_omicstools::proteomics::peptide::Terminus::N),
-        );
+        ));
 
-        let something_terminal_r = PTM::new(
+        let something_terminal_r = Arc::new(PostTranslationalModification::new(
             "oxi of term R",
             get_amino_acid_by_one_letter_code('R').unwrap(),
             20.3,
             ModificationType::Variable,
             Position::Terminus(dihardts_omicstools::proteomics::peptide::Terminus::C),
-        );
+        ));
 
-        let something_bond_n = PTM::new(
+        let something_bond_n = Arc::new(PostTranslationalModification::new(
             "something on N-bond",
             get_amino_acid_by_one_letter_code('X').unwrap(),
             10.0,
             ModificationType::Variable,
             Position::Terminus(dihardts_omicstools::proteomics::peptide::Terminus::N),
-        );
+        ));
 
-        let something_bond_c = PTM::new(
+        let something_bond_c = Arc::new(PostTranslationalModification::new(
             "something on N-bond",
             get_amino_acid_by_one_letter_code('X').unwrap(),
             40.3,
             ModificationType::Variable,
             Position::Terminus(dihardts_omicstools::proteomics::peptide::Terminus::C),
-        );
+        ));
 
         let mut condition = PeptideCondition::new(mass_to_int(mass));
-        condition.add_static_ptm(&carbamidomethylation_c);
-        condition.add_static_ptm(&carbamidomethylation_c);
-        condition.add_variable_ptm(&oxidation_m);
+        condition.add_static_ptm(carbamidomethylation_c.clone());
+        condition.add_static_ptm(carbamidomethylation_c.clone());
+        condition.add_variable_ptm(oxidation_m.clone());
 
         let mut finalized_condition: FinalizedPeptideCondition = condition.clone().into();
 
@@ -1499,7 +1505,7 @@ mod tests {
             ]
         );
 
-        condition.set_n_terminal_ptm(&something_terminal_m);
+        condition.set_n_terminal_ptm(something_terminal_m.clone());
         finalized_condition = condition.clone().into();
         assert!(finalized_condition.check_peptide(&peptide));
 
@@ -1510,7 +1516,7 @@ mod tests {
             ["<[+57.021464]@C>M[+16.99491]FCQLAKTCPVQLWVDM[+15.99491]STPPPGTRVR",]
         );
 
-        condition.set_c_terminal_ptm(&something_terminal_r);
+        condition.set_c_terminal_ptm(something_terminal_r.clone());
         finalized_condition = condition.clone().into();
         assert!(finalized_condition.check_peptide(&peptide));
 
@@ -1521,7 +1527,7 @@ mod tests {
             ["<[+57.021464]@C>M[+16.99491]FCQLAKTCPVQLWVDM[+15.99491]STPPPGTRVR[+20.3]",]
         );
 
-        condition.set_n_bond_ptm(&something_bond_n);
+        condition.set_n_bond_ptm(something_bond_n.clone());
         finalized_condition = condition.clone().into();
         assert!(finalized_condition.check_peptide(&peptide));
 
@@ -1532,7 +1538,7 @@ mod tests {
             ["<[+57.021464]@C>[10]-M[+16.99491]FCQLAKTCPVQLWVDM[+15.99491]STPPPGTRVR[+20.3]",]
         );
 
-        condition.set_c_bond_ptm(&something_bond_c);
+        condition.set_c_bond_ptm(something_bond_c.clone());
         finalized_condition = condition.clone().into();
         assert!(finalized_condition.check_peptide(&peptide));
 
