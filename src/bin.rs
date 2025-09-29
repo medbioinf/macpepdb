@@ -296,7 +296,8 @@ async fn main() -> Result<()> {
     {
         let layer = IndicatifLayer::new()
             .with_span_child_prefix_symbol("\t")
-            .with_span_child_prefix_indent("");
+            .with_span_child_prefix_indent("")
+            .with_max_progress_bars(10, None);
         tracing_indicatif_layer = Some(layer);
     }
 

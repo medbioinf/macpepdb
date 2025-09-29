@@ -275,16 +275,18 @@ impl Peptide {
                 .and_modify(|counter| *counter += 1)
                 .or_insert(1);
         }
-        let unique_taxonomy_ids: Vec<i64> = taxonomy_counters
+        let mut unique_taxonomy_ids: Vec<i64> = taxonomy_counters
             .iter()
             .filter(|(_, counter)| **counter == 1)
             .map(|(taxonomy_id, _)| *taxonomy_id)
             .collect();
+        unique_taxonomy_ids.sort();
 
-        let proteome_ids: Vec<String> = proteins
+        let mut proteome_ids: Vec<String> = proteins
             .iter()
             .map(|protein| protein.get_proteome_id().to_owned())
             .collect();
+        proteome_ids.sort();
 
         let mut domains: Vec<Domain> = Vec::new();
         if include_domains {

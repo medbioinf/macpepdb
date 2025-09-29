@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc,
 };
 use std::thread::sleep;
 use std::time::Duration;
@@ -18,11 +18,13 @@ use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{pin_mut, StreamExt, TryStreamExt};
+use indicatif::ProgressStyle;
 use metrics::{counter, describe_counter, describe_gauge, gauge, Unit};
 use tokio::fs::create_dir_all;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::{pin, spawn};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, info_span, trace, warn};
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 // internal imports
 use crate::database::generic_client::GenericClient;
@@ -80,6 +82,9 @@ pub const PROTEIN_QUEUE_SIZE_COUNTER_NAME: &str = "macpepdb_build_digestion_prot
 pub const METADATA_PROCESSED_PEPTIDES_COUNTER_NAME: &str =
     "macpepdb_build_metadata_processed_peptides";
 pub const METADATA_ERRORS_COUNTER_NAME: &str = "macpepdb_build_metadata_errors";
+
+pub const METADATA_UNRESOLVABLE_ERRORS_COUNTER_NAME: &str =
+    "macpepdb_build_metadata_unresolvable_errors";
 
 /// Number of proteins per thread in queue
 ///
@@ -736,6 +741,11 @@ impl DatabaseBuild {
         );
         describe_counter!(METADATA_ERRORS_COUNTER_NAME, "Number of errors");
 
+        describe_counter!(
+            METADATA_UNRESOLVABLE_ERRORS_COUNTER_NAME,
+            "Number of unrecoverable errors"
+        );
+
         let monitorable_metrics = vec![
             MonitorableMetric::new(
                 METADATA_PROCESSED_PEPTIDES_COUNTER_NAME.to_string(),
@@ -743,6 +753,10 @@ impl DatabaseBuild {
             ),
             MonitorableMetric::new(
                 METADATA_ERRORS_COUNTER_NAME.to_string(),
+                MonitorableMetricType::Rate,
+            ),
+            MonitorableMetric::new(
+                METADATA_UNRESOLVABLE_ERRORS_COUNTER_NAME.to_string(),
                 MonitorableMetricType::Rate,
             ),
         ];
@@ -753,10 +767,18 @@ impl DatabaseBuild {
             "http://127.0.0.1:9494/metrics".to_string(),
         )?;
 
+        let partition_queue: Arc<ArrayQueue<i64>> =
+            Arc::new(ArrayQueue::new(configuration.get_partition_limits().len()));
+
         // Metadata update variables
-        let partition_queue: Vec<i64> =
-            (0..(configuration.get_partition_limits().len() as i64)).collect();
-        let partition_queue = Arc::new(Mutex::new(partition_queue));
+        for i in 0..(configuration.get_partition_limits().len() as i64) {
+            match partition_queue.push(i) {
+                Ok(_) => {}
+                Err(_) => bail!("Could not push partition {} to partition queue", i),
+            }
+        }
+
+        let configuration_arc = Arc::new(configuration.clone());
 
         debug!("Starting {} metadata update threads", num_threads);
         let client = Arc::new(Client::new(database_url).await?);
@@ -766,11 +788,31 @@ impl DatabaseBuild {
                 Ok(spawn(Self::collect_peptide_metadata_thread(
                     client.clone(),
                     partition_queue.clone(),
+                    configuration_arc.clone(),
                     protease.clone(),
                     include_domains,
                 )))
             })
             .collect::<Result<Vec<_>>>()?;
+
+        let progress_span = info_span!("progress");
+        progress_span.pb_set_message("Finished partitions");
+        progress_span.pb_set_style(
+            &ProgressStyle::with_template("        {msg} {wide_bar} {pos}/{len} {per_sec} ")
+                .unwrap(),
+        );
+        progress_span.pb_set_length(configuration.get_partition_limits().len() as u64);
+
+        while !partition_queue.is_empty() {
+            progress_span.pb_set_position(
+                (configuration.get_partition_limits().len() - partition_queue.len()) as u64,
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
+        }
+
+        info!("... all partitions processed");
+
+        drop(progress_span);
 
         debug!("Waiting metadata update threads to stop ...");
         // Wait for digestion threads to finish
@@ -794,7 +836,8 @@ impl DatabaseBuild {
     ///
     async fn collect_peptide_metadata_thread(
         client: Arc<Client>,
-        partition_queue: Arc<Mutex<Vec<i64>>>,
+        partition_queue: Arc<ArrayQueue<i64>>,
+        configuration: Arc<Configuration>,
         protease: Arc<dyn Protease>,
         include_domains: bool,
     ) -> Result<()> {
@@ -809,77 +852,120 @@ impl DatabaseBuild {
             .map(|aa| *aa.get_code())
             .collect();
 
-        loop {
-            let partition = {
-                let mut partition_queue = match partition_queue.lock() {
-                    Ok(partition_queue) => partition_queue,
-                    Err(err) => bail!(format!("Could not lock partition queue: {}", err)),
-                };
-                match partition_queue.pop() {
-                    Some(partition) => partition,
-                    None => break,
+        while let Some(partition) = partition_queue.pop() {
+            info!("Processing partition {}", partition);
+
+            let peptide_stream = match PeptideTable::select_peptides_for_metadata_update(
+                client.as_ref(),
+                configuration.get_partition_limits(),
+                partition,
+            )
+            .await
+            {
+                Ok(stream) => stream,
+                Err(err) => {
+                    counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
+                    error!(
+                        "Could not select peptides for partition {}: {:?}",
+                        partition, err
+                    );
+                    continue;
                 }
             };
-
-            let partition_cql = CqlValue::BigInt(partition);
-            let select_args_refs = vec![&partition_cql];
-
-            let peptide_stream = PeptideTable::select(
-                client.as_ref(),
-                "WHERE partition = ? AND is_metadata_updated = false ALLOW FILTERING",
-                &select_args_refs,
-            )
-            .await?;
 
             pin_mut!(peptide_stream);
 
             while let Some(peptide) = peptide_stream.next().await {
-                let peptide = peptide?;
-                let associated_proteins =
-                    ProteinTable::get_proteins_of_peptide(client.as_ref(), &peptide)
-                        .await?
-                        .try_collect::<Vec<_>>()
-                        .await?;
-
-                let (
-                    is_swiss_prot,
-                    is_trembl,
-                    taxonomy_ids,
-                    unique_taxonomy_ids,
-                    proteome_ids,
-                    domains,
-                ) = peptide.get_metadata_from_proteins(
-                    &associated_proteins,
-                    &protease_cleavage_codes,
-                    &protease_cleavage_blocker_codes,
-                    include_domains,
-                );
-
-                let update_result = PeptideTable::update_metadata(
-                    client.as_ref(),
-                    &peptide,
-                    is_swiss_prot,
-                    is_trembl,
-                    &taxonomy_ids,
-                    &unique_taxonomy_ids,
-                    &proteome_ids,
-                    &domains,
-                )
-                .await;
-
-                match update_result {
-                    Ok(_) => {
-                        counter!(METADATA_PROCESSED_PEPTIDES_COUNTER_NAME).increment(1);
-                    }
+                let peptide = match peptide {
+                    Ok(peptide) => peptide,
                     Err(err) => {
                         counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
-                        error!(
-                            "Metadata update failed `{}`\n{:?}\n",
-                            peptide.get_sequence(),
-                            err
-                        );
+                        error!("Could not get peptide from stream: {:?}", err);
+                        continue;
                     }
                 };
+
+                let mut update_success = false;
+                for attempt in 0..3 {
+                    let protein_stream = match ProteinTable::get_proteins_of_peptide(
+                        client.as_ref(),
+                        &peptide,
+                    )
+                    .await
+                    {
+                        Ok(stream) => stream,
+                        Err(err) => {
+                            counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
+                            error!(
+                                "Could not select proteins for peptide {} in {attempt}. attempt: {:?}",
+                                peptide.get_sequence(),
+                                err
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                            continue;
+                        }
+                    };
+
+                    let associated_proteins = match protein_stream.try_collect::<Vec<_>>().await {
+                        Ok(proteins) => proteins,
+                        Err(err) => {
+                            counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
+                            error!(
+                                "Could not collect proteins for peptide {} in {attempt}. attempt: {:?}",
+                                peptide.get_sequence(),
+                                err
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                            continue;
+                        }
+                    };
+
+                    let (
+                        is_swiss_prot,
+                        is_trembl,
+                        taxonomy_ids,
+                        unique_taxonomy_ids,
+                        proteome_ids,
+                        domains,
+                    ) = peptide.get_metadata_from_proteins(
+                        &associated_proteins,
+                        &protease_cleavage_codes,
+                        &protease_cleavage_blocker_codes,
+                        include_domains,
+                    );
+
+                    let update_result = PeptideTable::update_metadata(
+                        client.as_ref(),
+                        &peptide,
+                        is_swiss_prot,
+                        is_trembl,
+                        &taxonomy_ids,
+                        &unique_taxonomy_ids,
+                        &proteome_ids,
+                        &domains,
+                    )
+                    .await;
+
+                    match update_result {
+                        Ok(_) => {
+                            counter!(METADATA_PROCESSED_PEPTIDES_COUNTER_NAME).increment(1);
+                            update_success = true;
+                            break;
+                        }
+                        Err(err) => {
+                            counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
+                            error!(
+                                "Metadata update failed for {} in in {attempt}. attempt: {:?}\n",
+                                peptide.get_sequence(),
+                                err
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                        }
+                    };
+                }
+                if !update_success {
+                    counter!(METADATA_UNRESOLVABLE_ERRORS_COUNTER_NAME).increment(1);
+                }
             }
         }
         Ok(())
@@ -1263,6 +1349,84 @@ mod test {
             assert!(peptide.get_is_swiss_prot());
             assert!(peptide.get_is_trembl());
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial]
+    async fn test_peptide_metadata_update() {
+        let client = Client::new("scylla://192.168.124.58,192.168.124.61,192.168.124.92,192.168.124.106,192.168.124.147,192.168.124.136,192.168.124.34,192.168.124.194,192.168.124.180,192.168.124.245/uniprottry").await.unwrap();
+        let config = ConfigurationTable::select(&client).await.unwrap();
+
+        let target = "DAQAGK";
+
+        let peptide =
+            PeptideTable::select_by_sequence(&client, target, config.get_partition_limits())
+                .await
+                .unwrap()
+                .unwrap();
+
+        println!("{} ", peptide.get_partition());
+
+        println!("{}", config.get_partition_limits().len());
+
+        // let associated_proteins = ProteinTable::get_proteins_of_peptide(&client, &peptide)
+        //     .await
+        //     .unwrap()
+        //     .try_collect::<Vec<_>>()
+        //     .await
+        //     .unwrap();
+
+        // for protein in &associated_proteins {
+        //     println!("{}", protein.get_accession(),);
+        // }
+
+        // let (
+        //     is_swiss_prot,
+        //     is_trembl,
+        //     mut taxonomy_ids,
+        //     mut unique_taxonomy_ids,
+        //     proteome_ids,
+        //     domains,
+        // ) = peptide.get_metadata_from_proteins(&associated_proteins, &['K', 'R'], &['P'], false);
+
+        // taxonomy_ids.sort();
+        // unique_taxonomy_ids.sort();
+
+        // println!("is_swiss_prot: {}", is_swiss_prot);
+        // println!("is_trembl: {}", is_trembl);
+        // println!("taxonomy_ids: {:?}", taxonomy_ids);
+        // println!("unique_taxonomy_ids: {:?}", unique_taxonomy_ids);
+        // println!("proteome_ids: {:?}", proteome_ids);
+
+        // let update_result = PeptideTable::update_metadata(
+        //     &client,
+        //     &peptide,
+        //     is_swiss_prot,
+        //     is_trembl,
+        //     &taxonomy_ids,
+        //     &unique_taxonomy_ids,
+        //     &proteome_ids,
+        //     &domains,
+        // )
+        // .await;
+
+        // println!("{:?}", update_result);
+
+        // assert!(update_result.is_ok());
+
+        // // match update_result {
+        // //     Ok(_) => {
+        // //         counter!(METADATA_PROCESSED_PEPTIDES_COUNTER_NAME).increment(1);
+        // //     }
+        // //     Err(err) => {
+        // //         counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
+        // //         error!(
+        // //             "Metadata update failed `{}`\n{:?}\n",
+        // //             peptide.get_sequence(),
+        // //             err
+        // //         );
+        // //     }
+        // // };
     }
 
     // TODO: Test update

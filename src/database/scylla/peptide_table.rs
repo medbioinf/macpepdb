@@ -59,6 +59,8 @@ const UPDATE_COLS: [&str; 9] = [
     "domains",
 ];
 
+const DEPRECATION_CHECK_COLS: [&str; 2] = ["sequence", "is_metadata_updated"];
+
 lazy_static! {
     /// Select statement with any additional where-clause
     ///
@@ -124,6 +126,15 @@ lazy_static! {
     static ref SELECT_BY_MASS_RANGE_STATEMENT: String = format!(
         "{} WHERE partition = ? AND mass >= ? AND mass <= ?",
         SELECT_STATEMENT.as_str(),
+    );
+
+    /// Statement returning information necessary to check the deprecation status of a peptide
+    /// and the primary key columns to uniquely identify a peptide in case of an upda
+    ///
+    static ref SELECT_FOR_DEPRECATION_CHECK_BY_MASS_RANGE_CHECK: String = format!(
+        "SELECT {} FROM :KEYSPACE:.{} WHERE partition = ?",
+        DEPRECATION_CHECK_COLS.join(", "),
+        TABLE_NAME
     );
 
 }
@@ -656,6 +667,44 @@ impl PeptideTable {
         pin!(stream);
 
         stream.try_next().await
+    }
+
+    /// Retruns a stream of peptides which have not yet updated metadata.
+    /// As a secondary index for is_metadata_updated would need a materialized view
+    /// which takes time and space to build, this method is running through all peptides
+    /// in the partition only selecting the sequence and is_metadata_updated columns.
+    /// If is_metadata_updated is false the full peptide is selected by sequence and yielded.
+    ///
+    /// # Arguments
+    /// * `client` - The database client
+    /// * `additional` - Additional statement to add to the select statement, e.g. WHERE clause
+    /// * `partition_limits` - The partition limits
+    ///
+    pub async fn select_peptides_for_metadata_update<'a>(
+        client: &'a Client,
+        partition_limits: &'a [i64],
+        partition: i64,
+    ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
+        let prepared_statement = client
+            .get_prepared_statement(SELECT_FOR_DEPRECATION_CHECK_BY_MASS_RANGE_CHECK.as_str())
+            .await?;
+
+        let stream = client
+            .execute_iter(prepared_statement, (partition,))
+            .await?
+            .rows_stream::<(String, bool)>()?;
+
+        Ok(try_stream! {
+            for await row in stream {
+                let row = row?;
+
+                if row.1 {
+                    continue;
+                }
+
+                yield Self::select_by_sequence(client, &row.0, partition_limits).await?.ok_or(anyhow::anyhow!("Peptide with sequence {} not found although it was selected before", row.0))?;
+            }
+        })
     }
 }
 
