@@ -1,8 +1,7 @@
 // 3rd party imports
 use anyhow::{bail, Result};
-use indicatif::ProgressStyle;
 use tracing::{debug, info_span, warn, Span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing_indicatif::{span_ext::IndicatifSpanExt, style::ProgressStyle};
 
 // Internal imports
 use crate::chemistry::amino_acid::INTERNAL_TRYPTOPHAN;

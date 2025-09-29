@@ -4,11 +4,10 @@ use std::sync::Arc;
 
 // 3rd party imports
 use anyhow::{bail, Result};
-use indicatif::ProgressStyle;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tracing::{info_span, Instrument, Span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing_indicatif::{span_ext::IndicatifSpanExt, style::ProgressStyle};
 
 /// update interval for the progress bar in ms
 ///

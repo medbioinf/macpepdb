@@ -4,11 +4,10 @@ use std::sync::atomic::Ordering;
 use std::sync::{atomic::AtomicBool, Arc};
 
 use anyhow::Result;
-use indicatif::ProgressStyle;
 use prometheus_parse::{Scrape, Value};
 use reqwest;
 use tracing::{info_span, warn, Instrument, Span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing_indicatif::{span_ext::IndicatifSpanExt, style::ProgressStyle};
 
 /// Refresh interval for the metrics monitor in ms
 ///

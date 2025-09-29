@@ -6,11 +6,10 @@ use std::sync::{atomic::AtomicBool, Mutex};
 use anyhow::{bail, Result};
 use crossbeam_queue::ArrayQueue;
 use futures::Future;
-use indicatif::ProgressStyle;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
 use tracing::{error, info_span, Instrument, Span};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing_indicatif::{span_ext::IndicatifSpanExt, style::ProgressStyle};
 
 /// update interval for the progress bar in ms
 ///

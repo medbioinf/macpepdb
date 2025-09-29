@@ -18,13 +18,13 @@ use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{pin_mut, StreamExt, TryStreamExt};
-use indicatif::ProgressStyle;
 use metrics::{counter, describe_counter, describe_gauge, gauge, Unit};
 use tokio::fs::create_dir_all;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::{pin, spawn};
 use tracing::{debug, error, info, info_span, trace, warn};
 use tracing_indicatif::span_ext::IndicatifSpanExt;
+use tracing_indicatif::style::ProgressStyle;
 
 // internal imports
 use crate::database::generic_client::GenericClient;
