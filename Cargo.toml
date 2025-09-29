@@ -41,14 +41,12 @@ async-stream = "0.3.5"
 axum = { version = "0.7.2", features = ["json"] }
 axum-streams = { version = "0.15", features = ["json", "csv", "text"] }
 base64 = "0.22.1"
-bitvec = "1.0.1"
 chrono = "0.4.23"
 clap = { version = "4.3.0", features = ["derive"] }
 crossbeam-queue = "0.3.11"
 csv = "1.2.2"
 dihardts_cstools = "~2.2.0"
 dihardts_omicstools = "~3.1.0"
-env_logger = "0.10.0"
 fallible-iterator = "0.3.0"
 fancy-regex = "0.11.0"
 flate2 = "1.0.28"
@@ -59,15 +57,10 @@ indicatif = "0.17.6"
 indicium = "0.6.0"
 itertools = "0.14.0"
 lazy_static = "1.4.0"
-log = "0.4.17"
 metrics = "0.24.1"
 metrics-exporter-prometheus = { version = "0.16.1", features = ["http-listener"] }
-metrics-util = "0.19.0"
-murmur3 = "0.5.2"
-openssl = "0.10.60"
 prometheus-parse = "0.2.5"
 rand = "0.8.5"
-refinery = { version = "0.8.7", features = ["tokio-postgres"] }
 reqwest = { version = "0.11.22", features = ["json", "stream"] }
 rustyms = "0.10.0"
 scylla = { version = "1.1.0", features = ["metrics"] }
@@ -77,7 +70,6 @@ sysinfo = "0.28.2"
 thiserror = "2.0.12"
 tokio = { version = "1.44.2", features = ["full"] }
 tokio-util = "0.7.14"
-tower = "0.4.13"
 tower-http = { version = "0.5.0", features = ["cors", "trace"] }
 tracing = "0.1.37"
 tracing-appender = "0.2.3"
