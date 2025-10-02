@@ -332,14 +332,14 @@ pub trait Search {
         task_id: usize,
         client: Arc<Client>,
         partition: usize,
-        mut conditions: Vec<(i64, i64, FinalizedPeptideCondition)>,
+        conditions: Vec<(i64, i64, FinalizedPeptideCondition)>,
         mut filter_pipeline: Vec<Box<dyn FilterFunction>>,
         resolve_modifications: bool,
         peptide_sender: Sender<Result<MatchingPeptide>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
             let partition = partition as i64;
-            for (lower_mass_limit, upper_mass_limit, mut ptm_condition) in conditions.iter_mut() {
+            for (lower_mass_limit, upper_mass_limit, mut ptm_condition) in conditions.into_iter() {
                 let peptide_stream = match PeptideTable::select(
                     client.as_ref(),
                     "WHERE partition = ? AND mass >= ? AND mass <= ?",
