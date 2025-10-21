@@ -17,6 +17,8 @@ mod layouts;
 mod pages;
 /// Routes used by the web app
 mod routes;
+/// Tracking of page visits
+mod tracking;
 
 use dioxus::{logger::tracing::Level, prelude::*};
 

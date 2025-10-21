@@ -12,6 +12,7 @@ use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::amino_acid::AminoAcid;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProteins;
+use crate::tracking::track_page_visit;
 
 /// As proteins contain their peptides and peptides contain their protein of origin, MaCPepDB
 /// stops the recursion on third level by only adding the Protein sequences to the protein
@@ -63,7 +64,8 @@ pub struct PeptideProps {
 ///
 pub fn Peptide(props: PeptideProps) -> Element {
     let app_config = use_context::<AppConfiguration>();
-    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let macpepdb_base_url: Signal<String> =
+        use_signal(|| app_config.get_macpepdb_base_url().to_owned());
     let peptide_sequence = use_signal(|| props.peptide_sequence.clone());
     let mut review_proteins: Signal<Option<Rc<Vec<ProteinEntity>>>> = use_signal(|| None);
     let mut unreview_proteins: Signal<Option<Rc<Vec<ProteinEntity>>>> = use_signal(|| None);
@@ -79,6 +81,14 @@ pub fn Peptide(props: PeptideProps) -> Element {
             Ok(peptide)
         });
     let amino_acid_map = use_resource(move || get_amino_acid_map(macpepdb_base_url));
+
+    let _ = use_resource(move || async move {
+        track_page_visit(vec![(
+            peptide_sequence.to_string(),
+            ":peptide_sequence".to_string(),
+        )])
+        .await
+    });
 
     rsx! {
         div {

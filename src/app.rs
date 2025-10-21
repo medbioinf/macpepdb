@@ -6,13 +6,14 @@ use dioxus::{
 use dioxus_router::prelude::Router;
 
 // internal imports
-use crate::{configuration::Configuration, routes::Routes};
+use crate::{configuration::Configuration, routes::Routes, tracking::create_tracking_id};
 
 /// Root component for the entire frontend
 ///
 pub fn App() -> Element {
     #[allow(clippy::redundant_closure)]
     use_context_provider(|| Configuration::new());
+    use_context_provider(create_tracking_id);
 
     rsx! {
         Stylesheet { href: "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" }

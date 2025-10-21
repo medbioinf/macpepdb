@@ -11,6 +11,7 @@ use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
+use crate::tracking::track_page_visit;
 
 /// Proteins downloaded via the proteins endpoint contains full peptide entries instead of sequences,
 /// but the peptide's proteins only contain protein accession.
@@ -69,6 +70,8 @@ pub fn ProteinSearch() -> Element {
             }
         }
     });
+
+    let _ = use_resource(move || async move { track_page_visit(vec![]).await });
 
     rsx! {
         h3 { "Search for proteins" }

@@ -8,6 +8,7 @@ use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
 use crate::routes::Routes;
+use crate::tracking::track_page_visit;
 
 /// As peptides contain their protein of origin and proteins contain their peptides, MaCPepDB
 /// stops the recursion on third level by only adding the protein accession to the peptides
@@ -39,11 +40,20 @@ pub struct ProteinProps {
 pub fn Protein(props: ProteinProps) -> Element {
     let app_config = use_context::<AppConfiguration>();
     let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+
     let protein_id = use_signal(|| props.protein_id.to_owned());
 
     let protein = use_resource(move || get_protein(macpepdb_base_url, protein_id));
 
     let uniprot_link = use_signal(|| format!("https://www.uniprot.org/uniprot/{}", protein_id));
+
+    let _ = use_resource(move || async move {
+        track_page_visit(vec![(
+            protein_id.to_string(),
+            ":protein_accession".to_string(),
+        )])
+        .await
+    });
 
     rsx! {
         div {

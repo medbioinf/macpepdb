@@ -1,12 +1,17 @@
 use dioxus::prelude::*;
 
-use crate::components::peptide_search::{mass_search::MassSearch, sequence_search::SequenceSearch};
+use crate::{
+    components::peptide_search::{mass_search::MassSearch, sequence_search::SequenceSearch},
+    tracking::track_page_visit,
+};
 
 const BY_MASS_TAB: &str = "by mass";
 const BY_SEQUENCE_TAB: &str = "by sequence";
 
 pub fn PeptideSearch() -> Element {
     let mut selected_tab = use_signal(|| BY_SEQUENCE_TAB);
+
+    let _ = use_resource(move || async move { track_page_visit(vec![]).await });
 
     rsx! {
         h3 { "Search for peptides" }
