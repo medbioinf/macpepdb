@@ -1,6 +1,8 @@
+use std::cell::Cell;
 use std::cmp::max;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Display;
+use std::io::Cursor;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -34,7 +36,7 @@ pub trait FilterFunction: Send + Sync + Display {
     /// # Arguments
     /// * `peptide` - The peptide to check
     ///
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool>;
+    fn is_match(&self, peptide: &Peptide) -> Result<bool>;
 }
 
 /// Filters peptides which not are in SwissProt
@@ -42,7 +44,7 @@ pub trait FilterFunction: Send + Sync + Display {
 struct IsSwissProtFilterFunction;
 
 impl FilterFunction for IsSwissProtFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         Ok(peptide.get_is_swiss_prot())
     }
 }
@@ -58,7 +60,7 @@ impl Display for IsSwissProtFilterFunction {
 struct IsTrEMBLFilterFunction;
 
 impl FilterFunction for IsTrEMBLFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         Ok(peptide.get_is_trembl())
     }
 }
@@ -72,22 +74,26 @@ impl Display for IsTrEMBLFilterFunction {
 /// Makes sure that no peptide is returned twice
 ///
 pub struct ThreadSafeDistinctFilterFunction {
-    bloom_filter: BloomFilter,
+    bloom_filter: BloomFilter<Cell<u64>>,
 }
 
 impl FilterFunction for ThreadSafeDistinctFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
-        if self.bloom_filter.contains(peptide.get_sequence())? {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
+        if self
+            .bloom_filter
+            .contains(&mut Cursor::new(peptide.get_sequence()))?
+        {
             return Ok(false);
         }
-        self.bloom_filter.add(peptide.get_sequence())?;
+        self.bloom_filter
+            .add_aliased(&mut Cursor::new(peptide.get_sequence()))?;
         Ok(true)
     }
 }
 
 impl Display for ThreadSafeDistinctFilterFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "distinct")
+        write!(f, "distinct ({})", self.bloom_filter)
     }
 }
 
@@ -98,7 +104,7 @@ struct TaxonomyFilterFunction {
 }
 
 impl FilterFunction for TaxonomyFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         for taxonomy_id in self.taxonomy_ids.iter() {
             if peptide.get_taxonomy_ids().contains(taxonomy_id) {
                 return Ok(true);
@@ -121,7 +127,7 @@ struct ProteomeFilterFunction {
 }
 
 impl FilterFunction for ProteomeFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         for proteome_id in self.proteome_ids.iter() {
             if peptide.get_proteome_ids().contains(proteome_id) {
                 return Ok(true);
@@ -144,7 +150,7 @@ struct StartsWithFilterFunction {
 }
 
 impl FilterFunction for StartsWithFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         Ok(peptide.get_sequence().starts_with(self.amino_acid))
     }
 }
@@ -163,7 +169,7 @@ struct EndsWithFilterFunction {
 }
 
 impl FilterFunction for EndsWithFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         Ok(peptide.get_sequence().ends_with(self.amino_acid))
     }
 }
@@ -183,7 +189,7 @@ struct EqualsNumberOfOccurrencesFilterFunction {
 }
 
 impl FilterFunction for EqualsNumberOfOccurrencesFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         let count = peptide.get_aa_count(self.amino_acid);
         Ok(count == self.amount)
     }
@@ -204,7 +210,7 @@ struct GreaterOrEqualsNumberOfOccurrencesFilterFunction {
 }
 
 impl FilterFunction for GreaterOrEqualsNumberOfOccurrencesFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         let count = peptide.get_aa_count(self.amino_acid);
         Ok(count >= self.amount)
     }
@@ -224,7 +230,7 @@ struct NoOccurrencesFilterFunction {
 }
 
 impl FilterFunction for NoOccurrencesFilterFunction {
-    fn is_match(&mut self, peptide: &Peptide) -> Result<bool> {
+    fn is_match(&self, peptide: &Peptide) -> Result<bool> {
         let count = peptide.get_aa_count(self.amino_acid);
         Ok(count == 0)
     }
@@ -233,6 +239,75 @@ impl FilterFunction for NoOccurrencesFilterFunction {
 impl Display for NoOccurrencesFilterFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "occurences of '{}' == 0", self.amino_acid,)
+    }
+}
+
+pub struct FilterPipeline {
+    filter_functions: Vec<Box<dyn FilterFunction>>,
+}
+
+impl FilterPipeline {
+    pub fn new(filter_functions: Vec<Box<dyn FilterFunction>>) -> Self {
+        Self { filter_functions }
+    }
+
+    pub fn new_for_general_peptide_attirbutes(
+        distinct: bool,
+        taxonomy_ids: Option<Arc<Vec<i64>>>,
+        proteome_ids: Option<Arc<Vec<String>>>,
+        is_reviewed: Option<bool>,
+    ) -> Result<Self> {
+        let mut filter_function: Vec<Box<dyn FilterFunction>> = Vec::new();
+        if distinct {
+            filter_function.push(Box::new(ThreadSafeDistinctFilterFunction {
+                //bloom_filter: BloomFilter::new_by_item_count_and_fp_prob(5564216, 0.001)?,
+                bloom_filter: BloomFilter::new_by_length_and_fp_prob(80_000_000, 0.001)?,
+            }));
+        }
+        if let Some(taxonomy_ids) = taxonomy_ids {
+            filter_function.push(Box::new(TaxonomyFilterFunction { taxonomy_ids }));
+        }
+        if let Some(proteome_ids) = proteome_ids {
+            filter_function.push(Box::new(ProteomeFilterFunction { proteome_ids }));
+        }
+        if let Some(is_reviewed) = is_reviewed {
+            if is_reviewed {
+                filter_function.push(Box::new(IsSwissProtFilterFunction {}));
+            } else {
+                filter_function.push(Box::new(IsTrEMBLFilterFunction {}));
+            }
+        }
+        Ok(Self::new(filter_function))
+    }
+
+    pub fn is_match(&self, peptide: &Peptide) -> Result<bool> {
+        for filter in self.filter_functions.iter() {
+            if !filter.is_match(peptide)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+impl Display for FilterPipeline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "FilterPipeline[{}]",
+            self.filter_functions
+                .iter()
+                .map(|f| f.to_string())
+                .join(", ")
+        )
+    }
+}
+
+impl Drop for FilterPipeline {
+    fn drop(&mut self) {
+        while let Some(filter) = self.filter_functions.pop() {
+            drop(filter);
+        }
     }
 }
 
@@ -281,42 +356,6 @@ pub trait Search {
         num_threads: Option<usize>,
     ) -> impl std::future::Future<Output = Result<FalliblePeptideStream>> + Send;
 
-    /// Creates a vecotor of filter functions based on the given parameters.
-    ///
-    /// # Arguments
-    /// * `distinct` - Whether to return distinct peptides only
-    /// * `taxonomy_ids` - The taxonomy IDs to filter the peptides by
-    /// * `proteome_ids` - The proteome IDs to filter the peptides by
-    /// * `is_reviewed` - Whether to filter the peptides by SwissProt or TrEMBL
-    ///
-    fn create_filter_pipeline(
-        distinct: bool,
-        taxonomy_ids: Option<Arc<Vec<i64>>>,
-        proteome_ids: Option<Arc<Vec<String>>>,
-        is_reviewed: Option<bool>,
-    ) -> Result<Vec<Box<dyn FilterFunction>>> {
-        let mut filter_pipeline: Vec<Box<dyn FilterFunction>> = Vec::new();
-        if distinct {
-            filter_pipeline.push(Box::new(ThreadSafeDistinctFilterFunction {
-                bloom_filter: BloomFilter::new_by_size_and_fp_prob(80_000_000, 0.001)?,
-            }));
-        }
-        if let Some(taxonomy_ids) = taxonomy_ids {
-            filter_pipeline.push(Box::new(TaxonomyFilterFunction { taxonomy_ids }));
-        }
-        if let Some(proteome_ids) = proteome_ids {
-            filter_pipeline.push(Box::new(ProteomeFilterFunction { proteome_ids }));
-        }
-        if let Some(is_reviewed) = is_reviewed {
-            if is_reviewed {
-                filter_pipeline.push(Box::new(IsSwissProtFilterFunction {}));
-            } else {
-                filter_pipeline.push(Box::new(IsTrEMBLFilterFunction {}));
-            }
-        }
-        Ok(filter_pipeline)
-    }
-
     /// Query condition (e.g. PTMs) which needs more work prior to the actual query than just querying the mass.
     ///
     /// # Arguments
@@ -333,7 +372,7 @@ pub trait Search {
         client: Arc<Client>,
         partition: usize,
         conditions: Vec<(i64, i64, FinalizedPeptideCondition)>,
-        mut filter_pipeline: Vec<Box<dyn FilterFunction>>,
+        filter_pipeline: Arc<FilterPipeline>,
         resolve_modifications: bool,
         peptide_sender: Sender<Result<MatchingPeptide>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
@@ -362,14 +401,11 @@ pub trait Search {
                             return Err(err);
                         }
                     };
-                    if !ptm_condition.check_peptide(&peptide) {
+                    if !ptm_condition.is_match(&peptide) {
                         continue;
                     }
-                    for filter in filter_pipeline.iter_mut() {
-                        if !filter.is_match(&peptide)? {
-                            // debug!("peptide: {} filtered", &seq);
-                            continue 'peptide_loop;
-                        }
+                    if !filter_pipeline.is_match(&peptide)? {
+                        continue 'peptide_loop;
                     }
 
                     let additional_sequences = if resolve_modifications {
@@ -411,7 +447,7 @@ pub trait Search {
         mass: i64,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
-        mut filter_pipeline: Vec<Box<dyn FilterFunction>>,
+        filter_pipeline: Arc<FilterPipeline>,
         peptide_sender: Sender<Result<MatchingPeptide>>,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         async move {
@@ -429,14 +465,12 @@ pub trait Search {
             pin_mut!(peptide_stream);
             'peptide_loop: while let Some(peptide) = peptide_stream.next().await {
                 let peptide = peptide?;
-                for filter in filter_pipeline.iter_mut() {
-                    if !filter.is_match(&peptide)? {
-                        continue 'peptide_loop;
-                    }
+                if filter_pipeline.is_match(&peptide)? {
+                    continue 'peptide_loop;
                 }
                 peptide_sender.send(Ok(MatchingPeptide::new(peptide, Vec::new())))?;
             }
-
+            drop(peptide_sender);
             Ok(())
         }
     }
@@ -567,16 +601,17 @@ impl Search for MultiTaskSearch {
         let (peptide_sender, mut peptide_receiver) = channel::<Result<MatchingPeptide>>();
 
         Ok(Box::pin(try_stream! {
+            let filter_pipeline = Arc::new(FilterPipeline::new_for_general_peptide_attirbutes(
+                distinct,
+                taxonomy_ids.clone(),
+                proteome_ids.clone(),
+                is_reviewed,
+            )?);
+
             let mut tasks: Vec<tokio::task::JoinHandle<Result<()>>> = Vec::with_capacity(max(sorted_ptm_conditions.len(), 1));
             if !sorted_ptm_conditions.is_empty() {
                 for (task_id, (partition, conditions)) in sorted_ptm_conditions.into_iter().enumerate() {
-                    let filter_pipeline = Self::create_filter_pipeline(
-                        distinct,
-                        taxonomy_ids.clone(),
-                        proteome_ids.clone(),
-                        is_reviewed,
-                    )?;
-
+                    let task_filter_pipeline = filter_pipeline.clone();
                     // Spawn on task for each PTM condition
                     tasks.push(tokio::task::spawn(
                         Self::search_with_ptm_conditions(
@@ -584,7 +619,7 @@ impl Search for MultiTaskSearch {
                             client.clone(),
                             partition,
                             conditions,
-                            filter_pipeline,
+                            task_filter_pipeline,
                             resolve_modifications,
                             peptide_sender.clone(),
                         )
@@ -599,12 +634,7 @@ impl Search for MultiTaskSearch {
                         mass,
                         lower_mass_tolerance_ppm,
                         upper_mass_tolerance_ppm,
-                        Self::create_filter_pipeline(
-                            distinct,
-                            taxonomy_ids,
-                            proteome_ids,
-                            is_reviewed,
-                        )?,
+                        filter_pipeline,
                         peptide_sender.clone(),
                     )
                 ));
@@ -616,7 +646,7 @@ impl Search for MultiTaskSearch {
                 yield peptide?;
             }
 
-            for task in tasks {
+            for task in tasks.into_iter() {
                 task.await??;
             }
         }))
@@ -1181,10 +1211,35 @@ impl Display for PeptideCondition {
     }
 }
 
+impl Drop for PeptideCondition {
+    fn drop(&mut self) {
+        while let Some(ptm) = self.static_ptms.pop() {
+            drop(ptm);
+        }
+        while let Some(ptm) = self.variable_ptms.pop() {
+            drop(ptm);
+        }
+        if let Some(ptm) = self.n_terminal_ptm.take() {
+            drop(ptm);
+        }
+        if let Some(ptm) = self.c_terminal_ptm.take() {
+            drop(ptm);
+        }
+        if let Some(ptm) = self.n_bond_ptm.take() {
+            drop(ptm);
+        }
+        if let Some(ptm) = self.c_bond_ptm.take() {
+            drop(ptm);
+        }
+        self.excluded_amino_acids.clear();
+        self.excluded_amino_acids.shrink_to(0);
+    }
+}
+
 pub struct FinalizedPeptideCondition {
     inner_peptide_condition: PeptideCondition,
     /// Filter functions the peptide has to pass before it is returned
-    filter_functions: Vec<Box<dyn FilterFunction>>,
+    filter_pipeline: FilterPipeline,
 }
 
 impl FinalizedPeptideCondition {
@@ -1193,7 +1248,7 @@ impl FinalizedPeptideCondition {
     /// # Arguments
     /// * `peptide_condition` - The PeptideCondition to finalize
     ///
-    fn get_filter_functions(peptide_condition: &PeptideCondition) -> Vec<Box<dyn FilterFunction>> {
+    fn get_filter_pipeline(peptide_condition: &PeptideCondition) -> FilterPipeline {
         let mut filter_functions: Vec<Box<dyn FilterFunction>> = Vec::with_capacity(
             peptide_condition.static_ptms.len()
                 + peptide_condition.variable_ptms.len()
@@ -1267,18 +1322,11 @@ impl FinalizedPeptideCondition {
             }));
         }
 
-        filter_functions
+        FilterPipeline::new(filter_functions)
     }
 
-    pub fn check_peptide(&mut self, peptide: &Peptide) -> bool {
-        // Check if the peptide passes all filter functions
-        for filter in self.filter_functions.iter_mut() {
-            if !filter.is_match(peptide).unwrap_or(false) {
-                return false;
-            }
-        }
-
-        true
+    pub fn is_match(&mut self, peptide: &Peptide) -> bool {
+        self.filter_pipeline.is_match(peptide).unwrap_or(false)
     }
 }
 
@@ -1293,24 +1341,20 @@ impl Deref for FinalizedPeptideCondition {
 
 impl From<PeptideCondition> for FinalizedPeptideCondition {
     fn from(peptide_condition: PeptideCondition) -> Self {
-        let filter_functions = FinalizedPeptideCondition::get_filter_functions(&peptide_condition);
+        let filter_pipeline = FinalizedPeptideCondition::get_filter_pipeline(&peptide_condition);
         Self {
             inner_peptide_condition: peptide_condition,
-            filter_functions,
+            filter_pipeline,
         }
     }
 }
 
 impl Display for FinalizedPeptideCondition {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let filter_descriptions = self
-            .filter_functions
-            .iter()
-            .map(|filter| format!("{filter}"))
-            .join(" && ");
         write!(
             f,
-            "FinalizedPeptideCondition: {filter_descriptions} @ {}",
+            "FinalizedPeptideCondition: {} @ {}",
+            self.filter_pipeline,
             mass_to_float(self.query_mass)
         )
     }
@@ -1400,6 +1444,10 @@ mod tests {
                 .map(|line| line.to_string())
                 .collect::<HashSet<_>>();
 
+        for condition in expected_conditions.iter() {
+            println!("{condition}");
+        }
+
         assert_eq!(stringyfied_conditions.len(), expected_conditions.len());
 
         for condition in stringyfied_conditions.iter() {
@@ -1487,7 +1535,7 @@ mod tests {
 
         let mut finalized_condition: FinalizedPeptideCondition = condition.clone().into();
 
-        assert!(finalized_condition.check_peptide(&peptide));
+        assert!(finalized_condition.is_match(&peptide));
 
         let mut modified_sequences = condition.modify_sequence(sequence);
         modified_sequences.sort();
@@ -1501,7 +1549,7 @@ mod tests {
 
         condition.set_n_terminal_ptm(something_terminal_m.clone());
         finalized_condition = condition.clone().into();
-        assert!(finalized_condition.check_peptide(&peptide));
+        assert!(finalized_condition.is_match(&peptide));
 
         let mut modified_sequences = condition.modify_sequence(sequence);
         modified_sequences.sort();
@@ -1512,7 +1560,7 @@ mod tests {
 
         condition.set_c_terminal_ptm(something_terminal_r.clone());
         finalized_condition = condition.clone().into();
-        assert!(finalized_condition.check_peptide(&peptide));
+        assert!(finalized_condition.is_match(&peptide));
 
         let mut modified_sequences = condition.modify_sequence(sequence);
         modified_sequences.sort();
@@ -1523,7 +1571,7 @@ mod tests {
 
         condition.set_n_bond_ptm(something_bond_n.clone());
         finalized_condition = condition.clone().into();
-        assert!(finalized_condition.check_peptide(&peptide));
+        assert!(finalized_condition.is_match(&peptide));
 
         let mut modified_sequences = condition.modify_sequence(sequence);
         modified_sequences.sort();
@@ -1534,7 +1582,7 @@ mod tests {
 
         condition.set_c_bond_ptm(something_bond_c.clone());
         finalized_condition = condition.clone().into();
-        assert!(finalized_condition.check_peptide(&peptide));
+        assert!(finalized_condition.is_match(&peptide));
 
         let mut modified_sequences = condition.modify_sequence(sequence);
         modified_sequences.sort();

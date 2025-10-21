@@ -45,7 +45,8 @@ chrono = "0.4.23"
 clap = { version = "4.3.0", features = ["derive"] }
 crossbeam-queue = "0.3.11"
 csv = "1.2.2"
-dihardts_cstools = "~2.2.0"
+# dihardts_cstools = "~2.2.0"
+dihardts_cstools = { git = "https://github.com/di-hardt/cstools.git", branch = "dev" }
 dihardts_omicstools = "~3.1.0"
 fallible-iterator = "0.3.0"
 fancy-regex = "0.11.0"
@@ -87,3 +88,6 @@ serial_test = "3.2.0"
 
 [build-dependencies]
 dihardts_omicstools = "~3.1.0"
+
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"

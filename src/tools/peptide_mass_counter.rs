@@ -1,8 +1,9 @@
 use std::{
     collections::HashMap,
+    io::Cursor,
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread::sleep,
@@ -46,7 +47,7 @@ impl MassCountThread {
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         protease: Box<dyn Protease>,
         remove_peptides_containing_unknown: bool,
-        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter>>>,
+        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter<AtomicU8>>>>,
         partition_limits: Arc<Vec<i64>>,
         partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
         processed_proteins: Arc<AtomicUsize>,
@@ -91,7 +92,7 @@ impl MassCountThread {
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         protease: Box<dyn Protease>,
         remove_peptides_containing_unknown: bool,
-        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter>>>,
+        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter<AtomicU8>>>>,
         partition_limits: Arc<Vec<i64>>,
         partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
         processed_proteins: Arc<AtomicUsize>,
@@ -148,10 +149,10 @@ impl MassCountThread {
                 let mut bloom_filter = bloom_filter_arc[partition_id].lock().unwrap();
                 let mut partition = partitions_counters[partition_id].lock().unwrap();
                 for (mass, sequence) in peptides.into_iter() {
-                    if bloom_filter.contains(&sequence)? {
+                    if bloom_filter.contains(&mut Cursor::new(sequence.as_bytes()))? {
                         continue;
                     }
-                    bloom_filter.add(&sequence)?;
+                    bloom_filter.add(&mut Cursor::new(sequence.as_bytes()))?;
                     *partition.entry(mass).or_insert(0) += 1;
                 }
             }
@@ -273,17 +274,18 @@ impl PeptideMassCounter {
         let usable_ram_per_partition = (usable_ram / partition_limits.len() as f64).floor() as u64;
         let bloom_filters = (0..partition_limits.len())
             .map(|_| {
-                BloomFilter::new_by_size_and_fp_prob(
+                BloomFilter::<AtomicU8>::new_by_length_and_fp_prob(
                     usable_ram_per_partition * 8,
                     false_positive_probability,
                 )
+                .map_err(anyhow::Error::from)
             })
-            .collect::<Result<Vec<BloomFilter>>>()?;
+            .collect::<Result<Vec<_>>>()?;
 
         // Put everything in Arcs
         let partition_limits = Arc::new(partition_limits);
         let partitions_counters = Arc::new(partitions_counters);
-        let bloom_filters: Arc<Vec<Mutex<BloomFilter>>> =
+        let bloom_filters: Arc<Vec<Mutex<BloomFilter<AtomicU8>>>> =
             Arc::new(bloom_filters.into_iter().map(Mutex::new).collect());
 
         // Create the the protein queue

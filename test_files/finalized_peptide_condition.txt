@@ -1,108 +1,108 @@
-FinalizedPeptideCondition: occurences of 'C' == 0 @ 839.403366202
-FinalizedPeptideCondition: occurences of 'C' == 1 @ 782.381902202
-FinalizedPeptideCondition: occurences of 'C' == 2 @ 725.360438202
-FinalizedPeptideCondition: occurences of 'C' == 3 @ 668.338974202
-FinalizedPeptideCondition: occurences of 'C' == 4 @ 611.317510202
-FinalizedPeptideCondition: occurences of 'C' == 5 @ 554.296046202
-FinalizedPeptideCondition: occurences of 'C' == 6 @ 497.274582202
-FinalizedPeptideCondition: occurences of 'C' == 7 @ 440.253118202
-FinalizedPeptideCondition: occurences of 'C' == 8 @ 383.231654202
-FinalizedPeptideCondition: occurences of 'C' == 0 && occurences of 'M' >= 1 @ 823.408456202
-FinalizedPeptideCondition: occurences of 'C' == 0 && occurences of 'M' >= 2 @ 807.413546202
-FinalizedPeptideCondition: occurences of 'C' == 1 && occurences of 'M' >= 1 @ 766.386992202
-FinalizedPeptideCondition: occurences of 'C' == 1 && occurences of 'M' >= 2 @ 750.392082202
-FinalizedPeptideCondition: occurences of 'C' == 2 && occurences of 'M' >= 1 @ 709.365528202
-FinalizedPeptideCondition: occurences of 'C' == 2 && occurences of 'M' >= 2 @ 693.370618202
-FinalizedPeptideCondition: occurences of 'C' == 3 && occurences of 'M' >= 1 @ 652.344064202
-FinalizedPeptideCondition: occurences of 'C' == 3 && occurences of 'M' >= 2 @ 636.349154202
-FinalizedPeptideCondition: occurences of 'C' == 4 && occurences of 'M' >= 1 @ 595.322600202
-FinalizedPeptideCondition: occurences of 'C' == 4 && occurences of 'M' >= 2 @ 579.327690202
-FinalizedPeptideCondition: occurences of 'C' == 5 && occurences of 'M' >= 1 @ 538.301136202
-FinalizedPeptideCondition: occurences of 'C' == 5 && occurences of 'M' >= 2 @ 522.306226202
-FinalizedPeptideCondition: occurences of 'C' == 6 && occurences of 'M' >= 1 @ 481.279672202
-FinalizedPeptideCondition: occurences of 'C' == 6 && occurences of 'M' >= 2 @ 465.284762202
-FinalizedPeptideCondition: occurences of 'C' == 7 && occurences of 'M' >= 1 @ 424.258208202
-FinalizedPeptideCondition: occurences of 'C' == 7 && occurences of 'M' >= 2 @ 408.263298202
-FinalizedPeptideCondition: occurences of 'C' == 8 && occurences of 'M' >= 1 @ 367.236744202
-FinalizedPeptideCondition: occurences of 'C' == 8 && occurences of 'M' >= 2 @ 351.241834202
-FinalizedPeptideCondition: occurences of 'C' == 0 && starts with 'M' && occurences of 'M' >= 1 @ 822.408456202
-FinalizedPeptideCondition: occurences of 'C' == 1 && starts with 'M' && occurences of 'M' >= 1 @ 765.386992202
-FinalizedPeptideCondition: occurences of 'C' == 2 && starts with 'M' && occurences of 'M' >= 1 @ 708.365528202
-FinalizedPeptideCondition: occurences of 'C' == 3 && starts with 'M' && occurences of 'M' >= 1 @ 651.344064202
-FinalizedPeptideCondition: occurences of 'C' == 4 && starts with 'M' && occurences of 'M' >= 1 @ 594.322600202
-FinalizedPeptideCondition: occurences of 'C' == 5 && starts with 'M' && occurences of 'M' >= 1 @ 537.301136202
-FinalizedPeptideCondition: occurences of 'C' == 6 && starts with 'M' && occurences of 'M' >= 1 @ 480.279672202
-FinalizedPeptideCondition: occurences of 'C' == 7 && starts with 'M' && occurences of 'M' >= 1 @ 423.258208202
-FinalizedPeptideCondition: occurences of 'C' == 8 && starts with 'M' && occurences of 'M' >= 1 @ 366.236744202
-FinalizedPeptideCondition: occurences of 'C' == 0 && starts with 'M' && occurences of 'M' >= 2 @ 806.413546202
-FinalizedPeptideCondition: occurences of 'C' == 0 && starts with 'M' && occurences of 'M' >= 3 @ 790.418636202
-FinalizedPeptideCondition: occurences of 'C' == 1 && starts with 'M' && occurences of 'M' >= 2 @ 749.392082202
-FinalizedPeptideCondition: occurences of 'C' == 1 && starts with 'M' && occurences of 'M' >= 3 @ 733.397172202
-FinalizedPeptideCondition: occurences of 'C' == 2 && starts with 'M' && occurences of 'M' >= 2 @ 692.370618202
-FinalizedPeptideCondition: occurences of 'C' == 2 && starts with 'M' && occurences of 'M' >= 3 @ 676.375708202
-FinalizedPeptideCondition: occurences of 'C' == 3 && starts with 'M' && occurences of 'M' >= 2 @ 635.349154202
-FinalizedPeptideCondition: occurences of 'C' == 3 && starts with 'M' && occurences of 'M' >= 3 @ 619.354244202
-FinalizedPeptideCondition: occurences of 'C' == 4 && starts with 'M' && occurences of 'M' >= 2 @ 578.327690202
-FinalizedPeptideCondition: occurences of 'C' == 4 && starts with 'M' && occurences of 'M' >= 3 @ 562.332780202
-FinalizedPeptideCondition: occurences of 'C' == 5 && starts with 'M' && occurences of 'M' >= 2 @ 521.306226202
-FinalizedPeptideCondition: occurences of 'C' == 5 && starts with 'M' && occurences of 'M' >= 3 @ 505.311316202
-FinalizedPeptideCondition: occurences of 'C' == 6 && starts with 'M' && occurences of 'M' >= 2 @ 464.284762202
-FinalizedPeptideCondition: occurences of 'C' == 6 && starts with 'M' && occurences of 'M' >= 3 @ 448.289852202
-FinalizedPeptideCondition: occurences of 'C' == 7 && starts with 'M' && occurences of 'M' >= 2 @ 407.263298202
-FinalizedPeptideCondition: occurences of 'C' == 7 && starts with 'M' && occurences of 'M' >= 3 @ 391.268388202
-FinalizedPeptideCondition: occurences of 'C' == 8 && starts with 'M' && occurences of 'M' >= 2 @ 350.241834202
-FinalizedPeptideCondition: occurences of 'C' == 8 && starts with 'M' && occurences of 'M' >= 3 @ 334.246924202
-FinalizedPeptideCondition: occurences of 'C' == 0 && ends with 'K' && occurences of 'K' >= 1 @ 819.103366202
-FinalizedPeptideCondition: occurences of 'C' == 1 && ends with 'K' && occurences of 'K' >= 1 @ 762.081902202
-FinalizedPeptideCondition: occurences of 'C' == 2 && ends with 'K' && occurences of 'K' >= 1 @ 705.060438202
-FinalizedPeptideCondition: occurences of 'C' == 3 && ends with 'K' && occurences of 'K' >= 1 @ 648.038974202
-FinalizedPeptideCondition: occurences of 'C' == 4 && ends with 'K' && occurences of 'K' >= 1 @ 591.017510202
-FinalizedPeptideCondition: occurences of 'C' == 5 && ends with 'K' && occurences of 'K' >= 1 @ 533.996046202
-FinalizedPeptideCondition: occurences of 'C' == 6 && ends with 'K' && occurences of 'K' >= 1 @ 476.974582202
-FinalizedPeptideCondition: occurences of 'C' == 7 && ends with 'K' && occurences of 'K' >= 1 @ 419.953118202
-FinalizedPeptideCondition: occurences of 'C' == 8 && ends with 'K' && occurences of 'K' >= 1 @ 362.931654202
-FinalizedPeptideCondition: occurences of 'C' == 0 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 803.108456202
-FinalizedPeptideCondition: occurences of 'C' == 0 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 787.113546202
-FinalizedPeptideCondition: occurences of 'C' == 1 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 746.086992202
-FinalizedPeptideCondition: occurences of 'C' == 1 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 730.092082202
-FinalizedPeptideCondition: occurences of 'C' == 2 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 689.065528202
-FinalizedPeptideCondition: occurences of 'C' == 2 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 673.070618202
-FinalizedPeptideCondition: occurences of 'C' == 3 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 632.044064202
-FinalizedPeptideCondition: occurences of 'C' == 3 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 616.049154202
-FinalizedPeptideCondition: occurences of 'C' == 4 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 575.022600202
-FinalizedPeptideCondition: occurences of 'C' == 4 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 559.027690202
-FinalizedPeptideCondition: occurences of 'C' == 5 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 518.001136202
-FinalizedPeptideCondition: occurences of 'C' == 5 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 502.006226202
-FinalizedPeptideCondition: occurences of 'C' == 6 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 460.979672202
-FinalizedPeptideCondition: occurences of 'C' == 6 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 444.984762202
-FinalizedPeptideCondition: occurences of 'C' == 7 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 403.958208202
-FinalizedPeptideCondition: occurences of 'C' == 7 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 387.963298202
-FinalizedPeptideCondition: occurences of 'C' == 8 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 346.936744202
-FinalizedPeptideCondition: occurences of 'C' == 8 && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 330.941834202
-FinalizedPeptideCondition: occurences of 'C' == 0 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 802.108456202
-FinalizedPeptideCondition: occurences of 'C' == 1 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 745.086992202
-FinalizedPeptideCondition: occurences of 'C' == 2 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 688.065528202
-FinalizedPeptideCondition: occurences of 'C' == 3 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 631.044064202
-FinalizedPeptideCondition: occurences of 'C' == 4 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 574.022600202
-FinalizedPeptideCondition: occurences of 'C' == 5 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 517.001136202
-FinalizedPeptideCondition: occurences of 'C' == 6 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 459.979672202
-FinalizedPeptideCondition: occurences of 'C' == 7 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 402.958208202
-FinalizedPeptideCondition: occurences of 'C' == 8 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 1 @ 345.936744202
-FinalizedPeptideCondition: occurences of 'C' == 0 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 786.113546202
-FinalizedPeptideCondition: occurences of 'C' == 0 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 770.118636202
-FinalizedPeptideCondition: occurences of 'C' == 1 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 729.092082202
-FinalizedPeptideCondition: occurences of 'C' == 1 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 713.097172202
-FinalizedPeptideCondition: occurences of 'C' == 2 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 672.070618202
-FinalizedPeptideCondition: occurences of 'C' == 2 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 656.075708202
-FinalizedPeptideCondition: occurences of 'C' == 3 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 615.049154202
-FinalizedPeptideCondition: occurences of 'C' == 3 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 599.054244202
-FinalizedPeptideCondition: occurences of 'C' == 4 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 558.027690202
-FinalizedPeptideCondition: occurences of 'C' == 4 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 542.032780202
-FinalizedPeptideCondition: occurences of 'C' == 5 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 501.006226202
-FinalizedPeptideCondition: occurences of 'C' == 5 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 485.011316202
-FinalizedPeptideCondition: occurences of 'C' == 6 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 443.984762202
-FinalizedPeptideCondition: occurences of 'C' == 6 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 427.989852202
-FinalizedPeptideCondition: occurences of 'C' == 7 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 386.963298202
-FinalizedPeptideCondition: occurences of 'C' == 7 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 370.968388202
-FinalizedPeptideCondition: occurences of 'C' == 8 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 2 @ 329.941834202
-FinalizedPeptideCondition: occurences of 'C' == 8 && starts with 'M' && ends with 'K' && occurences of 'K' >= 1 && occurences of 'M' >= 3 @ 313.946924202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0] @ 839.403366202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1] @ 782.381902202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2] @ 725.360438202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3] @ 668.338974202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4] @ 611.317510202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5] @ 554.296046202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6] @ 497.274582202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7] @ 440.253118202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8] @ 383.231654202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, occurences of 'M' >= 1] @ 823.408456202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, occurences of 'M' >= 2] @ 807.413546202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, occurences of 'M' >= 1] @ 766.386992202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, occurences of 'M' >= 2] @ 750.392082202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, occurences of 'M' >= 1] @ 709.365528202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, occurences of 'M' >= 2] @ 693.370618202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, occurences of 'M' >= 1] @ 652.344064202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, occurences of 'M' >= 2] @ 636.349154202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, occurences of 'M' >= 1] @ 595.322600202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, occurences of 'M' >= 2] @ 579.327690202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, occurences of 'M' >= 1] @ 538.301136202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, occurences of 'M' >= 2] @ 522.306226202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, occurences of 'M' >= 1] @ 481.279672202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, occurences of 'M' >= 2] @ 465.284762202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, occurences of 'M' >= 1] @ 424.258208202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, occurences of 'M' >= 2] @ 408.263298202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, occurences of 'M' >= 1] @ 367.236744202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, occurences of 'M' >= 2] @ 351.241834202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, starts with 'M', occurences of 'M' >= 1] @ 822.408456202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, starts with 'M', occurences of 'M' >= 1] @ 765.386992202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, starts with 'M', occurences of 'M' >= 1] @ 708.365528202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, starts with 'M', occurences of 'M' >= 1] @ 651.344064202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, starts with 'M', occurences of 'M' >= 1] @ 594.322600202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, starts with 'M', occurences of 'M' >= 1] @ 537.301136202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, starts with 'M', occurences of 'M' >= 1] @ 480.279672202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, starts with 'M', occurences of 'M' >= 1] @ 423.258208202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, starts with 'M', occurences of 'M' >= 1] @ 366.236744202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, starts with 'M', occurences of 'M' >= 2] @ 806.413546202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, starts with 'M', occurences of 'M' >= 3] @ 790.418636202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, starts with 'M', occurences of 'M' >= 2] @ 749.392082202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, starts with 'M', occurences of 'M' >= 3] @ 733.397172202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, starts with 'M', occurences of 'M' >= 2] @ 692.370618202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, starts with 'M', occurences of 'M' >= 3] @ 676.375708202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, starts with 'M', occurences of 'M' >= 2] @ 635.349154202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, starts with 'M', occurences of 'M' >= 3] @ 619.354244202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, starts with 'M', occurences of 'M' >= 2] @ 578.327690202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, starts with 'M', occurences of 'M' >= 3] @ 562.332780202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, starts with 'M', occurences of 'M' >= 2] @ 521.306226202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, starts with 'M', occurences of 'M' >= 3] @ 505.311316202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, starts with 'M', occurences of 'M' >= 2] @ 464.284762202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, starts with 'M', occurences of 'M' >= 3] @ 448.289852202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, starts with 'M', occurences of 'M' >= 2] @ 407.263298202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, starts with 'M', occurences of 'M' >= 3] @ 391.268388202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, starts with 'M', occurences of 'M' >= 2] @ 350.241834202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, starts with 'M', occurences of 'M' >= 3] @ 334.246924202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, ends with 'K', occurences of 'K' >= 1] @ 819.103366202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, ends with 'K', occurences of 'K' >= 1] @ 762.081902202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, ends with 'K', occurences of 'K' >= 1] @ 705.060438202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, ends with 'K', occurences of 'K' >= 1] @ 648.038974202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, ends with 'K', occurences of 'K' >= 1] @ 591.017510202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, ends with 'K', occurences of 'K' >= 1] @ 533.996046202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, ends with 'K', occurences of 'K' >= 1] @ 476.974582202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, ends with 'K', occurences of 'K' >= 1] @ 419.953118202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, ends with 'K', occurences of 'K' >= 1] @ 362.931654202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 803.108456202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 787.113546202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 746.086992202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 730.092082202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 689.065528202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 673.070618202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 632.044064202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 616.049154202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 575.022600202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 559.027690202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 518.001136202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 502.006226202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 460.979672202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 444.984762202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 403.958208202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 387.963298202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 346.936744202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 330.941834202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 802.108456202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 745.086992202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 688.065528202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 631.044064202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 574.022600202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 517.001136202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 459.979672202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 402.958208202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 1] @ 345.936744202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 786.113546202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 0, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 770.118636202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 729.092082202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 1, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 713.097172202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 672.070618202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 2, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 656.075708202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 615.049154202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 3, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 599.054244202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 558.027690202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 4, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 542.032780202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 501.006226202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 5, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 485.011316202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 443.984762202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 6, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 427.989852202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 386.963298202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 7, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 370.968388202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 2] @ 329.941834202
+FinalizedPeptideCondition: FilterPipeline[occurences of 'C' == 8, starts with 'M', ends with 'K', occurences of 'K' >= 1, occurences of 'M' >= 3] @ 313.946924202
