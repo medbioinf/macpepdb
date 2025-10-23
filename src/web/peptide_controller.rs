@@ -1,5 +1,6 @@
+use std::ops::Deref;
 // std imports
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 
 // 3rd party imports
 use anyhow::Result;
@@ -32,6 +33,15 @@ use crate::web::app_state::AppState;
 use crate::web::web_error::WebError;
 
 const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
+
+static DEFAULT_ERROR_HEADER_MAP: LazyLock<HeaderMap> = LazyLock::new(|| {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/plain; charset=utf-8"),
+    );
+    headers
+});
 
 /// Struct to deserialize the query parameters for get peptide
 ///
@@ -390,7 +400,7 @@ pub async fn get_search(
         Err(err) => {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                HeaderMap::new(),
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                 Body::from(format!(
                     "!!! Error while decoding payload form URL: {:?}",
                     err
@@ -405,7 +415,7 @@ pub async fn get_search(
         Err(err) => {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                HeaderMap::new(),
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                 Body::from(format!(
                     "!!! Error while decoding payload from base64: {:?}",
                     err
@@ -420,7 +430,7 @@ pub async fn get_search(
         Err(err) => {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                HeaderMap::new(),
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                 Body::from(format!(
                     "!!! Error while decoding payload from bytes: {:?}",
                     err
@@ -435,7 +445,7 @@ pub async fn get_search(
         Err(err) => {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                HeaderMap::new(),
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                 Body::from(format!("!!! Error while deserializing payload: {:?}", err)),
             ));
         }
@@ -447,7 +457,7 @@ pub async fn get_search(
         Err(err) => {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                HeaderMap::new(),
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                 Body::from(format!(
                     "!!! Error while decoding payload form URL: {:?}",
                     err
@@ -480,7 +490,7 @@ async fn search(
         {
             return Ok((
                 StatusCode::BAD_REQUEST,
-                HeaderMap::new(),
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                 Body::from(format!(
                     "!!! Taxonomy with id {} does not exist",
                     taxonomy_id
@@ -506,7 +516,7 @@ async fn search(
         Err(err) => {
             return Ok((
                 StatusCode::UNPROCESSABLE_ENTITY,
-                HeaderMap::new(),
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                 Body::from(format!("Error while validating PTMs: {:?}", err)),
             ));
         }
@@ -531,7 +541,7 @@ async fn search(
         Err(err) => {
             return Ok((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                HeaderMap::new(),
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                 Body::from(format!("Error while searching for peptides: {:?}", err)),
             ));
         }
@@ -679,10 +689,8 @@ async fn search(
         ),
         _ => (
             StatusCode::NOT_ACCEPTABLE,
-            HeaderMap::new(),
-            Body::from_stream(stream! {
-                yield Err::<String, String>("!!! Unsupported accept header".to_string());
-            }),
+            DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+            Body::from("Unsupported accept header".to_string()),
         ),
     };
     Ok((status_code, headers, body))
