@@ -1,30 +1,14 @@
-# Image for building and testing
-FROM rust:latest AS rsbuilder
-
-# By default this image will build and install the binary
-# However this is unnecessary for testing, the
-ARG SKIP_INSTALL=false
-ENV SKIP_INSTALL=$SKIP_INSTALL
+FROM rust:1.89 AS build-stage
 
 WORKDIR /usr/src/macpepdb
-
 COPY . .
 
-RUN apt update \
-    && apt install -y libssl-dev pkg-config libhdf5-dev \
-    && apt clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && [ "$SKIP_INSTALL" = "false" ] && cargo install --path . --root /usr/local || echo "Skipping install"
+RUN cargo build -r
 
 
-# Minimal Image for running
-FROM ubuntu:noble
 
-COPY --from=rsbuilder /usr/local/bin/macpepdb /usr/local/bin/macpepdb
-RUN apt update \
-    && apt install -y libssl-dev libhdf5-dev \
-    && apt clean \
-    && rm -rf /var/lib/apt/lists/*
+FROM debian:trixie-slim
 
+COPY --from=build-stage /usr/src/macpepdb/target/release/macpepdb /usr/bin/macpepdb
 
-ENTRYPOINT [ "macpepdb" ]
+ENTRYPOINT [ "/usr/bin/macpepdb" ]
