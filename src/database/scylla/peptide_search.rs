@@ -1,10 +1,10 @@
-use std::cell::Cell;
 use std::cmp::min;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::io::Cursor;
 use std::ops::Deref;
 use std::pin::Pin;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -76,7 +76,7 @@ impl Display for IsTrEMBLFilterFunction {
 /// Makes sure that no peptide is returned twice
 ///
 pub struct ThreadSafeDistinctFilterFunction {
-    bloom_filter: BloomFilter<Cell<u64>>,
+    bloom_filter: BloomFilter<AtomicU64>,
 }
 
 impl FilterFunction for ThreadSafeDistinctFilterFunction {
