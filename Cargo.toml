@@ -38,7 +38,7 @@ path = "src/bin.rs"
 [dependencies]
 anyhow = "~1.0.69"
 async-stream = "0.3.6"
-axum = { version = "0.8.5", features = ["json"] }
+axum = { version = "0.8.5", features = ["json", "http2"] }
 axum-streams = { version = "0.23.1", features = ["json", "csv", "text"] }
 base64 = "0.22.1"
 chrono = "0.4.23"
