@@ -164,7 +164,8 @@ enum Commands {
         /// by ~1GB
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         no_taxonomy_search: bool,
-
+        #[arg(long, short, default_value_t = 10)]
+        num_search_threads: usize,
         // positional arguments
         /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
@@ -284,7 +285,8 @@ async fn main() -> Result<()> {
         .add_directive("scylla=error".parse().unwrap())
         .add_directive("tokio_postgres=error".parse().unwrap())
         .add_directive("hyper=error".parse().unwrap())
-        .add_directive("reqwest=error".parse().unwrap());
+        .add_directive("reqwest=error".parse().unwrap())
+        .add_directive("h2=error".parse().unwrap());
 
     // Tracing layers
     let mut tracing_indicatif_layer = None;
@@ -470,9 +472,17 @@ async fn main() -> Result<()> {
             interface,
             port,
             no_taxonomy_search,
+            num_search_threads,
         } => {
             if database_url.starts_with("scylla://") {
-                start_web_server(&database_url, interface, port, !no_taxonomy_search).await?;
+                start_web_server(
+                    &database_url,
+                    interface,
+                    port,
+                    !no_taxonomy_search,
+                    num_search_threads,
+                )
+                .await?;
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }

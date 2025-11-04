@@ -394,6 +394,7 @@ impl PeptideTable {
     /// * `is_reviewed` - Optional: If the peptides should be reviewed or unreviewed
     /// * `ptm_collection` - The PTMs to consider
     /// * `resolve_modifications` - If the modifications should be resolved
+    /// * `num_threads` - Optional: Number of threads to use for searching
     ///
     #[allow(clippy::too_many_arguments)]
     pub async fn search(
@@ -408,6 +409,7 @@ impl PeptideTable {
         is_reviewed: Option<bool>,
         ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
+        num_threads: Option<usize>,
     ) -> Result<FalliblePeptideStream> {
         MultiTaskSearch::search(
             client,
@@ -422,7 +424,7 @@ impl PeptideTable {
             is_reviewed,
             ptm_collection,
             resolve_modifications,
-            None,
+            num_threads,
         )
         .await
     }

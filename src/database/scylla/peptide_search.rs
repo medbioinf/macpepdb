@@ -1,6 +1,6 @@
 use std::cell::Cell;
-use std::cmp::max;
-use std::collections::{HashMap, HashSet};
+use std::cmp::min;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::io::Cursor;
 use std::ops::Deref;
@@ -11,9 +11,11 @@ use anyhow::Result;
 use async_stream::try_stream;
 use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::chemistry::amino_acid::{AminoAcid, CANONICAL_AMINO_ACIDS};
+use futures::stream::FuturesUnordered;
 use futures::{pin_mut, Stream, StreamExt};
 use itertools::Itertools;
 use tokio::sync::mpsc::{unbounded_channel as channel, UnboundedSender as Sender};
+use tokio::task::JoinHandle;
 use tracing::error;
 
 use crate::chemistry::amino_acid::INTERNAL_GLYCINE;
@@ -542,8 +544,9 @@ impl Search for MultiTaskSearch {
         is_reviewed: Option<bool>,
         ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
-        _num_threads: Option<usize>,
+        num_threads: Option<usize>,
     ) -> Result<FalliblePeptideStream> {
+        let num_threads = num_threads.unwrap_or(10);
         let taxonomy_ids = taxonomy_ids.map(Arc::new);
         let proteome_ids = proteome_ids.map(Arc::new);
 
@@ -608,26 +611,59 @@ impl Search for MultiTaskSearch {
                 is_reviewed,
             )?);
 
-            let mut tasks: Vec<tokio::task::JoinHandle<Result<()>>> = Vec::with_capacity(max(sorted_ptm_conditions.len(), 1));
-            if !sorted_ptm_conditions.is_empty() {
-                for (task_id, (partition, conditions)) in sorted_ptm_conditions.into_iter().enumerate() {
-                    let task_filter_pipeline = filter_pipeline.clone();
-                    // Spawn on task for each PTM condition
-                    tasks.push(tokio::task::spawn(
-                        Self::search_with_ptm_conditions(
-                            task_id,
-                            client.clone(),
-                            partition,
-                            conditions,
-                            task_filter_pipeline,
-                            resolve_modifications,
-                            peptide_sender.clone(),
-                        )
-                    ));
-                }
+
+            let search_handle = if !sorted_ptm_conditions.is_empty() {
+                tokio::spawn( async move {
+                    let mut pool: FuturesUnordered<JoinHandle<Result<(), anyhow::Error>>> = FuturesUnordered::new();
+                    let mut sorted_ptm_conditions = sorted_ptm_conditions.into_iter().collect::<VecDeque<_>>();
+                    let mut task_id = 0;
+
+                    for _ in 0..min(num_threads, sorted_ptm_conditions.len()) {
+                        if let Some((partition, conditions)) = sorted_ptm_conditions.pop_front() {
+                            task_id += 1;
+                            pool.push(
+                                tokio::spawn(
+                                    Self::search_with_ptm_conditions(
+                                        task_id,
+                                        client.clone(),
+                                        partition,
+                                        conditions,
+                                        filter_pipeline.clone(),
+                                        resolve_modifications,
+                                        peptide_sender.clone(),
+                                    )
+                                )
+                            );
+                        }
+                    }
+
+                    // as soon as any future finishes, process result and push a new one if available
+                    while let Some(join_res) = pool.next().await {
+                        join_res??;
+
+                        if let Some((partition, conditions)) = sorted_ptm_conditions.pop_front() {
+                            task_id += 1;
+                            pool.push(
+                                tokio::spawn(
+                                    Self::search_with_ptm_conditions(
+                                        task_id,
+                                        client.clone(),
+                                        partition,
+                                        conditions,
+                                        filter_pipeline.clone(),
+                                        resolve_modifications,
+                                        peptide_sender.clone(),
+                                    )
+                                )
+                            );
+                        }
+                    }
+
+                    Ok::<(), anyhow::Error>(())
+                })
             } else {
                 // Spawn one task for the mass range as there are no PTMs
-                tasks.push(tokio::task::spawn(
+                tokio::spawn(
                     Self::search_without_ptm_condition(
                         client.clone(),
                         configuration.clone(),
@@ -635,20 +671,16 @@ impl Search for MultiTaskSearch {
                         lower_mass_tolerance_ppm,
                         upper_mass_tolerance_ppm,
                         filter_pipeline,
-                        peptide_sender.clone(),
+                        peptide_sender,
                     )
-                ));
-            }
-
-            drop(peptide_sender);
+                )
+            };
 
             while let Some(peptide) = peptide_receiver.recv().await {
                 yield peptide?;
             }
 
-            for task in tasks.into_iter() {
-                task.await??;
-            }
+            search_handle.await??;
         }))
     }
 }

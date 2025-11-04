@@ -34,12 +34,15 @@ use crate::web::tools_controller::{digest, get_mass, get_partition, get_protease
 /// * `database_nodes` - List of database nodes
 /// * `interface` - Interface to listen on
 /// * `port` - Port to listen on
+/// * `with_taxonomy_search` - If taxonomy search index should be built
+/// * `num_search_threads` - Number of concurrent search threads (and connections)
 ///
 pub async fn start(
     database_url: &str,
     interface: String,
     port: u16,
     with_taxonomy_search: bool,
+    num_search_threads: usize,
 ) -> Result<()> {
     tracing::info!("Start MaCPepDB web server");
     // Create a database client
@@ -75,6 +78,7 @@ pub async fn start(
         configuration,
         taxonomy_tree,
         taxonomy_search,
+        num_search_threads,
     ));
 
     // Add CORS layer

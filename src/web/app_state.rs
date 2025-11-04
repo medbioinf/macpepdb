@@ -13,6 +13,8 @@ pub struct AppState {
     configuration: Arc<Configuration>,
     taxonomy_tree: Arc<TaxonomyTree>,
     taxonomy_index: Arc<Option<SearchIndex<u64>>>,
+    /// Number of concurrent search threads (and connections)
+    num_search_threads: usize,
 }
 
 impl AppState {
@@ -21,8 +23,10 @@ impl AppState {
         configuration: Configuration,
         taxonomy_tree: TaxonomyTree,
         taxonomy_index: Option<SearchIndex<u64>>,
+        num_search_threads: usize,
     ) -> Self {
         Self {
+            num_search_threads,
             db_client: Arc::new(db_client),
             configuration: Arc::new(configuration),
             taxonomy_tree: Arc::new(taxonomy_tree),
@@ -76,5 +80,11 @@ impl AppState {
     ///
     pub fn get_taxonomy_index_as_ref(&self) -> &Option<SearchIndex<u64>> {
         self.taxonomy_index.as_ref()
+    }
+
+    /// Returns the number of search threads
+    ///
+    pub fn get_num_search_threads(&self) -> usize {
+        self.num_search_threads
     }
 }

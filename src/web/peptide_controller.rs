@@ -534,6 +534,7 @@ async fn search(
         payload.is_reviewed,
         ptm_collection,
         payload.resolve_modifications.unwrap_or(false),
+        Some(app_state.get_num_search_threads()),
     )
     .await
     {
