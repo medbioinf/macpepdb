@@ -1,3 +1,5 @@
+@use "colors"
+
 .sequence-block
     .sequence-block-src
         .sequence-block-src-row
@@ -7,7 +9,7 @@
                 display: table-cell
                 // same font size as code elements
                 font-size: 1 em
-                background-color: darken($rub-gray, 10%)
+                background-color: darken(colors.$rub-gray, 10%)
                 user-select: none
 
             code
@@ -16,4 +18,4 @@
             //For every odd code-block-row set the baackground color to rub-gray
             &:nth-child(odd)
                 code
-                    background-color: $rub-gray
+                    background-color: colors.$rub-gray

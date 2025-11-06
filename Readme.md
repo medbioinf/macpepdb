@@ -12,10 +12,9 @@ Another benefit of Dioxus is also the possibility to build an Electron Desktop A
 ## Installation
 1. Clone the repositry
 2. Install rustup
-3. Install [sass](https://sass-lang.com/install/), make sure it is available in your `PATH` as `sass`
-4. Install Dioxus: `cargo install dioxus-cli`
-5. Install WASM toolchain: `rustup target add wasm32-unknown-unknown`
-6. `dx serve`
+3. Install Dioxus: `cargo install dioxus-cli`
+4. Install WASM toolchain: `rustup target add wasm32-unknown-unknown`
+5. `dx serve`
 
 Per default the application uses the configuration `frontend.config.toml`. If your wat to adjust it:
 1. Make a copy of `frontend.config.toml` and adjust it
@@ -25,7 +24,6 @@ Per default the application uses the configuration `frontend.config.toml`. If yo
 While a WASM application has no access to any filesystem, the configuration is compiled into the binary. Therefore it needs to be selected during compiling.
 
 ## Deplyoment
-1. `sass assets/sass/index.sass public/index.css`
-2. `dx build --release`
+1. `dx build --release`
 2. Serve the created `target/dx/macpepdb-frontend/release/web/public` folder with any web server, e.g. NginX
 

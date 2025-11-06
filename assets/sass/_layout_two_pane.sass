@@ -1,3 +1,6 @@
+
+@use "colors"
+
 .layout-two-panes
     display: flex
     padding: 0
@@ -23,7 +26,7 @@
                 display: none !important
 
     .pane-menu
-        background-color: $rub-gray
+        background-color: colors.$rub-gray
 
         .navbar-brand
             display: flex
@@ -44,10 +47,10 @@
         .separator
             width: 100%
             margin-top: 1rem
-            border-top: 3px solid $rub-green
+            border-top: 3px solid colors.$rub-green
 
         .external-pages
-            background-color: $rub-dark-gray
+            background-color: colors.$rub-dark-gray
 
     .pane-content
         height: calc(100vh - 95px)
