@@ -20,6 +20,8 @@ use crate::tracking::track_page_visit;
 type ProteinEntity = MaCPepDBProteins<String>;
 type PeptideEntity = MaCPepDBPeptide<ProteinEntity>;
 
+type AminoAcidMap = Rc<HashMap<char, AminoAcid>>;
+
 /// Fetches peptide from MaCPepDB
 ///
 /// # Arguments
@@ -71,18 +73,17 @@ pub fn Peptide(props: PeptideProps) -> Element {
         ))
     });
 
-    let amino_acid_map: Resource<Result<Option<Rc<HashMap<char, AminoAcid>>>>> =
-        use_resource(move || async move {
-            let app_config = app_config.read_unchecked();
-            let macpepdb_base_url = match app_config.as_ref() {
-                Some(config) => config.get_macpepdb_base_url(),
-                None => return Ok(None),
-            };
+    let amino_acid_map: Resource<Result<Option<AminoAcidMap>>> = use_resource(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Ok(None),
+        };
 
-            let map = get_amino_acid_map(macpepdb_base_url).await?;
+        let map = get_amino_acid_map(macpepdb_base_url).await?;
 
-            Ok(Some(Rc::new(map)))
-        });
+        Ok(Some(Rc::new(map)))
+    });
 
     use_future(move || async move {
         track_page_visit(vec![(
