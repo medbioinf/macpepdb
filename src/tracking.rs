@@ -59,9 +59,21 @@ pub async fn track_page_visit(path_segment_overrides: Vec<(String, String)>) {
 
     let tracking_url = format!("{}?{}", config.matomo_url().unwrap(), params);
 
-    match reqwest::get(&tracking_url).await {
-        Ok(_) => {}
-        Err(e) => tracing::error!("Failed to track page visit: {}", e),
+    let response = match reqwest::get(&tracking_url).await {
+        Ok(response) => response,
+        Err(e) => {
+            error!("Failed to track page visit @ {}: {}", &tracking_url, e);
+            return;
+        }
+    };
+
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        error!(
+            "Failed to track page visit @ {}: status {}, body {}",
+            &tracking_url, status, body
+        );
     }
 }
 
