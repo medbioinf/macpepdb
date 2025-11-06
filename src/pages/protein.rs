@@ -52,7 +52,7 @@ pub fn Protein(props: ProteinProps) -> Element {
 
     let uniprot_link = use_signal(|| format!("https://www.uniprot.org/uniprot/{}", protein_id));
 
-    let _ = use_resource(move || async move {
+    use_future(move || async move {
         track_page_visit(vec![(
             protein_id.to_string(),
             ":protein_accession".to_string(),

@@ -3,7 +3,7 @@ use dioxus::prelude::*;
 use crate::{components::configuration::*, tracking::track_page_visit};
 
 pub fn Status() -> Element {
-    let _ = use_resource(move || async move { track_page_visit(vec![]).await });
+    use_future(move || async move { track_page_visit(vec![]).await });
 
     rsx! {
         div {

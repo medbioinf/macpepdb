@@ -84,7 +84,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
             Ok(Some(Rc::new(map)))
         });
 
-    let _ = use_resource(move || async move {
+    use_future(move || async move {
         track_page_visit(vec![(
             peptide_sequence.to_string(),
             ":peptide_sequence".to_string(),

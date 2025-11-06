@@ -11,7 +11,7 @@ const BY_SEQUENCE_TAB: &str = "by sequence";
 pub fn PeptideSearch() -> Element {
     let mut selected_tab = use_signal(|| BY_SEQUENCE_TAB);
 
-    let _ = use_resource(move || async move { track_page_visit(vec![]).await });
+    use_future(move || async move { track_page_visit(vec![]).await });
 
     rsx! {
         h3 { "Search for peptides" }
