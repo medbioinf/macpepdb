@@ -11,8 +11,8 @@ use crate::{configuration::Configuration, routes::Routes, tracking::create_track
 /// Root component for the entire frontend
 ///
 pub fn App() -> Element {
-    #[allow(clippy::redundant_closure)]
-    use_context_provider(|| Configuration::new());
+    let config = use_resource(Configuration::new);
+    use_context_provider(|| config);
     use_context_provider(create_tracking_id);
 
     rsx! {

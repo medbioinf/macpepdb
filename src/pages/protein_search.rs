@@ -27,30 +27,33 @@ const MIN_SEARCH_TERM_LENGTH: usize = 3;
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 /// * `protein_id` - Protein accession or gene nam
 ///
-pub async fn get_proteins(
-    macpepdb_base_url: Signal<String>,
-    protein_id: Signal<String>,
-) -> Result<Rc<Vec<ProteinEntity>>> {
+pub async fn get_proteins(macpepdb_base_url: &str, protein_id: &str) -> Result<Vec<ProteinEntity>> {
     let url = format!("{macpepdb_base_url}/api/proteins/search/{protein_id}");
-    Ok(Rc::new(
-        reqwest::get(&url)
-            .await?
-            .json::<Vec<ProteinEntity>>()
-            .await?,
-    ))
+    Ok(reqwest::get(&url)
+        .await?
+        .json::<Vec<ProteinEntity>>()
+        .await?)
 }
 
 /// Search for proteins by accession or gene name
 ///
 pub fn ProteinSearch() -> Element {
-    let app_config = use_context::<AppConfiguration>();
-    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let app_config = use_context::<Resource<AppConfiguration>>();
     let mut protein_id = use_signal(|| "".to_string());
 
     // search peptides
     let mut proteins = use_signal(|| FetchStatus::None);
     let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
         while rx.next().await.is_some() {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => {
+                    proteins.set(FetchStatus::Error(anyhow!("App configuration not loaded")));
+                    continue;
+                }
+            };
+
             if protein_id.read().len() < MIN_SEARCH_TERM_LENGTH {
                 proteins.set(FetchStatus::Error(anyhow!(
                     "Search term too short, must be at least {} characters",
@@ -60,9 +63,9 @@ pub fn ProteinSearch() -> Element {
             }
 
             proteins.set(FetchStatus::Loading);
-            match get_proteins(macpepdb_base_url, protein_id).await {
+            match get_proteins(macpepdb_base_url, protein_id.read_unchecked().as_str()).await {
                 Ok(fetched_proteins) => {
-                    proteins.set(FetchStatus::Finished(fetched_proteins));
+                    proteins.set(FetchStatus::Finished(Rc::new(fetched_proteins)));
                 }
                 Err(err) => {
                     proteins.set(FetchStatus::Error(err));

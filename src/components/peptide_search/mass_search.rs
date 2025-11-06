@@ -1,7 +1,7 @@
 use std::{fmt::Display, rc::Rc, str::FromStr};
 
 use ::web_sys::window;
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
 use dioxus::prelude::*;
 use dioxus_logger::tracing::info;
@@ -107,7 +107,7 @@ fn create_search_body(
 }
 
 async fn search_peptides(
-    macpepdb_base_url: Signal<String>,
+    macpepdb_base_url: &str,
     search_body: serde_json::Value,
 ) -> Result<Vec<PeptideEntity>> {
     let url = format!("{}/api/peptides/search", macpepdb_base_url);
@@ -131,8 +131,7 @@ fn base64_urlsafe_encode(input: &str) -> String {
 }
 
 pub fn MassSearch() -> Element {
-    let app_config = use_context::<AppConfiguration>();
-    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let app_config = use_context::<Resource<AppConfiguration>>();
 
     // ui state
     let mut are_filters_visible = use_signal(|| false);
@@ -149,6 +148,12 @@ pub fn MassSearch() -> Element {
     let mut taxonomy_search_term = use_signal(|| "".to_string());
     let mut selected_taxonomy_id: Signal<Option<u64>> = use_signal(|| None);
     let taxonomies: Resource<Result<Option<Vec<Taxonomy>>>> = use_resource(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Ok(None),
+        };
+
         if taxonomy_search_term.read_unchecked().is_empty() {
             return Ok(None);
         }
@@ -162,11 +167,20 @@ pub fn MassSearch() -> Element {
             }))
             .send()
             .await?;
+
         if !response.status().is_success() {
-            bail!(response.text().await?);
+            let status = response.status();
+            bail!(
+                "{}, status code: {}",
+                response
+                    .text()
+                    .await
+                    .unwrap_or("Could not decode body of error response".to_string()),
+                status
+            );
         }
 
-        Ok(Some(response.json::<Vec<Taxonomy>>().await?))
+        Ok(Some(response.json().await?))
     });
 
     let selected_taxonomy: Resource<Result<Option<Taxonomy>>> = use_resource(move || async move {
@@ -174,12 +188,18 @@ pub fn MassSearch() -> Element {
             return Ok(None);
         }
 
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Ok(None),
+        };
+
         let url = format!(
             "{macpepdb_base_url}/api/taxonomies/{}",
             selected_taxonomy_id.unwrap()
         );
 
-        Ok(Some(reqwest::get(url).await?.json::<Taxonomy>().await?))
+        Ok(Some(reqwest::get(url).await?.json().await?))
     });
 
     // post translational modifications
@@ -190,11 +210,17 @@ pub fn MassSearch() -> Element {
     let mut new_ptm_position = use_signal(|| PtmPosition::Anywhere);
     let mut ptm_index = use_signal(|| 0); // Just to have something to use as name
     let mut ptms: Signal<Vec<PostTranslationalModification>> = use_signal(Vec::new);
-    let amino_acids: Resource<Result<Vec<AminoAcid>>> = use_resource(move || async move {
+    let amino_acids: Resource<Result<Option<Vec<AminoAcid>>>> = use_resource(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Ok(None),
+        };
+
         let url = format!("{macpepdb_base_url}/api/chemistry/amino_acids");
         let mut amino_acids = reqwest::get(&url).await?.json::<Vec<AminoAcid>>().await?;
         amino_acids.sort_by(|x, y| x.get_code().cmp(y.get_code()));
-        Ok(amino_acids)
+        Ok(Some(amino_acids))
     });
 
     // review filter
@@ -205,6 +231,17 @@ pub fn MassSearch() -> Element {
         use_signal(|| FetchStatus::None);
     let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
         while rx.next().await.is_some() {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => {
+                    peptides.set(FetchStatus::Error(anyhow!(
+                        "App configuration not loaded yet"
+                    )));
+                    continue;
+                }
+            };
+
             peptides.set(FetchStatus::Loading);
             let search_body = create_search_body(
                 selected_mass_unit,
@@ -230,6 +267,17 @@ pub fn MassSearch() -> Element {
     //
     let download_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
         while rx.next().await.is_some() {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => {
+                    peptides.set(FetchStatus::Error(anyhow!(
+                        "App configuration not loaded yet"
+                    )));
+                    continue;
+                }
+            };
+
             let search_body = create_search_body(
                 selected_mass_unit,
                 thompson,
@@ -453,15 +501,15 @@ pub fn MassSearch() -> Element {
                     },
                     option { value: " ", "Select amino acid" }
                     match &*amino_acids.read_unchecked() {
-                        Some(Ok(amino_acid)) => rsx! {
-                            for aa in amino_acid {
+                        Some(Ok(Some(amino_acids))) => rsx! {
+                            for aa in amino_acids {
                                 option { value: "{aa.get_code()}", "{aa.get_code()} - {aa.get_name()}" }
                             }
                         },
                         Some(Err(e)) => rsx! {
                             option { "Error loading amino acids: {e}" }
                         },
-                        None => rsx! {
+                        None | Some(Ok(None)) => rsx! {
                             option { "Loading ..." }
                         },
                     }

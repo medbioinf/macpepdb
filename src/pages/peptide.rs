@@ -26,10 +26,7 @@ type PeptideEntity = MaCPepDBPeptide<ProteinEntity>;
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 /// * `peptide_id` - peptide accession or gene name
 ///
-pub async fn get_peptide(
-    macpepdb_base_url: Signal<String>,
-    peptide_sequence: Signal<String>,
-) -> Result<PeptideEntity> {
+pub async fn get_peptide(macpepdb_base_url: &str, peptide_sequence: &str) -> Result<PeptideEntity> {
     let url = format!("{macpepdb_base_url}/api/peptides/{peptide_sequence}");
     Ok(reqwest::get(&url).await?.json().await?)
 }
@@ -40,17 +37,13 @@ pub async fn get_peptide(
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 /// * `peptide_id` - peptide accession or gene name
 ///
-pub async fn get_amino_acid_map(
-    macpepdb_base_url: Signal<String>,
-) -> Result<Rc<HashMap<char, AminoAcid>>> {
+pub async fn get_amino_acid_map(macpepdb_base_url: &str) -> Result<HashMap<char, AminoAcid>> {
     let url = format!("{macpepdb_base_url}/api/chemistry/amino_acids");
     let amino_acids: Vec<AminoAcid> = reqwest::get(&url).await?.json().await?;
-    Ok(Rc::new(
-        amino_acids
-            .into_iter()
-            .map(|aa| (aa.get_code().to_owned(), aa))
-            .collect(),
-    ))
+    Ok(amino_acids
+        .into_iter()
+        .map(|aa| (aa.get_code().to_owned(), aa))
+        .collect())
 }
 
 /// Properties for peptide page
@@ -63,24 +56,33 @@ pub struct PeptideProps {
 /// Page for rendering a single peptide
 ///
 pub fn Peptide(props: PeptideProps) -> Element {
-    let app_config = use_context::<AppConfiguration>();
-    let macpepdb_base_url: Signal<String> =
-        use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let app_config = use_context::<Resource<AppConfiguration>>();
     let peptide_sequence = use_signal(|| props.peptide_sequence.clone());
-    let mut review_proteins: Signal<Option<Rc<Vec<ProteinEntity>>>> = use_signal(|| None);
-    let mut unreview_proteins: Signal<Option<Rc<Vec<ProteinEntity>>>> = use_signal(|| None);
 
-    let peptide: Resource<Result<MaCPepDBPeptide<MaCPepDBProteins<String>>>> =
+    let peptide: Resource<Result<Option<PeptideEntity>>> = use_resource(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Ok(None),
+        };
+
+        Ok(Some(
+            get_peptide(macpepdb_base_url, peptide_sequence.read().as_str()).await?,
+        ))
+    });
+
+    let amino_acid_map: Resource<Result<Option<Rc<HashMap<char, AminoAcid>>>>> =
         use_resource(move || async move {
-            let mut peptide = get_peptide(macpepdb_base_url, peptide_sequence).await?;
-            let proteins = peptide.take_proteins();
-            let (reviewed, unreviewed): (Vec<ProteinEntity>, Vec<ProteinEntity>) =
-                proteins.into_iter().partition(|p| p.get_is_reviewed());
-            review_proteins.set(Some(Rc::new(reviewed)));
-            unreview_proteins.set(Some(Rc::new(unreviewed)));
-            Ok(peptide)
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => return Ok(None),
+            };
+
+            let map = get_amino_acid_map(macpepdb_base_url).await?;
+
+            Ok(Some(Rc::new(map)))
         });
-    let amino_acid_map = use_resource(move || get_amino_acid_map(macpepdb_base_url));
 
     let _ = use_resource(move || async move {
         track_page_visit(vec![(
@@ -94,7 +96,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
         div {
             h2 { "Peptide: {peptide_sequence}" }
             match &*peptide.read_unchecked() {
-                Some(Ok(peptide)) => rsx! {
+                Some(Ok(Some(peptide))) => rsx! {
                     table { class: "table table-striped",
                         thead {
                             tr {
@@ -170,7 +172,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
                     }
                     h3 { "Amino acid composition" }
                     match &*amino_acid_map.read_unchecked() {
-                        Some(Ok(amino_acid_map)) => rsx! {
+                        Some(Ok(Some(amino_acid_map))) => rsx! {
                             table { class: "table table-sm",
                                 thead {
                                     tr {
@@ -188,36 +190,19 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 }
                             }
                         },
-                        Some(Err(e)) => rsx! {
-                            div { "Error loading the amino acid map {e}" }
+                        Some(Err(err)) => rsx! {
+                            div { "Error loading the amino acid map {err}" }
                         },
-                        None => rsx! {
+                        Some(Ok(None)) | None => rsx! {
                             div { "Loading ..." }
                         },
                     }
-                    match &*review_proteins.read_unchecked() {
-                        Some(proteins) => rsx! {
-                            h3 { "Reviewed Proteins" }
-                            ProteinList { proteins: proteins.clone() }
-                        },
-                        None => rsx! {
-                            div { "Loading ..." }
-                        },
-                    }
-                    match &*unreview_proteins.read_unchecked() {
-                        Some(proteins) => rsx! {
-                            h3 { "Unreviewed Proteins" }
-                            ProteinList { proteins: proteins.clone() }
-                        },
-                        None => rsx! {
-                            div { "Loading ..." }
-                        },
-                    }
+                    ProteinList { proteins: peptide.get_proteins() }
                 },
-                Some(Err(e)) => rsx! {
-                    div { "Error loading the peptide {e}" }
+                Some(Err(err)) => rsx! {
+                    div { "Error loading the peptide {err}" }
                 },
-                None => rsx! {
+                Some(Ok(None)) | None => rsx! {
                     div { "Loading ..." }
                 },
             }

@@ -24,9 +24,7 @@ const DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH: usize = 6;
 /// # Arguments
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 ///
-pub async fn get_macpepdb_configuration(
-    macpepdb_base_url: Signal<String>,
-) -> Result<MacPepDBConfiguration> {
+pub async fn get_macpepdb_configuration(macpepdb_base_url: &str) -> Result<MacPepDBConfiguration> {
     let url = format!("{macpepdb_base_url}/api/configuration",);
     Ok(reqwest::get(&url)
         .await?
@@ -36,10 +34,7 @@ pub async fn get_macpepdb_configuration(
 
 /// Get peptide
 ///
-pub async fn get_peptide(
-    macpepdb_base_url: Signal<String>,
-    sequence: Signal<String>,
-) -> Result<Option<PeptideEntity>> {
+pub async fn get_peptide(macpepdb_base_url: &str, sequence: &str) -> Result<Option<PeptideEntity>> {
     let url = format!("{macpepdb_base_url}/api/peptides/{sequence}",);
     let response = reqwest::get(&url).await?;
     match response.status() {
@@ -50,15 +45,21 @@ pub async fn get_peptide(
 }
 
 pub fn SequenceSearch() -> Element {
-    let app_config = use_context::<AppConfiguration>();
-    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let app_config = use_context::<Resource<AppConfiguration>>();
     let mut sequence = use_signal(|| "".to_string());
 
     let minimum_sequence_length_to_search = use_resource(move || async move {
-        match get_macpepdb_configuration(macpepdb_base_url).await {
-            Ok(config) => config.get_min_peptide_length().unwrap_or(1),
-            Err(_) => DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH,
-        }
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return None,
+        };
+
+        get_macpepdb_configuration(macpepdb_base_url)
+            .await
+            .map_or(Some(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH), |config| {
+                config.get_min_peptide_length()
+            })
     });
 
     // Event handler for fetching proteins on button click or on enter
@@ -66,22 +67,30 @@ pub fn SequenceSearch() -> Element {
     let mut peptide: Signal<FetchStatus<PeptideEntity>> = use_signal(|| FetchStatus::None);
     let get_peptide_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
         while rx.next().await.is_some() {
-            if sequence.read_unchecked().len()
-                < minimum_sequence_length_to_search
-                    .read_unchecked()
-                    .unwrap_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH)
-            {
+            let min_peptide_length = minimum_sequence_length_to_search
+                .read_unchecked()
+                .unwrap_or(Some(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH))
+                .unwrap_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH);
+
+            if sequence.read_unchecked().len() < min_peptide_length {
                 peptide.set(FetchStatus::Error(anyhow!(
                     "Sequence is too short, must be at least {} characters",
-                    minimum_sequence_length_to_search
-                        .read_unchecked()
-                        .unwrap_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH)
+                    min_peptide_length
                 )));
                 continue;
             }
-
             peptide.set(FetchStatus::Loading);
-            match get_peptide(macpepdb_base_url, sequence).await {
+
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => {
+                    peptide.set(FetchStatus::Error(anyhow!("App configuration not loaded")));
+                    continue;
+                }
+            };
+
+            match get_peptide(macpepdb_base_url, sequence.read().as_str()).await {
                 Ok(Some(fetched_peptide)) => {
                     peptide.set(FetchStatus::Finished(fetched_peptide));
                 }

@@ -30,33 +30,54 @@ where
             div { "No proteins" }
         };
     }
+
+    let reviewed_proteins = props
+        .proteins
+        .iter()
+        .filter(|protein| protein.get_is_reviewed())
+        .collect::<Vec<&MaCPepDBProtein<T>>>();
+
+    let unreviewed_proteins = props
+        .proteins
+        .iter()
+        .filter(|protein| !protein.get_is_reviewed())
+        .collect::<Vec<&MaCPepDBProtein<T>>>();
+
+    let protein_lists = vec![
+        ("Reviewed Proteins", reviewed_proteins),
+        ("Unreviewed Proteins", unreviewed_proteins),
+    ];
+
     rsx! {
-        table { class: "table table-striped table-hover",
-            thead {
-                tr {
-                    th { "Accession" }
-                    th { "Entry name" }
-                    th { "Name" }
-                    th { "Genes" }
-                    th { "Is reviewed" }
-                }
-            }
-            tbody {
-                for protein in props.proteins.iter() {
+        for (title , proteins) in protein_lists {
+            h3 { "{title}" }
+            table { class: "table table-striped table-hover",
+                thead {
                     tr {
-                        td {
-                            Link {
-                                to: Routes::Protein {
-                                    protein_id: protein.get_accession().to_owned(),
-                                },
-                                "{protein.get_accession()}"
+                        th { "Accession" }
+                        th { "Entry name" }
+                        th { "Name" }
+                        th { "Genes" }
+                        th { "Is reviewed" }
+                    }
+                }
+                tbody {
+                    for protein in proteins {
+                        tr {
+                            td {
+                                Link {
+                                    to: Routes::Protein {
+                                        protein_id: protein.get_accession().to_owned(),
+                                    },
+                                    "{protein.get_accession()}"
+                                }
                             }
-                        }
-                        td { "{protein.get_entry_name()}" }
-                        td { "{protein.get_name()}" }
-                        td { "{protein.get_genes().join(\", \")}" }
-                        td {
-                            i { class: if protein.get_is_reviewed() { "fas fa-check" } else { "fas fa-times" } }
+                            td { "{protein.get_entry_name()}" }
+                            td { "{protein.get_name()}" }
+                            td { "{protein.get_genes().join(\", \")}" }
+                            td {
+                                i { class: if protein.get_is_reviewed() { "fas fa-check" } else { "fas fa-times" } }
+                            }
                         }
                     }
                 }

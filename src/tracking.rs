@@ -13,7 +13,15 @@ use crate::{configuration::Configuration, routes::Routes};
 /// # Arguments
 /// * `path_segment_overrides` - Vector of (segment to replace, replacement) tuples. Important to generalize the path segments which can have high cardinality like protein accessions or peptide sequences.
 pub async fn track_page_visit(path_segment_overrides: Vec<(String, String)>) {
-    let config = use_context::<Configuration>();
+    let app_config = use_context::<Resource<Configuration>>();
+    let config_ref = app_config.read_unchecked();
+    let config = match config_ref.as_ref() {
+        Some(config) => config,
+        None => {
+            tracing::warn!("App configuration not loaded, cannot track page visit");
+            return;
+        }
+    };
 
     if config.matomo_url().is_none() || config.matomo_site_id().is_none() {
         return;

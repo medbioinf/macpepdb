@@ -21,10 +21,7 @@ type ProteinEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 /// * `protein_id` - Protein accession or gene name
 ///
-pub async fn get_protein(
-    macpepdb_base_url: Signal<String>,
-    protein_id: Signal<String>,
-) -> Result<ProteinEntity> {
+pub async fn get_protein(macpepdb_base_url: &str, protein_id: &str) -> Result<ProteinEntity> {
     let url = format!("{}/api/proteins/{}", macpepdb_base_url, protein_id);
     Ok(reqwest::get(&url).await?.json().await?)
 }
@@ -38,12 +35,20 @@ pub struct ProteinProps {
 
 /// Protein page
 pub fn Protein(props: ProteinProps) -> Element {
-    let app_config = use_context::<AppConfiguration>();
-    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
+    let app_config = use_context::<Resource<AppConfiguration>>();
 
     let protein_id = use_signal(|| props.protein_id.to_owned());
 
-    let protein = use_resource(move || get_protein(macpepdb_base_url, protein_id));
+    let protein: Resource<Result<Option<ProteinEntity>>> = use_resource(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Ok(None),
+        };
+        Ok(Some(
+            get_protein(macpepdb_base_url, protein_id.read().as_str()).await?,
+        ))
+    });
 
     let uniprot_link = use_signal(|| format!("https://www.uniprot.org/uniprot/{}", protein_id));
 
@@ -59,7 +64,7 @@ pub fn Protein(props: ProteinProps) -> Element {
         div {
             h2 { "Protein: {props.protein_id}" }
             match &*protein.read_unchecked() {
-                Some(Ok(protein)) => rsx! {
+                Some(Ok(Some(protein))) => rsx! {
                     table { class: "table table-striped",
                         thead {
                             tr {
@@ -125,7 +130,7 @@ pub fn Protein(props: ProteinProps) -> Element {
                             tr {
                                 td { "Sequence" }
                                 td {
-                                    SequenceBlock { sequence: protein.get_sequence().to_owned() }
+                                    SequenceBlock { sequence: protein.get_sequence().clone() }
                                 }
                             }
                             tr {
@@ -166,10 +171,10 @@ pub fn Protein(props: ProteinProps) -> Element {
                         }
                     }
                 },
-                Some(Err(e)) => rsx! {
-                    div { "Error loading the protein {e}" }
+                Some(Err(err)) => rsx! {
+                    div { "Error loading the protein {err}" }
                 },
-                None => rsx! {
+                None | Some(Ok(None)) => rsx! {
                     div { "Loading ..." }
                 },
             }

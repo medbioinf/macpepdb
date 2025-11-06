@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 // 3rd party imports
 use serde::Deserialize;
 
@@ -11,12 +13,12 @@ where
     sequence: String,
     missed_cleavages: i16,
     aa_counts: Vec<i16>,
-    proteins: Vec<T>,
+    proteins: Rc<Vec<T>>,
     is_swiss_prot: bool,
     is_trembl: bool,
     taxonomy_ids: Vec<i64>,
     unique_taxonomy_ids: Vec<i64>,
-    proteome_ids: Vec<String>,
+    proteome_ids: Rc<Vec<String>>,
 }
 
 impl<T> Peptide<T>
@@ -80,10 +82,8 @@ where
         &self.proteome_ids
     }
 
-    /// Takes the proteins, leaving an empty vector
-    /// Useful for moving the proteins to another entity/component
-    ///
-    pub fn take_proteins(&mut self) -> Vec<T> {
-        std::mem::take(&mut self.proteins)
+    // Returns the proteins containing
+    pub fn get_proteins(&self) -> Rc<Vec<T>> {
+        self.proteins.clone()
     }
 }

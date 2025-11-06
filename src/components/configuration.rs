@@ -14,9 +14,7 @@ const PARTITION_PLOT_ID: &str = "partition-plot";
 /// # Arguments
 /// * `macpepdb_base_url` - Base URL of MaCPepDB
 ///
-pub async fn get_macpepdb_configuration(
-    macpepdb_base_url: Signal<String>,
-) -> Result<MacPepDBConfiguration> {
+pub async fn get_macpepdb_configuration(macpepdb_base_url: &str) -> Result<MacPepDBConfiguration> {
     let url = format!("{}/api/configuration", macpepdb_base_url);
     Ok(reqwest::get(&url)
         .await?
@@ -27,15 +25,22 @@ pub async fn get_macpepdb_configuration(
 /// Component for rendering MaCPepDB configuration
 ///
 pub fn Configuration() -> Element {
-    let app_config = use_context::<AppConfiguration>();
-    let macpepdb_base_url = use_signal(|| app_config.get_macpepdb_base_url().to_owned());
-    let macpepdb_configuration =
-        use_resource(move || get_macpepdb_configuration(macpepdb_base_url));
+    let app_config = use_context::<Resource<AppConfiguration>>();
+    let macpepdb_configuration: Resource<Result<Option<MacPepDBConfiguration>>> =
+        use_resource(move || async move {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => return Ok(None),
+            };
+
+            Ok(Some(get_macpepdb_configuration(macpepdb_base_url).await?))
+        });
     let mut is_partition_plot_element_mounted = use_signal(|| false);
 
     // Need to be made reactive to be trigger the effect
     use_effect(move || {
-        if let Some(Ok(config)) = &*macpepdb_configuration.read_unchecked() {
+        if let Some(Ok(Some(config))) = &*macpepdb_configuration.read() {
             if is_partition_plot_element_mounted() {
                 let mut plot = Plot::new();
                 let trace = Scatter::new(
@@ -69,7 +74,7 @@ pub fn Configuration() -> Element {
                     }
                 }
 
-                // I expected this two work as well, but it produced an JS `arg0 is undefined`
+                // I expected this to work as well, but it produced an JS `arg0 is undefined`
                 // which I was not able to debug. I suspect that the div-element is sometimes not
                 // mounted. I tried several things to sync it but without success.
                 // spawn(async move {
@@ -83,7 +88,7 @@ pub fn Configuration() -> Element {
         div {
             h2 { "Settings" }
             match &*macpepdb_configuration.read_unchecked() {
-                Some(Ok(config)) => {
+                Some(Ok(Some(config))) => {
                     rsx! {
                         table { class: "table table-striped",
                             thead {
@@ -136,7 +141,7 @@ pub fn Configuration() -> Element {
                 Some(Err(err)) => rsx! {
                     div { class: "alert alert-danger", "{err}" }
                 },
-                None => rsx! {
+                None | Some(Ok(None)) => rsx! {
                     Spinner {}
                 },
             }
@@ -147,7 +152,10 @@ pub fn Configuration() -> Element {
                     The number of partitions and mass limits can be different for each MaCPepDB instance and depends on the number of initial proteins
                     and the used protease."#
                 }
-                div { id: PARTITION_PLOT_ID, onmounted: move |_| is_partition_plot_element_mounted.set(true) }
+                div {
+                    id: PARTITION_PLOT_ID,
+                    onmounted: move |_| is_partition_plot_element_mounted.set(true),
+                }
             }
         }
     }
