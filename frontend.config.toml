@@ -1,4 +1,4 @@
-macpepdb_base_url = "http://localhost:9999"
+macpepdb_base_url = "https://macpepdb.cubimed.rub.de"
 # Enable Matomo tracking by setting the URL and site ID below
 # Do not forget to add the matomo_url to the CORS allowed origins when serving
 # the frontend.
