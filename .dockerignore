@@ -1,0 +1,13 @@
+# Deny every file
+*
+
+# Add rust files
+!/assets/**/*
+!/build.rs
+!/Cargo.toml
+!/Cargo.lock
+!/Dioxus.lock
+!/LICENSE
+!/README.md
+!/rust-toolchain.toml
+!/src/**/*.rs

@@ -25,6 +25,8 @@ env MACPEPDB_BASE_URL=http://127.0.0.1:8000 dx serve
 ```
 
 ## Deplyoment
+
+## Native
 1. `dx build --release`
 2. Serve the created `target/dx/macpepdb-frontend/release/web/public` folder with any web server, e.g. NginX. A very simple config is provided `nginx.conf`. using Docker simply call:
 
@@ -41,3 +43,12 @@ A simpler version is comming soon.
 Copy `config.template.toml` adjust it and put it into the `target/dx/macpepdb-frontend/release/web/public/assets/config.toml`.
 
 
+## Docker
+1. Check the [https://github.com/orgs/medbioinf/packages/container/package/macpepdb-frontend](available containers)
+2. Start one `docker run --rm -p <HOST_PORT>:80 <IMAGE_TAG>`
+
+### Configuration
+Copy `config.template.toml` adjust it and mount it at `/usr/share/caddy/assets/config.toml`
+
+### SSL
+Let anotherproxy like NginX, Caddy or HAProxy handle this.
