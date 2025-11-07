@@ -44,11 +44,11 @@ Copy `config.template.toml` adjust it and put it into the `target/dx/macpepdb-fr
 
 
 ## Docker
-1. Check the [https://github.com/orgs/medbioinf/packages/container/package/macpepdb-frontend](available containers)
+1. Check the [available images](https://github.com/orgs/medbioinf/packages/container/package/macpepdb-frontend)
 2. Start one `docker run --rm -p <HOST_PORT>:80 <IMAGE_TAG>`
 
 ### Configuration
 Copy `config.template.toml` adjust it and mount it at `/usr/share/caddy/assets/config.toml`
 
 ### SSL
-Let anotherproxy like NginX, Caddy or HAProxy handle this.
+Let another proxy like NginX, Caddy or HAProxy handle this.
