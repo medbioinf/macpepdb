@@ -9,7 +9,7 @@ edition = "2021"
 anyhow = "1.0.75"
 base64 = "0.22.1"
 chrono = "0.4.39"
-dioxus = { version = "0.7", features = ["router", "logger"] }
+dioxus = { version = "0.7.1", features = ["router", "logger"] }
 dioxus-logger = "0.6.2"
 futures-util = "0.3.31"
 log = "0.4.20"
