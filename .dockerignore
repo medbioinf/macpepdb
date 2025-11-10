@@ -6,7 +6,7 @@
 !/build.rs
 !/Cargo.toml
 !/Cargo.lock
-!/Dioxus.lock
+!/Dioxus.toml
 !/LICENSE
 !/README.md
 !/rust-toolchain.toml
