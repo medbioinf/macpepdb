@@ -11,3 +11,4 @@
 !/README.md
 !/rust-toolchain.toml
 !/src/**/*.rs
+!/docker/**/*
