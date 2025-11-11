@@ -270,12 +270,18 @@ impl Protein {
         partition_limits: &[i64],
         protease: &dyn Protease,
         include_protein_accessions: bool,
+        num_threads: usize,
     ) -> Result<JsonValue> {
-        let mut peptides: Vec<Peptide> =
-            PeptideTable::get_peptides_of_proteins(client, self, protease, partition_limits)
-                .await?
-                .try_collect()
-                .await?;
+        let mut peptides: Vec<Peptide> = PeptideTable::get_peptides_of_proteins(
+            client,
+            self,
+            protease,
+            partition_limits,
+            num_threads,
+        )
+        .await?
+        .try_collect()
+        .await?;
 
         peptides.sort_by(|pep_x, pep_y| pep_x.get_mass().partial_cmp(&pep_y.get_mass()).unwrap());
 

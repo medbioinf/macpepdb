@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::cmp::min;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use anyhow::{bail, Result};
@@ -6,13 +7,15 @@ use async_stream::try_stream;
 use dihardts_omicstools::proteomics::proteases::protease::Protease;
 use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
-use futures::{Stream, TryStreamExt};
+use futures::stream::FuturesUnordered;
+use futures::{pin_mut, Stream, StreamExt, TryStreamExt};
 use itertools::Itertools;
 use scylla::errors::ExecutionError;
 use scylla::serialize::row::SerializeRow;
 use scylla::value::CqlValue;
 use tokio::pin;
-use tokio::task::JoinSet;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::task::JoinHandle;
 
 use crate::chemistry::amino_acid::calc_sequence_mass_int;
 use crate::database::generic_client::GenericClient;
@@ -461,6 +464,85 @@ impl PeptideTable {
         Ok(stream.try_next().await?.is_some())
     }
 
+    /// Selects peptides of proteins by partition. Designed to be run as a task.
+    ///
+    /// # Arguments
+    /// * `task_id` - The id of the task
+    /// * `client` - The database client
+    /// * `partition` - The partition to search in
+    /// * `peptides` - The peptides to search for
+    /// * `peptide_sender` - The sender to send the found peptides back
+    ///
+    async fn select_peptides_of_proteins_by_partition_task(
+        task_id: usize,
+        client: Arc<Client>,
+        partition: i64,
+        peptides: Vec<Peptide>,
+        peptide_sender: UnboundedSender<Result<Peptide>>,
+    ) -> Result<()> {
+        if peptides.len() == 1 {
+            // Get stream of peptides
+            let peptide_stream = PeptideTable::select(
+                client.as_ref(),
+                "WHERE partition = ? AND mass = ? AND sequence = ?",
+                (
+                    partition,
+                    peptides[0].get_mass(),
+                    peptides[0].get_sequence(),
+                ),
+            )
+            .await?;
+            pin_mut!(peptide_stream);
+
+            // Send back to sink
+            while let Some(peptide) = peptide_stream.next().await {
+                peptide_sender.send(peptide).map_err(|e| {
+                    anyhow::anyhow!(
+                        "Error sending peptide from search task {}: {:?}",
+                        task_id,
+                        e
+                    )
+                })?;
+            }
+        } else {
+            // Add where clause for each peptide's clustering keys (mass and sequence)
+            let where_clauses = peptides
+                .iter()
+                .map(|_| "(?, ?)".to_string())
+                .collect::<Vec<String>>()
+                .join(", ");
+            // Add the partition clause
+            let statement_addition =
+                format!("WHERE partition = ? AND (mass, sequence) IN ({where_clauses})");
+
+            // Collect select values
+            let mut select_values = Vec::with_capacity(2 * peptides.len() + 1);
+            select_values.push(CqlValue::BigInt(partition));
+            for peptide in &peptides {
+                select_values.push(CqlValue::BigInt(peptide.get_mass()));
+                select_values.push(CqlValue::Text(peptide.get_sequence().to_string()));
+            }
+
+            // Get stream of peptides
+            let peptide_stream =
+                PeptideTable::select(client.as_ref(), &statement_addition, select_values).await?;
+            pin_mut!(peptide_stream);
+
+            // Send back to sink
+            while let Some(peptide) = peptide_stream.next().await {
+                peptide_sender.send(peptide).map_err(|e| {
+                    anyhow::anyhow!(
+                        "Error sending peptide from search task {}: {:?}",
+                        task_id,
+                        e
+                    )
+                })?;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Returns peptides of protein
     ///
     /// # Arguments
@@ -472,52 +554,70 @@ impl PeptideTable {
         protein: &'a Protein,
         protease: &'a dyn Protease,
         partition_limits: &'a [i64],
+        num_threads: usize,
     ) -> Result<impl Stream<Item = Result<Peptide>> + 'a> {
         Ok(try_stream! {
-            // First digest the protein
-            let dummy_peptides: Vec<Peptide> = convert_to_internal_dummy_peptide(
+            let (peptide_sender, mut peptide_receiver) = unbounded_channel::<Result<Peptide>>();
+
+
+            // First digest the protein and sort the peptides by partition
+            let dummy_peptides_by_partition: Vec<(i64, Vec<Peptide>)> = convert_to_internal_dummy_peptide(
                 Box::new(protease.cleave(protein.get_sequence())?),
                 partition_limits,
             )
             .collect::<HashSet<Peptide>>()?
             .into_iter()
+            .into_group_map_by(|pep| pep.get_partition())
+            .into_iter()
             .collect();
 
-            // Chunking the peptides to 2 * number of nodes which seem to be a good
-            // value of concurrent peptide-SELECT. For sure this should not be linear.
-            let chunk_size = dummy_peptides.len() / client.get_num_nodes() * 2;
-            let dummy_peptides: Vec<Vec<Peptide>> = dummy_peptides.into_iter()
-                .chunks(chunk_size)
-                .into_iter()
-                .map(Iterator::collect)
-                .collect();
 
-            for peptide_chunk in dummy_peptides {
-                let mut join: JoinSet<Result<Option<Peptide>>> = JoinSet::new();
-                for peptide in peptide_chunk {
-                    let task_client = client.clone();
-                    join.spawn(async move {
-                        let stream = PeptideTable::select(
-                            task_client.as_ref(),
-                            "WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1",
-                            (
-                                peptide.get_partition(),
-                                peptide.get_mass(),
-                                peptide.get_sequence(),
-                            )
-                        ).await?;
-                        pin!(stream);
+            let select_handle = tokio::spawn( async move {
+                let mut pool: FuturesUnordered<JoinHandle<Result<(), anyhow::Error>>> = FuturesUnordered::new();
+                let mut dummy_peptides_by_partition = VecDeque::from(dummy_peptides_by_partition);
+                let mut task_id = 0;
 
-                        stream.try_next().await
-                    });
-                }
-                while let Some(peptide) = join.join_next().await {
-                    yield match peptide?? {
-                        Some(peptide) => peptide,
-                        None => continue,
+                for _ in 0..min(num_threads, dummy_peptides_by_partition.len()) {
+                    if let Some((partition, peptides)) = dummy_peptides_by_partition.pop_front() {
+                        task_id += 1;
+                        pool.push(
+                            tokio::spawn(Self::select_peptides_of_proteins_by_partition_task(
+                                task_id,
+                                client.clone(),
+                                partition,
+                                peptides,
+                                peptide_sender.clone(),
+                            ))
+                        );
                     }
                 }
+
+                // as soon as any future finishes, process result and push a new one if available
+                while let Some(join_res) = pool.next().await {
+                    join_res??;
+
+                    if let Some((partition, peptides)) = dummy_peptides_by_partition.pop_front() {
+                        task_id += 1;
+                        pool.push(
+                            tokio::spawn(Self::select_peptides_of_proteins_by_partition_task(
+                                task_id,
+                                client.clone(),
+                                partition,
+                                peptides,
+                                peptide_sender.clone(),
+                            ))
+                        );
+                    }
+                }
+
+                Ok::<(), anyhow::Error>(())
+            });
+
+            while let Some(peptide) = peptide_receiver.recv().await {
+                yield peptide?;
             }
+
+            select_handle.await??;
         })
     }
 

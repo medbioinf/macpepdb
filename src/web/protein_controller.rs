@@ -134,6 +134,7 @@ pub async fn get_protein(
                     app_state.get_configuration_as_ref().get_partition_limits(),
                     protease.as_ref(),
                     query.include_peptide_protein_accession,
+                    app_state.get_num_search_threads(),
                 )
                 .await?,
         ));
@@ -244,7 +245,8 @@ pub async fn search_protein(
                     app_state.get_db_client().clone(),
                     app_state.get_configuration_as_ref().get_partition_limits(),
                     protease.as_ref(),
-                    true
+                    true,
+                    app_state.get_num_search_threads(),
                 ).await {
                     Ok(json) => json,
                     Err(err) => {
