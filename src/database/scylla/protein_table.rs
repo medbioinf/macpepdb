@@ -1,3 +1,4 @@
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -80,6 +81,8 @@ impl From<TypedProteinRow> for Protein {
     }
 }
 
+pub type FallibleProteinStream = Pin<Box<dyn Stream<Item = Result<Protein>> + Send>>;
+
 pub struct ProteinTable {}
 
 impl ProteinTable {
@@ -156,11 +159,8 @@ impl ProteinTable {
     /// # Arguments
     /// * `client` - The database client
     /// * `attribute` - Accession or gene name, will be wrapped in a like-query
-    pub async fn search<'a>(
-        client: Arc<Client>,
-        attribute: String,
-    ) -> Result<impl Stream<Item = Result<Protein>> + 'a> {
-        Ok(try_stream! {
+    pub async fn search(client: Arc<Client>, attribute: String) -> Result<FallibleProteinStream> {
+        Ok(Box::pin(try_stream! {
 
             for await protein in Self::select(
                 client.as_ref(),
@@ -177,7 +177,7 @@ impl ProteinTable {
             ).await? {
                 yield protein?;
             }
-        })
+        }))
     }
 
     /// get proteins of peptide
