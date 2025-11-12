@@ -31,7 +31,7 @@ where
     let mut current_page = use_signal(|| 0);
     let current_element_range = use_resource(move || async move {
         let start = *current_page.read_unchecked() * props.peptides_per_page;
-        let end = min(start + props.peptides_per_page, number_of_peptides);
+        let end = min(start + props.peptides_per_page, number_of_peptides - 1);
         start..end
     });
     let previous_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
