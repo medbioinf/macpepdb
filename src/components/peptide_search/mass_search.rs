@@ -1,16 +1,11 @@
-use std::{fmt::Display, rc::Rc, str::FromStr};
+use std::rc::Rc;
 
 use ::web_sys::window;
-use anyhow::{anyhow, bail, Result};
-use base64::{engine::general_purpose::STANDARD as Base64Standard, Engine as _};
 use dioxus::prelude::*;
 use dioxus_logger::tracing::info;
-use futures_util::StreamExt;
-use serde_json::json;
-use urlencoding::encode as urlencode;
 
 use crate::{
-    api_helpers::fetch_status::FetchStatus,
+    api_client::Client,
     components::{
         paginated_peptide_list::PaginatedPeptideList, separator_line::SeparatorLine,
         spinner::Spinner,
@@ -18,10 +13,12 @@ use crate::{
     configuration::Configuration as AppConfiguration,
     entities::{
         amino_acid::AminoAcid,
+        mass_unit::MassUnit,
         peptide::Peptide as MaCPepDBPeptide,
         post_translational_modification::{PostTranslationalModification, PtmPosition, PtmType},
         taxonomy::Taxonomy,
     },
+    errors::{api_client_error::ApiClientError, general_error::GeneralError},
 };
 
 /// Default upper and lower mass tolerance
@@ -41,95 +38,6 @@ const DEFAULT_MAX_VAR_MODIFICATIONS: i16 = 2;
 /// instead of the whole protein.
 type PeptideEntity = MaCPepDBPeptide<String>;
 
-/// Supported mass units for the search
-///
-#[derive(PartialEq)]
-enum MassUnit {
-    Thompson,
-    Dalton,
-}
-
-impl Display for MassUnit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MassUnit::Thompson => write!(f, "Thompson"),
-            MassUnit::Dalton => write!(f, "Dalton"),
-        }
-    }
-}
-
-impl FromStr for MassUnit {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "thompson" => Ok(MassUnit::Thompson),
-            "dalton" => Ok(MassUnit::Dalton),
-            _ => Err(()),
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn create_search_body(
-    selected_mass_unit: Signal<MassUnit>,
-    thompson: Signal<f64>,
-    charge: Signal<u8>,
-    dalton: Signal<f64>,
-    lower_mass_tolerance: Signal<i64>,
-    upper_mass_tolerance: Signal<i64>,
-    taxonomy: Resource<Result<Option<Taxonomy>>>,
-    max_variable_modifications: Signal<i16>,
-    ptms: Signal<Vec<PostTranslationalModification>>,
-    is_reviewed: Signal<Option<bool>>,
-) -> serde_json::Value {
-    let mut body = json!({
-        "lower_mass_tolerance_ppm": *lower_mass_tolerance.read(),
-        "upper_mass_tolerance_ppm": *upper_mass_tolerance.read(),
-        "max_variable_modifications": *max_variable_modifications.read(),
-        "modifications": *ptms.read(),
-    });
-
-    match *selected_mass_unit.read() {
-        MassUnit::Thompson => body["mass"] = json!((*thompson.read(), *charge.read())),
-        MassUnit::Dalton => body["mass"] = json!(*dalton.read()),
-    };
-
-    if let Some(Ok(Some(taxonomy))) = &*taxonomy.read_unchecked() {
-        body["taxonomy_id"] = json!(taxonomy.id);
-    }
-
-    if let Some(is_reviewed) = &*is_reviewed.read() {
-        body["is_reviewed"] = json!(is_reviewed);
-    }
-
-    body
-}
-
-async fn search_peptides(
-    macpepdb_base_url: &str,
-    search_body: serde_json::Value,
-) -> Result<Vec<PeptideEntity>> {
-    let url = format!("{}/api/peptides/search", macpepdb_base_url);
-
-    let client = reqwest::Client::new();
-    let response = client
-        .post(&url)
-        .header("Accept", "application/json")
-        .json(&search_body)
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        bail!(response.text().await?);
-    }
-
-    Ok(response.json().await?)
-}
-
-fn base64_urlsafe_encode(input: &str) -> String {
-    urlencode(&Base64Standard.encode(input.as_bytes())).into_owned()
-}
-
 pub fn MassSearch() -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
 
@@ -147,60 +55,44 @@ pub fn MassSearch() -> Element {
     // taxonomy filter
     let mut taxonomy_search_term = use_signal(|| "".to_string());
     let mut selected_taxonomy_id: Signal<Option<u64>> = use_signal(|| None);
-    let taxonomies: Resource<Result<Option<Vec<Taxonomy>>>> = use_resource(move || async move {
-        let app_config = app_config.read_unchecked();
-        let macpepdb_base_url = match app_config.as_ref() {
-            Some(config) => config.get_macpepdb_base_url(),
-            None => return Ok(None),
-        };
 
-        if taxonomy_search_term.read_unchecked().is_empty() {
-            return Ok(None);
-        }
+    let taxonomies: Resource<Result<Option<Vec<Taxonomy>>, GeneralError>> =
+        use_resource(move || async move {
+            if taxonomy_search_term.read_unchecked().is_empty() {
+                return Ok(None);
+            }
 
-        let url = format!("{macpepdb_base_url}/api/taxonomies/search");
-        let client = reqwest::Client::new();
-        let response = client
-            .post(&url)
-            .json(&json!({
-                "name_query": format!("*{taxonomy_search_term}*"),
-            }))
-            .send()
-            .await?;
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => Err(GeneralError::ConfigurationNotLoaded)?,
+            };
 
-        if !response.status().is_success() {
-            let status = response.status();
-            bail!(
-                "{}, status code: {}",
-                response
-                    .text()
-                    .await
-                    .unwrap_or("Could not decode body of error response".to_string()),
-                status
-            );
-        }
+            Ok(Some(
+                Client::new(macpepdb_base_url)
+                    .search_taxonomies(&taxonomy_search_term.read_unchecked())
+                    .await?,
+            ))
+        });
 
-        Ok(Some(response.json().await?))
-    });
+    let selected_taxonomy: Resource<Result<Option<Taxonomy>, GeneralError>> =
+        use_resource(move || async move {
+            if selected_taxonomy_id.read_unchecked().is_none() {
+                return Ok(None);
+            }
 
-    let selected_taxonomy: Resource<Result<Option<Taxonomy>>> = use_resource(move || async move {
-        if selected_taxonomy_id.read_unchecked().is_none() {
-            return Ok(None);
-        }
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => return Ok(None),
+            };
 
-        let app_config = app_config.read_unchecked();
-        let macpepdb_base_url = match app_config.as_ref() {
-            Some(config) => config.get_macpepdb_base_url(),
-            None => return Ok(None),
-        };
-
-        let url = format!(
-            "{macpepdb_base_url}/api/taxonomies/{}",
-            selected_taxonomy_id.unwrap()
-        );
-
-        Ok(Some(reqwest::get(url).await?.json().await?))
-    });
+            Ok(Some(
+                Client::new(macpepdb_base_url)
+                    .get_taxonomy(selected_taxonomy_id.read_unchecked().unwrap())
+                    .await?,
+            ))
+        });
 
     // post translational modifications
     let mut max_var_modifications = use_signal(|| DEFAULT_MAX_VAR_MODIFICATIONS);
@@ -227,77 +119,72 @@ pub fn MassSearch() -> Element {
     let mut is_reviewed: Signal<Option<bool>> = use_signal(|| None);
 
     // search peptides
-    let mut peptides: Signal<FetchStatus<Rc<Vec<PeptideEntity>>>> =
-        use_signal(|| FetchStatus::None);
-    let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
-        while rx.next().await.is_some() {
-            let app_config = app_config.read_unchecked();
-            let macpepdb_base_url = match app_config.as_ref() {
-                Some(config) => config.get_macpepdb_base_url(),
-                None => {
-                    peptides.set(FetchStatus::Error(anyhow!(
-                        "App configuration not loaded yet"
-                    )));
-                    continue;
-                }
-            };
+    let mut peptides = use_action(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Err(GeneralError::ConfigurationNotLoaded),
+        };
 
-            peptides.set(FetchStatus::Loading);
-            let search_body = create_search_body(
-                selected_mass_unit,
-                thompson,
-                charge,
-                dalton,
-                lower_mass_tolerance,
-                upper_mass_tolerance,
+        let selected_taxonomy_bound = selected_taxonomy.read_unchecked();
+        let selected_taxonomy = match selected_taxonomy_bound.as_ref() {
+            Some(Ok(taxonomy)) => taxonomy,
+            Some(Err(_)) => &None,
+            None => &None,
+        };
+
+        let peptides: Result<Vec<PeptideEntity>, ApiClientError> = Client::new(macpepdb_base_url)
+            .search_peptides(
+                selected_mass_unit.read_unchecked().clone(),
+                *thompson.read_unchecked(),
+                *charge.read_unchecked(),
+                *dalton.read_unchecked(),
+                *lower_mass_tolerance.read_unchecked(),
+                *upper_mass_tolerance.read_unchecked(),
                 selected_taxonomy,
-                max_var_modifications,
-                ptms,
-                is_reviewed,
-            );
-            let peptides_result = search_peptides(macpepdb_base_url, search_body).await;
-            match peptides_result {
-                Ok(new_peptides) => peptides.set(FetchStatus::Finished(Rc::new(new_peptides))),
-                Err(e) => peptides.set(FetchStatus::Error(e)),
-            }
+                *max_var_modifications.read_unchecked(),
+                &ptms.read_unchecked(),
+                *is_reviewed.read_unchecked(),
+            )
+            .await;
+
+        match peptides {
+            Ok(peptides) => Ok(Rc::new(peptides)),
+            Err(err) => Err(err.into()),
         }
     });
 
     // Coroutine to intiate download with the last search parameters
     //
-    let download_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
-        while rx.next().await.is_some() {
-            let app_config = app_config.read_unchecked();
-            let macpepdb_base_url = match app_config.as_ref() {
-                Some(config) => config.get_macpepdb_base_url(),
-                None => {
-                    peptides.set(FetchStatus::Error(anyhow!(
-                        "App configuration not loaded yet"
-                    )));
-                    continue;
-                }
-            };
+    let mut download = use_action(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Err(GeneralError::ConfigurationNotLoaded),
+        };
 
-            let search_body = create_search_body(
-                selected_mass_unit,
-                thompson,
-                charge,
-                dalton,
-                lower_mass_tolerance,
-                upper_mass_tolerance,
-                selected_taxonomy,
-                max_var_modifications,
-                ptms,
-                is_reviewed,
-            );
-            let url = format!(
-                "{}/api/peptides/search/{}/{}?is_download=true",
-                macpepdb_base_url,
-                base64_urlsafe_encode(serde_json::to_string(&search_body).unwrap().as_str()),
-                urlencode("text/tab-separated-values")
-            );
-            window().unwrap().location().assign(&url).unwrap();
-        }
+        let selected_taxonomy_bound = selected_taxonomy.read_unchecked();
+        let selected_taxonomy = match selected_taxonomy_bound.as_ref() {
+            Some(Ok(taxonomy)) => taxonomy,
+            Some(Err(_)) => &None,
+            None => &None,
+        };
+
+        let url = Client::new(macpepdb_base_url).peptide_search_download_url(
+            selected_mass_unit.read().clone(),
+            *thompson.read(),
+            *charge.read(),
+            *dalton.read(),
+            *lower_mass_tolerance.read(),
+            *upper_mass_tolerance.read(),
+            selected_taxonomy,
+            *max_var_modifications.read(),
+            &ptms.read(),
+            *is_reviewed.read(),
+        );
+        window().unwrap().location().assign(&url).unwrap();
+
+        Ok(())
     });
 
     rsx! {
@@ -646,16 +533,16 @@ pub fn MassSearch() -> Element {
                 button {
                     class: "btn btn-primary",
                     r#type: "button",
-                    onclick: move |_| { search_coroutine.send(()) },
+                    onclick: move |_| { peptides.call() },
                     i { class: "fa-solid fa-search me-2" }
                     "Search"
                 }
-                if let FetchStatus::Finished(_) = &*peptides.read_unchecked() {
+                if let Some(Ok(_)) = peptides.value() {
                     button {
                         class: "btn btn-primary",
                         r#type: "button",
                         onclick: move |_| {
-                            download_coroutine.send(());
+                            download.call();
                         },
                         i { class: "fa-solid fa-download me-2" }
                         "Download"
@@ -663,16 +550,17 @@ pub fn MassSearch() -> Element {
                 }
             }
         }
-        match &*peptides.read_unchecked() {
-            FetchStatus::None => rsx! { "" },
-            FetchStatus::Loading => rsx! {
-                Spinner {}
+        match peptides.value() {
+            Some(Ok(peptides)) => rsx! {
+                PaginatedPeptideList { peptides_per_page: 100, peptides: peptides.read_unchecked().clone() }
             },
-            FetchStatus::Finished(peptides) => rsx! {
-                PaginatedPeptideList { peptides_per_page: 100, peptides: peptides.clone() }
+            Some(Err(err)) => rsx! {
+                div { class: "alert alert-danger", "Error getting peptides: {err}" }
             },
-            FetchStatus::Error(err) => rsx! {
-                div { class: "alert alert-danger", "Error fetching peptides: {err}" }
+            None => rsx! {
+                if peptides.pending() {
+                    Spinner {}
+                }
             },
         }
     }

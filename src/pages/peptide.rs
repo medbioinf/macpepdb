@@ -1,17 +1,19 @@
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use anyhow::Result;
 use dioxus::prelude::*;
 
+use crate::api_client::Client;
 use crate::components::peptide::amino_acid_composition_header_cell::AminoAcidCompositionHeaderCell;
 use crate::components::protein_list::ProteinList;
 use crate::components::rounded_mass::RoundedMass;
 use crate::components::sequence_block::SequenceBlock;
+use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::amino_acid::AminoAcid;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProteins;
+use crate::errors::general_error::GeneralError;
 use crate::tracking::track_page_visit;
 
 /// As proteins contain their peptides and peptides contain their protein of origin, MaCPepDB
@@ -21,32 +23,6 @@ type ProteinEntity = MaCPepDBProteins<String>;
 type PeptideEntity = MaCPepDBPeptide<ProteinEntity>;
 
 type AminoAcidMap = Rc<HashMap<char, AminoAcid>>;
-
-/// Fetches peptide from MaCPepDB
-///
-/// # Arguments
-/// * `macpepdb_base_url` - Base URL of MaCPepDB
-/// * `peptide_id` - peptide accession or gene name
-///
-pub async fn get_peptide(macpepdb_base_url: &str, peptide_sequence: &str) -> Result<PeptideEntity> {
-    let url = format!("{macpepdb_base_url}/api/peptides/{peptide_sequence}");
-    Ok(reqwest::get(&url).await?.json().await?)
-}
-
-/// Fetches amino acids and returns them as map of code => amino acid
-///
-/// # Arguments
-/// * `macpepdb_base_url` - Base URL of MaCPepDB
-/// * `peptide_id` - peptide accession or gene name
-///
-pub async fn get_amino_acid_map(macpepdb_base_url: &str) -> Result<HashMap<char, AminoAcid>> {
-    let url = format!("{macpepdb_base_url}/api/chemistry/amino_acids");
-    let amino_acids: Vec<AminoAcid> = reqwest::get(&url).await?.json().await?;
-    Ok(amino_acids
-        .into_iter()
-        .map(|aa| (aa.get_code().to_owned(), aa))
-        .collect())
-}
 
 /// Properties for peptide page
 #[derive(Clone, PartialEq, Props)]
@@ -61,29 +37,35 @@ pub fn Peptide(props: PeptideProps) -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
     let peptide_sequence = use_signal(|| props.peptide_sequence.clone());
 
-    let peptide: Resource<Result<Option<PeptideEntity>>> = use_resource(move || async move {
+    let peptide: Resource<Result<PeptideEntity, GeneralError>> = use_resource(move || async move {
         let app_config = app_config.read_unchecked();
         let macpepdb_base_url = match app_config.as_ref() {
             Some(config) => config.get_macpepdb_base_url(),
-            None => return Ok(None),
+            None => return Err(GeneralError::ConfigurationNotLoaded),
         };
 
-        Ok(Some(
-            get_peptide(macpepdb_base_url, peptide_sequence.read().as_str()).await?,
-        ))
+        Ok(Client::new(macpepdb_base_url)
+            .get_peptide(peptide_sequence.read().as_str())
+            .await?)
     });
 
-    let amino_acid_map: Resource<Result<Option<AminoAcidMap>>> = use_resource(move || async move {
-        let app_config = app_config.read_unchecked();
-        let macpepdb_base_url = match app_config.as_ref() {
-            Some(config) => config.get_macpepdb_base_url(),
-            None => return Ok(None),
-        };
+    let amino_acid_map: Resource<Result<AminoAcidMap, GeneralError>> =
+        use_resource(move || async move {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => return Err(GeneralError::ConfigurationNotLoaded),
+            };
 
-        let map = get_amino_acid_map(macpepdb_base_url).await?;
+            let map = Client::new(macpepdb_base_url)
+                .get_amino_acid()
+                .await?
+                .into_iter()
+                .map(|aa| (aa.get_code().to_owned(), aa))
+                .collect();
 
-        Ok(Some(Rc::new(map)))
-    });
+            Ok(Rc::new(map))
+        });
 
     use_future(move || async move {
         track_page_visit(vec![(
@@ -97,7 +79,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
         div {
             h2 { "Peptide: {peptide_sequence}" }
             match &*peptide.read_unchecked() {
-                Some(Ok(Some(peptide))) => rsx! {
+                Some(Ok(peptide)) => rsx! {
                     table { class: "table table-striped",
                         thead {
                             tr {
@@ -173,7 +155,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
                     }
                     h3 { "Amino acid composition" }
                     match &*amino_acid_map.read_unchecked() {
-                        Some(Ok(Some(amino_acid_map))) => rsx! {
+                        Some(Ok(amino_acid_map)) => rsx! {
                             table { class: "table table-sm",
                                 thead {
                                     tr {
@@ -194,17 +176,21 @@ pub fn Peptide(props: PeptideProps) -> Element {
                         Some(Err(err)) => rsx! {
                             div { "Error loading the amino acid map {err}" }
                         },
-                        Some(Ok(None)) | None => rsx! {
-                            div { "Loading ..." }
+                        None => rsx! {
+                            if amino_acid_map.pending() {
+                                Spinner {}
+                            }
                         },
                     }
                     ProteinList { proteins: peptide.get_proteins() }
                 },
                 Some(Err(err)) => rsx! {
-                    div { "Error loading the peptide {err}" }
+                    div { class: "alert alert-danger", "Error getting proteins: {err}" }
                 },
-                Some(Ok(None)) | None => rsx! {
-                    div { "Loading ..." }
+                None => rsx! {
+                    if peptide.pending() {
+                        Spinner {}
+                    }
                 },
             }
         }

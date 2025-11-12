@@ -1,12 +1,14 @@
-use anyhow::Result;
 use dioxus::prelude::*;
 use dioxus_router::components::Link;
 
+use crate::api_client::Client;
 use crate::components::rounded_mass::RoundedMass;
 use crate::components::sequence_block::SequenceBlock;
+use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
+use crate::errors::general_error::GeneralError;
 use crate::routes::Routes;
 use crate::tracking::track_page_visit;
 
@@ -14,17 +16,6 @@ use crate::tracking::track_page_visit;
 /// stops the recursion on third level by only adding the protein accession to the peptides
 /// instead of the whole protein.
 type ProteinEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
-
-/// Fetch protein from MaCPepDB
-///
-/// # Arguments
-/// * `macpepdb_base_url` - Base URL of MaCPepDB
-/// * `protein_id` - Protein accession or gene name
-///
-pub async fn get_protein(macpepdb_base_url: &str, protein_id: &str) -> Result<ProteinEntity> {
-    let url = format!("{}/api/proteins/{}", macpepdb_base_url, protein_id);
-    Ok(reqwest::get(&url).await?.json().await?)
-}
 
 /// Properties for protein page
 #[derive(Clone, PartialEq, Props)]
@@ -39,15 +30,15 @@ pub fn Protein(props: ProteinProps) -> Element {
 
     let protein_id = use_signal(|| props.protein_id.to_owned());
 
-    let protein: Resource<Result<Option<ProteinEntity>>> = use_resource(move || async move {
+    let protein: Resource<Result<ProteinEntity, GeneralError>> = use_resource(move || async move {
         let app_config = app_config.read_unchecked();
         let macpepdb_base_url = match app_config.as_ref() {
             Some(config) => config.get_macpepdb_base_url(),
-            None => return Ok(None),
+            None => return Err(GeneralError::ConfigurationNotLoaded),
         };
-        Ok(Some(
-            get_protein(macpepdb_base_url, protein_id.read().as_str()).await?,
-        ))
+        Ok(Client::new(macpepdb_base_url)
+            .get_protein(protein_id.read().as_str())
+            .await?)
     });
 
     let uniprot_link = use_signal(|| format!("https://www.uniprot.org/uniprot/{}", protein_id));
@@ -64,7 +55,7 @@ pub fn Protein(props: ProteinProps) -> Element {
         div {
             h2 { "Protein: {props.protein_id}" }
             match &*protein.read_unchecked() {
-                Some(Ok(Some(protein))) => rsx! {
+                Some(Ok(protein)) => rsx! {
                     table { class: "table table-striped",
                         thead {
                             tr {
@@ -172,10 +163,12 @@ pub fn Protein(props: ProteinProps) -> Element {
                     }
                 },
                 Some(Err(err)) => rsx! {
-                    div { "Error loading the protein {err}" }
+                    div { class: "alert alert-danger", "Error getting protein: {err}" }
                 },
-                None | Some(Ok(None)) => rsx! {
-                    div { "Loading ..." }
+                None => rsx! {
+                    if protein.pending() {
+                        Spinner {}
+                    }
                 },
             }
         }

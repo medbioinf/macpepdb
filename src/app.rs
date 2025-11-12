@@ -5,6 +5,7 @@ use dioxus::{
     prelude::*,
 };
 
+use crate::components::spinner::Spinner;
 // internal imports
 use crate::{configuration::Configuration, routes::Routes, tracking::create_tracking_id};
 
@@ -22,6 +23,14 @@ pub fn App() -> Element {
         Script { src: "https://cdn.jsdelivr.net/npm/@popperjs/core@2.11.8/dist/umd/popper.min.js" }
         Script { src: "https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js" }
         Script { src: "https://cdn.plot.ly/plotly-2.14.0.min.js" }
-        Router::<Routes> {}
+
+        match &*config.read_unchecked() {
+            Some(_) => rsx! {
+                Router::<Routes> {}
+            },
+            None => rsx! {
+                Spinner {}
+            },
+        }
     }
 }

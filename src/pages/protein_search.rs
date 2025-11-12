@@ -1,16 +1,17 @@
 use std::rc::Rc;
 
-use anyhow::{anyhow, Result};
 use dioxus::html::input_data::keyboard_types::Code;
 use dioxus::prelude::*;
-use futures_util::StreamExt;
 
-use crate::api_helpers::fetch_status::FetchStatus;
+use crate::api_client::Client;
 use crate::components::protein_list::ProteinList;
 use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
 use crate::entities::peptide::Peptide as MaCPepDBPeptide;
 use crate::entities::protein::Protein as MaCPepDBProtein;
+use crate::errors::api_client_error::ApiClientError;
+use crate::errors::general_error::GeneralError;
+use crate::errors::protein_search_page_error::ProteinSearchPageError;
 use crate::tracking::track_page_visit;
 
 /// Proteins downloaded via the proteins endpoint contains full peptide entries instead of sequences,
@@ -21,56 +22,31 @@ type ProteinEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 ///
 const MIN_SEARCH_TERM_LENGTH: usize = 3;
 
-/// Fetch MaCPepDB configuration from the servers
-///
-/// # Arguments
-/// * `macpepdb_base_url` - Base URL of MaCPepDB
-/// * `protein_id` - Protein accession or gene nam
-///
-pub async fn get_proteins(macpepdb_base_url: &str, protein_id: &str) -> Result<Vec<ProteinEntity>> {
-    let url = format!("{macpepdb_base_url}/api/proteins/search/{protein_id}");
-    Ok(reqwest::get(&url)
-        .await?
-        .json::<Vec<ProteinEntity>>()
-        .await?)
-}
-
 /// Search for proteins by accession or gene name
 ///
 pub fn ProteinSearch() -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
     let mut protein_id = use_signal(|| "".to_string());
 
-    // search peptides
-    let mut proteins = use_signal(|| FetchStatus::None);
-    let search_coroutine = use_coroutine(move |mut rx: UnboundedReceiver<()>| async move {
-        while rx.next().await.is_some() {
-            let app_config = app_config.read_unchecked();
-            let macpepdb_base_url = match app_config.as_ref() {
-                Some(config) => config.get_macpepdb_base_url(),
-                None => {
-                    proteins.set(FetchStatus::Error(anyhow!("App configuration not loaded")));
-                    continue;
-                }
-            };
+    let mut proteins = use_action(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Err(GeneralError::ConfigurationNotLoaded),
+        };
 
-            if protein_id.read().len() < MIN_SEARCH_TERM_LENGTH {
-                proteins.set(FetchStatus::Error(anyhow!(
-                    "Search term too short, must be at least {} characters",
-                    MIN_SEARCH_TERM_LENGTH
-                )));
-                continue;
-            }
+        if protein_id.read().len() < MIN_SEARCH_TERM_LENGTH {
+            return Err(ProteinSearchPageError::SearchTermTooShort(MIN_SEARCH_TERM_LENGTH).into());
+        }
 
-            proteins.set(FetchStatus::Loading);
-            match get_proteins(macpepdb_base_url, protein_id.read_unchecked().as_str()).await {
-                Ok(fetched_proteins) => {
-                    proteins.set(FetchStatus::Finished(Rc::new(fetched_proteins)));
-                }
-                Err(err) => {
-                    proteins.set(FetchStatus::Error(err));
-                }
-            }
+        let fetched_proteins: Result<Vec<ProteinEntity>, ApiClientError> =
+            Client::new(macpepdb_base_url)
+                .search_protein(&protein_id.read())
+                .await;
+
+        match fetched_proteins {
+            Ok(fetched_proteins) => Ok(Rc::new(fetched_proteins)),
+            Err(err) => Err(err.into()),
         }
     });
 
@@ -87,36 +63,29 @@ pub fn ProteinSearch() -> Element {
                 oninput: move |evt| protein_id.set(evt.value()),
                 onkeyup: move |evt| {
                     if evt.code() == Code::Enter || evt.code() == Code::NumpadEnter {
-                        search_coroutine.send(())
+                        proteins.call();
                     }
                 },
             }
             button {
                 class: "btn btn-primary",
                 r#type: "button",
-                onclick: move |_| search_coroutine.send(()),
+                onclick: move |_| proteins.call(),
                 "Search"
             }
         }
-        match &*proteins.read_unchecked() {
-            FetchStatus::None => {
-                rsx! { "" }
-            }
-            FetchStatus::Loading => {
-                rsx! {
+        match proteins.value() {
+            Some(Ok(proteins)) => rsx! {
+                ProteinList { proteins: proteins.read().clone() }
+            },
+            Some(Err(err)) => rsx! {
+                div { class: "alert alert-danger", "Error getting proteins: {err}" }
+            },
+            None => rsx! {
+                if proteins.pending() {
                     Spinner {}
                 }
-            }
-            FetchStatus::Finished(proteins) => {
-                rsx! {
-                    ProteinList { proteins: proteins.clone() }
-                }
-            }
-            FetchStatus::Error(err) => {
-                rsx! {
-                    div { class: "alert alert-danger", "Error getting proteins: {err}" }
-                }
-            }
+            },
         }
     }
 }

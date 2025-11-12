@@ -1,86 +1,59 @@
-use anyhow::Result;
 use dioxus::prelude::*;
 use plotly::{layout::Axis, Layout, Plot, Scatter};
 
 use crate::{
-    components::spinner::Spinner, configuration::Configuration as AppConfiguration,
+    api_client::Client, components::spinner::Spinner,
+    configuration::Configuration as AppConfiguration,
     entities::configuration::Configuration as MacPepDBConfiguration,
+    errors::general_error::GeneralError,
 };
 
 const PARTITION_PLOT_ID: &str = "partition-plot";
-
-/// Fetch MaCPepDB configuration from the servers
-///
-/// # Arguments
-/// * `macpepdb_base_url` - Base URL of MaCPepDB
-///
-pub async fn get_macpepdb_configuration(macpepdb_base_url: &str) -> Result<MacPepDBConfiguration> {
-    let url = format!("{}/api/configuration", macpepdb_base_url);
-    Ok(reqwest::get(&url)
-        .await?
-        .json::<MacPepDBConfiguration>()
-        .await?)
-}
 
 /// Component for rendering MaCPepDB configuration
 ///
 pub fn Configuration() -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
-    let macpepdb_configuration: Resource<Result<Option<MacPepDBConfiguration>>> =
+    let macpepdb_configuration: Resource<Result<MacPepDBConfiguration, GeneralError>> =
         use_resource(move || async move {
             let app_config = app_config.read_unchecked();
             let macpepdb_base_url = match app_config.as_ref() {
                 Some(config) => config.get_macpepdb_base_url(),
-                None => return Ok(None),
+                None => return Err(GeneralError::ConfigurationNotLoaded),
             };
 
-            Ok(Some(get_macpepdb_configuration(macpepdb_base_url).await?))
+            Ok(Client::new(macpepdb_base_url).get_configuration().await?)
         });
     let mut is_partition_plot_element_mounted = use_signal(|| false);
 
     // Need to be made reactive to be trigger the effect
     use_effect(move || {
-        if let Some(Ok(Some(config))) = &*macpepdb_configuration.read() {
-            if is_partition_plot_element_mounted() {
-                let mut plot = Plot::new();
-                let trace = Scatter::new(
-                    config
-                        .get_partition_limits()
-                        .iter()
-                        .enumerate()
-                        .map(|(idx, _)| idx)
-                        .collect::<Vec<usize>>(),
-                    config.get_partition_limits().clone(),
-                );
-                plot.add_trace(trace);
-                let x_axis = Axis::new().title("Partition Index");
-                let y_axis = Axis::new().title("Mass limit (Da)");
-                let layout = Layout::new().x_axis(x_axis).y_axis(y_axis);
-                plot.set_layout(layout);
+        let macpepdb_configuration = macpepdb_configuration.read_unchecked();
+        let partition_limits = match &*macpepdb_configuration {
+            Some(Ok(config)) => config.get_partition_limits(),
+            _ => return,
+        };
 
-                let eval = document::eval(
-                    r#"
-                    let plot_data = JSON.parse(await dioxus.recv());
-                    Plotly.newPlot("partition-plot", plot_data);
-                    "#,
-                );
+        if is_partition_plot_element_mounted() {
+            let mut plot = Plot::new();
+            let trace = Scatter::new(
+                partition_limits
+                    .iter()
+                    .enumerate()
+                    .map(|(idx, _)| idx)
+                    .collect::<Vec<usize>>(),
+                partition_limits.to_vec(),
+            );
 
-                match eval.send(plot.to_json()) {
-                    Ok(_) => {}
-                    Err(err) => {
-                        web_sys::console::error_1(
-                            &format!("Error when rendering partition plot: {:?}", err).into(),
-                        );
-                    }
-                }
+            plot.add_trace(trace);
+            let x_axis = Axis::new().title("Partition Index");
+            let y_axis = Axis::new().title("Mass limit (Da)");
+            let layout = Layout::new().x_axis(x_axis).y_axis(y_axis);
+            plot.set_layout(layout);
 
-                // I expected this to work as well, but it produced an JS `arg0 is undefined`
-                // which I was not able to debug. I suspect that the div-element is sometimes not
-                // mounted. I tried several things to sync it but without success.
-                // spawn(async move {
-                //     plotly::bindings::new_plot("partition-plot", &plot).await;
-                // });
-            }
+            spawn(async move {
+                plotly::bindings::new_plot("partition-plot", &plot).await;
+            });
         }
     });
 
@@ -88,7 +61,7 @@ pub fn Configuration() -> Element {
         div {
             h2 { "Settings" }
             match &*macpepdb_configuration.read_unchecked() {
-                Some(Ok(Some(config))) => {
+                Some(Ok(config)) => {
                     rsx! {
                         table { class: "table table-striped",
                             thead {
@@ -139,10 +112,12 @@ pub fn Configuration() -> Element {
                     }
                 }
                 Some(Err(err)) => rsx! {
-                    div { class: "alert alert-danger", "{err}" }
+                    div { class: "alert alert-danger", "Error getting configuration: {err}" }
                 },
-                None | Some(Ok(None)) => rsx! {
-                    Spinner {}
+                None => rsx! {
+                    if macpepdb_configuration.pending() {
+                        Spinner {}
+                    }
                 },
             }
             div {
