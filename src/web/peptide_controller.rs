@@ -570,6 +570,34 @@ async fn search(
         );
     }
 
+    match accept_header.as_str() {
+        "application/json" => {
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=utf-8"),
+            );
+        }
+        "text/tab-separated-values" => {
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/tab-separated-values; charset=utf-8"),
+            );
+        }
+        "text/plain" => {
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+        }
+        "text/proforma" => {
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"), // no official mime type for proforma most clients can deal with text/plain
+            );
+        }
+        _ => (),
+    }
+
     let (status_code, headers, body) = match accept_header.as_str() {
         "application/json" => (
             StatusCode::OK,
