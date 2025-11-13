@@ -502,6 +502,7 @@ async fn main() -> Result<()> {
                     !no_taxonomy_search,
                     num_search_threads,
                     matomo_info,
+                    None,
                 )
                 .await?;
             } else {

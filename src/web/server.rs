@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -27,6 +29,28 @@ use crate::web::protein_controller::{get_protein, search_protein};
 use crate::web::taxonomy_controller::{get_sub_taxonomies, get_taxonomy, search_taxonomies};
 use crate::web::tools_controller::{digest, get_mass, get_partition, get_proteases};
 
+/// Default shutdown signal handler for ctrl-c and terminate signals
+///
+async fn default_shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+}
+
 /// Starts the MaCPepDB web server on the given interface and port.
 ///
 /// # Arguments
@@ -44,8 +68,14 @@ pub async fn start(
     with_taxonomy_search: bool,
     num_search_threads: usize,
     matomo_info: Option<MatomoInfo>,
+    shutdown_signal: Option<Pin<Box<dyn Future<Output = ()> + Send + 'static>>>,
 ) -> Result<()> {
     tracing::info!("Start MaCPepDB web server");
+    let shutdown_signal = match shutdown_signal {
+        Some(signal) => signal,
+        None => Box::pin(default_shutdown_signal()),
+    };
+
     // Create a database client
     // Session maintains it own connection pool internally: https://github.com/scylladb/scylla-rust-driver/issues/724
     // A single client with a session should be sufficient for the entire application
@@ -139,6 +169,7 @@ pub async fn start(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown_signal)
     .await
     .unwrap();
 
