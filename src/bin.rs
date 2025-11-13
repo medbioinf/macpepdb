@@ -36,6 +36,7 @@ use macpepdb::database::table::Table;
 use macpepdb::entities::peptide::Peptide;
 use macpepdb::tools::peptide_mass_counter::PeptideMassCounter;
 use macpepdb::tools::peptide_partitioner::PeptidePartitioner;
+use macpepdb::web::app_state::MatomoInfo;
 use macpepdb::web::server::start as start_web_server;
 use macpepdb::{
     database::scylla::database_build::DatabaseBuild as ScyllaBuild,
@@ -166,6 +167,12 @@ enum Commands {
         no_taxonomy_search: bool,
         #[arg(long, short, default_value_t = 10)]
         num_search_threads: usize,
+        /// Matomo tracking URL e.g. https://matomo.example.com/matomo.php
+        #[arg(long)]
+        matomo_url: Option<String>,
+        /// Matomo site ID
+        #[arg(long)]
+        matomo_site_id: Option<u32>,
         // positional arguments
         /// Database URL to connect e.g. scylla://host1,host2/keyspace
         database_url: String,
@@ -473,14 +480,28 @@ async fn main() -> Result<()> {
             port,
             no_taxonomy_search,
             num_search_threads,
+            matomo_url,
+            matomo_site_id,
         } => {
             if database_url.starts_with("scylla://") {
+                let mut matomo_info = None;
+                if matomo_url.is_some() ^ matomo_site_id.is_some() {
+                    bail!(
+                        "Both matomo_url and matomo_site_id must be set to enable Matomo tracking."
+                    );
+                }
+
+                if let (Some(url), Some(site_id)) = (matomo_url, matomo_site_id) {
+                    matomo_info = Some(MatomoInfo::new(url, site_id));
+                }
+
                 start_web_server(
                     &database_url,
                     interface,
                     port,
                     !no_taxonomy_search,
                     num_search_threads,
+                    matomo_info,
                 )
                 .await?;
             } else {

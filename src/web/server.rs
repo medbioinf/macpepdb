@@ -1,25 +1,24 @@
-// std imports
+use std::net::SocketAddr;
 use std::sync::Arc;
 
-// 3rd party imports
 use anyhow::Result;
 use axum::routing::{get, post};
-use axum::Router;
+use axum::{middleware, Router};
 use dihardts_omicstools::biology::taxonomy::TaxonomyTree;
 use http::Method;
 use indicium::simple::SearchIndex;
 use tower_http::cors::{Any, CorsLayer};
 
-// internal imports
 use crate::database::generic_client::GenericClient;
 use crate::database::scylla::client::Client;
 use crate::database::scylla::configuration_table::ConfigurationTable;
 use crate::database::scylla::taxonomy_tree_table::TaxonomyTreeTable;
 use crate::entities::configuration::Configuration;
-use crate::web::app_state::AppState;
+use crate::web::app_state::{AppState, MatomoInfo};
 use crate::web::chemistry_controller::{get_all_amino_acids, get_amino_acid};
 use crate::web::configuration_controller::get_configuration;
 use crate::web::error_controller::page_not_found;
+use crate::web::middleware::tracking_middleware;
 use crate::web::peptide_controller::{
     get_peptide, get_peptide_existence, get_search as get_peptide_search,
     post_search as post_peptide_search,
@@ -36,6 +35,7 @@ use crate::web::tools_controller::{digest, get_mass, get_partition, get_protease
 /// * `port` - Port to listen on
 /// * `with_taxonomy_search` - If taxonomy search index should be built
 /// * `num_search_threads` - Number of concurrent search threads (and connections)
+/// * `matomo_info` - Optional Matomo tracking information
 ///
 pub async fn start(
     database_url: &str,
@@ -43,6 +43,7 @@ pub async fn start(
     port: u16,
     with_taxonomy_search: bool,
     num_search_threads: usize,
+    matomo_info: Option<MatomoInfo>,
 ) -> Result<()> {
     tracing::info!("Start MaCPepDB web server");
     // Create a database client
@@ -79,6 +80,7 @@ pub async fn start(
         taxonomy_tree,
         taxonomy_search,
         num_search_threads,
+        matomo_info,
     ));
 
     // Add CORS layer
@@ -89,7 +91,7 @@ pub async fn start(
 
     tracing::debug!("Create router...");
     // Build our application with route
-    let app = Router::new()
+    let mut app = Router::new()
         // Peptide routes
         .route(
             "/api/peptides/search/{payload}/{accept}",
@@ -122,10 +124,23 @@ pub async fn start(
         .fallback(page_not_found)
         .layer(cors);
 
+    if app_state.get_matomo_info().is_some() {
+        tracing::info!("Add tracking middleware...");
+        app = app.layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            tracking_middleware::track_middleware,
+        ));
+    }
+
     tracing::debug!("Bind listener...");
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", interface, port)).await?;
     tracing::info!("Ready for connections, listening on {}:{}", interface, port);
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await
+    .unwrap();
 
     Ok(())
 }

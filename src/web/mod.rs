@@ -6,6 +6,8 @@ pub mod chemistry_controller;
 pub mod configuration_controller;
 /// Controller for error handling
 pub mod error_controller;
+/// Various middleware implementations
+pub mod middleware;
 /// Endpoints for getting peptides by sequence, mass search, ...
 pub mod peptide_controller;
 /// Endpoints for getting proteins by accession, ...

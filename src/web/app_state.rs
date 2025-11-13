@@ -8,6 +8,27 @@ use indicium::simple::SearchIndex;
 // internal imports
 use crate::{database::scylla::client::Client, entities::configuration::Configuration};
 
+/// Information required for Matomo tracking
+///
+pub struct MatomoInfo {
+    url: String,
+    site_id: u32,
+}
+
+impl MatomoInfo {
+    pub fn new(url: String, site_id: u32) -> Self {
+        Self { url, site_id }
+    }
+
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub fn site_id(&self) -> u32 {
+        self.site_id
+    }
+}
+
 pub struct AppState {
     db_client: Arc<Client>,
     configuration: Arc<Configuration>,
@@ -15,6 +36,8 @@ pub struct AppState {
     taxonomy_index: Arc<Option<SearchIndex<u64>>>,
     /// Number of concurrent search threads (and connections)
     num_search_threads: usize,
+    /// Matomo information
+    matomo_info: Option<MatomoInfo>,
 }
 
 impl AppState {
@@ -24,9 +47,11 @@ impl AppState {
         taxonomy_tree: TaxonomyTree,
         taxonomy_index: Option<SearchIndex<u64>>,
         num_search_threads: usize,
+        matomo_info: Option<MatomoInfo>,
     ) -> Self {
         Self {
             num_search_threads,
+            matomo_info,
             db_client: Arc::new(db_client),
             configuration: Arc::new(configuration),
             taxonomy_tree: Arc::new(taxonomy_tree),
@@ -86,5 +111,11 @@ impl AppState {
     ///
     pub fn get_num_search_threads(&self) -> usize {
         self.num_search_threads
+    }
+
+    /// Returns the matomo information
+    ///
+    pub fn get_matomo_info(&self) -> Option<&MatomoInfo> {
+        self.matomo_info.as_ref()
     }
 }
