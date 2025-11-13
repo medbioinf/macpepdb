@@ -4,3 +4,4 @@ macpepdb_base_url = "https://macpepdb.cubimed.rub.de"
 # the frontend.
 # matomo_url = "https://matomo.example.org/matomo.php"
 # matomo_site_id = 1
+# show_denbi_survey_banner = true

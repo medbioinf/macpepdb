@@ -14,6 +14,9 @@ pub struct Configuration {
     matomo_url: Option<String>,
     /// Matomo site ID
     matomo_site_id: Option<u64>,
+    /// Controls with the de.NBI survey banner is shown
+    #[serde(default)]
+    show_denbi_survey_banner: bool,
 }
 
 impl Configuration {
@@ -89,6 +92,12 @@ impl Configuration {
     pub fn matomo_site_id(&self) -> Option<u64> {
         self.matomo_site_id
     }
+
+    /// Whether to show the de.NBI survey banner
+    ///
+    pub fn show_denbi_survey_banner(&self) -> bool {
+        self.show_denbi_survey_banner
+    }
 }
 
 impl Default for Configuration {
@@ -99,6 +108,7 @@ impl Default for Configuration {
                 .to_string(),
             matomo_url: None,
             matomo_site_id: None,
+            show_denbi_survey_banner: true,
         }
     }
 }

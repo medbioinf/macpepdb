@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use dioxus::prelude::*;
 
-use crate::routes::Routes;
+use crate::{configuration::Configuration as AppConfiguration, routes::Routes};
 
 /// Menu state (open or close), used to toggle the menu
 ///
@@ -22,6 +22,7 @@ impl Display for MenuState {
 
 /// Layout with two panes. One for the menu and one for the main content
 pub fn TwoPanes() -> Element {
+    let app_config = use_context::<Resource<AppConfiguration>>();
     let mut menu_state = use_signal(|| MenuState::Close);
 
     let close_menu_fn = move |_| menu_state.set(MenuState::Close);
@@ -156,10 +157,49 @@ pub fn TwoPanes() -> Element {
                                 }
                             }
                         }
+                        div { class: "row align-items-center mt-3",
+                            div { class: "col-4 offset-4",
+                                a {
+                                    href: "https://www.denbi.de/",
+                                    target: "_blank",
+                                    img {
+                                        class: "w-100",
+                                        src: asset!("assets/images/denbi_logo.svg"),
+                                        alt: "de.NBI logo",
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
-            div { class: "pane-content col-12 col-lg-10 p-3", Outlet::<Routes> {} }
+            div { class: "pane-content col-12 col-lg-10 p-3",
+
+                if let Some(config) = &*app_config.read_unchecked() {
+                    if config.show_denbi_survey_banner() {
+                        div { class: "alert alert-info",
+                            img {
+                                src: asset!("assets/images/denbi_logo.svg"),
+                                alt: "de.NBI logo",
+                                style: "height: 40px; margin-right: 15px;",
+                            }
+                            "If you used this de.NBI service please take the time to answer"
+                            a {
+                                href: "https://www.surveymonkey.de/r/denbi-service?sc=bioinfra-prot&tool=MaCPepDB",
+                                target: "_blank",
+                                " our short survey "
+                                i { class: "fa-solid fa-external-link-alt ms-1" }
+                            }
+                            " to help us improve our services"
+                        }
+                    }
+                }
+
+                // Main content will be rendered here
+                //
+
+                Outlet::<Routes> {}
+            }
         }
     }
 }
