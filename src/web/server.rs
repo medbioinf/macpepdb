@@ -20,6 +20,7 @@ use crate::web::app_state::{AppState, MatomoInfo};
 use crate::web::chemistry_controller::{get_all_amino_acids, get_amino_acid};
 use crate::web::configuration_controller::get_configuration;
 use crate::web::error_controller::page_not_found;
+use crate::web::headers::X_DO_NOT_TRACK;
 use crate::web::middleware::tracking_middleware;
 use crate::web::peptide_controller::{
     get_peptide, get_peptide_existence, get_search as get_peptide_search,
@@ -116,7 +117,12 @@ pub async fn start(
     // Add CORS layer
     let cors = CorsLayer::new()
         .allow_methods([Method::GET, Method::POST])
-        .allow_headers(vec![http::header::ACCEPT, http::header::CONTENT_TYPE])
+        .allow_headers(vec![
+            http::header::ACCEPT,
+            http::header::CONTENT_TYPE,
+            http::header::DNT,
+            X_DO_NOT_TRACK,
+        ])
         .allow_origin(Any);
 
     tracing::debug!("Create router...");
