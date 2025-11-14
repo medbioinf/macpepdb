@@ -1,5 +1,5 @@
 use base64::{prelude::BASE64_STANDARD, Engine};
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::de::DeserializeOwned;
 use serde_json::json;
 use urlencoding::encode as urlencode;
@@ -14,22 +14,39 @@ use crate::{
     errors::api_client_error::ApiClientError,
 };
 
+const X_DO_NOT_TRACK: HeaderName = HeaderName::from_static("x-do-not-track");
+
 pub struct Client<'a> {
     base_url: &'a str,
+    inner_client: reqwest::Client,
 }
 
 impl<'a> Client<'a> {
-    pub fn new(base_url: &'a str) -> Self {
-        Self { base_url }
+    pub fn new(base_url: &'a str) -> Result<Self, ApiClientError> {
+        let inner_client = reqwest::Client::builder()
+            .default_headers(HeaderMap::from_iter([
+                (reqwest::header::DNT, HeaderValue::from_static("1")), // Set Do Not Track header to prevent API from tracking twice
+                (X_DO_NOT_TRACK, HeaderValue::from_static("1")), // Set Do Not Track header to prevent API from tracking twice
+            ]))
+            .build()
+            .map_err(ApiClientError::ClientCreationError)?;
+
+        Ok(Self {
+            base_url,
+            inner_client,
+        })
     }
 
-    pub async fn get<T>(base_url: &str, endpoint: &str) -> Result<T, ApiClientError>
+    pub async fn get<T>(&self, endpoint: &str) -> Result<T, ApiClientError>
     where
         T: DeserializeOwned,
     {
-        let url = format!("{base_url}{endpoint}");
+        let url = format!("{}{endpoint}", self.base_url);
 
-        let response = reqwest::get(&url)
+        let response = self
+            .inner_client
+            .get(&url)
+            .send()
             .await
             .map_err(ApiClientError::NetworkError)?;
 
@@ -62,7 +79,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn post<T>(
-        base_url: &str,
+        &self,
         endpoint: &str,
         body: serde_json::Value,
         headers: Option<&[(HeaderName, HeaderValue)]>,
@@ -70,11 +87,9 @@ impl<'a> Client<'a> {
     where
         T: DeserializeOwned,
     {
-        let url = format!("{base_url}{endpoint}");
+        let url = format!("{}{endpoint}", self.base_url);
 
-        let client = reqwest::Client::new();
-
-        let mut request_builder = client.post(&url);
+        let mut request_builder = self.inner_client.post(&url);
         if let Some(headers) = headers {
             for (name, value) in headers {
                 request_builder = request_builder.header(name, value);
@@ -118,7 +133,7 @@ impl<'a> Client<'a> {
     /// Fetches the MaCPepDB configuration from the server
     ///
     pub async fn get_configuration(&self) -> Result<MacPepDBConfiguration, ApiClientError> {
-        Self::get(self.base_url, "/api/configuration").await
+        self.get("/api/configuration").await
     }
 
     /// Get peptide by sequence
@@ -131,7 +146,7 @@ impl<'a> Client<'a> {
         T: 'static + PartialEq + DeserializeOwned,
     {
         let endpoint = format!("/api/peptides/{sequence}");
-        Client::get(self.base_url, &endpoint).await
+        self.get(&endpoint).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -199,8 +214,7 @@ impl<'a> Client<'a> {
             ptms,
             is_reviewed,
         );
-        Client::post(
-            self.base_url,
+        self.post(
             "/api/peptides/search",
             body,
             Some(&[(
@@ -284,7 +298,7 @@ impl<'a> Client<'a> {
             "name_query": format!("*{taxonomy_search_term}*"),
         });
 
-        Self::post(self.base_url, "/api/taxonomies/search", body, None).await
+        self.post("/api/taxonomies/search", body, None).await
     }
 
     /// Get taxonomy by ID
@@ -293,7 +307,7 @@ impl<'a> Client<'a> {
     /// * `taxonomy_id` - Taxonomy ID
     pub async fn get_taxonomy(&self, taxonomy_id: u64) -> Result<Taxonomy, ApiClientError> {
         let endpoint = format!("/api/taxonomies/{taxonomy_id}");
-        Self::get(self.base_url, &endpoint).await
+        self.get(&endpoint).await
     }
 
     /// Get protein
@@ -310,13 +324,13 @@ impl<'a> Client<'a> {
     {
         let endpoint = format!("/api/proteins/search/{search_term}");
 
-        Self::get(self.base_url, &endpoint).await
+        self.get(&endpoint).await
     }
 
     /// Fetches amino acid
     ///
     pub async fn get_amino_acid(&self) -> Result<Vec<AminoAcid>, ApiClientError> {
-        Client::get(self.base_url, "/api/chemistry/amino_acids").await
+        self.get("/api/chemistry/amino_acids").await
     }
 
     /// Fetches a protein by its accession
@@ -329,6 +343,6 @@ impl<'a> Client<'a> {
         T: 'static + PartialEq + DeserializeOwned,
     {
         let endpoint = format!("/api/proteins/{accession}");
-        Client::get(self.base_url, &endpoint).await
+        self.get(&endpoint).await
     }
 }

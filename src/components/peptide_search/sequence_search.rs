@@ -27,14 +27,16 @@ pub fn SequenceSearch() -> Element {
             None => return Err(GeneralError::ConfigurationNotLoaded),
         };
 
-        Ok(Client::new(macpepdb_base_url)
-            .get_configuration()
-            .await
-            .map_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH, |config| {
+        let client = Client::new(macpepdb_base_url)?;
+
+        Ok(client.get_configuration().await.map_or(
+            DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH,
+            |config| {
                 config
                     .get_min_peptide_length()
                     .unwrap_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH)
-            }))
+            },
+        ))
     });
 
     // Action to search for peptide
@@ -56,7 +58,9 @@ pub fn SequenceSearch() -> Element {
             None => return Err(GeneralError::ConfigurationNotLoaded),
         };
 
-        Client::new(macpepdb_base_url)
+        let client = Client::new(macpepdb_base_url)?;
+
+        client
             .get_peptide(&sequence.read_unchecked())
             .await
             .map_err(GeneralError::from)

@@ -4,6 +4,9 @@ use reqwest::StatusCode;
 
 #[derive(Debug, Error)]
 pub enum ApiClientError {
+    #[error("Creating the http client failed: {0}")]
+    ClientCreationError(reqwest::Error),
+
     #[error("Network error: {0}")]
     NetworkError(reqwest::Error),
 

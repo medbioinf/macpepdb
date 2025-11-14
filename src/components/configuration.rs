@@ -22,7 +22,9 @@ pub fn Configuration() -> Element {
                 None => return Err(GeneralError::ConfigurationNotLoaded),
             };
 
-            Ok(Client::new(macpepdb_base_url).get_configuration().await?)
+            let client = Client::new(macpepdb_base_url)?;
+
+            Ok(client.get_configuration().await?)
         });
     let mut is_partition_plot_element_mounted = use_signal(|| false);
 

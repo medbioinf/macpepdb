@@ -36,9 +36,10 @@ pub fn Protein(props: ProteinProps) -> Element {
             Some(config) => config.get_macpepdb_base_url(),
             None => return Err(GeneralError::ConfigurationNotLoaded),
         };
-        Ok(Client::new(macpepdb_base_url)
-            .get_protein(protein_id.read().as_str())
-            .await?)
+
+        let client = Client::new(macpepdb_base_url)?;
+
+        Ok(client.get_protein(protein_id.read().as_str()).await?)
     });
 
     let uniprot_link = use_signal(|| format!("https://www.uniprot.org/uniprot/{}", protein_id));

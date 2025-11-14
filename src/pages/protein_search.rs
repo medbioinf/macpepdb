@@ -39,10 +39,10 @@ pub fn ProteinSearch() -> Element {
             return Err(ProteinSearchPageError::SearchTermTooShort(MIN_SEARCH_TERM_LENGTH).into());
         }
 
+        let client = Client::new(macpepdb_base_url)?;
+
         let fetched_proteins: Result<Vec<ProteinEntity>, ApiClientError> =
-            Client::new(macpepdb_base_url)
-                .search_protein(&protein_id.read())
-                .await;
+            client.search_protein(&protein_id.read()).await;
 
         match fetched_proteins {
             Ok(fetched_proteins) => Ok(Rc::new(fetched_proteins)),

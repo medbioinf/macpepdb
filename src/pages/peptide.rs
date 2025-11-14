@@ -44,9 +44,9 @@ pub fn Peptide(props: PeptideProps) -> Element {
             None => return Err(GeneralError::ConfigurationNotLoaded),
         };
 
-        Ok(Client::new(macpepdb_base_url)
-            .get_peptide(peptide_sequence.read().as_str())
-            .await?)
+        let client = Client::new(macpepdb_base_url)?;
+
+        Ok(client.get_peptide(peptide_sequence.read().as_str()).await?)
     });
 
     let amino_acid_map: Resource<Result<AminoAcidMap, GeneralError>> =
@@ -57,7 +57,9 @@ pub fn Peptide(props: PeptideProps) -> Element {
                 None => return Err(GeneralError::ConfigurationNotLoaded),
             };
 
-            let map = Client::new(macpepdb_base_url)
+            let client = Client::new(macpepdb_base_url)?;
+
+            let map = client
                 .get_amino_acid()
                 .await?
                 .into_iter()

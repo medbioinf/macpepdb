@@ -68,8 +68,10 @@ pub fn MassSearch() -> Element {
                 None => Err(GeneralError::ConfigurationNotLoaded)?,
             };
 
+            let client = Client::new(macpepdb_base_url)?;
+
             Ok(Some(
-                Client::new(macpepdb_base_url)
+                client
                     .search_taxonomies(&taxonomy_search_term.read_unchecked())
                     .await?,
             ))
@@ -87,8 +89,10 @@ pub fn MassSearch() -> Element {
                 None => return Ok(None),
             };
 
+            let client = Client::new(macpepdb_base_url)?;
+
             Ok(Some(
-                Client::new(macpepdb_base_url)
+                client
                     .get_taxonomy(selected_taxonomy_id.read_unchecked().unwrap())
                     .await?,
             ))
@@ -133,22 +137,23 @@ pub fn MassSearch() -> Element {
             None => &None,
         };
 
-        let peptides: Result<Vec<PeptideEntity>, ApiClientError> = Client::new(macpepdb_base_url)
-            .search_peptides(
-                selected_mass_unit.read_unchecked().clone(),
-                *thompson.read_unchecked(),
-                *charge.read_unchecked(),
-                *dalton.read_unchecked(),
-                *lower_mass_tolerance.read_unchecked(),
-                *upper_mass_tolerance.read_unchecked(),
-                selected_taxonomy,
-                *max_var_modifications.read_unchecked(),
-                &ptms.read_unchecked(),
-                *is_reviewed.read_unchecked(),
-            )
-            .await;
+        let peptides_result: Result<Vec<PeptideEntity>, ApiClientError> =
+            Client::new(macpepdb_base_url)?
+                .search_peptides(
+                    selected_mass_unit.read_unchecked().clone(),
+                    *thompson.read_unchecked(),
+                    *charge.read_unchecked(),
+                    *dalton.read_unchecked(),
+                    *lower_mass_tolerance.read_unchecked(),
+                    *upper_mass_tolerance.read_unchecked(),
+                    selected_taxonomy,
+                    *max_var_modifications.read_unchecked(),
+                    &ptms.read_unchecked(),
+                    *is_reviewed.read_unchecked(),
+                )
+                .await;
 
-        match peptides {
+        match peptides_result {
             Ok(peptides) => Ok(Rc::new(peptides)),
             Err(err) => Err(err.into()),
         }
@@ -170,7 +175,7 @@ pub fn MassSearch() -> Element {
             None => &None,
         };
 
-        let url = Client::new(macpepdb_base_url).peptide_search_download_url(
+        let url = Client::new(macpepdb_base_url)?.peptide_search_download_url(
             selected_mass_unit.read().clone(),
             *thompson.read(),
             *charge.read(),
