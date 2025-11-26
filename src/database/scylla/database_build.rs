@@ -1354,7 +1354,7 @@ mod test {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_peptide_metadata_update() {
-        let client = Client::new("scylla://192.168.124.58,192.168.124.61,192.168.124.92,192.168.124.106,192.168.124.147,192.168.124.136,192.168.124.34,192.168.124.194,192.168.124.180,192.168.124.245/uniprottry").await.unwrap();
+        let client = Client::new("scylla://192.168.124.58,192.168.124.61,192.168.124.92,192.168.124.106,192.168.124.147,192.168.124.136,192.168.124.34,192.168.124.194,192.168.124.180,192.168.124.245/uniprottry?read_consistency_level=one").await.unwrap();
         let config = ConfigurationTable::select(&client).await.unwrap();
 
         let target = "DAQAGK";

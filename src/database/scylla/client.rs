@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use fancy_regex::Regex;
 use scylla::{
     client::{session::Session, session_builder::SessionBuilder, PoolSize},
-    statement::prepared::PreparedStatement,
+    statement::{prepared::PreparedStatement, Consistency},
 };
 use tokio::sync::RwLock;
 
@@ -44,6 +44,8 @@ struct ClientSettings {
     pub connection_timeout: Option<Duration>,
     pub pool_size: Option<usize>,
     pub pool_type: PoolType,
+    pub read_consistency_level: Option<Consistency>,
+    pub write_consistency_level: Option<Consistency>,
 }
 
 impl ClientSettings {
@@ -78,6 +80,8 @@ impl ClientSettings {
             connection_timeout: None,
             pool_size: None,
             pool_type: PoolType::PerHost,
+            read_consistency_level: None,
+            write_consistency_level: None,
         };
 
         // Extract credentials and attributes if present
@@ -114,6 +118,15 @@ impl ClientSettings {
             if let Some(pool_type) = attributes.get("pool_type") {
                 settings.pool_type = PoolType::from(*pool_type);
             }
+
+            if let Some(level) = attributes.get("read_consistency_level") {
+                settings.read_consistency_level = Some(Self::str_to_consistency_level(level)?);
+            };
+
+            if let Some(level) = attributes.get("write_consistency_level") {
+                settings.write_consistency_level =
+                    Some(Self::str_to_write_consistency_level(level)?);
+            };
         }
         Ok(settings)
     }
@@ -144,6 +157,39 @@ impl ClientSettings {
 
         Ok(builder.build().await?)
     }
+
+    /// Returns the ScyllaDB consistency level from a string representation
+    /// which can be used for read and write operations.
+    ///
+    fn str_to_consistency_level(s: &str) -> Result<Consistency> {
+        match s {
+            "one" => Ok(Consistency::One),
+            "two" => Ok(Consistency::Two),
+            "three" => Ok(Consistency::Three),
+            "quorum" => Ok(Consistency::Quorum),
+            "local_quorum" => Ok(Consistency::LocalQuorum),
+            "all" => Ok(Consistency::All),
+            "local_one" => Ok(Consistency::LocalOne),
+            "local_serial" => Ok(Consistency::LocalSerial),
+            "serial" => Ok(Consistency::Serial),
+            _ => Err(anyhow!("Invalid consistency level: {}", s)),
+        }
+    }
+
+    /// Returns the ScyllaDB consistency level from a string representation
+    /// which can be used for write operations.
+    ///
+    fn str_to_write_consistency_level(s: &str) -> Result<Consistency> {
+        if let Ok(level) = Self::str_to_consistency_level(s) {
+            return Ok(level);
+        }
+
+        match s {
+            "any" => Ok(Consistency::Any),
+            "each_quorum" => Ok(Consistency::EachQuorum),
+            _ => Err(anyhow!("Invalid consistency level: {}", s)),
+        }
+    }
 }
 
 pub struct Client {
@@ -152,6 +198,8 @@ pub struct Client {
     url: String,
     prepared_statement_cache: RwLock<HashMap<String, PreparedStatement>>,
     num_nodes: usize,
+    read_consistency_level: Option<Consistency>,
+    write_consistency_level: Option<Consistency>,
 }
 
 impl Client {
@@ -178,9 +226,21 @@ impl Client {
             return Ok(statement.clone());
         }
 
-        let statement = self
+        let mut statement = self
             .prepare(query.replace(":KEYSPACE:", &self.database))
             .await?;
+
+        if let Some(level) = self.read_consistency_level {
+            if !Self::is_write_query(query) {
+                statement.set_consistency(level);
+            }
+        }
+
+        if let Some(level) = self.write_consistency_level {
+            if Self::is_write_query(query) {
+                statement.set_consistency(level);
+            }
+        }
 
         write_guard.insert(query.to_string(), statement.clone());
 
@@ -189,6 +249,11 @@ impl Client {
 
     pub async fn reset_prepared_statement_cache(&self) {
         self.prepared_statement_cache.write().await.clear();
+    }
+
+    fn is_write_query(query: &str) -> bool {
+        let query = query.to_lowercase();
+        query.starts_with("insert") || query.starts_with("update") || query.starts_with("delete")
     }
 }
 
@@ -217,6 +282,8 @@ impl GenericClient<Session> for Client {
             url: database_url.to_string(),
             prepared_statement_cache: RwLock::new(HashMap::new()),
             num_nodes: settings.hosts.len(),
+            read_consistency_level: settings.read_consistency_level,
+            write_consistency_level: settings.write_consistency_level,
         })
     }
 
@@ -236,7 +303,7 @@ mod tests {
     #[test]
     fn test_parse_database_url() {
         let url_credentials_attributes = "scylla://gandalf:mellon@10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1&pool_type=shard";
-        let url_attributes = "scylla://10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1";
+        let url_attributes = "scylla://10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot?connection_timeout=60&pool_size=1&write_consistency_level=quorum&read_consistency_level=one";
         let url_mandatory =
             "scylla://10.0.0.168,10.0.0.35,10.0.0.139,10.0.0.11,10.0.0.73,10.0.0.194/mdb_uniprot";
 
@@ -275,6 +342,8 @@ mod tests {
         assert_eq!(settings.connection_timeout, Some(Duration::from_secs(60)));
         assert_eq!(settings.pool_size, Some(1));
         assert_eq!(settings.pool_type, PoolType::PerHost);
+        assert_eq!(settings.read_consistency_level, Some(Consistency::One));
+        assert_eq!(settings.write_consistency_level, Some(Consistency::Quorum));
 
         let settings = ClientSettings::new(url_mandatory).unwrap();
         assert_eq!(settings.user, None);
