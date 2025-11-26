@@ -175,7 +175,17 @@ mod test {
         let expected_partition_limits: Vec<i64> =
             reader.deserialize().map(|line| line.unwrap()).collect();
 
-        assert_eq!(partition_limits, expected_partition_limits);
+        for (idx, (limit, expected_limit)) in partition_limits
+            .iter()
+            .zip(expected_partition_limits.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                limit, expected_limit,
+                "Partition limit at index {} does not match (expected: {}, got: {})",
+                idx, expected_limit, limit
+            );
+        }
     }
 
     #[test]

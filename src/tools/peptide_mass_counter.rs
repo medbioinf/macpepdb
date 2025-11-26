@@ -431,6 +431,23 @@ mod test {
             .collect::<Result<Vec<(i64, u64)>>>()
             .unwrap();
 
+        for (idx, (mass_count, expected_mass_count)) in mass_counts
+            .iter()
+            .zip(expected_mass_counts.iter())
+            .enumerate()
+        {
+            assert_eq!(
+                mass_count.0, expected_mass_count.0,
+                "Masses do not match at index {} (expected: {}, got: {})",
+                idx, expected_mass_count.0, mass_count.0
+            );
+            assert_eq!(
+                mass_count.1, expected_mass_count.1,
+                "Counts do not match at index {} (expected: {}, got: {})",
+                idx, expected_mass_count.1, mass_count.1
+            );
+        }
+
         assert_eq!(mass_counts, expected_mass_counts);
     }
 }
