@@ -122,7 +122,7 @@ Table to store several binary data. Scylla blob type has in practice a limit of 
 
 ### Install Scylla
 
-[Ubuntu 22.04](https://www.scylladb.com/download/?platform=ubuntu-22.04&version=scylla-5.2#open-source)
+Install Scylla 6.2. This is the last OSS release. 
 
 ### Configure
 
