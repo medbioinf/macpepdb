@@ -971,7 +971,7 @@ impl DatabaseBuild {
         Ok(())
     }
 
-    async fn build_taxonomy_tree(client: &Client, taxonomy_file_path: &Path) -> Result<()> {
+    pub async fn build_taxonomy_tree(client: &Client, taxonomy_file_path: &Path) -> Result<()> {
         debug!("Build taxonomy tree...");
         let taxonomy_tree = TaxonomyReader::new(taxonomy_file_path)?.read()?;
         TaxonomyTreeTable::insert(client, &taxonomy_tree).await?;

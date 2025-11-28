@@ -159,6 +159,12 @@ enum Commands {
         #[arg(value_delimiter = ' ', num_args = 0..)]
         protein_file_paths: Vec<String>,
     },
+    BuildTaxonomyTree {
+        /// Path taxdmp.zip from [NCBI](https://ftp.ncbi.nlm.nih.gov/pub/taxonomy/taxdmp.zip)
+        taxonomy_file: String,
+        /// Database URL to connect e.g. scylla://host1,host2/keyspace
+        database_url: String,
+    },
     Web {
         /// Setting this flag disables the creation of the taxonomy name search index,
         /// disables the taxonomy search end point and reduces the memory usage of the web server
@@ -470,6 +476,25 @@ async fn main() -> Result<()> {
                     Err(e) => error!("Database build failed: {:?}", e),
                 }
                 info!("Database build took: {:?}", start.elapsed());
+            } else {
+                error!("Unsupported database protocol: {}", database_url);
+            }
+        }
+        Commands::BuildTaxonomyTree {
+            taxonomy_file,
+            database_url,
+        } => {
+            if database_url.starts_with("scylla://") {
+                let client = Client::new(&database_url).await?;
+
+                let taxonomy_file_path = Path::new(&taxonomy_file).to_path_buf();
+
+                let start = std::time::Instant::now();
+                match ScyllaBuild::build_taxonomy_tree(&client, &taxonomy_file_path).await {
+                    Ok(_) => info!("Taxonomy build completed successfully!"),
+                    Err(e) => error!("Taxonomy build failed: {:?}", e),
+                }
+                info!("Taxonomy build took: {:?}", start.elapsed());
             } else {
                 error!("Unsupported database protocol: {}", database_url);
             }
