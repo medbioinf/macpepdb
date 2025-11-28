@@ -63,7 +63,9 @@ async fn tracking_task(
 
     let tracking_url = format!("{}?{}", matomo_info.url(), params);
 
-    let response = match reqwest::get(&tracking_url).await {
+    let client = reqwest::Client::new();
+
+    let response = match client.post(&tracking_url).send().await {
         Ok(response) => response,
         Err(e) => {
             error!("Failed to track page visit @ {}: {}", &tracking_url, e);
