@@ -59,7 +59,9 @@ pub async fn track_page_visit(path_segment_overrides: Vec<(String, String)>) {
 
     let tracking_url = format!("{}?{}", config.matomo_url().unwrap(), params);
 
-    let response = match reqwest::get(&tracking_url).await {
+    let client = reqwest::Client::new();
+
+    let response = match client.post(&tracking_url).send().await {
         Ok(response) => response,
         Err(e) => {
             error!("Failed to track page visit @ {}: {}", &tracking_url, e);
