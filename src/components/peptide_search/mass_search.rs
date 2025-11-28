@@ -1,6 +1,7 @@
-use std::rc::Rc;
+use std::{rc::Rc, time::Duration};
 
 use ::web_sys::window;
+use async_std::task::sleep;
 use dioxus::prelude::*;
 use dioxus_logger::tracing::info;
 
@@ -61,6 +62,8 @@ pub fn MassSearch() -> Element {
             if taxonomy_search_term.read_unchecked().is_empty() {
                 return Ok(None);
             }
+
+            sleep(Duration::from_millis(300)).await; // debounce
 
             let app_config = app_config.read_unchecked();
             let macpepdb_base_url = match app_config.as_ref() {
