@@ -161,11 +161,13 @@ impl DatabaseBuild {
                 protease.as_ref(),
                 initial_configuration.get_remove_peptides_containing_unknown(),
                 partitioner_false_positive_probability,
-                System::new_all().available_memory() * allowed_ram_fraction as u64,
+                (System::new_all().available_memory() as f64 * allowed_ram_fraction) as u64,
                 10,
                 40,
             )
-            .await?;
+            .await
+            .map_err(|err| anyhow::anyhow!("{}", err))?;
+
             let partition_limits =
                 PeptidePartitioner::create_partition_limits(&mass_counts, num_partitions, None)?;
 
@@ -1167,8 +1169,8 @@ mod test {
                 &taxdmp_zip_path,
                 2,
                 100,
-                0.5,
-                0.0002,
+                3.0_f64 * 1024.0_f64.powf(3.0) / System::new().total_memory() as f64, // fraction == 3 GB
+                0.0000001,
                 None,
                 &log_folder,
                 true,
@@ -1203,8 +1205,8 @@ mod test {
                 &taxdmp_zip_path,
                 2,
                 100,
-                0.5,
-                0.0002,
+                3.0_f64 * 1024.0_f64.powf(3.0) / System::new_all().total_memory() as f64, // fraction == 3 GB
+                0.0000001,
                 Some(CONFIGURATION.clone()),
                 &log_folder,
                 true,
@@ -1350,84 +1352,6 @@ mod test {
             assert!(peptide.get_is_swiss_prot());
             assert!(peptide.get_is_trembl());
         }
-    }
-
-    #[tokio::test(flavor = "multi_thread")]
-    #[serial]
-    async fn test_peptide_metadata_update() {
-        let client = Client::new("scylla://192.168.124.58,192.168.124.61,192.168.124.92,192.168.124.106,192.168.124.147,192.168.124.136,192.168.124.34,192.168.124.194,192.168.124.180,192.168.124.245/uniprottry?read_consistency_level=one").await.unwrap();
-        let config = ConfigurationTable::select(&client).await.unwrap();
-
-        let target = "DAQAGK";
-
-        let peptide =
-            PeptideTable::select_by_sequence(&client, target, config.get_partition_limits())
-                .await
-                .unwrap()
-                .unwrap();
-
-        println!("{} ", peptide.get_partition());
-
-        println!("{}", config.get_partition_limits().len());
-
-        // let associated_proteins = ProteinTable::get_proteins_of_peptide(&client, &peptide)
-        //     .await
-        //     .unwrap()
-        //     .try_collect::<Vec<_>>()
-        //     .await
-        //     .unwrap();
-
-        // for protein in &associated_proteins {
-        //     println!("{}", protein.get_accession(),);
-        // }
-
-        // let (
-        //     is_swiss_prot,
-        //     is_trembl,
-        //     mut taxonomy_ids,
-        //     mut unique_taxonomy_ids,
-        //     proteome_ids,
-        //     domains,
-        // ) = peptide.get_metadata_from_proteins(&associated_proteins, &['K', 'R'], &['P'], false);
-
-        // taxonomy_ids.sort();
-        // unique_taxonomy_ids.sort();
-
-        // println!("is_swiss_prot: {}", is_swiss_prot);
-        // println!("is_trembl: {}", is_trembl);
-        // println!("taxonomy_ids: {:?}", taxonomy_ids);
-        // println!("unique_taxonomy_ids: {:?}", unique_taxonomy_ids);
-        // println!("proteome_ids: {:?}", proteome_ids);
-
-        // let update_result = PeptideTable::update_metadata(
-        //     &client,
-        //     &peptide,
-        //     is_swiss_prot,
-        //     is_trembl,
-        //     &taxonomy_ids,
-        //     &unique_taxonomy_ids,
-        //     &proteome_ids,
-        //     &domains,
-        // )
-        // .await;
-
-        // println!("{:?}", update_result);
-
-        // assert!(update_result.is_ok());
-
-        // // match update_result {
-        // //     Ok(_) => {
-        // //         counter!(METADATA_PROCESSED_PEPTIDES_COUNTER_NAME).increment(1);
-        // //     }
-        // //     Err(err) => {
-        // //         counter!(METADATA_ERRORS_COUNTER_NAME).increment(1);
-        // //         error!(
-        // //             "Metadata update failed `{}`\n{:?}\n",
-        // //             peptide.get_sequence(),
-        // //             err
-        // //         );
-        // //     }
-        // // };
     }
 
     // TODO: Test update

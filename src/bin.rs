@@ -417,6 +417,10 @@ async fn main() -> Result<()> {
                 bail!("Max peptide lengths cannot be greater than 60");
             }
 
+            if usable_memory_fraction <= 0.0 || usable_memory_fraction > 1.0 {
+                bail!("Usable memory fraction must be in (0.0, 1.0]");
+            }
+
             let protein_file_paths = convert_str_paths_and_resolve_globs(protein_file_paths)?;
 
             let taxonomy_file_path =
@@ -625,7 +629,8 @@ async fn main() -> Result<()> {
                 initial_num_partitions,
             )
             .instrument(info_span)
-            .await?;
+            .await
+            .map_err(|err| anyhow::anyhow!("{}", err))?;
 
             let num_peptides: u64 = mass_counts.iter().map(|x| x.1).sum();
             info!("Total number of peptides: {}", num_peptides);

@@ -13,6 +13,8 @@ pub mod peptide_partitioner;
 
 pub mod cql;
 
+/// Errors used in tools
+pub mod errors;
 /// Monitor for metrics, made available by the prometheus scrape endpoint
 pub mod metrics_monitor;
 /// Functions to process data from dihardts_omicstools

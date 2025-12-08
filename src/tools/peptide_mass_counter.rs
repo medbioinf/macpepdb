@@ -10,7 +10,6 @@ use std::{
     vec,
 };
 
-use anyhow::{bail, Result};
 use dihardts_cstools::bloom_filter::BloomFilter;
 use dihardts_omicstools::proteomics::proteases::{
     functions::get_by_name as get_protease_by_name, protease::Protease,
@@ -25,6 +24,7 @@ use crate::{
     entities::{peptide::Peptide, protein::Protein},
     io::uniprot_text::reader::Reader,
     tools::{
+        errors::peptide_mass_counter_error::PeptideMassCounterError,
         omicstools::{convert_to_internal_peptide, remove_unknown_from_digest},
         progress_monitor::ProgressMonitor,
         queue_monitor::QueueMonitor,
@@ -38,7 +38,7 @@ lazy_static! {
 }
 
 struct MassCountThread {
-    thread: Option<std::thread::JoinHandle<Result<()>>>,
+    thread: Option<std::thread::JoinHandle<Result<(), PeptideMassCounterError>>>,
     stop_flag: Arc<AtomicBool>,
 }
 
@@ -75,15 +75,17 @@ impl MassCountThread {
         Self { thread, stop_flag }
     }
 
-    fn join(&mut self) -> Result<()> {
+    fn join(&mut self) -> Result<(), PeptideMassCounterError> {
         if self.thread.is_none() {
             return Ok(());
         }
         self.stop_flag.store(true, Ordering::Relaxed);
-        match self.thread.take().unwrap().join() {
-            Ok(_) => Ok(()),
-            Err(err) => bail!(format!("Error in count thread: {:?}", err)),
+        if let Some(thread) = self.thread.take() {
+            thread
+                .join()
+                .map_err(PeptideMassCounterError::ProteinCountThreadPanicError)??;
         }
+        Ok(())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -96,7 +98,7 @@ impl MassCountThread {
         mass_counters: Arc<RwLock<HashMap<i64, AtomicU64>>>,
         processed_proteins: Arc<AtomicUsize>,
         stop_flag: Arc<AtomicBool>,
-    ) -> Result<()> {
+    ) -> Result<(), PeptideMassCounterError> {
         let mut wait_for_queue = false;
         loop {
             // Wait for protein queue to fill up
@@ -123,14 +125,21 @@ impl MassCountThread {
             let peptides = convert_to_internal_peptide(
                 match remove_peptides_containing_unknown {
                     true => Box::new(remove_unknown_from_digest(
-                        protease.cleave(protein.get_sequence())?,
+                        protease
+                            .cleave(protein.get_sequence())
+                            .map_err(PeptideMassCounterError::ProteaseCleavageError)?,
                     )),
-                    false => Box::new(protease.cleave(protein.get_sequence())?),
+                    false => Box::new(
+                        protease
+                            .cleave(protein.get_sequence())
+                            .map_err(PeptideMassCounterError::ProteaseCleavageError)?,
+                    ),
                 },
                 &[i64::MAX],
                 &protein,
             )
-            .collect::<HashSet<Peptide>>()?;
+            .collect::<HashSet<Peptide>>()
+            .map_err(PeptideMassCounterError::PeptideConversionError)?;
 
             for peptide in peptides.into_iter() {
                 if !bloom_filter.add_aliased(peptide.get_sequence().as_bytes())? {
@@ -178,15 +187,18 @@ impl PeptideMassCounter {
         bloom_filter_length: u64,
         num_threads: usize,
         initial_num_partitions: usize,
-    ) -> Result<Vec<(i64, u64)>> {
+    ) -> Result<Vec<(i64, u64)>, PeptideMassCounterError> {
         // Count number of proteins in files
         info!("Counting proteins ...");
 
         if System::new_all().available_memory() < bloom_filter_length {
-            bail!("Not enough available memory to create bloom filters. Available memory: {} bytes, required memory: {} bytes", System::new_all().available_memory(), bloom_filter_length * initial_num_partitions as u64);
+            return Err(PeptideMassCounterError::InsufficientMemory(
+                bloom_filter_length as usize,
+                System::new_all().available_memory() as usize,
+            ));
         }
 
-        let mut protein_ctr: usize = 0;
+        let protein_ctr = Arc::new(AtomicUsize::new(0));
 
         let protein_file_path_queue = Arc::new(Mutex::new(protein_file_paths.to_owned()));
         let processed_files = Arc::new(AtomicUsize::new(0));
@@ -198,20 +210,22 @@ impl PeptideMassCounter {
             vec![Some(protein_file_paths.len() as u64)],
             vec!["files".to_string()],
             None,
-        )?;
+        )
+        .map_err(PeptideMassCounterError::ProgressMonitorError)?;
 
-        let thread_handles: Vec<std::thread::JoinHandle<Result<usize>>> = (0..num_threads)
+        let thread_handles: Vec<std::thread::JoinHandle<Result<(), PeptideMassCounterError>>> = (0
+            ..num_threads)
             .map(|_| {
                 let thread_protein_file_path_queue = protein_file_path_queue.clone();
                 let thread_processed_files = processed_files.clone();
+                let thread_protein_ctr = protein_ctr.clone();
                 std::thread::spawn(move || {
-                    let mut protein_ctr: usize = 0;
                     loop {
                         let path = {
                             let mut path_queue = match thread_protein_file_path_queue.lock() {
                                 Ok(path_queue) => path_queue,
-                                Err(err) => {
-                                    bail!(format!("Could not lock protein path queue: {}", err))
+                                Err(_) => {
+                                    return Err(PeptideMassCounterError::ProteinQueuePoisoned);
                                 }
                             };
                             match path_queue.pop() {
@@ -220,31 +234,40 @@ impl PeptideMassCounter {
                             }
                         };
                         info!("... {}", path.display());
-                        let mut reader = Reader::new(&path, 1024)?;
-                        protein_ctr += reader.count_proteins()?;
+                        let mut reader = Reader::new(&path, 1024)
+                            .map_err(PeptideMassCounterError::ProteinReaderError)?;
+                        let ctr = reader
+                            .count_proteins()
+                            .map_err(PeptideMassCounterError::ProteinCountError)?;
+                        thread_protein_ctr.fetch_add(ctr, Ordering::Relaxed);
                         thread_processed_files.fetch_add(1, Ordering::Relaxed);
                     }
-                    Ok(protein_ctr)
+                    Ok(())
                 })
             })
             .collect::<Vec<_>>();
 
         // wait for counting to finish
         for thread_handle in thread_handles.into_iter() {
-            protein_ctr += match thread_handle.join() {
-                Ok(protein_ctr) => protein_ctr?,
-                Err(err) => bail!(format!("Error in protein counting thread: {:?}", err)),
-            };
+            thread_handle
+                .join()
+                .map_err(PeptideMassCounterError::ProteinCountThreadPanicError)??;
         }
 
         // Stop progress bar
         stop_flag.store(true, Ordering::Relaxed);
-        progress_view.stop().await?;
+        progress_view
+            .stop()
+            .await
+            .map_err(PeptideMassCounterError::ProgressMonitorError)?;
+
+        let protein_ctr = protein_ctr.load(Ordering::SeqCst);
 
         info!("... {} proteins in total", protein_ctr);
 
         // Calculate the max mass and width of each partition
-        let max_mass = INTERNAL_TRYPTOPHAN.get_mono_mass_int() * 60;
+        let max_mass = INTERNAL_TRYPTOPHAN.get_mono_mass_int()
+            * protease.get_max_length().unwrap_or(60) as i64;
         let mass_step = max_mass / initial_num_partitions as i64;
         debug!("max mass: {}", max_mass);
         debug!("mass step: {}", mass_step);
@@ -264,7 +287,7 @@ impl PeptideMassCounter {
             BloomFilter::<AtomicU8>::build()
                 .with_false_positive_probability(false_positive_probability)
                 .with_length(bloom_filter_length * 8) // bits
-                .map_err(anyhow::Error::from)?,
+                .map_err(PeptideMassCounterError::BloomFilterError)?,
         );
 
         // Create the the protein queue
@@ -285,7 +308,8 @@ impl PeptideMassCounter {
             vec![Some(protein_ctr as u64)],
             vec!["proteins".to_string()],
             None,
-        )?;
+        )
+        .map_err(PeptideMassCounterError::ProgressMonitorError)?;
 
         let mut queue_monitor = QueueMonitor::new(
             "",
@@ -293,7 +317,8 @@ impl PeptideMassCounter {
             vec![protein_queue_size as u64],
             vec!["protein queue".to_string()],
             None,
-        )?;
+        )
+        .map_err(PeptideMassCounterError::QueueMonitorError)?;
 
         // Start threads
         let mass_count_threads = (0..num_threads)
@@ -306,7 +331,8 @@ impl PeptideMassCounter {
                         protease.get_min_length(),
                         protease.get_max_length(),
                         protease.get_max_missed_cleavages(),
-                    )?,
+                    )
+                    .map_err(PeptideMassCounterError::ProteaseCreationError)?,
                     remove_peptides_containing_unknown,
                     bloom_filter.clone(),
                     mass_counters.clone(),
@@ -314,13 +340,17 @@ impl PeptideMassCounter {
                     Some(stop_flag.clone()),
                 ))
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, PeptideMassCounterError>>()?;
 
         for protein_file_path in protein_file_paths.iter() {
             info!("Reading proteins from {}", protein_file_path.display());
-            let mut reader = Reader::new(protein_file_path, 4096)?;
+            let mut reader = Reader::new(protein_file_path, 4096)
+                .map_err(PeptideMassCounterError::ProteinReaderError)?;
             let mut wait_for_queue = false;
-            while let Some(protein) = reader.next()? {
+            while let Some(protein) = reader
+                .next()
+                .map_err(PeptideMassCounterError::NextProteinReadeError)?
+            {
                 loop {
                     if wait_for_queue {
                         // Wait before pushing the protein into queue
@@ -330,7 +360,9 @@ impl PeptideMassCounter {
                     // Acquire lock on protein queue
                     let mut protein_queue = match protein_queue_arc.lock() {
                         Ok(protein_queue) => protein_queue,
-                        Err(err) => bail!(format!("Could not lock protein queue: {}", err)),
+                        Err(_) => {
+                            return Err(PeptideMassCounterError::ProteinQueuePoisoned);
+                        }
                     };
                     // If protein queue is already full, set wait and try again
                     if protein_queue.len() >= protein_queue_size {
@@ -354,8 +386,14 @@ impl PeptideMassCounter {
 
         // Stop progress bar
         progress_stop_flag.store(true, Ordering::Relaxed);
-        progress_view.stop().await?;
-        queue_monitor.stop().await?;
+        progress_view
+            .stop()
+            .await
+            .map_err(PeptideMassCounterError::ProgressMonitorError)?;
+        queue_monitor
+            .stop()
+            .await
+            .map_err(PeptideMassCounterError::QueueMonitorError)?;
 
         debug!("Accumulate results");
         let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(mass_counters)
