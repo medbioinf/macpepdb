@@ -19,6 +19,7 @@ use fallible_iterator::FallibleIterator;
 use futures::future::join_all;
 use futures::{pin_mut, StreamExt, TryStreamExt};
 use metrics::{counter, describe_counter, describe_gauge, gauge, Unit};
+use sysinfo::{System, SystemExt};
 use tokio::fs::create_dir_all;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::{pin, spawn};
@@ -160,7 +161,7 @@ impl DatabaseBuild {
                 protease.as_ref(),
                 initial_configuration.get_remove_peptides_containing_unknown(),
                 partitioner_false_positive_probability,
-                allowed_ram_fraction,
+                System::new_all().available_memory() * allowed_ram_fraction as u64,
                 10,
                 40,
             )
@@ -302,7 +303,7 @@ impl DatabaseBuild {
         drop(unprocessable_proteins_sender);
 
         // Reader is not async (yet) so it needs to run in a separate thread
-        // so the queue is not stareved
+        // so the queue is not starved
         let thread_protein_file_paths = protein_file_paths.to_vec();
         let reader_thread: std::thread::JoinHandle<Result<()>> = std::thread::spawn(move || {
             for protein_file_path in thread_protein_file_paths {

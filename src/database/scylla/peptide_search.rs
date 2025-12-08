@@ -1,7 +1,6 @@
 use std::cmp::min;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
-use std::io::Cursor;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::atomic::AtomicU64;
@@ -80,16 +79,12 @@ pub struct ThreadSafeDistinctFilterFunction {
 }
 
 impl FilterFunction for ThreadSafeDistinctFilterFunction {
+    // Returns true if the peptide is distinct (not seen before), false otherwise.
     fn is_match(&self, peptide: &Peptide) -> Result<bool> {
-        if self
+        let existed = self
             .bloom_filter
-            .contains(&mut Cursor::new(peptide.get_sequence()))?
-        {
-            return Ok(false);
-        }
-        self.bloom_filter
-            .add_aliased(&mut Cursor::new(peptide.get_sequence()))?;
-        Ok(true)
+            .add_aliased(peptide.get_sequence().as_bytes())?;
+        Ok(!existed)
     }
 }
 
@@ -262,8 +257,10 @@ impl FilterPipeline {
         let mut filter_function: Vec<Box<dyn FilterFunction>> = Vec::new();
         if distinct {
             filter_function.push(Box::new(ThreadSafeDistinctFilterFunction {
-                //bloom_filter: BloomFilter::new_by_item_count_and_fp_prob(5564216, 0.001)?,
-                bloom_filter: BloomFilter::new_by_length_and_fp_prob(80_000_000, 0.001)?,
+                bloom_filter: BloomFilter::build()
+                    .with_length(80_000_000) // bits
+                    .with_false_positive_probability(0.001)
+                    .map_err(anyhow::Error::from)?,
             }));
         }
         if let Some(taxonomy_ids) = taxonomy_ids {

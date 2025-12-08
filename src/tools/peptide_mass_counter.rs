@@ -1,13 +1,13 @@
 use std::{
-    collections::HashMap,
-    io::Cursor,
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::{
-        atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicU8, AtomicUsize, Ordering},
         Arc, Mutex,
     },
     thread::sleep,
     time::Duration,
+    vec,
 };
 
 use anyhow::{bail, Result};
@@ -16,16 +16,18 @@ use dihardts_omicstools::proteomics::proteases::{
     functions::get_by_name as get_protease_by_name, protease::Protease,
 };
 use fallible_iterator::FallibleIterator;
+use parking_lot::RwLock;
 use sysinfo::{System, SystemExt};
-use tracing::{debug, info, trace};
+use tracing::{debug, info};
 
 use crate::{
-    chemistry::amino_acid::{calc_sequence_mass_int, INTERNAL_TRYPTOPHAN},
-    entities::protein::Protein,
+    chemistry::amino_acid::INTERNAL_TRYPTOPHAN,
+    entities::{peptide::Peptide, protein::Protein},
     io::uniprot_text::reader::Reader,
     tools::{
-        omicstools::remove_unknown_from_digest, peptide_partitioner::get_mass_partition,
-        progress_monitor::ProgressMonitor, queue_monitor::QueueMonitor,
+        omicstools::{convert_to_internal_peptide, remove_unknown_from_digest},
+        progress_monitor::ProgressMonitor,
+        queue_monitor::QueueMonitor,
     },
 };
 
@@ -47,9 +49,8 @@ impl MassCountThread {
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         protease: Box<dyn Protease>,
         remove_peptides_containing_unknown: bool,
-        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter<AtomicU8>>>>,
-        partition_limits: Arc<Vec<i64>>,
-        partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
+        bloom_filter: Arc<BloomFilter<AtomicU8>>,
+        mass_counters: Arc<RwLock<HashMap<i64, AtomicU64>>>,
         processed_proteins: Arc<AtomicUsize>,
         stop_flag: Option<Arc<AtomicBool>>,
     ) -> Self {
@@ -64,9 +65,8 @@ impl MassCountThread {
                 protein_queue_arc,
                 protease,
                 remove_peptides_containing_unknown,
-                bloom_filter_arc,
-                partition_limits,
-                partitions_counters,
+                bloom_filter,
+                mass_counters,
                 processed_proteins,
                 thread_stop,
             )
@@ -92,9 +92,8 @@ impl MassCountThread {
         protein_queue_arc: Arc<Mutex<Vec<Protein>>>,
         protease: Box<dyn Protease>,
         remove_peptides_containing_unknown: bool,
-        bloom_filter_arc: Arc<Vec<Mutex<BloomFilter<AtomicU8>>>>,
-        partition_limits: Arc<Vec<i64>>,
-        partitions_counters: Arc<Vec<Mutex<HashMap<i64, u64>>>>,
+        bloom_filter: Arc<BloomFilter<AtomicU8>>,
+        mass_counters: Arc<RwLock<HashMap<i64, AtomicU64>>>,
         processed_proteins: Arc<AtomicUsize>,
         stop_flag: Arc<AtomicBool>,
     ) -> Result<()> {
@@ -119,42 +118,33 @@ impl MassCountThread {
                     }
                 }
             };
-            trace!("Thread {} got protein {}", tid, protein.get_accession());
 
             // Digest protein, keep only sequences
-            let peptides: Vec<String> = match remove_peptides_containing_unknown {
-                true => remove_unknown_from_digest(protease.cleave(protein.get_sequence())?)
-                    .map(|pep| Ok(pep.get_sequence().to_string()))
-                    .collect()?,
-                false => protease
-                    .cleave(protein.get_sequence())?
-                    .map(|pep| Ok(pep.get_sequence().to_string()))
-                    .collect()?,
-            };
+            let peptides = convert_to_internal_peptide(
+                match remove_peptides_containing_unknown {
+                    true => Box::new(remove_unknown_from_digest(
+                        protease.cleave(protein.get_sequence())?,
+                    )),
+                    false => Box::new(protease.cleave(protein.get_sequence())?),
+                },
+                &[i64::MAX],
+                &protein,
+            )
+            .collect::<HashSet<Peptide>>()?;
 
-            // Calc mass per seqeunce and sort peptides into partitions
-            let mut peptides_sorted_by_partition = vec![Vec::new(); partition_limits.len()];
-
-            for sequence in peptides.into_iter() {
-                let mass = calc_sequence_mass_int(sequence.as_str())?;
-                let partition = get_mass_partition(&partition_limits, mass)?;
-                peptides_sorted_by_partition[partition].push((mass, sequence));
-            }
-
-            // Add peptides to bloom filter and count them
-            for (partition_id, peptides) in peptides_sorted_by_partition.into_iter().enumerate() {
-                if peptides.is_empty() {
-                    continue;
-                }
-                let mut bloom_filter = bloom_filter_arc[partition_id].lock().unwrap();
-                let mut partition = partitions_counters[partition_id].lock().unwrap();
-                for (mass, sequence) in peptides.into_iter() {
-                    if bloom_filter.contains(&mut Cursor::new(sequence.as_bytes()))? {
+            for peptide in peptides.into_iter() {
+                if !bloom_filter.add_aliased(peptide.get_sequence().as_bytes())? {
+                    if let Some(counter) = mass_counters.read().get(&peptide.get_mass()) {
+                        counter.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
-                    bloom_filter.add(&mut Cursor::new(sequence.as_bytes()))?;
-                    *partition.entry(mass).or_insert(0) += 1;
                 }
+
+                mass_counters
+                    .write()
+                    .entry(peptide.get_mass())
+                    .or_insert_with(|| AtomicU64::new(0))
+                    .fetch_add(1, Ordering::Relaxed);
             }
             processed_proteins.fetch_add(1, Ordering::Relaxed);
         }
@@ -176,7 +166,7 @@ impl PeptideMassCounter {
     /// * `protease` - protease used for digestion
     /// * `remove_peptides_containing_unknown` - If true removes peptides containing unknown amino acids
     /// * `false_positive_probability` - False positive probability of the bloom filter
-    /// * `usable_memory_fraction` - Fraction of the available memory to use
+    /// * `bloom_filter_length` - Length of the bloom filter in bytes
     /// * `num_threads` - Number of threads to use
     /// * `initial_num_partitions` - Initial number of partitions for counting
     ///
@@ -185,12 +175,16 @@ impl PeptideMassCounter {
         protease: &dyn Protease,
         remove_peptides_containing_unknown: bool,
         false_positive_probability: f64,
-        usable_memory_fraction: f64,
+        bloom_filter_length: u64,
         num_threads: usize,
         initial_num_partitions: usize,
     ) -> Result<Vec<(i64, u64)>> {
         // Count number of proteins in files
         info!("Counting proteins ...");
+
+        if System::new_all().available_memory() < bloom_filter_length {
+            bail!("Not enough available memory to create bloom filters. Available memory: {} bytes, required memory: {} bytes", System::new_all().available_memory(), bloom_filter_length * initial_num_partitions as u64);
+        }
 
         let mut protein_ctr: usize = 0;
 
@@ -263,30 +257,15 @@ impl PeptideMassCounter {
             partition_limits.push(max_mass);
         }
 
-        // Create a counter for each partition
-        let partitions_counters: Vec<Mutex<HashMap<i64, u64>>> = partition_limits
-            .iter()
-            .map(|_| Mutex::new(HashMap::new()))
-            .collect();
+        let mass_counters: Arc<RwLock<HashMap<i64, AtomicU64>>> =
+            Arc::new(RwLock::new(HashMap::new()));
 
-        // Create the bloom filter for counting peptides. Use the allowed fraction of available memory
-        let usable_ram = System::new_all().available_memory() as f64 * usable_memory_fraction;
-        let usable_ram_per_partition = (usable_ram / partition_limits.len() as f64).floor() as u64;
-        let bloom_filters = (0..partition_limits.len())
-            .map(|_| {
-                BloomFilter::<AtomicU8>::new_by_length_and_fp_prob(
-                    usable_ram_per_partition * 8,
-                    false_positive_probability,
-                )
-                .map_err(anyhow::Error::from)
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        // Put everything in Arcs
-        let partition_limits = Arc::new(partition_limits);
-        let partitions_counters = Arc::new(partitions_counters);
-        let bloom_filters: Arc<Vec<Mutex<BloomFilter<AtomicU8>>>> =
-            Arc::new(bloom_filters.into_iter().map(Mutex::new).collect());
+        let bloom_filter = Arc::new(
+            BloomFilter::<AtomicU8>::build()
+                .with_false_positive_probability(false_positive_probability)
+                .with_length(bloom_filter_length * 8) // bits
+                .map_err(anyhow::Error::from)?,
+        );
 
         // Create the the protein queue
         let protein_queue_size = num_threads * 300;
@@ -329,9 +308,8 @@ impl PeptideMassCounter {
                         protease.get_max_missed_cleavages(),
                     )?,
                     remove_peptides_containing_unknown,
-                    bloom_filters.clone(),
-                    partition_limits.clone(),
-                    partitions_counters.clone(),
+                    bloom_filter.clone(),
+                    mass_counters.clone(),
                     processed_proteins.clone(),
                     Some(stop_flag.clone()),
                 ))
@@ -380,10 +358,11 @@ impl PeptideMassCounter {
         queue_monitor.stop().await?;
 
         debug!("Accumulate results");
-        let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(partitions_counters)
+        let mut partitions_counters: Vec<(i64, u64)> = Arc::try_unwrap(mass_counters)
             .unwrap()
+            .into_inner()
             .into_iter()
-            .flat_map(|counter| counter.into_inner().unwrap().into_iter())
+            .map(|counter| (counter.0, counter.1.load(Ordering::SeqCst)))
             .collect();
 
         partitions_counters.sort_by(|a, b| a.0.cmp(&b.0));
@@ -411,25 +390,35 @@ mod test {
             &[PathBuf::from("test_files/mouse.txt")],
             protease.as_ref(),
             true,
-            0.02,
-            0.3,
-            20,
-            40,
+            0.0000001,
+            1024 * 1024 * 1024 * 3, // 3 GiB
+            1,
+            1,
         )
         .await
         .unwrap();
 
-        let mut reader = csv::ReaderBuilder::new()
-            .delimiter(b'\t')
-            .has_headers(true)
-            .from_path(Path::new("test_files/mouse_masses.tsv"))
-            .unwrap();
+        let tsv = std::fs::read_to_string(Path::new("test_files/mouse_masses.tsv")).unwrap();
+        let expected_mass_counts: Vec<(i64, u64)> = tsv
+            .lines()
+            .skip(1)
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .map(|line| {
+                let mut parts = line.split("\t");
+                let mass: i64 = parts.next().unwrap().parse().unwrap();
+                let count: u64 = parts.next().unwrap().parse().unwrap();
+                (mass, count)
+            })
+            .collect();
 
-        let expected_mass_counts = reader
-            .deserialize()
-            .map(|line| Ok(line?))
-            .collect::<Result<Vec<(i64, u64)>>>()
-            .unwrap();
+        assert_eq!(
+            mass_counts.len(),
+            expected_mass_counts.len(),
+            "Mass count lengths do not match (got: {}, expected: {})",
+            mass_counts.len(),
+            expected_mass_counts.len(),
+        );
 
         for (idx, (mass_count, expected_mass_count)) in mass_counts
             .iter()

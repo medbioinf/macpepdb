@@ -1,3 +1,4 @@
+use sysinfo::{System, SystemExt};
 #[cfg(not(target_env = "msvc"))]
 use tikv_jemallocator::Jemalloc;
 
@@ -611,12 +612,15 @@ async fn main() -> Result<()> {
                 None => 4 * num_threads,
             };
 
+            let bloom_filter_length =
+                (System::new_all().total_memory() as f64 * usable_memory_fraction) as u64;
+
             let mass_counts = PeptideMassCounter::count(
                 &protein_file_paths,
                 protease.as_ref(),
                 true,
                 false_positive_probability,
-                usable_memory_fraction,
+                bloom_filter_length,
                 num_threads,
                 initial_num_partitions,
             )

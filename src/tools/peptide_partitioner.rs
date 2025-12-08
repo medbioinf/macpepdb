@@ -155,10 +155,10 @@ mod test {
             &[PathBuf::from("test_files/mouse.txt")],
             protease.as_ref(),
             true,
-            0.02,
-            0.3,
-            20,
-            80,
+            0.0000001,
+            1024 * 1024 * 1024 * 3, // 3 GiB
+            1,
+            1,
         )
         .await
         .unwrap();
@@ -166,14 +166,22 @@ mod test {
         let partition_limits =
             PeptidePartitioner::create_partition_limits(&mass_counts, 10, None).unwrap();
 
-        let mut reader = csv::ReaderBuilder::new()
-            .delimiter(b'\t')
-            .has_headers(true)
-            .from_path("test_files/mouse_partitioning.tsv")
-            .unwrap();
+        let tsv = std::fs::read_to_string("test_files/mouse_partitioning.tsv").unwrap();
+        let expected_partition_limits: Vec<i64> = tsv
+            .lines()
+            .skip(1)
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .map(|line| line.parse::<i64>().unwrap())
+            .collect();
 
-        let expected_partition_limits: Vec<i64> =
-            reader.deserialize().map(|line| line.unwrap()).collect();
+        assert_eq!(
+            partition_limits.len(),
+            expected_partition_limits.len(),
+            "Partition limit lengths do not match (got: {}, expected: {})",
+            partition_limits.len(),
+            expected_partition_limits.len(),
+        );
 
         for (idx, (limit, expected_limit)) in partition_limits
             .iter()
