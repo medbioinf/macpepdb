@@ -2,7 +2,10 @@
 use serde::{Deserialize, Serialize};
 
 // internal imports
-use crate::tools::serde::{deserialize_mass_vec_from_int_vec, serialize_mass_vec_to_float_vec};
+use crate::{
+    database::system_table::IsSystemTableCompatible,
+    tools::serde::{deserialize_mass_vec_from_int_vec, serialize_mass_vec_to_float_vec},
+};
 
 /// Keeps the configuration parameters for MaCPepDB, e.g. digestion parameters, distribution ...
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -72,5 +75,11 @@ impl Configuration {
     ///
     pub fn get_partition_limits(&self) -> &Vec<i64> {
         &self.partition_limits
+    }
+}
+
+impl IsSystemTableCompatible for Configuration {
+    fn system_table_id() -> &'static str {
+        "configuration"
     }
 }

@@ -1,30 +1,32 @@
 services:
-  # ScyllaDB
-  scylla-node1:
-    container_name: scylla-node1
-    image: scylladb/scylla:6.2
-    restart: always
-    command: --seeds=scylla-node1,scylla-node2 --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
-    ports:
-      - 9042:9042
+  master:
+    container_name: "${COMPOSE_PROJECT_NAME:-citus}_master"
+    image: "citusdata/citus:13.0.3"
+    ports: ["${COORDINATOR_EXTERNAL_PORT:-5432}:5432"]
+    labels: ["com.citusdata.role=Master"]
+    environment: &AUTH
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      PGUSER: "${POSTGRES_USER:-postgres}"
+      PGPASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_HOST_AUTH_METHOD: "${POSTGRES_HOST_AUTH_METHOD:-trust}"
+  worker1: &worker
+    image: "citusdata/citus:13.0.3"
+    labels: ["com.citusdata.role=Worker"]
+    depends_on: [manager]
+    environment: *AUTH
+    command: "/wait-for-manager.sh"
     volumes:
-      - "./docker/compose/scylla/scylla.yaml:/etc/scylla/scylla.yaml"
-      - "./docker/compose/scylla/cassandra-rackdc.properties:/etc/scylla/cassandra-rackdc.properties"
-    networks:
-      web:
-  scylla-node2:
-    container_name: scylla-node2
-    image: scylladb/scylla:6.2
-    restart: always
-    command: --seeds=scylla-node1,scylla-node2 --smp 1 --memory 750M --overprovisioned 1 --api-address 0.0.0.0
-    ports:
-      - 9043:9042
+      - healthcheck-volume:/healthcheck
+  worker2:
+    <<: *worker
+  manager:
+    container_name: "${COMPOSE_PROJECT_NAME:-citus}_manager"
+    image: "ghcr.io/medbioinf/citusdata-membership-manager:fixed-docker-api"
     volumes:
-      - "./docker/compose/scylla/scylla.yaml:/etc/scylla/scylla.yaml"
-      - "./docker/compose/scylla/cassandra-rackdc.properties:/etc/scylla/cassandra-rackdc.properties"
-    networks:
-      web:
-
-networks:
-  web:
-    driver: bridge
+      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
+      - healthcheck-volume:/healthcheck
+    depends_on: [master]
+    environment: *AUTH
+volumes:
+  healthcheck-volume:
