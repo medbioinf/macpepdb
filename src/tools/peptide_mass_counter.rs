@@ -147,13 +147,12 @@ impl MassCountThread {
                         counter.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
+                    mass_counters
+                        .write()
+                        .entry(peptide.get_mass())
+                        .or_insert_with(|| AtomicU64::new(0))
+                        .fetch_add(1, Ordering::Relaxed);
                 }
-
-                mass_counters
-                    .write()
-                    .entry(peptide.get_mass())
-                    .or_insert_with(|| AtomicU64::new(0))
-                    .fetch_add(1, Ordering::Relaxed);
             }
             processed_proteins.fetch_add(1, Ordering::Relaxed);
         }
@@ -289,6 +288,8 @@ impl PeptideMassCounter {
                 .with_length(bloom_filter_length * 8) // bits
                 .map_err(PeptideMassCounterError::BloomFilterError)?,
         );
+
+        info!("{bloom_filter}");
 
         // Create the the protein queue
         let protein_queue_size = num_threads * 300;
