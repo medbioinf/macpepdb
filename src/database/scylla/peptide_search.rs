@@ -3,12 +3,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::ops::Deref;
 use std::pin::Pin;
-use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use anyhow::Result;
 use async_stream::try_stream;
-use dihardts_cstools::bloom_filter::BloomFilter;
+use dashmap::DashSet;
 use dihardts_omicstools::chemistry::amino_acid::{AminoAcid, CANONICAL_AMINO_ACIDS};
 use futures::stream::FuturesUnordered;
 use futures::{pin_mut, Stream, StreamExt};
@@ -75,22 +74,19 @@ impl Display for IsTrEMBLFilterFunction {
 /// Makes sure that no peptide is returned twice
 ///
 pub struct ThreadSafeDistinctFilterFunction {
-    bloom_filter: BloomFilter<AtomicU64>,
+    sequences: DashSet<String>,
 }
 
 impl FilterFunction for ThreadSafeDistinctFilterFunction {
     // Returns true if the peptide is distinct (not seen before), false otherwise.
     fn is_match(&self, peptide: &Peptide) -> Result<bool> {
-        let existed = self
-            .bloom_filter
-            .add_aliased(peptide.get_sequence().as_bytes())?;
-        Ok(!existed)
+        Ok(self.sequences.insert(peptide.get_sequence().to_string()))
     }
 }
 
 impl Display for ThreadSafeDistinctFilterFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "distinct ({})", self.bloom_filter)
+        write!(f, "distinct")
     }
 }
 
@@ -257,10 +253,7 @@ impl FilterPipeline {
         let mut filter_function: Vec<Box<dyn FilterFunction>> = Vec::new();
         if distinct {
             filter_function.push(Box::new(ThreadSafeDistinctFilterFunction {
-                bloom_filter: BloomFilter::build()
-                    .with_length(80_000_000) // bits
-                    .with_false_positive_probability(0.001)
-                    .map_err(anyhow::Error::from)?,
+                sequences: DashSet::with_capacity(300_000), // With an average length of 30 amino acids this shopuld grow to about 72MB in memory
             }));
         }
         if let Some(taxonomy_ids) = taxonomy_ids {

@@ -1948,6 +1948,7 @@ dependencies = [
  "clap",
  "crossbeam-queue",
  "csv",
+ "dashmap",
  "dihardts_cstools",
  "dihardts_omicstools",
  "fallible-iterator",
