@@ -25,7 +25,12 @@ pub async fn drop_keyspace(client: &Client) {
 }
 
 pub async fn create_keyspace_if_not_exists(client: &Client) {
-    let create_statement = CREATE_KEYSPACE.replace(":KEYSPACE:", client.get_database());
+    let create_statement = CREATE_KEYSPACE
+        .replace(":KEYSPACE:", client.get_database())
+        .replace(
+            ":REPLICATION_FACTOR:",
+            &client.get_replication_factor().to_string(),
+        );
     client.query_unpaged(create_statement, &[]).await.unwrap();
 }
 

@@ -11,7 +11,7 @@ pub const DROP_KEYSPACE: &str = "DROP KEYSPACE IF EXISTS :KEYSPACE:;";
 
 pub const CREATE_KEYSPACE: &str = "CREATE KEYSPACE IF NOT EXISTS :KEYSPACE:
                 WITH REPLICATION = {'class': 'NetworkTopologyStrategy',
-                'replication_factor': 1};";
+                'replication_factor': :REPLICATION_FACTOR:};";
 
 const CREATE_MIGRATIONS_TABLE: &str = "CREATE TABLE :KEYSPACE:.migrations ( pk TEXT, id INT, created TEXT, description TEXT, PRIMARY KEY(pk, id));";
 

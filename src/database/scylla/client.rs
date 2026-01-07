@@ -17,6 +17,11 @@ lazy_static! {
     pub static ref URL_PASER_REGEX: Regex = Regex::new(r"(?m)scylla://((?P<credentials>[^:]*?:[^:]+)@){0,1}(?P<hosts>.+)/(?P<keyspace>[^/?]+)(\?(?P<attributes>.+)){0,1}").unwrap();
 }
 
+/// Default replication factor for the ScyllaDB keyspace
+/// 1 is not recommended for production use
+///
+const DEFAULT_REPLICATION_FACTOR: usize = 1;
+
 /// Pool type for the ScyllaDB client
 /// default is PerHost
 ///
@@ -39,6 +44,7 @@ impl From<&str> for PoolType {
 struct ClientSettings {
     pub hosts: Vec<String>,
     pub keyspace: String,
+    pub replication_factor: usize,
     pub user: Option<String>,
     pub password: Option<String>,
     pub connection_timeout: Option<Duration>,
@@ -75,6 +81,7 @@ impl ClientSettings {
         let mut settings = Self {
             hosts,
             keyspace,
+            replication_factor: DEFAULT_REPLICATION_FACTOR,
             user: None,
             password: None,
             connection_timeout: None,
@@ -126,6 +133,10 @@ impl ClientSettings {
             if let Some(level) = attributes.get("write_consistency_level") {
                 settings.write_consistency_level =
                     Some(Self::str_to_write_consistency_level(level)?);
+            };
+
+            if let Some(replication_factor) = attributes.get("replication_factor") {
+                settings.replication_factor = replication_factor.parse()?;
             };
         }
         Ok(settings)
@@ -195,6 +206,7 @@ impl ClientSettings {
 pub struct Client {
     session: Session,
     database: String,
+    replication_factor: usize,
     url: String,
     prepared_statement_cache: RwLock<HashMap<String, PreparedStatement>>,
     num_nodes: usize,
@@ -209,6 +221,10 @@ impl Client {
 
     pub fn get_num_nodes(&self) -> usize {
         self.num_nodes
+    }
+
+    pub fn get_replication_factor(&self) -> usize {
+        self.replication_factor
     }
 
     /// Get a prepared statement from the cache
@@ -279,6 +295,7 @@ impl GenericClient<Session> for Client {
         Ok(Self {
             session: settings.to_session().await?,
             database: settings.keyspace.clone(),
+            replication_factor: settings.replication_factor,
             url: database_url.to_string(),
             prepared_statement_cache: RwLock::new(HashMap::new()),
             num_nodes: settings.hosts.len(),
