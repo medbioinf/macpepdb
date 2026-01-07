@@ -464,7 +464,7 @@ pub trait Search {
             pin_mut!(peptide_stream);
             'peptide_loop: while let Some(peptide) = peptide_stream.next().await {
                 let peptide = peptide?;
-                if filter_pipeline.is_match(&peptide)? {
+                if !filter_pipeline.is_match(&peptide)? {
                     continue 'peptide_loop;
                 }
                 peptide_sender.send(Ok(MatchingPeptide::new(peptide, Vec::new())))?;
