@@ -1008,7 +1008,7 @@ impl DatabaseBuild {
     /// * `partitioner_false_positive_probability` - False positive probability of the partitioners Bloom filters.
     /// * `initial_configuration_opt` - Optional initial configuration.
     /// * `log_folder` - Path to the log folder.
-    /// * `include_do
+    /// * `include_domains` - Whether to include domains in the database.
     ///
     #[allow(clippy::too_many_arguments)]
     pub async fn build(
