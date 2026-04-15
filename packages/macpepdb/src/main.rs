@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
 };
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use fallible_iterator::FallibleIterator;
 use lru::LruCache;
 use macpepdb::{
@@ -21,6 +21,15 @@ use macpepdb::{
 use tokio_postgres::NoTls;
 use uniprot_reader::reader::IndexedReader;
 
+/// Seqeunce typey to use
+///
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+enum SequenceTypes {
+    Bit,
+    ByteArray,
+    String,
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -33,6 +42,9 @@ struct Cli {
     /// Batch size of peptides to insert
     #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
     protien_reader_cache_size: NonZeroUsize,
+    /// Types of sequence to use, multiple are possible
+    #[arg(short, long, value_enum, action = clap::ArgAction::Append)]
+    sequence_type: Vec<SequenceTypes>,
     /// Protein files
     #[arg(value_delimiter = ' ', num_args = 0..)]
     protein_file_paths: Vec<PathBuf>,
@@ -42,15 +54,15 @@ struct Cli {
 async fn main() {
     let cli = Cli::parse();
 
-    let bit_protease =
-        Protease::<BitSequence>::get_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
-    let str_protease =
-        Protease::<StringSequence>::get_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
     let bytea_protease =
         Protease::<ByteArraySequence>::get_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
-
     let now = std::time::Instant::now();
-    let index = build_mass_index(&bit_protease, &cli.protein_file_paths, cli.index_file_path).await;
+    let index = build_mass_index(
+        &bytea_protease,
+        &cli.protein_file_paths,
+        cli.index_file_path,
+    )
+    .await;
     let elapsed = now.elapsed();
     println!(
         "Index: build = {:.2?} s; #masses = {}; #peptides = {}",
@@ -58,39 +70,53 @@ async fn main() {
         index.len(),
         index.entry_len()
     );
+    drop(bytea_protease);
 
-    let now = std::time::Instant::now();
-    build_db(
-        &bit_protease,
-        &index,
-        cli.peptides_insert_batch_size,
-        cli.protien_reader_cache_size,
-    )
-    .await;
-    let elapsed = now.elapsed();
-    println!("DB (bitseq): build = {:.2?} s;", elapsed.as_secs_f32(),);
+    if cli.sequence_type.contains(&SequenceTypes::Bit) {
+        let bit_protease =
+            Protease::<BitSequence>::get_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
+        let now = std::time::Instant::now();
+        build_db(
+            &bit_protease,
+            &index,
+            cli.peptides_insert_batch_size,
+            cli.protien_reader_cache_size,
+        )
+        .await;
+        let elapsed = now.elapsed();
+        println!("DB (bitseq): build = {:.2?} s;", elapsed.as_secs_f32(),);
+    }
 
-    let now = std::time::Instant::now();
-    build_db(
-        &str_protease,
-        &index,
-        cli.peptides_insert_batch_size,
-        cli.protien_reader_cache_size,
-    )
-    .await;
-    let elapsed = now.elapsed();
-    println!("DB (strseq): build = {:.2?} s;", elapsed.as_secs_f32(),);
+    if cli.sequence_type.contains(&SequenceTypes::String) {
+        let str_protease =
+            Protease::<StringSequence>::get_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
+        let now = std::time::Instant::now();
+        build_db(
+            &str_protease,
+            &index,
+            cli.peptides_insert_batch_size,
+            cli.protien_reader_cache_size,
+        )
+        .await;
+        let elapsed = now.elapsed();
+        println!("DB (strseq): build = {:.2?} s;", elapsed.as_secs_f32(),);
+    }
 
-    let now = std::time::Instant::now();
-    build_db(
-        &bytea_protease,
-        &index,
-        cli.peptides_insert_batch_size,
-        cli.protien_reader_cache_size,
-    )
-    .await;
-    let elapsed = now.elapsed();
-    println!("DB (strseq): build = {:.2?} s;", elapsed.as_secs_f32(),);
+    if cli.sequence_type.contains(&SequenceTypes::ByteArray) {
+        let bytea_protease =
+            Protease::<ByteArraySequence>::get_by_name("trypsin", Some(6), Some(50), Some(2))
+                .unwrap();
+        let now = std::time::Instant::now();
+        build_db(
+            &bytea_protease,
+            &index,
+            cli.peptides_insert_batch_size,
+            cli.protien_reader_cache_size,
+        )
+        .await;
+        let elapsed = now.elapsed();
+        println!("DB (strseq): build = {:.2?} s;", elapsed.as_secs_f32(),);
+    }
 }
 
 async fn build_mass_index<S: IsSequence>(
