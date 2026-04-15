@@ -1,0 +1,23 @@
+[package]
+name = "macpepdb"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bitvec = { workspace = true }
+clap = { workspace = true, features = ["derive"] }
+dihardts_omicstools = { workspace = true }
+fallible-iterator = { workspace = true }
+lru = { workspace = true }
+pastey = { workspace = true }
+postgres-protocol = { workspace = true }
+postgres-types = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-postgres = { workspace = true, features = ["array-impls"] }
+uniprot_reader = { workspace = true, features = ["serde"] }
+
+[build-dependencies]
+dihardts_omicstools = { workspace = true }

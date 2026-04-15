@@ -1,0 +1,40 @@
+services:
+  master:
+    container_name: "${COMPOSE_PROJECT_NAME:-citus}_master"
+    image: "citusdata/citus:14"
+    ports:
+      - "${COORDINATOR_EXTERNAL_PORT:-5432}:5432"
+    labels:
+      - "com.citusdata.role=Master"
+    environment: &AUTH
+      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      PGUSER: "${POSTGRES_USER:-postgres}"
+      PGPASSWORD: "${POSTGRES_PASSWORD:-postgres}"
+      POSTGRES_HOST_AUTH_METHOD: "${POSTGRES_HOST_AUTH_METHOD:-trust}"
+  worker1: &worker
+    image: "citusdata/citus:14"
+    labels:
+      - "com.citusdata.role=Worker"
+    depends_on:
+      - manager
+    environment: *AUTH
+    command:
+      - "/citus-overrides/wait-for-manager.sh"
+      - "-c"
+      - "config_file=/citus-overrides/postgresql.conf"
+    volumes:
+      - healthcheck-volume:/healthcheck
+      - ./docker/compose/citus:/citus-overrides
+  worker2:
+    <<: *worker
+  manager:
+    container_name: "${COMPOSE_PROJECT_NAME:-citus}_manager"
+    image: "ghcr.io/medbioinf/citusdata-membership-manager:fixed-docker-api"
+    volumes:
+      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
+      - healthcheck-volume:/healthcheck
+    depends_on: [master]
+    environment: *AUTH
+volumes:
+  healthcheck-volume:

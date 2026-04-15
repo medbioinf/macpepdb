@@ -1,0 +1,13 @@
+[package]
+name = "uniprot_reader"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true, optional = true, features = ["derive"] }
+thiserror = { workspace = true }
+
+
+[features]
+default = []
+serde = ["dep:serde"]

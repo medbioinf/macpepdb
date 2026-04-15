@@ -1,0 +1,11 @@
+# Rust
+/target
+
+# OS
+.DS_Store
+
+# Dev
+*.py
+*.index
+# Protein files on root level
+/*.txt
