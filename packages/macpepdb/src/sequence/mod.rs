@@ -1,5 +1,6 @@
 pub mod bit_sequence;
 pub mod byte_array_sequence;
+pub mod cql;
 pub mod error;
 pub mod is_seqeunce;
 pub mod string_sequence;

@@ -17,8 +17,10 @@ pub trait IsSequence:
     + Sync
     + TryInto<String, Error = Error>
     + for<'a> TryFrom<&'a str, Error = Error>
-    + ToSql
+    + for<'frame, 'metadata> scylla::deserialize::value::DeserializeValue<'frame, 'metadata>
     + for<'a> FromSql<'a>
+    + scylla::serialize::value::SerializeValue
+    + ToSql
 {
     const PEPTIDE_DATABASE: &str;
 

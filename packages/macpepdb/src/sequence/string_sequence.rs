@@ -3,7 +3,7 @@ use std::fmt::{Debug, Display};
 
 use crate::{
     amino_acid::AminoAcid,
-    sequence::{Error, IsSequence},
+    sequence::{Error, IsSequence, cql::ensure_not_null_slice},
 };
 
 #[derive(Eq, Hash, PartialEq, ToSql, FromSql)]
@@ -66,6 +66,70 @@ impl Display for StringSequence {
 impl Debug for StringSequence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "StringSequence({})", self)
+    }
+}
+
+impl scylla::serialize::value::SerializeValue for StringSequence {
+    fn serialize<'b>(
+        &self,
+        typ: &scylla::cluster::metadata::ColumnType,
+        writer: scylla::serialize::writers::CellWriter<'b>,
+    ) -> Result<
+        scylla::serialize::writers::WrittenCellProof<'b>,
+        scylla::serialize::SerializationError,
+    > {
+        if !matches!(
+            typ,
+            scylla::cluster::metadata::ColumnType::Native(
+                scylla::cluster::metadata::NativeType::Text
+            )
+        ) {
+            return Err(scylla::serialize::SerializationError::new(
+                Error::UnexpectedCqlValueType(
+                    typ.clone().into_owned(),
+                    scylla::cluster::metadata::ColumnType::Native(
+                        scylla::cluster::metadata::NativeType::Text,
+                    ),
+                ),
+            ));
+        }
+
+        writer.set_value(self.0.as_bytes()).map_err(|_| {
+            scylla::serialize::SerializationError::new(Error::ByteSequenceTooLargeForCqlBlob)
+        })
+    }
+}
+
+impl<'frame, 'metadata> scylla::deserialize::value::DeserializeValue<'frame, 'metadata>
+    for StringSequence
+{
+    fn type_check(
+        typ: &scylla::cluster::metadata::ColumnType,
+    ) -> Result<(), scylla::errors::TypeCheckError> {
+        if matches!(
+            typ,
+            scylla::cluster::metadata::ColumnType::Native(
+                scylla::cluster::metadata::NativeType::Text
+            )
+        ) {
+            return Err(scylla::errors::TypeCheckError::new(
+                Error::UnexpectedCqlValueType(
+                    typ.clone().into_owned(),
+                    scylla::cluster::metadata::ColumnType::Native(
+                        scylla::cluster::metadata::NativeType::Text,
+                    ),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn deserialize(
+        typ: &'metadata scylla::cluster::metadata::ColumnType<'metadata>,
+        v: Option<scylla::deserialize::FrameSlice<'frame>>,
+    ) -> Result<Self, scylla::errors::DeserializationError> {
+        let val = ensure_not_null_slice::<&[u8]>(typ, v)?;
+        Ok(StringSequence(String::from_utf8_lossy(val).to_string()))
     }
 }
 

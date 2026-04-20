@@ -108,6 +108,51 @@ impl tokio_postgres::types::ToSql for BitSequence {
     tokio_postgres::types::to_sql_checked!();
 }
 
+impl scylla::serialize::value::SerializeValue for BitSequence {
+    fn serialize<'b>(
+        &self,
+        _typ: &scylla::cluster::metadata::ColumnType,
+        _writer: scylla::serialize::writers::CellWriter<'b>,
+    ) -> Result<
+        scylla::serialize::writers::WrittenCellProof<'b>,
+        scylla::serialize::SerializationError,
+    > {
+        unimplemented!()
+    }
+}
+
+impl<'frame, 'metadata> scylla::deserialize::value::DeserializeValue<'frame, 'metadata>
+    for BitSequence
+{
+    fn type_check(
+        typ: &scylla::cluster::metadata::ColumnType,
+    ) -> Result<(), scylla::errors::TypeCheckError> {
+        if matches!(
+            typ,
+            scylla::cluster::metadata::ColumnType::Native(
+                scylla::cluster::metadata::NativeType::Text
+            )
+        ) {
+            return Err(scylla::errors::TypeCheckError::new(
+                Error::UnexpectedCqlValueType(
+                    typ.clone().into_owned(),
+                    scylla::cluster::metadata::ColumnType::Native(
+                        scylla::cluster::metadata::NativeType::Text,
+                    ),
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn deserialize(
+        _typ: &'metadata scylla::cluster::metadata::ColumnType<'metadata>,
+        _v: Option<scylla::deserialize::FrameSlice<'frame>>,
+    ) -> Result<Self, scylla::errors::DeserializationError> {
+        unimplemented!()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

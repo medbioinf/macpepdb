@@ -1,4 +1,5 @@
 use bitvec::{BitArr, field::BitField, order::Lsb0, slice::BitSlice};
+use deku::prelude::*;
 use pastey::paste;
 use thiserror::Error;
 
@@ -20,6 +21,7 @@ pub struct AminoAcid {
     code: char,
     mono_mass: i64,
     bit_code: &'static BitCode,
+    aa_bit_code: AminoAcidBitCode,
 }
 
 impl AminoAcid {
@@ -37,26 +39,40 @@ impl AminoAcid {
         &self.bit_code[..Self::BIT_CODE_LEN]
     }
 
-    pub fn foo(&self) -> &'static BitCode {
-        self.bit_code
+    pub fn aa_bit_code(&self) -> &AminoAcidBitCode {
+        &self.aa_bit_code
     }
 }
 
 macro_rules! create_const_amino_acids {
     ([$(($name:literal; $one_letter_code:literal; $mass:literal; $bit_code:literal)),* $(,)?]) => {
         paste! {
+
+            #[derive(Clone, Debug, Eq, Hash, PartialEq, DekuRead, DekuWrite)]
+            #[deku(id_type = "u8", bits = "5")]
+            pub enum AminoAcidBitCode {
+                $(
+                    #[deku(id = $bit_code)]
+                    [< $one_letter_code:upper>],
+                )+
+            }
+
              $(
                 const [< $name:replace(" ", "_"):snake:upper _BIT_CODE_RAW>]: u8 = $bit_code;
+
+
                 const [< $name:replace(" ", "_"):snake:upper _BIT_CODE>]: BitCode = {
                     // make the concrete BitArray type explicit
                     type This = ::bitvec::array::BitArray<[u8; ::bitvec::mem::elts::<u8>(BIT_CODE_LEN)], Lsb0>;
                     // one-element data array initialized from the raw byte
                     This { data: [ [< $name:replace(" ", "_"):snake:upper _BIT_CODE_RAW>] ], ..This::ZERO }
                 };
+
                 pub const [< $name:replace(" ", "_"):snake:upper >]: AminoAcid = AminoAcid {
                     code: $one_letter_code,
                     mono_mass: mass_to_int!{$mass},
                     bit_code: &[< $name:replace(" ", "_"):snake:upper _BIT_CODE>],
+                    aa_bit_code: AminoAcidBitCode::[< $one_letter_code:upper>],
                 };
              )+
 
@@ -65,6 +81,7 @@ macro_rules! create_const_amino_acids {
                      &[< $name:replace(" ", "_"):snake:upper >],
                  )+
              ];
+
 
              impl AminoAcid {
                  /// Returns a canonical or non-canoncial amino acid by one letter code
@@ -93,6 +110,19 @@ macro_rules! create_const_amino_acids {
                              [< $name:replace(" ", "_"):snake:upper _BIT_CODE_RAW>] => Ok(&[< $name:replace(" ", "_"):snake:upper >]),
                          )+
                          _ => Err(Error::InvalidAminoAcidBitCode(code_raw)),
+                     }
+                 }
+
+                 /// Returns a canonical or non-canoncial amino acid by MaCPepDB's 5 bit code
+                 ///
+                 /// # Arguments
+                 /// * `bit_code` - 5 bit code
+                 ///
+                 pub fn by_aa_bit_code(code: &AminoAcidBitCode) -> Result<&'static AminoAcid, Error> {
+                     match code {
+                         $(
+                             AminoAcidBitCode::[< $one_letter_code:snake:upper >] => Ok(&[< $name:replace(" ", "_"):snake:upper >]),
+                         )+
                      }
                  }
 

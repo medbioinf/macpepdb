@@ -4,8 +4,10 @@ use crate::sequence::IsSequence;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("Cql error: {0}")]
+    Cql(Box<scylla::errors::ExecutionError>),
     #[error("Database error: {0}")]
-    Database(tokio_postgres::Error),
+    Database(#[from] tokio_postgres::Error),
     #[error("{0}")]
     Sequence(#[from] crate::sequence::Error),
 }
@@ -41,13 +43,64 @@ where
         self.sequence.is_empty()
     }
 
-    pub async fn insert<C: tokio_postgres::GenericClient>(&self, client: &C) -> Result<u64, Error> {
+    pub fn psql_insert_statement() -> String {
+        format!(
+            "INSERT INTO {} (mass, sequence) VALUES ($1, $2) ON CONFLICT (mass, sequence) DO NOTHING",
+            S::PEPTIDE_DATABASE
+        )
+    }
+
+    pub async fn psql_insert<C: tokio_postgres::GenericClient>(
+        &self,
+        client: &C,
+    ) -> Result<u64, Error> {
         client
-                .execute(
-                    &format!("INSERT INTO {} (mass, sequence) VALUES ($1, $2) ON CONFLICT (mass, sequence) DO NOTHING", S::PEPTIDE_DATABASE),
-                    &[&self.mass(), self.sequence()],
-                )
-                .await
-                .map_err(Error::Database)
+            .execute(
+                &Self::psql_insert_statement(),
+                &[&self.mass(), self.sequence()],
+            )
+            .await
+            .map_err(Error::Database)
+    }
+
+    pub async fn psql_insert_with_preped_statement<C: tokio_postgres::GenericClient>(
+        &self,
+        client: &C,
+        prepared_statement: &tokio_postgres::Statement,
+    ) -> Result<u64, Error> {
+        client
+            .execute(prepared_statement, &[&self.mass(), self.sequence()])
+            .await
+            .map_err(Error::Database)
+    }
+
+    pub fn cssndr_insert_statement() -> String {
+        format!(
+            "INSERT INTO {} (mass, sequence) VALUES (?, ?)",
+            S::PEPTIDE_DATABASE
+        )
+    }
+
+    pub async fn cssndr_insert_with_preped_statement(
+        &self,
+        client: &scylla::client::session::Session,
+        prepared_statement: &scylla::statement::prepared::PreparedStatement,
+    ) -> Result<(), Error> {
+        client
+            .execute_unpaged(prepared_statement, (self.mass(), self.sequence()))
+            .await
+            .map_err(|err| Error::Cql(Box::new(err)))?;
+
+        Ok(())
+    }
+
+    pub async fn cssndr_insert_with_preped_statement_owned(
+        self,
+        client: &scylla::client::session::Session,
+        prepared_statement: &scylla::statement::prepared::PreparedStatement,
+    ) -> Result<Self, Error> {
+        self.cssndr_insert_with_preped_statement(client, prepared_statement)
+            .await?;
+        Ok(self)
     }
 }
