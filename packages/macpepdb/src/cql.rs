@@ -6,14 +6,19 @@ use scylla::{
     },
     errors::SerializationError,
 };
+use thiserror::Error;
 
-use crate::sequence::Error;
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("CQL value is null")]
+    CqlValueNull,
+}
 
 pub fn ensure_not_null_frame_slice<'frame, T>(
     _typ: &ColumnType,
     v: Option<FrameSlice<'frame>>,
 ) -> Result<FrameSlice<'frame>, scylla::errors::DeserializationError> {
-    v.ok_or_else(|| scylla::errors::DeserializationError::new(Error::CqlValueNone("")))
+    v.ok_or_else(|| scylla::errors::DeserializationError::new(Error::CqlValueNull))
 }
 
 pub fn ensure_not_null_slice<'frame, T>(

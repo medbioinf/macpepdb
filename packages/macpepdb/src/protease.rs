@@ -10,7 +10,7 @@ use dihardts_omicstools::proteomics::{
     },
 };
 
-use crate::{amino_acid::UNKNOWN, peptide::Peptide, sequence::IsSequence};
+use crate::{amino_acid::UNKNOWN, peptide::Peptide, sequence::Sequence};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -22,29 +22,25 @@ pub enum Error {
     UnableToGetPartition(String),
     #[error("Protease creation failed: {0}")]
     FailedCreation(String),
-    #[error("Sequence error: {0}")]
+    #[error("Sequence error in protease: {0}")]
     Sequence(#[from] crate::sequence::Error),
-    #[error("Peptide error: {0}")]
+    #[error("Peptide error in protease: {0}")]
     Peptide(#[from] crate::peptide::Error),
 }
 
 /// Wrapper around dihardts_omicstools protease to produce MacPepDB compatible peptides
 ///
 ///
-pub struct Protease<S: IsSequence> {
+pub struct Protease {
     inner_protease: Box<dyn InnerProtease>,
-    _sequence_type: std::marker::PhantomData<S>,
 }
 
-impl<S> Protease<S>
-where
-    S: IsSequence,
-{
+impl Protease {
     pub fn cleave<'a>(
         &self,
         sequence: &str,
         remove_unknown: bool,
-    ) -> Result<impl FallibleIterator<Item = Peptide<S>, Error = Error> + 'a, Error> {
+    ) -> Result<impl FallibleIterator<Item = Peptide, Error = Error> + 'a, Error> {
         let iter = self
             .inner_protease
             .cleave(sequence)
@@ -59,14 +55,14 @@ where
             })
             .map(move |pep| {
                 let peptide = Self::to_internal_peptide(pep)?;
-                Ok::<Peptide<S>, Error>(peptide)
+                Ok::<Peptide, Error>(peptide)
             });
         Ok(iter)
     }
 
-    fn to_internal_peptide(pep: CleavedPeptide) -> Result<Peptide<S>, Error> {
-        let sequence = S::try_from(pep.get_sequence())?;
-        Ok(Peptide::new(sequence)?)
+    fn to_internal_peptide(pep: CleavedPeptide) -> Result<Peptide, Error> {
+        let sequence = Sequence::try_from(pep.get_sequence().as_str())?;
+        Ok(Peptide::new(sequence))
     }
 
     pub fn get_by_name(
@@ -99,10 +95,7 @@ where
     }
 }
 
-impl<S> Clone for Protease<S>
-where
-    S: IsSequence,
-{
+impl Clone for Protease {
     fn clone(&self) -> Self {
         // Unwrap should be save as the inner protease is working
         Self::get_by_name(
@@ -115,10 +108,7 @@ where
     }
 }
 
-impl<S> Debug for Protease<S>
-where
-    S: IsSequence,
-{
+impl Debug for Protease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -131,10 +121,7 @@ where
     }
 }
 
-impl<S> Display for Protease<S>
-where
-    S: IsSequence,
-{
+impl Display for Protease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -151,22 +138,15 @@ where
     }
 }
 
-impl<S> From<Box<dyn InnerProtease>> for Protease<S>
-where
-    S: IsSequence,
-{
+impl From<Box<dyn InnerProtease>> for Protease {
     fn from(inner: Box<dyn InnerProtease>) -> Self {
         Self {
             inner_protease: inner,
-            _sequence_type: std::marker::PhantomData,
         }
     }
 }
 
-impl<S> PartialEq for Protease<S>
-where
-    S: IsSequence,
-{
+impl PartialEq for Protease {
     fn eq(&self, other: &Self) -> bool {
         self.name() == other.name()
             && self.min_length() == other.min_length()

@@ -12,8 +12,6 @@ fallible-iterator = { workspace = true }
 futures = { workspace = true }
 lru = { workspace = true }
 pastey = { workspace = true }
-postgres-protocol = { workspace = true }
-postgres-types = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 scylla = { workspace = true }

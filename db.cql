@@ -14,3 +14,9 @@ CREATE TABLE IF NOT EXISTS macpepdb.bytea_peptides (
     sequence blob,
     PRIMARY KEY (mass, sequence)
 );
+
+
+CREATE TABLE IF NOT EXISTS macpepdb.mass_index (
+    mass bigint primary key,
+    entrs set<blob>,
+);
