@@ -4,7 +4,10 @@ use deku::DekuEnumExt;
 use scylla::{DeserializeRow, SerializeRow};
 use thiserror::Error;
 
-use crate::{amino_acid::AminoAcid, sequence::Sequence};
+use crate::{
+    amino_acid::{AminoAcid, AminoAcidBitCode},
+    sequence::{IsSequence, PeptideSequence as Sequence},
+};
 
 pub const TABLE_NAME: &str = "peptides";
 
@@ -32,7 +35,7 @@ pub struct Peptide {
 
 impl Peptide {
     pub fn new(sequence: Sequence) -> Self {
-        let mass = sequence.to_peptide_mass();
+        let mass = Self::to_peptide_mass(&sequence);
         Self {
             mass,
             sequence,
@@ -81,31 +84,12 @@ impl Peptide {
         Ok(self.amino_acid_count(amino_acid))
     }
 
-    pub fn cssndr_insert_statement() -> String {
-        format!("INSERT INTO {} (mass, sequence) VALUES (?, ?)", TABLE_NAME)
-    }
-
-    pub async fn cssndr_insert_with_preped_statement(
-        &self,
-        client: &scylla::client::session::Session,
-        prepared_statement: &scylla::statement::prepared::PreparedStatement,
-    ) -> Result<(), Error> {
-        client
-            .execute_unpaged(prepared_statement, (self.mass(), self.sequence()))
-            .await
-            .map_err(|err| Error::Cql(Box::new(err)))?;
-
-        Ok(())
-    }
-
-    pub async fn cssndr_insert_with_preped_statement_owned(
-        self,
-        client: &scylla::client::session::Session,
-        prepared_statement: &scylla::statement::prepared::PreparedStatement,
-    ) -> Result<Self, Error> {
-        self.cssndr_insert_with_preped_statement(client, prepared_statement)
-            .await?;
-        Ok(self)
+    pub fn to_peptide_mass(sequence: &Sequence) -> i64 {
+        sequence
+            .amino_acids()
+            .fold(WATER_MONO_MASS, |acc, amino_acid| {
+                acc + amino_acid.mono_mass()
+            })
     }
 }
 

@@ -10,7 +10,7 @@ use dihardts_omicstools::proteomics::{
     },
 };
 
-use crate::{amino_acid::UNKNOWN, peptide::Peptide, sequence::Sequence};
+use crate::{amino_acid::UNKNOWN, peptide::Peptide, sequence::PeptideSequence as Sequence};
 
 #[derive(Error, Debug)]
 pub enum Error {
