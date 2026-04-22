@@ -1,7 +1,13 @@
 use std::{collections::VecDeque, fs::File, io::BufReader, num::NonZeroUsize, path::PathBuf};
 
 use clap::Parser;
-use macpepdb::{client::Client, protein::Protein};
+use macpepdb::{
+    client::Client,
+    mass_index::MassIndex,
+    protease::Protease,
+    protein::Protein,
+    sequence::{IsSequence, PeptideSequence},
+};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -28,21 +34,38 @@ async fn main() {
     let cli = Cli::parse();
 
     let client = Client::new(&cli.database_url).await.unwrap();
+    let protease = Protease::get_by_name(
+        "trypsin",
+        Some(PeptideSequence::MIN_LENGTH.get()),
+        Some(PeptideSequence::MAX_LENGTH.get()),
+        Some(2),
+    )
+    .unwrap();
 
-    let now = std::time::Instant::now();
-    build_db(&client, &cli.protein_file_paths, cli.insert_batch_size).await;
-    let elapsed = now.elapsed();
-    println!("DB (strseq): build = {:.2?} s;", elapsed.as_secs_f32(),);
+    build_db(
+        &client,
+        &cli.protein_file_paths,
+        cli.insert_batch_size,
+        &protease,
+    )
+    .await;
 }
 
 async fn build_db(
     client: &Client,
     protein_file_paths: &[PathBuf],
     insert_batch_size: NonZeroUsize,
+    protease: &Protease,
 ) {
     // First set insert proteins
+    let now = std::time::Instant::now();
     build_db_proteins(client, protein_file_paths, insert_batch_size).await;
+    println!("db proteins = {:.2?} s;", now.elapsed().as_secs_f32(),);
+
     // Second step create mass to protein index
+    let now = std::time::Instant::now();
+    build_db_mass_index(client, insert_batch_size, protease).await;
+    println!("db mass index = {:.2?} s;", now.elapsed().as_secs_f32(),);
     // Third step whent through masses and digest the proteins collect distingt peptdes and insert
 }
 
@@ -60,7 +83,7 @@ async fn build_db_proteins(
         for entry in entry_reader {
             let protein = Protein::try_from(entry.unwrap().entry()).unwrap();
             buffer.push_back(protein);
-            if buffer.len() == 1000 {
+            if buffer.len() == insert_batch_size.get() {
                 Protein::insert_batch(client, buffer.drain(..))
                     .await
                     .unwrap();
@@ -71,6 +94,16 @@ async fn build_db_proteins(
             .await
             .unwrap();
     }
+}
+
+async fn build_db_mass_index(
+    client: &Client,
+    insert_batch_size: NonZeroUsize,
+    protease: &Protease,
+) {
+    let index = MassIndex::new(client);
+
+    index.build(protease, insert_batch_size).await.unwrap()
 }
 
 #[cfg(test)]

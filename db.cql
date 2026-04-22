@@ -12,3 +12,9 @@ CREATE TABLE IF NOT EXISTS macpepdb.proteins (
     accession ascii primary key,
     sequence blob,
 );
+
+DROP TABLE IF EXISTS macpepdb.mass_index;
+CREATE TABLE IF NOT EXISTS macpepdb.mass_index (
+    mass bigint primary key,
+    proteins set<text>,
+);
