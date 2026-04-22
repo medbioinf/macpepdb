@@ -1,33 +1,20 @@
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::{self, BufReader},
-    num::NonZeroUsize,
-    path::PathBuf,
-};
+use std::{collections::VecDeque, fs::File, io::BufReader, num::NonZeroUsize, path::PathBuf};
 
 use clap::Parser;
-use fallible_iterator::FallibleIterator;
-use futures::{StreamExt, future::join_all};
-use lru::LruCache;
-use macpepdb::{
-    mass_index::{IsMassIndexMap, MassIndex, MassIndexDbMap},
-    peptide::Peptide,
-    protease::Protease,
-};
-use scylla::client::session::Session;
-use scylla::client::session_builder::SessionBuilder;
-use uniprot_reader::reader::IndexedReader;
+use macpepdb::{client::Client, protein::Protein};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
     /// Optional path to save index
-    #[arg(short, long)]
-    index_file_path: Option<PathBuf>,
-    /// Batch size of peptides to insert
-    #[arg(short, long, default_value_t = 1000)]
-    peptides_insert_batch_size: usize,
+    // #[arg(short, long)]
+    // index_file_path: Option<PathBuf>,
+    /// Database URL, format `scylla://[<user:string>[:<url-safe-password:string>]@]<host[:<port>]>[,<host[:<port>]>...]/<keyspace>`
+    #[arg(short, long, default_value_t = String::from("scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb"))]
+    database_url: String,
+    /// Batch size of records to insert concurrently
+    #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
+    insert_batch_size: NonZeroUsize,
     /// Batch size of peptides to insert
     #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
     protien_reader_cache_size: NonZeroUsize,
@@ -40,151 +27,50 @@ struct Cli {
 async fn main() {
     let cli = Cli::parse();
 
-    let protease = Protease::get_by_name("trypsin", Some(6), Some(50), Some(2)).unwrap();
-    let now = std::time::Instant::now();
-    let index = build_mass_index(&protease, &cli.protein_file_paths).await;
-
-    let elapsed = now.elapsed();
-    println!(
-        "Index: build = {:.2?} s; #masses = {}; #peptides = {}",
-        elapsed.as_secs_f32(),
-        index.len().await.unwrap(),
-        index.entries_len().await.unwrap()
-    );
+    let client = Client::new(&cli.database_url).await.unwrap();
 
     let now = std::time::Instant::now();
-    cssndr_build_db(
-        &protease,
-        &index,
-        cli.peptides_insert_batch_size,
-        cli.protien_reader_cache_size,
-    )
-    .await;
+    build_db(&client, &cli.protein_file_paths, cli.insert_batch_size).await;
     let elapsed = now.elapsed();
     println!("DB (strseq): build = {:.2?} s;", elapsed.as_secs_f32(),);
 }
 
-async fn build_mass_index(
-    protease: &Protease,
+async fn build_db(
+    client: &Client,
     protein_file_paths: &[PathBuf],
-) -> MassIndex<MassIndexDbMap> {
-    let client: Session = SessionBuilder::new()
-        .known_node("127.0.0.1:9042")
-        .known_node("127.0.0.1:9043")
-        .use_keyspace("macpepdb", true)
-        .build()
-        .await
-        .unwrap();
-
-    let mass_index_map = MassIndexDbMap::new(client);
-    let mut index = MassIndex::new(protein_file_paths.to_vec(), mass_index_map);
-    index.build(protease).await.unwrap();
-
-    index
+    insert_batch_size: NonZeroUsize,
+) {
+    // First set insert proteins
+    build_db_proteins(client, protein_file_paths, insert_batch_size).await;
+    // Second step create mass to protein index
+    // Third step whent through masses and digest the proteins collect distingt peptdes and insert
 }
 
-async fn cssndr_build_db<'a>(
-    protease: &Protease,
-    index: &'a MassIndex<MassIndexDbMap>,
-    peptides_insert_batch_size: usize,
-    protien_reader_cache_size: NonZeroUsize,
+async fn build_db_proteins(
+    client: &Client,
+    protein_file_paths: &[PathBuf],
+    insert_batch_size: NonZeroUsize,
 ) {
-    let mut db_secs: f64 = 0.0;
+    for protein_file_path in protein_file_paths {
+        let mut buf_reader = BufReader::new(File::open(protein_file_path).unwrap());
+        let entry_reader = uniprot_reader::reader::Reader::new(&mut buf_reader);
 
-    let client: Session = SessionBuilder::new()
-        .known_node("127.0.0.1:9042")
-        .known_node("127.0.0.1:9043")
-        .use_keyspace("macpepdb", true)
-        .build()
-        .await
-        .unwrap();
+        let mut buffer: VecDeque<Protein> = VecDeque::with_capacity(insert_batch_size.get());
 
-    let insert_statement = client
-        .prepare(Peptide::cssndr_insert_statement())
-        .await
-        .unwrap();
-
-    let mut protein_reader_cache: LruCache<&'a PathBuf, IndexedReader<BufReader<File>>> =
-        LruCache::new(protien_reader_cache_size);
-
-    let mut masses = index
-        .masses()
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, <MassIndexDbMap as IsMassIndexMap>::Error>>()
-        .unwrap();
-    masses.sort();
-
-    #[allow(clippy::mutable_key_type)]
-    let mut peptide_buffer: HashSet<Peptide> = HashSet::with_capacity(1000);
-
-    for mass in masses.into_iter() {
-        let entries = index.get(*mass).await.unwrap().unwrap();
-
-        // Get relevant paths
-        let file_paths = entries
-            .iter()
-            .map(|entry| {
-                (
-                    entry.file_idx(),
-                    index.files().get(entry.file_idx()).unwrap(),
-                )
-            })
-            .collect::<HashMap<usize, &PathBuf>>();
-
-        for entry in entries.iter() {
-            let path = file_paths.get(&entry.file_idx()).unwrap();
-            let reader = protein_reader_cache
-                .try_get_or_insert_mut(path, || {
-                    let file = File::open(path)?;
-                    Ok::<IndexedReader<_>, io::Error>(IndexedReader::new(BufReader::new(file)))
-                })
-                .unwrap();
-            let entry = reader.read(entry.offset()).unwrap();
-
-            #[allow(clippy::mutable_key_type)]
-            let mut peptides = protease
-                .cleave(entry.sequence(), true)
-                .unwrap()
-                .filter(|peptide| Ok(peptide.mass() == *mass))
-                .collect::<HashSet<_>>()
-                .unwrap();
-
-            peptide_buffer.extend(peptides.drain());
-
-            if peptide_buffer.len() >= peptides_insert_batch_size {
-                let inserts_future = peptide_buffer.drain().map(|peptide| {
-                    peptide.cssndr_insert_with_preped_statement_owned(&client, &insert_statement)
-                });
-
-                let db_now = std::time::Instant::now();
-                join_all(inserts_future)
+        for entry in entry_reader {
+            let protein = Protein::try_from(entry.unwrap().entry()).unwrap();
+            buffer.push_back(protein);
+            if buffer.len() == 1000 {
+                Protein::insert_batch(client, buffer.drain(..))
                     .await
-                    .into_iter()
-                    .collect::<Result<Vec<_>, _>>()
                     .unwrap();
-                db_secs += db_now.elapsed().as_secs_f64();
             }
         }
-    }
-    if !peptide_buffer.is_empty() {
-        let inserts_future = peptide_buffer.drain().map(|peptide| {
-            peptide.cssndr_insert_with_preped_statement_owned(&client, &insert_statement)
-        });
 
-        let db_now = std::time::Instant::now();
-        join_all(inserts_future)
+        Protein::insert_batch(client, buffer.drain(..))
             .await
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        db_secs += db_now.elapsed().as_secs_f64();
     }
-
-    println!("Total DB insert time: {:.2} s", db_secs);
 }
 
 #[cfg(test)]

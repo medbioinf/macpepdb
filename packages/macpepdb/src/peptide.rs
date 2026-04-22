@@ -1,27 +1,39 @@
-use std::{cell::OnceCell, hash::Hash};
+use std::{cell::OnceCell, hash::Hash, sync::LazyLock};
 
 use deku::DekuEnumExt;
-use scylla::{DeserializeRow, SerializeRow};
+use scylla::{DeserializeRow, SerializeRow, client::pager::TypedRowStream};
+
 use thiserror::Error;
 
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
+    client::Client,
+    molecules::WATER_MONO_MASS,
     sequence::{IsSequence, PeptideSequence as Sequence},
 };
 
 pub const TABLE_NAME: &str = "peptides";
 
+static INSERT_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("INSERT INTO {TABLE_NAME} (mass, sequence) VALUES (?, ?)"));
+
+static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
+
 const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A') as usize;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Cql error: {0}")]
-    Cql(Box<scylla::errors::ExecutionError>),
-    #[error("Database error: {0}")]
-    Database(#[from] tokio_postgres::Error),
-    #[error("{0}")]
+    #[error("Client error in peptide: {0}")]
+    Client(#[from] crate::client::Error),
+    #[error("CQL execution error in peptide: {0}")]
+    CqlExecution(#[from] Box<scylla::errors::ExecutionError>),
+    #[error("CQL paged execution error in peptide: {0}")]
+    CqlPagedExecution(#[from] Box<scylla::errors::PagerExecutionError>),
+    #[error("CQL type check failed in peptide: {0}")]
+    CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
+    #[error("Sequence error in peptide: {0}")]
     Sequence(#[from] crate::sequence::Error),
-    #[error("Invalid amino acid code: {0}")]
+    #[error("Amino acid error in peptide: {0}")]
     AminoAcid(#[from] crate::amino_acid::Error),
 }
 
@@ -82,6 +94,34 @@ impl Peptide {
     pub fn amino_acid_count_by_code(&self, code: char) -> Result<u8, Error> {
         let amino_acid = AminoAcid::by_code(code)?;
         Ok(self.amino_acid_count(amino_acid))
+    }
+
+    pub fn amino_acid_count_by_bit_code(&self, code: AminoAcidBitCode) -> u8 {
+        let amino_acid = AminoAcid::by_bit_code(&code);
+        self.amino_acid_count(amino_acid)
+    }
+
+    pub async fn insert(&self, client: &Client) -> Result<(), Error> {
+        let stmt = client
+            .get_prepared_statement(INSERT_STATEMENT.as_str())
+            .await?;
+        client
+            .execute_unpaged(&stmt, &self)
+            .await
+            .map_err(|err| Error::CqlExecution(Box::new(err)))?;
+        Ok(())
+    }
+
+    pub async fn select(client: &Client) -> Result<TypedRowStream<Self>, Error> {
+        let stmt = client
+            .get_prepared_statement(SELECT_STATEMENT.as_str())
+            .await?;
+
+        Ok(client
+            .execute_iter(stmt, ())
+            .await
+            .map_err(|err| Error::CqlPagedExecution(Box::new(err)))?
+            .rows_stream::<Self>()?)
     }
 
     pub fn to_peptide_mass(sequence: &Sequence) -> i64 {

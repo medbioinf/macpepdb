@@ -1,22 +1,14 @@
 CREATE KEYSPACE IF NOT EXISTS macpepdb WITH REPLICATION = {'class': 'NetworkTopologyStrategy', 'replication_factor': 1};
 
-DROP TABLE IF EXISTS macpepdb.str_peptides;
-CREATE TABLE IF NOT EXISTS macpepdb.str_peptides (
-    mass bigint,
-    sequence text,
-    PRIMARY KEY (mass, sequence)
-);
-
-DROP TABLE IF EXISTS macpepdb.bytea_peptides;
-
-CREATE TABLE IF NOT EXISTS macpepdb.bytea_peptides (
+DROP TABLE IF EXISTS macpepdb.peptides;
+CREATE TABLE IF NOT EXISTS macpepdb.peptides (
     mass bigint,
     sequence blob,
     PRIMARY KEY (mass, sequence)
 );
 
-
-CREATE TABLE IF NOT EXISTS macpepdb.mass_index (
-    mass bigint primary key,
-    entrs set<blob>,
+DROP TABLE IF EXISTS macpepdb.proteins;
+CREATE TABLE IF NOT EXISTS macpepdb.proteins (
+    accession ascii primary key,
+    sequence blob,
 );
