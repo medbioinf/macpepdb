@@ -4,6 +4,7 @@ pub mod mass;
 // pub mod protein;
 pub mod client;
 pub mod cql;
+pub mod mass_counter;
 pub mod mass_index;
 pub mod molecules;
 pub mod peptide;

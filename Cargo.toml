@@ -9,6 +9,7 @@ members = [
 [workspace.dependencies]
 bitvec = "~1.0.1"
 clap = "~4.6.0"
+crossbeam = "~0.8.4"
 deku = "~0.20.0"
 dihardts_omicstools = "~3.1.0"
 fallible-iterator = "~0.3.0"
