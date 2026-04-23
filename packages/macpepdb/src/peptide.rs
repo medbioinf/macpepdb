@@ -1,7 +1,8 @@
 use std::{cell::OnceCell, hash::Hash, sync::LazyLock};
 
 use deku::DekuEnumExt;
-use scylla::{DeserializeRow, SerializeRow, client::pager::TypedRowStream};
+use futures::future::join_all;
+use scylla::{DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError};
 
 use thiserror::Error;
 
@@ -109,6 +110,25 @@ impl Peptide {
             .execute_unpaged(&stmt, &self)
             .await
             .map_err(|err| Error::CqlExecution(Box::new(err)))?;
+        Ok(())
+    }
+
+    pub async fn insert_batch(
+        client: &Client,
+        values: impl Iterator<Item = Self>,
+    ) -> Result<(), Error> {
+        let stmt = client
+            .get_prepared_statement(INSERT_STATEMENT.as_str())
+            .await?;
+
+        let insert_futures = values.map(|value| client.execute_unpaged(&stmt, value));
+
+        join_all(insert_futures)
+            .await
+            .into_iter()
+            .collect::<Result<Vec<_>, ExecutionError>>()
+            .map_err(|err| Error::CqlExecution(Box::new(err)))?;
+
         Ok(())
     }
 

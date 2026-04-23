@@ -7,7 +7,10 @@ use std::{
 
 use fallible_iterator::FallibleIterator;
 use futures::{Stream, StreamExt, future::join_all};
-use scylla::{DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError};
+use scylla::{
+    DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError,
+    serialize::row::SerializeRow,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -77,13 +80,13 @@ impl Entry {
 
     pub async fn upsert_batch(
         client: &Client,
-        entries: impl Iterator<Item = Self>,
+        values: impl Iterator<Item = Self>,
     ) -> Result<(), Error> {
         let stmt = client
             .get_prepared_statement(UPSERT_STATEMENT.as_str())
             .await?;
 
-        let upsert_futures = entries.map(|entry| client.execute_unpaged(&stmt, entry));
+        let upsert_futures = values.map(|value| client.execute_unpaged(&stmt, value));
 
         join_all(upsert_futures)
             .await
@@ -93,9 +96,17 @@ impl Entry {
         Ok(())
     }
 
-    pub async fn select(client: &Client) -> Result<TypedRowStream<Self>, Error> {
+    pub async fn select(
+        client: &Client,
+        select_addition: Option<&str>,
+        values: impl SerializeRow,
+    ) -> Result<TypedRowStream<Self>, Error> {
+        let statement = select_addition
+            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
+            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
+
         Ok(client
-            .query_iter(SELECT_STATEMENT.as_str(), ())
+            .query_iter(statement.as_str(), values)
             .await?
             .rows_stream::<Self>()?)
     }
@@ -115,7 +126,7 @@ impl<'a> MassIndex<'a> {
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
     ) -> Result<(), Error> {
-        let mut proteins = Protein::select(self.client).await?;
+        let mut proteins = Protein::select(self.client, None, ()).await?;
 
         let mut buffer: HashMap<i64, HashSet<String>> =
             HashMap::with_capacity(insert_batch_size.get());
@@ -241,7 +252,20 @@ impl<'a> MassIndex<'a> {
     }
 
     pub async fn entries(&'a self) -> Result<TypedRowStream<Entry>, Error> {
-        Entry::select(self.client).await
+        Entry::select(self.client, None, ()).await
+    }
+
+    pub async fn get(&'a self, mass: i64) -> Result<Option<Entry>, Error> {
+        let mut stream =
+            Entry::select(self.client, Some("WHERE mass = ? LIMIT 1"), (mass,)).await?;
+
+        while let Some(entry) = stream.next().await.transpose()? {
+            if entry.mass() == mass {
+                return Ok(Some(entry));
+            }
+        }
+
+        Ok(None)
     }
 }
 

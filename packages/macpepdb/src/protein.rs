@@ -1,7 +1,10 @@
 use std::sync::LazyLock;
 
 use futures::future::join_all;
-use scylla::{DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError};
+use scylla::{
+    DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError,
+    serialize::row::SerializeRow,
+};
 use thiserror::Error;
 
 use crate::{client::Client, sequence::ProteinSequence as Sequence};
@@ -59,13 +62,13 @@ impl Protein {
 
     pub async fn insert_batch(
         client: &Client,
-        proteins: impl Iterator<Item = Self>,
+        values: impl Iterator<Item = Self>,
     ) -> Result<(), Error> {
         let stmt = client
             .get_prepared_statement(INSERT_STATEMENT.as_str())
             .await?;
 
-        let insert_futures = proteins.map(|protein| client.execute_unpaged(&stmt, protein));
+        let insert_futures = values.map(|value| client.execute_unpaged(&stmt, value));
 
         join_all(insert_futures)
             .await
@@ -75,12 +78,19 @@ impl Protein {
         Ok(())
     }
 
-    pub async fn select(client: &Client) -> Result<TypedRowStream<Self>, Error> {
-        let stmt = client
-            .get_prepared_statement(SELECT_STATEMENT.as_str())
-            .await?;
+    pub async fn select(
+        client: &Client,
+        select_addition: Option<&str>,
+        values: impl SerializeRow,
+    ) -> Result<TypedRowStream<Self>, Error> {
+        let statement = select_addition
+            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
+            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
 
-        Ok(client.execute_iter(stmt, ()).await?.rows_stream::<Self>()?)
+        Ok(client
+            .query_iter(statement.as_str(), values)
+            .await?
+            .rows_stream::<Self>()?)
     }
 }
 

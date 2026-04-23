@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "packages/macpepdb",
     "packages/uniprot_reader",
+    "packages/tui",
 ]
 
 [workspace.dependencies]
@@ -13,6 +14,7 @@ dihardts_omicstools = "~3.1.0"
 fallible-iterator = "~0.3.0"
 fancy-regex = "~0.17.0"
 futures = "~0.3.32"
+itertools = "~0.14.0"
 lru = "0.16.4"
 num-traits = "~0.2.19"
 pastey = "~0.2.1"
