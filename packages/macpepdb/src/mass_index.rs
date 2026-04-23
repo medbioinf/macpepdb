@@ -2,9 +2,11 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
     num::NonZeroUsize,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
+    time::Duration,
 };
 
+use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::{Stream, StreamExt, future::join_all};
 use scylla::{
@@ -43,6 +45,10 @@ pub enum Error {
     // EarlyIndexThreadStop,
     #[error("IO error in mass index: {0}")]
     Io(#[from] std::io::Error),
+    #[error("Unable to join insertion task: {0}")]
+    Join(String),
+    #[error("No errored thread found in mass index, but one finished early.")]
+    NoErroredThread,
     #[error("Protease error in mass index: {0}")]
     Protease(#[from] crate::protease::Error),
     #[error("Protein error in mass index: {0}")]
@@ -112,12 +118,12 @@ impl Entry {
     }
 }
 
-pub struct MassIndex<'a> {
-    client: &'a Client,
+pub struct MassIndex {
+    client: Arc<Client>,
 }
 
-impl<'a> MassIndex<'a> {
-    pub fn new(client: &'a Client) -> Self {
+impl MassIndex {
+    pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 
@@ -126,7 +132,7 @@ impl<'a> MassIndex<'a> {
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
     ) -> Result<(), Error> {
-        let mut proteins = Protein::select(self.client, None, ()).await?;
+        let mut proteins = Protein::select(self.client.as_ref(), None, ()).await?;
 
         let mut buffer: HashMap<i64, HashSet<String>> =
             HashMap::with_capacity(insert_batch_size.get());
@@ -152,7 +158,7 @@ impl<'a> MassIndex<'a> {
 
                 if buffer.len() >= insert_batch_size.get() {
                     Entry::upsert_batch(
-                        self.client,
+                        self.client.as_ref(),
                         buffer
                             .drain()
                             .map(|(mass, proteins)| Entry { mass, proteins }),
@@ -164,7 +170,7 @@ impl<'a> MassIndex<'a> {
 
         if !buffer.is_empty() {
             Entry::upsert_batch(
-                self.client,
+                self.client.as_ref(),
                 buffer
                     .drain()
                     .map(|(mass, proteins)| Entry { mass, proteins }),
@@ -175,71 +181,137 @@ impl<'a> MassIndex<'a> {
         Ok(())
     }
 
-    // pub async fn build_multithreaded(
-    //     &mut self,
-    //     protease: &Protease,
-    //     num_threads: usize,
-    // ) -> Result<(), Error> {
-    //     let num_threads = std::cmp::min(num_threads, self.files.len());
+    pub async fn build_concurrently(
+        &self,
+        protease: &Protease,
+        insert_batch_size: NonZeroUsize,
+        num_threads: NonZeroUsize,
+    ) -> Result<(), Error> {
+        let mut proteins = Protein::select(self.client.as_ref(), None, ()).await?;
+        let queue: Arc<ArrayQueue<Option<Protein>>> =
+            Arc::new(ArrayQueue::new(num_threads.get() * 3));
+        let protease = Arc::new(protease.clone());
 
-    //     let (sender, receiver) = std::sync::mpsc::channel::<(i64, Entry)>();
+        let digest_and_insertion_threads = (0..num_threads.get())
+            .map(|_| {
+                let protease = protease.clone();
+                let queue = queue.clone();
+                let client = self.client.clone();
+                let protease = protease.clone();
 
-    //     let protein_reader_threads = (0..num_threads)
-    //         .map(|_| {
-    //             let file_path_queue = Arc::clone(&file_path_queue);
-    //             let sender = sender.clone();
-    //             let protease = protease.clone();
+                tokio::spawn(async move {
+                    let mut buffer: HashMap<i64, HashSet<String>> =
+                        HashMap::with_capacity(insert_batch_size.get());
 
-    //             std::thread::spawn(move || {
-    //                 while let Some((path_idx, path)) = file_path_queue.lock().unwrap().pop_front() {
-    //                     let mut buf_reader = BufReader::new(File::open(path).unwrap());
-    //                     let reader = uniprot_reader::reader::Reader::new(&mut buf_reader);
+                    loop {
+                        let protein = match queue.pop() {
+                            Some(Some(protein)) => protein,
+                            Some(None) => break,
+                            None => {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                                continue;
+                            }
+                        };
 
-    //                     for item in reader {
-    //                         let item = item.unwrap();
-    //                         #[allow(clippy::mutable_key_type)]
-    //                         let peptides = protease
-    //                             .cleave(item.entry().sequence(), true)
-    //                             .unwrap()
-    //                             .collect::<HashSet<_>>()
-    //                             .unwrap();
+                        #[allow(clippy::mutable_key_type)]
+                        let peptides = protease
+                            .cleave(protein.sequence().to_string().as_str(), true)
+                            .map_err(Error::Protease)?
+                            .collect::<HashSet<_>>()
+                            .map_err(Error::Protease)?;
 
-    //                         for peptide in peptides {
-    //                             let mass = peptide.mass();
-    //                             let entry = Entry {
-    //                                 file_idx: path_idx,
-    //                                 offset: item.offset().clone(),
-    //                             };
+                        let masses = peptides
+                            .iter()
+                            .map(|peptide| peptide.mass())
+                            .collect::<HashSet<_>>();
 
-    //                             match sender.send((mass, entry)) {
-    //                                 Ok(_) => (),
-    //                                 Err(_) => return Err(Error::EarlyIndexThreadStop),
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-    //                 Ok(())
-    //             })
-    //         })
-    //         .collect::<Vec<_>>();
+                        for mass in masses {
+                            buffer
+                                .entry(mass)
+                                .or_default()
+                                .insert(protein.accession().to_string());
 
-    //     // drop original sender
-    //     drop(sender);
+                            if buffer.len() >= insert_batch_size.get() {
+                                Entry::upsert_batch(
+                                    client.as_ref(),
+                                    buffer
+                                        .drain()
+                                        .map(|(mass, proteins)| Entry { mass, proteins }),
+                                )
+                                .await?;
+                            }
+                        }
+                    }
 
-    //     while let Ok((mass, entry)) = receiver.recv() {
-    //         self.insert(mass, entry)
-    //             .await
-    //             .map_err(|err| Error::InsertEntry(err.to_string()))?;
-    //     }
+                    if !buffer.is_empty() {
+                        Entry::upsert_batch(
+                            client.as_ref(),
+                            buffer
+                                .drain()
+                                .map(|(mass, proteins)| Entry { mass, proteins }),
+                        )
+                        .await?;
+                    }
 
-    //     for thread in protein_reader_threads.into_iter() {
-    //         thread
-    //             .join()
-    //             .map_err(|err| Error::ProteinReaderThread(format!("{err:?}")))??;
-    //     }
+                    Ok::<_, Error>(())
+                })
+            })
+            .collect::<Vec<_>>();
 
-    //     Ok(())
-    // }
+        while let Some(protein) = proteins.next().await.transpose()? {
+            let mut protein = Some(protein);
+            loop {
+                protein = match queue.push(protein) {
+                    Ok(()) => break,
+                    Err(entry) => {
+                        // check if all threads still running
+                        if digest_and_insertion_threads
+                            .iter()
+                            .any(|thread| thread.is_finished())
+                        {
+                            // find errored_thread and return error
+                            return Err(
+                                Self::find_errored_thread(digest_and_insertion_threads).await
+                            );
+                        }
+                        entry
+                    }
+                };
+            }
+        }
+
+        // Send none to signal stop
+        for _ in 0..num_threads.get() {
+            loop {
+                if queue.push(None).is_ok() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+
+        for thread in digest_and_insertion_threads {
+            thread.await.map_err(|err| Error::Join(err.to_string()))??;
+        }
+
+        Ok(())
+    }
+
+    async fn find_errored_thread(
+        threads: Vec<tokio::task::JoinHandle<Result<(), Error>>>,
+    ) -> Error {
+        for thread in threads {
+            if thread.is_finished() {
+                match thread.await {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(err)) => return err,
+                    Err(_err) => continue,
+                }
+            }
+        }
+
+        Error::NoErroredThread
+    }
 
     pub async fn len(&self) -> Result<usize, Error> {
         // Using count(*) in CQL-based databases is inefficient and will most likely result in timeouts
@@ -252,7 +324,7 @@ impl<'a> MassIndex<'a> {
         Ok(self.len().await? == 0)
     }
 
-    pub async fn masses(&'a self) -> Result<impl Stream<Item = Result<i64, Error>>, Error> {
+    pub async fn masses(&self) -> Result<impl Stream<Item = Result<i64, Error>>, Error> {
         Ok(self
             .client
             .query_iter(SELECT_MASS_STATEMENT.as_str(), ())
@@ -261,13 +333,17 @@ impl<'a> MassIndex<'a> {
             .map(|row| Ok(row?.0)))
     }
 
-    pub async fn entries(&'a self) -> Result<TypedRowStream<Entry>, Error> {
-        Entry::select(self.client, None, ()).await
+    pub async fn entries(&self) -> Result<TypedRowStream<Entry>, Error> {
+        Entry::select(self.client.as_ref(), None, ()).await
     }
 
-    pub async fn get(&'a self, mass: i64) -> Result<Option<Entry>, Error> {
-        let mut stream =
-            Entry::select(self.client, Some("WHERE mass = ? LIMIT 1"), (mass,)).await?;
+    pub async fn get(&self, mass: i64) -> Result<Option<Entry>, Error> {
+        let mut stream = Entry::select(
+            self.client.as_ref(),
+            Some("WHERE mass = ? LIMIT 1"),
+            (mass,),
+        )
+        .await?;
 
         while let Some(entry) = stream.next().await.transpose()? {
             if entry.mass() == mass {

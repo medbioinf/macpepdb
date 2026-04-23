@@ -181,14 +181,14 @@ impl MassCounter {
         &self,
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
-        num_threads: usize,
+        num_threads: NonZeroUsize,
     ) -> Result<(), Error> {
         let mut mass_index_entries = MassIndexEntry::select(self.client.as_ref(), None, ()).await?;
         let queue: Arc<ArrayQueue<Option<MassIndexEntry>>> =
-            Arc::new(ArrayQueue::new(num_threads * 3));
+            Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
 
-        let digest_and_insertion_threads = (0..num_threads)
+        let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
                 let protease = protease.clone();
                 let queue = queue.clone();
@@ -274,7 +274,7 @@ impl MassCounter {
         }
 
         // Send none to signal stop
-        for _ in 0..num_threads {
+        for _ in 0..num_threads.get() {
             loop {
                 if queue.push(None).is_ok() {
                     break;

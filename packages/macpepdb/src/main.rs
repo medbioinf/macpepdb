@@ -31,6 +31,9 @@ struct Cli {
     #[arg(short, long, default_value_t = String::from("scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb"))]
     database_url: String,
     /// Batch size of records to insert concurrently
+    #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
+    threads: NonZeroUsize,
+    /// Batch size of records to insert concurrently
     #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
     insert_batch_size: NonZeroUsize,
     /// Batch size of peptides to insert
@@ -59,6 +62,7 @@ async fn main() {
         &cli.protein_file_paths,
         cli.insert_batch_size,
         &protease,
+        cli.threads,
     )
     .await;
 }
@@ -68,6 +72,7 @@ async fn build_db(
     protein_file_paths: &[PathBuf],
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
+    num_threads: NonZeroUsize,
 ) {
     // 1. set insert proteins
     let now = std::time::Instant::now();
@@ -76,12 +81,12 @@ async fn build_db(
 
     // 2. step create mass to protein index
     let now = std::time::Instant::now();
-    build_db_mass_index(client.as_ref(), insert_batch_size, protease).await;
+    build_db_mass_index(client.clone(), insert_batch_size, protease, num_threads).await;
     println!("db mass index = {:.2?} s;", now.elapsed().as_secs_f32(),);
 
     // 2.1 count masses for partitions
     let now = std::time::Instant::now();
-    build_db_mass_counter(client.clone(), insert_batch_size, protease).await;
+    build_db_mass_counter(client.clone(), insert_batch_size, protease, num_threads).await;
     println!("db mass counter = {:.2?} s;", now.elapsed().as_secs_f32(),);
 
     // 2.1 caluclate partitioning by going through masses and count peptides
@@ -89,7 +94,7 @@ async fn build_db(
 
     // Third step go through masses and digest the proteins collect distinct peptides and insert
     let now = std::time::Instant::now();
-    build_db_peptides(client.as_ref(), insert_batch_size, protease).await;
+    build_db_peptides(client.clone(), insert_batch_size, protease).await;
     println!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);
 }
 
@@ -126,30 +131,39 @@ async fn build_db_proteins(
 }
 
 async fn build_db_mass_index(
-    client: &Client,
+    client: Arc<Client>,
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
+    num_threads: NonZeroUsize,
 ) {
     let index = MassIndex::new(client);
 
-    index.build(protease, insert_batch_size).await.unwrap()
+    index
+        .build_concurrently(protease, insert_batch_size, num_threads)
+        .await
+        .unwrap()
 }
 
 async fn build_db_mass_counter(
     client: Arc<Client>,
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
+    threads: NonZeroUsize,
 ) {
     let counter = MassCounter::new(client);
 
     counter
-        .count_concurrently(protease, insert_batch_size, 16)
+        .count_concurrently(protease, insert_batch_size, threads)
         .await
         .unwrap()
 }
 
-async fn build_db_peptides(client: &Client, insert_batch_size: NonZeroUsize, protease: &Protease) {
-    let index = MassIndex::new(client);
+async fn build_db_peptides(
+    client: Arc<Client>,
+    insert_batch_size: NonZeroUsize,
+    protease: &Protease,
+) {
+    let index = MassIndex::new(client.clone());
     let now = std::time::Instant::now();
     let mut masses = index
         .masses()
@@ -177,10 +191,13 @@ async fn build_db_peptides(client: &Client, insert_batch_size: NonZeroUsize, pro
 
         let accession_ref_vec = mass_entry.proteins().iter().collect::<Vec<_>>();
 
-        let mut proteins =
-            Protein::select(client, Some("WHERE accession IN ?"), (accession_ref_vec,))
-                .await
-                .unwrap();
+        let mut proteins = Protein::select(
+            client.as_ref(),
+            Some("WHERE accession IN ?"),
+            (accession_ref_vec,),
+        )
+        .await
+        .unwrap();
 
         while let Some(protein) = proteins.next().await {
             let protein = protein.unwrap();
@@ -201,7 +218,9 @@ async fn build_db_peptides(client: &Client, insert_batch_size: NonZeroUsize, pro
         let now = std::time::Instant::now();
         let peptides = peptides.into_iter().collect::<Vec<_>>();
         for peptide_chunk in &peptides.into_iter().chunks(insert_batch_size.get()) {
-            Peptide::insert_batch(client, peptide_chunk).await.unwrap();
+            Peptide::insert_batch(client.as_ref(), peptide_chunk)
+                .await
+                .unwrap();
         }
         println!(
             "\tdb peptides: insert peptides = {:.2?} s; mass = {mass}",
