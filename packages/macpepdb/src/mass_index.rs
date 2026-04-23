@@ -162,6 +162,16 @@ impl<'a> MassIndex<'a> {
             }
         }
 
+        if !buffer.is_empty() {
+            Entry::upsert_batch(
+                self.client,
+                buffer
+                    .drain()
+                    .map(|(mass, proteins)| Entry { mass, proteins }),
+            )
+            .await?;
+        }
+
         Ok(())
     }
 
