@@ -347,8 +347,10 @@ impl MassCounter {
             .map(|row| Ok(row?.0)))
     }
 
-    pub async fn entries(&self) -> Result<TypedRowStream<Entry>, Error> {
-        Entry::select(self.client.as_ref(), None, ()).await
+    pub async fn entries(&self) -> Result<impl Stream<Item = Result<Entry, Error>>, Error> {
+        Ok(Entry::select(self.client.as_ref(), None, ())
+            .await?
+            .map(|entry| entry.map_err(Error::from)))
     }
 
     pub async fn get(&self, mass: i64) -> Result<Option<Entry>, Error> {

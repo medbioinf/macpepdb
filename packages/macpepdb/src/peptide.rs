@@ -9,14 +9,16 @@ use thiserror::Error;
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
     client::Client,
+    mass_partitioner::Partitioning,
     molecules::WATER_MONO_MASS,
     sequence::{IsSequence, PeptideSequence as Sequence},
 };
 
 pub const TABLE_NAME: &str = "peptides";
 
-static INSERT_STATEMENT: LazyLock<String> =
-    LazyLock::new(|| format!("INSERT INTO {TABLE_NAME} (mass, sequence) VALUES (?, ?)"));
+static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!("INSERT INTO {TABLE_NAME} (partition, mass, sequence) VALUES (?, ?, ?)")
+});
 
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
 
@@ -32,6 +34,8 @@ pub enum Error {
     CqlPagedExecution(#[from] Box<scylla::errors::PagerExecutionError>),
     #[error("CQL type check failed in peptide: {0}")]
     CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
+    #[error("Partition not found peptide `{0}` with mass {1}")]
+    NoPartition(String, i64),
     #[error("Sequence error in peptide: {0}")]
     Sequence(#[from] crate::sequence::Error),
     #[error("Amino acid error in peptide: {0}")]
@@ -40,6 +44,7 @@ pub enum Error {
 
 #[derive(DeserializeRow, SerializeRow)]
 pub struct Peptide {
+    partition: Option<i32>,
     mass: i64,
     sequence: Sequence,
     #[scylla(skip)]
@@ -52,8 +57,20 @@ impl Peptide {
         Self {
             mass,
             sequence,
+            partition: None,
             amino_acid_counts: OnceCell::new(),
         }
+    }
+
+    pub fn partition(&self) -> Option<i32> {
+        self.partition
+    }
+
+    pub fn set_partition(&mut self, partitioning: &Partitioning) -> Result<(), Error> {
+        self.partition = partitioning.get(&self.mass).cloned();
+        self.partition
+            .ok_or(Error::NoPartition(self.sequence().to_string(), self.mass))?;
+        Ok(())
     }
 
     pub fn mass(&self) -> i64 {

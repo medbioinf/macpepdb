@@ -2,7 +2,7 @@ use std::{
     collections::{HashSet, VecDeque},
     fs::File,
     io::BufReader,
-    num::NonZeroUsize,
+    num::{NonZeroU32, NonZeroUsize},
     path::PathBuf,
     sync::Arc,
 };
@@ -12,9 +12,11 @@ use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use itertools::Itertools;
 use macpepdb::{
+    blob::Blob,
     client::Client,
     mass_counter::MassCounter,
     mass_index::MassIndex,
+    mass_partitioner::{MassPartitioner, Partitioning},
     peptide::Peptide,
     protease::Protease,
     protein::Protein,
@@ -31,14 +33,17 @@ struct Cli {
     #[arg(short, long, default_value_t = String::from("scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb"))]
     database_url: String,
     /// Batch size of records to insert concurrently
-    #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
-    threads: NonZeroUsize,
-    /// Batch size of records to insert concurrently
     #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
     insert_batch_size: NonZeroUsize,
+    /// Number of mass partition
+    #[arg(short, long, default_value_t = NonZeroU32::new(1000).unwrap())]
+    partitions: NonZeroU32,
     /// Batch size of peptides to insert
     #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
     protien_reader_cache_size: NonZeroUsize,
+    /// Batch size of records to insert concurrently
+    #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
+    threads: NonZeroUsize,
     /// Protein files
     #[arg(value_delimiter = ' ', num_args = 0..)]
     protein_file_paths: Vec<PathBuf>,
@@ -63,6 +68,7 @@ async fn main() {
         cli.insert_batch_size,
         &protease,
         cli.threads,
+        cli.partitions,
     )
     .await;
 }
@@ -73,6 +79,7 @@ async fn build_db(
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
     num_threads: NonZeroUsize,
+    num_partitions: NonZeroU32,
 ) {
     // 1. set insert proteins
     let now = std::time::Instant::now();
@@ -91,7 +98,7 @@ async fn build_db(
         now.elapsed().as_secs_f32(),
     );
 
-    // 2.1 count masses for partitions
+    // 3. count masses for partitions
     let now = std::time::Instant::now();
     let (mass_ctr, peptide_ctr) =
         build_db_mass_counter(client.clone(), insert_batch_size, protease, num_threads).await;
@@ -100,13 +107,22 @@ async fn build_db(
         now.elapsed().as_secs_f32(),
     );
 
-    // 2.1 caluclate partitioning by going through masses and count peptides
+    // 4. caluclate partitioning by going through masses and count peptides
     // partitioning is currently not implemented, let's see first if we need it.
-
-    // Third step go through masses and digest the proteins collect distinct peptides and insert
     let now = std::time::Instant::now();
-    build_db_peptides(client.clone(), insert_batch_size, protease).await;
+    let partitioning =
+        build_db_parititoning(client.clone(), insert_batch_size, num_partitions).await;
+    println!(
+        "db partitioning: time = {:.2?} s; #masses = {mass_ctr}; #peptides = {peptide_ctr}",
+        now.elapsed().as_secs_f32(),
+    );
+
+    // 5. go through masses and digest the proteins collect distinct peptides and upsert them with proteins
+    let now = std::time::Instant::now();
+    build_db_peptides(client.clone(), insert_batch_size, protease, &partitioning).await;
     println!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);
+
+    // 6. Collect metadata
 }
 
 async fn build_db_proteins(
@@ -169,10 +185,35 @@ async fn build_db_mass_counter(
         .unwrap()
 }
 
+async fn build_db_parititoning(
+    client: Arc<Client>,
+    insert_batch_size: NonZeroUsize,
+    num_partitions: NonZeroU32,
+) -> Partitioning {
+    match Blob::select(client.as_ref(), Partitioning::BLOB_KEY)
+        .await
+        .unwrap()
+    {
+        Some(partitioning) => partitioning,
+        None => {
+            let partitioning = MassPartitioner::new(client.clone())
+                .build(num_partitions)
+                .await
+                .unwrap();
+            Blob::insert(client.as_ref(), &partitioning, insert_batch_size)
+                .await
+                .unwrap();
+
+            partitioning
+        }
+    }
+}
+
 async fn build_db_peptides(
     client: Arc<Client>,
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
+    partitioning: &Partitioning,
 ) {
     let index = MassIndex::new(client.clone());
     let now = std::time::Instant::now();
@@ -216,6 +257,10 @@ async fn build_db_peptides(
                 protease
                     .cleave(protein.sequence().to_string().as_str(), true)
                     .unwrap()
+                    .map(|mut peptide| {
+                        peptide.set_partition(partitioning)?;
+                        Ok(peptide)
+                    })
                     .collect::<Vec<_>>()
                     .unwrap(),
             );

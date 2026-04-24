@@ -18,9 +18,18 @@ CREATE TABLE IF NOT EXISTS macpepdb.mass_counts (
     count bigint,
 );
 
+DROP TABLE IF EXISTS macpepdb.blobs;
+CREATE TABLE IF NOT EXISTS macpepdb.blobs (
+    key ascii,
+    part smallint,
+    data blob,
+    PRIMARY KEY (key, part)
+);
+
 DROP TABLE IF EXISTS macpepdb.peptides;
 CREATE TABLE IF NOT EXISTS macpepdb.peptides (
+    partition int,
     mass bigint,
     sequence blob,
-    PRIMARY KEY (mass, sequence)
+    PRIMARY KEY (partition, mass, sequence)
 );

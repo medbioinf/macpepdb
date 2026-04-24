@@ -24,7 +24,7 @@ pub enum Error {
     #[error("Failed to parse attribute {0} with value {2} into {1}")]
     ParsingAttribute(&'static str, &'static str, String),
     #[error("Unable to prepare statement `{0}`: {1}")]
-    CqlPrepate(String, Box<scylla::errors::PrepareError>),
+    CqlPrepare(String, Box<scylla::errors::PrepareError>),
 }
 
 /// Pool type for the ScyllaDB client
@@ -291,7 +291,7 @@ impl Client {
         let mut statement = self
             .prepare(query.replace(":KEYSPACE:", &self.database))
             .await
-            .map_err(|err| Error::CqlPrepate(query.to_string(), Box::new(err)))?;
+            .map_err(|err| Error::CqlPrepare(query.to_string(), Box::new(err)))?;
 
         if let Some(level) = self.read_consistency_level
             && !Self::is_write_query(query)
