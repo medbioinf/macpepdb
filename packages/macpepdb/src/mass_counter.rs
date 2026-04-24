@@ -71,7 +71,7 @@ impl Entry {
         self.mass
     }
 
-    pub fn proteins(&self) -> i64 {
+    pub fn count(&self) -> i64 {
         self.count
     }
 
