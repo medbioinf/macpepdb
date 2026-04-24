@@ -76,18 +76,29 @@ async fn build_db(
 ) {
     // 1. set insert proteins
     let now = std::time::Instant::now();
-    build_db_proteins(client.as_ref(), protein_file_paths, insert_batch_size).await;
-    println!("db proteins = {:.2?} s;", now.elapsed().as_secs_f32(),);
+    let protein_ctr =
+        build_db_proteins(client.as_ref(), protein_file_paths, insert_batch_size).await;
+    println!(
+        "db proteins: time = {:.2?} s; #proteins = {protein_ctr}",
+        now.elapsed().as_secs_f32(),
+    );
 
     // 2. step create mass to protein index
     let now = std::time::Instant::now();
     build_db_mass_index(client.clone(), insert_batch_size, protease, num_threads).await;
-    println!("db mass index = {:.2?} s;", now.elapsed().as_secs_f32(),);
+    println!(
+        "db mass index: time = {:.2?} s;",
+        now.elapsed().as_secs_f32(),
+    );
 
     // 2.1 count masses for partitions
     let now = std::time::Instant::now();
-    build_db_mass_counter(client.clone(), insert_batch_size, protease, num_threads).await;
-    println!("db mass counter = {:.2?} s;", now.elapsed().as_secs_f32(),);
+    let (mass_ctr, peptide_ctr) =
+        build_db_mass_counter(client.clone(), insert_batch_size, protease, num_threads).await;
+    println!(
+        "db mass counter: time = {:.2?} s; #masses = {mass_ctr}; #peptides = {peptide_ctr}",
+        now.elapsed().as_secs_f32(),
+    );
 
     // 2.1 caluclate partitioning by going through masses and count peptides
     // partitioning is currently not implemented, let's see first if we need it.
@@ -149,7 +160,7 @@ async fn build_db_mass_counter(
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
     threads: NonZeroUsize,
-) {
+) -> (usize, usize) {
     let counter = MassCounter::new(client);
 
     counter

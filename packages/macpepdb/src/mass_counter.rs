@@ -2,7 +2,7 @@ use std::{
     collections::{HashSet, VecDeque},
     fmt::Debug,
     num::NonZeroUsize,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, atomic::AtomicUsize},
     time::Duration,
 };
 
@@ -67,6 +67,10 @@ pub struct Entry {
 }
 
 impl Entry {
+    pub fn new(mass: i64, count: i64) -> Self {
+        Self { mass, count }
+    }
+
     pub fn mass(&self) -> i64 {
         self.mass
     }
@@ -132,12 +136,15 @@ impl MassCounter {
         &self,
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
-    ) -> Result<(), Error> {
+    ) -> Result<(usize, usize), Error> {
         let mut mass_index_entries = MassIndexEntry::select(self.client.as_ref(), None, ()).await?;
+        let mut mass_ctr: usize = 0;
+        let mut peptide_ctr: usize = 0;
 
         let mut buffer: VecDeque<Entry> = VecDeque::with_capacity(insert_batch_size.get());
 
         while let Some(mass_index_entry) = mass_index_entries.next().await.transpose()? {
+            mass_ctr += 1;
             let mut proteins = Protein::select(
                 self.client.as_ref(),
                 Some("WHERE accession IN ?"),
@@ -160,6 +167,8 @@ impl MassCounter {
                     })?;
             }
 
+            peptide_ctr += peptide_sequences.len();
+
             buffer.push_back(Entry {
                 mass: mass_index_entry.mass(),
                 count: peptide_sequences.len() as i64,
@@ -174,7 +183,7 @@ impl MassCounter {
             Entry::insert_batch(self.client.as_ref(), buffer.drain(..)).await?;
         }
 
-        Ok(())
+        Ok((mass_ctr, peptide_ctr))
     }
 
     pub async fn count_concurrently(
@@ -182,11 +191,13 @@ impl MassCounter {
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
-    ) -> Result<(), Error> {
+    ) -> Result<(usize, usize), Error> {
         let mut mass_index_entries = MassIndexEntry::select(self.client.as_ref(), None, ()).await?;
         let queue: Arc<ArrayQueue<Option<MassIndexEntry>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
+        let mut mass_ctr: usize = 0;
+        let peptide_ctr = Arc::new(AtomicUsize::new(0));
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -194,6 +205,7 @@ impl MassCounter {
                 let queue = queue.clone();
                 let client = self.client.clone();
                 let protease = protease.clone();
+                let peptide_ctr = peptide_ctr.clone();
 
                 tokio::spawn(async move {
                     let mut buffer: VecDeque<Entry> =
@@ -232,6 +244,11 @@ impl MassCounter {
                                 })?;
                         }
 
+                        peptide_ctr.fetch_add(
+                            peptide_sequences.len(),
+                            std::sync::atomic::Ordering::Relaxed,
+                        );
+
                         buffer.push_back(Entry {
                             mass: mass_index_entry.mass(),
                             count: peptide_sequences.len() as i64,
@@ -253,6 +270,7 @@ impl MassCounter {
 
         while let Some(mass_index_entry) = mass_index_entries.next().await.transpose()? {
             let mut mass_index_entry = Some(mass_index_entry);
+            mass_ctr += 1;
             loop {
                 mass_index_entry = match queue.push(mass_index_entry) {
                     Ok(()) => break,
@@ -287,7 +305,10 @@ impl MassCounter {
             thread.await.map_err(|err| Error::Join(err.to_string()))??;
         }
 
-        Ok(())
+        Ok((
+            mass_ctr,
+            peptide_ctr.load(std::sync::atomic::Ordering::Relaxed),
+        ))
     }
 
     async fn find_errored_thread(
