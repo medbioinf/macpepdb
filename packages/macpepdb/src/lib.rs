@@ -10,7 +10,7 @@ pub mod mass_counter;
 pub mod mass_index;
 pub mod molecules;
 pub mod peptide;
+pub mod peptide_table;
 pub mod protease;
 pub mod protein;
 pub mod sequence;
-

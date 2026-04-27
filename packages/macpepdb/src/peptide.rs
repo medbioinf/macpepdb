@@ -62,6 +62,17 @@ impl Peptide {
         }
     }
 
+    pub fn new_with_partition(sequence: Sequence, partitioning: &Partitioning) -> Self {
+        let mass = Self::to_peptide_mass(&sequence);
+        let partition = partitioning.get(&mass).cloned();
+        Self {
+            mass,
+            sequence,
+            partition,
+            amino_acid_counts: OnceCell::new(),
+        }
+    }
+
     pub fn partition(&self) -> Option<i32> {
         self.partition
     }

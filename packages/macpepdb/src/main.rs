@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::VecDeque,
     fs::File,
     io::BufReader,
     num::{NonZeroU32, NonZeroUsize},
@@ -8,16 +8,13 @@ use std::{
 };
 
 use clap::Parser;
-use fallible_iterator::FallibleIterator;
-use futures::StreamExt;
-use itertools::Itertools;
 use macpepdb::{
     blob::Blob,
     client::Client,
     mass_counter::MassCounter,
     mass_index::MassIndex,
     mass_partitioner::{MassPartitioner, Partitioning},
-    peptide::Peptide,
+    peptide_table::PeptideTable,
     protease::Protease,
     protein::Protein,
     sequence::{IsSequence, PeptideSequence},
@@ -113,13 +110,20 @@ async fn build_db(
     let partitioning =
         build_db_parititoning(client.clone(), insert_batch_size, num_partitions).await;
     println!(
-        "db partitioning: time = {:.2?} s; #masses = {mass_ctr}; #peptides = {peptide_ctr}",
+        "db partitioning: time = {:.2?} s;",
         now.elapsed().as_secs_f32(),
     );
 
     // 5. go through masses and digest the proteins collect distinct peptides and upsert them with proteins
     let now = std::time::Instant::now();
-    build_db_peptides(client.clone(), insert_batch_size, protease, &partitioning).await;
+    build_db_peptides(
+        client.clone(),
+        insert_batch_size,
+        protease,
+        &partitioning,
+        num_threads,
+    )
+    .await;
     println!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);
 
     // 6. Collect metadata
@@ -214,73 +218,10 @@ async fn build_db_peptides(
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
     partitioning: &Partitioning,
+    num_threads: NonZeroUsize,
 ) {
-    let index = MassIndex::new(client.clone());
-    let now = std::time::Instant::now();
-    let mut masses = index
-        .masses()
-        .await
-        .unwrap()
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .unwrap();
-    masses.sort();
-    println!(
-        "db peptides: get masses = {:.2?} s;",
-        now.elapsed().as_secs_f32(),
-    );
-
-    for mass in masses.into_iter() {
-        let now = std::time::Instant::now();
-        #[allow(clippy::mutable_key_type)]
-        let mut peptides: HashSet<Peptide> = HashSet::new();
-        let mass_entry = match index.get(mass).await.unwrap() {
-            Some(mass_entry) => mass_entry,
-            None => continue,
-        };
-
-        let accession_ref_vec = mass_entry.proteins().iter().collect::<Vec<_>>();
-
-        let mut proteins = Protein::select(
-            client.as_ref(),
-            Some("WHERE accession IN ?"),
-            (accession_ref_vec,),
-        )
+    PeptideTable::new(client)
+        .build_concurrently(protease, insert_batch_size, num_threads, partitioning)
         .await
         .unwrap();
-
-        while let Some(protein) = proteins.next().await {
-            let protein = protein.unwrap();
-            peptides.extend(
-                protease
-                    .cleave(protein.sequence().to_string().as_str(), true)
-                    .unwrap()
-                    .map(|mut peptide| {
-                        peptide.set_partition(partitioning)?;
-                        Ok(peptide)
-                    })
-                    .collect::<Vec<_>>()
-                    .unwrap(),
-            );
-        }
-        println!(
-            "\tdb peptides: get proteins and digest = {:.2?} s; mass = {mass}; peptides = {}",
-            now.elapsed().as_secs_f32(),
-            peptides.len(),
-        );
-
-        let now = std::time::Instant::now();
-        let peptides = peptides.into_iter().collect::<Vec<_>>();
-        for peptide_chunk in &peptides.into_iter().chunks(insert_batch_size.get()) {
-            Peptide::insert_batch(client.as_ref(), peptide_chunk)
-                .await
-                .unwrap();
-        }
-        println!(
-            "\tdb peptides: insert peptides = {:.2?} s; mass = {mass}",
-            now.elapsed().as_secs_f32(),
-        );
-    }
 }
