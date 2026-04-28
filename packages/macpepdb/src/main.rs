@@ -1,7 +1,6 @@
 use std::{
-    collections::VecDeque,
-    fs::File,
-    io::BufReader,
+    collections::HashMap,
+    net::SocketAddr,
     num::{NonZeroU32, NonZeroUsize},
     path::PathBuf,
     sync::Arc,
@@ -14,11 +13,14 @@ use macpepdb::{
     mass_counter::MassCounter,
     mass_index::MassIndex,
     mass_partitioner::{MassPartitioner, Partitioning},
+    monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide_table::PeptideTable,
     protease::Protease,
-    protein::Protein,
+    protein_table::ProteinTable,
     sequence::{IsSequence, PeptideSequence},
 };
+use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
+use url::Url;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -32,15 +34,35 @@ struct Cli {
     /// Batch size of records to insert concurrently
     #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
     insert_batch_size: NonZeroUsize,
+    /// Path to optional log file
+    #[arg(long)]
+    log_file: Option<PathBuf>,
+    #[arg(long, default_value_t = TracingLogRotation::Daily)]
+    log_rotation: TracingLogRotation,
+    /// Endpoint for Loki API to send logs to
+    #[arg(long)]
+    loki: Option<Url>,
+    /// Label to  distinguish logs from this app instance in Loki
+    #[arg(long, default_value_t = String::from(env!("CARGO_CRATE_NAME")))]
+    loki_label: String,
     /// Number of mass partition
     #[arg(short, long, default_value_t = NonZeroU32::new(1000).unwrap())]
     partitions: NonZeroU32,
+    /// Socket for prometheus collection endpoint
+    #[arg(long)]
+    prometheus: Option<SocketAddr>,
     /// Batch size of peptides to insert
-    #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
+    #[arg(long, default_value_t = NonZeroUsize::new(1000).unwrap())]
     protien_reader_cache_size: NonZeroUsize,
+    /// Flag to show a terminal UI for tracing and metics
+    #[arg(long, default_value_t = false)]
+    terminal: bool,
     /// Batch size of records to insert concurrently
     #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
     threads: NonZeroUsize,
+    /// Increases log level each time it is used. 10 and above will activating level tracing for all crates included.
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    verbose: u8,
     /// Protein files
     #[arg(value_delimiter = ' ', num_args = 0..)]
     protein_file_paths: Vec<PathBuf>,
@@ -59,6 +81,43 @@ async fn main() {
     )
     .unwrap();
 
+    let mut tracing_targets: Vec<TracingTarget> = Vec::new();
+    let mut metric_targets: Vec<MetricTarget> = Vec::new();
+
+    let tui = cli.terminal.then(|| {
+        let tui = Tui::builder().title(env!("CARGO_CRATE_NAME")).build();
+        tracing_targets.push(TracingTarget::Terminal(tui.layer()));
+        metric_targets.push(MetricTarget::Terminal(tui.recorder()));
+        tui.run_raw()
+    });
+
+    if let Some(log_file_path) = cli.log_file {
+        tracing_targets.push(TracingTarget::File(
+            log_file_path.clone(),
+            cli.log_rotation.into(),
+        ));
+    }
+
+    if let Some(loki_url) = cli.loki {
+        tracing_targets.push(TracingTarget::Loki(loki_url, cli.loki_label));
+    }
+
+    if let Some(prometheus_socket) = cli.prometheus {
+        metric_targets.push(MetricTarget::Prometheus(
+            prometheus_socket,
+            Box::pin(axum_shutdown_signal()),
+        ));
+    }
+
+    let _monitoring = Monitoring::new(
+        cli.verbose,
+        tracing_targets.into_iter(),
+        metric_targets.into_iter(),
+        HashMap::new(),
+    )
+    .await
+    .unwrap();
+
     build_db(
         client,
         &cli.protein_file_paths,
@@ -66,6 +125,7 @@ async fn main() {
         &protease,
         cli.threads,
         cli.partitions,
+        tui.as_ref(),
     )
     .await;
 }
@@ -77,45 +137,67 @@ async fn build_db(
     protease: &Protease,
     num_threads: NonZeroUsize,
     num_partitions: NonZeroU32,
+    tui: Option<&TuiHandle>,
 ) {
     // 1. set insert proteins
-    let now = std::time::Instant::now();
+    if let Some(tui) = &tui {
+        tui.add_metric(MetricConfig::rate(
+            macpepdb::protein_table::INSERTED_PROTEINS_METRIC,
+            "Inserted proteins",
+        ));
+    }
     let protein_ctr =
-        build_db_proteins(client.as_ref(), protein_file_paths, insert_batch_size).await;
-    println!(
-        "db proteins: time = {:.2?} s; #proteins = {protein_ctr}",
-        now.elapsed().as_secs_f32(),
-    );
+        build_db_proteins(client.clone(), protein_file_paths, insert_batch_size).await;
+    if let Some(tui) = &tui {
+        tui.remove_metric(macpepdb::protein_table::INSERTED_PROTEINS_METRIC);
+    }
 
     // 2. step create mass to protein index
-    let now = std::time::Instant::now();
-    build_db_mass_index(client.clone(), insert_batch_size, protease, num_threads).await;
-    println!(
-        "db mass index: time = {:.2?} s;",
-        now.elapsed().as_secs_f32(),
-    );
+    if let Some(tui) = &tui {
+        tui.add_metric(MetricConfig::progress(
+            macpepdb::mass_index::PROGRESS_METRIC,
+            macpepdb::mass_index::PROGRESS_METRIC,
+            protein_ctr as f64,
+        ));
+    }
+    let mass_ctr =
+        build_db_mass_index(client.clone(), insert_batch_size, protease, num_threads).await;
+    if let Some(tui) = &tui {
+        tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
+    }
 
     // 3. count masses for partitions
-    let now = std::time::Instant::now();
-    let (mass_ctr, peptide_ctr) =
+    if let Some(tui) = &tui {
+        tui.add_metric(MetricConfig::progress(
+            macpepdb::mass_counter::PROGESS_METRIC,
+            macpepdb::mass_counter::PROGESS_METRIC,
+            mass_ctr as f64,
+        ));
+        tui.add_metric(MetricConfig::counter(
+            macpepdb::mass_counter::PEPTIDES_METRIC,
+            macpepdb::mass_counter::PEPTIDES_METRIC,
+        ));
+    }
+    let peptide_ctr =
         build_db_mass_counter(client.clone(), insert_batch_size, protease, num_threads).await;
-    println!(
-        "db mass counter: time = {:.2?} s; #masses = {mass_ctr}; #peptides = {peptide_ctr}",
-        now.elapsed().as_secs_f32(),
-    );
+    if let Some(tui) = &tui {
+        tui.remove_metric(macpepdb::mass_counter::PROGESS_METRIC);
+        tui.remove_metric(macpepdb::mass_counter::PEPTIDES_METRIC);
+    }
 
     // 4. caluclate partitioning by going through masses and count peptides
     // partitioning is currently not implemented, let's see first if we need it.
-    let now = std::time::Instant::now();
     let partitioning =
         build_db_parititoning(client.clone(), insert_batch_size, num_partitions).await;
-    println!(
-        "db partitioning: time = {:.2?} s;",
-        now.elapsed().as_secs_f32(),
-    );
 
     // 5. go through masses and digest the proteins collect distinct peptides and upsert them with proteins
-    let now = std::time::Instant::now();
+    if let Some(tui) = &tui {
+        tui.add_metric(MetricConfig::progress(
+            macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
+            macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
+            peptide_ctr as f64,
+        ));
+    }
     build_db_peptides(
         client.clone(),
         insert_batch_size,
@@ -124,40 +206,27 @@ async fn build_db(
         num_threads,
     )
     .await;
-    println!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);
+    if let Some(tui) = &tui {
+        tui.remove_metric(macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC);
+    }
 
     // 6. Collect metadata
 }
 
 async fn build_db_proteins(
-    client: &Client,
+    client: Arc<Client>,
     protein_file_paths: &[PathBuf],
     insert_batch_size: NonZeroUsize,
 ) -> usize {
-    let mut protein_ctr: usize = 0;
-    let mut buffer: VecDeque<Protein> = VecDeque::with_capacity(insert_batch_size.get());
-
-    for protein_file_path in protein_file_paths {
-        let mut buf_reader = BufReader::new(File::open(protein_file_path).unwrap());
-        let entry_reader = uniprot_reader::reader::Reader::new(&mut buf_reader);
-
-        for entry in entry_reader {
-            let protein = Protein::try_from(entry.unwrap().entry()).unwrap();
-            buffer.push_back(protein);
-            if buffer.len() == insert_batch_size.get() {
-                protein_ctr += buffer.len();
-                Protein::insert_batch(client, buffer.drain(..))
-                    .await
-                    .unwrap();
-            }
-        }
-    }
-
-    protein_ctr += buffer.len();
-    Protein::insert_batch(client, buffer.drain(..))
+    let now = std::time::Instant::now();
+    let protein_ctr = ProteinTable::new(client)
+        .build(protein_file_paths.iter(), insert_batch_size)
         .await
         .unwrap();
-
+    tracing::info!(
+        "db proteins: time = {:.2?} s; #proteins = {protein_ctr}",
+        now.elapsed().as_secs_f32(),
+    );
     protein_ctr
 }
 
@@ -166,13 +235,18 @@ async fn build_db_mass_index(
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
     num_threads: NonZeroUsize,
-) {
-    let index = MassIndex::new(client);
-
-    index
+) -> usize {
+    let now = std::time::Instant::now();
+    let mass_ctr = MassIndex::new(client)
         .build_concurrently(protease, insert_batch_size, num_threads)
         .await
-        .unwrap()
+        .unwrap();
+    tracing::info!(
+        "db mass index: time = {:.2?} s; #masses = {mass_ctr}",
+        now.elapsed().as_secs_f32(),
+    );
+
+    mass_ctr
 }
 
 async fn build_db_mass_counter(
@@ -180,13 +254,20 @@ async fn build_db_mass_counter(
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
     threads: NonZeroUsize,
-) -> (usize, usize) {
-    let counter = MassCounter::new(client);
+) -> usize {
+    let now = std::time::Instant::now();
 
-    counter
+    let peptides_ctr = MassCounter::new(client)
         .count_concurrently(protease, insert_batch_size, threads)
         .await
-        .unwrap()
+        .unwrap();
+
+    tracing::info!(
+        "db mass counter: time = {:.2?} s; #peptides = {peptides_ctr}",
+        now.elapsed().as_secs_f32(),
+    );
+
+    peptides_ctr
 }
 
 async fn build_db_parititoning(
@@ -194,11 +275,15 @@ async fn build_db_parititoning(
     insert_batch_size: NonZeroUsize,
     num_partitions: NonZeroU32,
 ) -> Partitioning {
-    match Blob::select(client.as_ref(), Partitioning::BLOB_KEY)
+    let now = std::time::Instant::now();
+    let partitioning = match Blob::select(client.as_ref(), Partitioning::BLOB_KEY)
         .await
         .unwrap()
     {
-        Some(partitioning) => partitioning,
+        Some(partitioning) => {
+            tracing::info!("db partitioning: loaded from db;");
+            partitioning
+        }
         None => {
             let partitioning = MassPartitioner::new(client.clone())
                 .build(num_partitions)
@@ -210,7 +295,14 @@ async fn build_db_parititoning(
 
             partitioning
         }
-    }
+    };
+
+    tracing::info!(
+        "db partitioning: time = {:.2?} s;",
+        now.elapsed().as_secs_f32(),
+    );
+
+    partitioning
 }
 
 async fn build_db_peptides(
@@ -220,8 +312,32 @@ async fn build_db_peptides(
     partitioning: &Partitioning,
     num_threads: NonZeroUsize,
 ) {
+    let now = std::time::Instant::now();
     PeptideTable::new(client)
         .build_concurrently(protease, insert_batch_size, num_threads, partitioning)
         .await
         .unwrap();
+    tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);
+}
+
+/// Axum shutdown signal handler for ctrl-c and terminate signals
+///
+async fn axum_shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }

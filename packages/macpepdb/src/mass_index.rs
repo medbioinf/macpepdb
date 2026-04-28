@@ -8,7 +8,7 @@ use std::{
 
 use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
-use futures::{Stream, StreamExt, future::join_all};
+use futures::{Stream, StreamExt, TryStreamExt, future::join_all};
 use scylla::{
     DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError,
     serialize::row::SerializeRow,
@@ -28,6 +28,8 @@ static SELECT_STATEMENT: LazyLock<String> =
 
 static SELECT_MASS_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT mass FROM {TABLE_NAME}"));
+
+pub static PROGRESS_METRIC: &str = "mass_index::progress";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -131,8 +133,9 @@ impl MassIndex {
         &self,
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
-    ) -> Result<(), Error> {
+    ) -> Result<usize, Error> {
         let mut proteins = Protein::select(self.client.as_ref(), None, ()).await?;
+        let progress_metric = metrics::counter!(PROGRESS_METRIC);
 
         let mut buffer: HashMap<i64, HashSet<String>> =
             HashMap::with_capacity(insert_batch_size.get());
@@ -166,6 +169,7 @@ impl MassIndex {
                     .await?;
                 }
             }
+            progress_metric.increment(1);
         }
 
         if !buffer.is_empty() {
@@ -178,7 +182,10 @@ impl MassIndex {
             .await?;
         }
 
-        Ok(())
+        self.masses()
+            .await?
+            .try_fold(0, |ctr, _mass| async move { Ok(ctr + 1) })
+            .await
     }
 
     pub async fn build_concurrently(
@@ -186,11 +193,12 @@ impl MassIndex {
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
-    ) -> Result<(), Error> {
+    ) -> Result<usize, Error> {
         let mut proteins = Protein::select(self.client.as_ref(), None, ()).await?;
         let queue: Arc<ArrayQueue<Option<Protein>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
+        let progress_metric = Arc::new(metrics::counter!(PROGRESS_METRIC));
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -198,6 +206,7 @@ impl MassIndex {
                 let queue = queue.clone();
                 let client = self.client.clone();
                 let protease = protease.clone();
+                let progress_metric = progress_metric.clone();
 
                 tokio::spawn(async move {
                     let mut buffer: HashMap<i64, HashSet<String>> =
@@ -241,6 +250,7 @@ impl MassIndex {
                                 .await?;
                             }
                         }
+                        progress_metric.increment(1);
                     }
 
                     if !buffer.is_empty() {
@@ -294,7 +304,10 @@ impl MassIndex {
             thread.await.map_err(|err| Error::Join(err.to_string()))??;
         }
 
-        Ok(())
+        self.masses()
+            .await?
+            .try_fold(0, |ctr, _mass| async move { Ok(ctr + 1) })
+            .await
     }
 
     async fn find_errored_thread(

@@ -32,6 +32,9 @@ static SELECT_STATEMENT: LazyLock<String> =
 static SELECT_MASS_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT mass FROM {TABLE_NAME}"));
 
+pub static PROGESS_METRIC: &str = "mass_counter::progress";
+pub static PEPTIDES_METRIC: &str = "mass_counter::peptides";
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Client error in mass index: {0}")]
@@ -136,15 +139,16 @@ impl MassCounter {
         &self,
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
-    ) -> Result<(usize, usize), Error> {
+    ) -> Result<usize, Error> {
         let mut mass_index_entries = MassIndexEntry::select(self.client.as_ref(), None, ()).await?;
-        let mut mass_ctr: usize = 0;
         let mut peptide_ctr: usize = 0;
+
+        let progress_metric = metrics::counter!(PROGESS_METRIC);
+        let peptides_metric = metrics::counter!(PEPTIDES_METRIC);
 
         let mut buffer: VecDeque<Entry> = VecDeque::with_capacity(insert_batch_size.get());
 
         while let Some(mass_index_entry) = mass_index_entries.next().await.transpose()? {
-            mass_ctr += 1;
             let mut proteins = Protein::select(
                 self.client.as_ref(),
                 Some("WHERE accession IN ?"),
@@ -168,6 +172,7 @@ impl MassCounter {
             }
 
             peptide_ctr += peptide_sequences.len();
+            peptides_metric.increment(peptide_sequences.len() as u64);
 
             buffer.push_back(Entry {
                 mass: mass_index_entry.mass(),
@@ -177,13 +182,15 @@ impl MassCounter {
             if buffer.len() >= insert_batch_size.get() {
                 Entry::insert_batch(self.client.as_ref(), buffer.drain(..)).await?;
             }
+
+            progress_metric.increment(1);
         }
 
         if !buffer.is_empty() {
             Entry::insert_batch(self.client.as_ref(), buffer.drain(..)).await?;
         }
 
-        Ok((mass_ctr, peptide_ctr))
+        Ok(peptide_ctr)
     }
 
     pub async fn count_concurrently(
@@ -191,13 +198,14 @@ impl MassCounter {
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
-    ) -> Result<(usize, usize), Error> {
+    ) -> Result<usize, Error> {
         let mut mass_index_entries = MassIndexEntry::select(self.client.as_ref(), None, ()).await?;
         let queue: Arc<ArrayQueue<Option<MassIndexEntry>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
-        let mut mass_ctr: usize = 0;
         let peptide_ctr = Arc::new(AtomicUsize::new(0));
+        let progress_metric = Arc::new(metrics::counter!(PROGESS_METRIC));
+        let peptides_metric = Arc::new(metrics::counter!(PEPTIDES_METRIC));
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -206,6 +214,7 @@ impl MassCounter {
                 let client = self.client.clone();
                 let protease = protease.clone();
                 let peptide_ctr = peptide_ctr.clone();
+                let peptides_metric = peptides_metric.clone();
 
                 tokio::spawn(async move {
                     let mut buffer: VecDeque<Entry> =
@@ -248,6 +257,7 @@ impl MassCounter {
                             peptide_sequences.len(),
                             std::sync::atomic::Ordering::Relaxed,
                         );
+                        peptides_metric.increment(peptide_sequences.len() as u64);
 
                         buffer.push_back(Entry {
                             mass: mass_index_entry.mass(),
@@ -270,7 +280,6 @@ impl MassCounter {
 
         while let Some(mass_index_entry) = mass_index_entries.next().await.transpose()? {
             let mut mass_index_entry = Some(mass_index_entry);
-            mass_ctr += 1;
             loop {
                 mass_index_entry = match queue.push(mass_index_entry) {
                     Ok(()) => break,
@@ -289,6 +298,7 @@ impl MassCounter {
                     }
                 };
             }
+            progress_metric.increment(1);
         }
 
         // Send none to signal stop
@@ -305,10 +315,7 @@ impl MassCounter {
             thread.await.map_err(|err| Error::Join(err.to_string()))??;
         }
 
-        Ok((
-            mass_ctr,
-            peptide_ctr.load(std::sync::atomic::Ordering::Relaxed),
-        ))
+        Ok(peptide_ctr.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     async fn find_errored_thread(

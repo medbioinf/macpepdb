@@ -15,6 +15,8 @@ use crate::{
     sequence::{ByteSequence, PeptideSequence},
 };
 
+pub static INSERTED_PEPTIDES_METRIC: &str = "peptides_table::build::inserted_peptides";
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Client error in peptide table: {0}")]
@@ -72,6 +74,7 @@ impl PeptideTable {
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
         let partitioning = Arc::new(partitioning.clone());
+        let inserted_peptides_metric = Arc::new(metrics::counter!(INSERTED_PEPTIDES_METRIC));
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -80,6 +83,7 @@ impl PeptideTable {
                 let client = self.client.clone();
                 let protease = protease.clone();
                 let partitioning = partitioning.clone();
+                let inserted_peptides_metric = inserted_peptides_metric.clone();
 
                 tokio::spawn(async move {
                     loop {
@@ -130,7 +134,9 @@ impl PeptideTable {
                                 })
                                 .collect::<Result<Vec<_>, crate::sequence::Error>>()?;
 
+                            let peptides_len = peptides.len();
                             Peptide::insert_batch(client.as_ref(), peptides.into_iter()).await?;
+                            inserted_peptides_metric.increment(peptides_len as u64);
                         }
                     }
                     Ok::<_, Error>(())
