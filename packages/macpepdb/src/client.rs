@@ -3,15 +3,16 @@ use std::{collections::HashMap, num::NonZeroUsize, ops::Deref, sync::LazyLock, t
 
 use fancy_regex::Regex;
 use scylla::{
-    client::{PoolSize, session::Session, session_builder::SessionBuilder},
-    statement::{Consistency, prepared::PreparedStatement},
+    client::{PoolSize, caching_session::CachingSession, session_builder::SessionBuilder},
+    statement::Consistency,
 };
 use thiserror::Error;
-use tokio::sync::RwLock;
 
 pub static URL_PASER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)scylla://((?P<credentials>[^:]*?:[^:]+)@){0,1}(?P<hosts>.+)/(?P<keyspace>[^/?]+)(\?(?P<attributes>.+)){0,1}").unwrap()
 });
+
+static DEFAULT_CACHE_SIZE: usize = 100;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -49,6 +50,7 @@ impl From<&str> for PoolType {
 struct ClientSettings {
     pub hosts: Vec<String>,
     pub keyspace: String,
+    pub cache_size: usize,
     pub user: Option<String>,
     pub password: Option<String>,
     pub connection_timeout: Option<Duration>,
@@ -89,6 +91,7 @@ impl ClientSettings {
         let mut settings = Self {
             hosts,
             keyspace,
+            cache_size: DEFAULT_CACHE_SIZE,
             user: None,
             password: None,
             connection_timeout: None,
@@ -159,11 +162,17 @@ impl ClientSettings {
                         )
                     })?);
             };
+
+            if let Some(cache_size) = attributes.get("cache_size") {
+                settings.cache_size = (cache_size).parse().map_err(|_| {
+                    Error::ParsingAttribute("cache_size", "usize", cache_size.to_string())
+                })?;
+            }
         }
         Ok(settings)
     }
 
-    pub async fn to_session(&self) -> Result<Session, Error> {
+    pub async fn to_session(&self) -> Result<CachingSession, Error> {
         let mut builder = SessionBuilder::new()
             .known_nodes(self.hosts.clone())
             .use_keyspace(self.keyspace.clone(), true);
@@ -188,7 +197,9 @@ impl ClientSettings {
             builder = builder.pool_size(pool_size);
         }
 
-        Ok(builder.build().await?)
+        let session = builder.build().await?;
+
+        Ok(CachingSession::from(session, self.cache_size))
     }
 
     /// Returns the ScyllaDB consistency level from a string representation
@@ -226,13 +237,12 @@ impl ClientSettings {
 }
 
 pub struct Client {
-    session: Session,
+    session: CachingSession,
     database: String,
     url: String,
-    prepared_statement_cache: RwLock<HashMap<String, PreparedStatement>>,
     num_nodes: usize,
-    read_consistency_level: Option<Consistency>,
-    write_consistency_level: Option<Consistency>,
+    _read_consistency_level: Option<Consistency>,
+    _write_consistency_level: Option<Consistency>,
 }
 
 impl Client {
@@ -250,14 +260,13 @@ impl Client {
             session: settings.to_session().await?,
             database: settings.keyspace.clone(),
             url: database_url.to_string(),
-            prepared_statement_cache: RwLock::new(HashMap::new()),
             num_nodes: settings.hosts.len(),
-            read_consistency_level: settings.read_consistency_level,
-            write_consistency_level: settings.write_consistency_level,
+            _read_consistency_level: settings.read_consistency_level,
+            _write_consistency_level: settings.write_consistency_level,
         })
     }
 
-    pub fn inner_client(&self) -> &Session {
+    pub fn inner_client(&self) -> &CachingSession {
         &self.session
     }
 
@@ -272,56 +281,10 @@ impl Client {
     pub fn num_nodes(&self) -> usize {
         self.num_nodes
     }
-
-    /// Get a prepared statement from the cache
-    /// if the statement is not in the cache it be added and returned
-    pub async fn get_prepared_statement(&self, query: &str) -> Result<PreparedStatement, Error> {
-        let read_guard = self.prepared_statement_cache.read().await;
-        if let Some(statement) = read_guard.get(query) {
-            return Ok(statement.clone());
-        }
-        drop(read_guard);
-
-        let mut write_guard = self.prepared_statement_cache.write().await;
-        // Check if statement was added while waiting for the write guard
-        if let Some(statement) = write_guard.get(query) {
-            return Ok(statement.clone());
-        }
-
-        let mut statement = self
-            .prepare(query.replace(":KEYSPACE:", &self.database))
-            .await
-            .map_err(|err| Error::CqlPrepare(query.to_string(), Box::new(err)))?;
-
-        if let Some(level) = self.read_consistency_level
-            && !Self::is_write_query(query)
-        {
-            statement.set_consistency(level);
-        }
-
-        if let Some(level) = self.write_consistency_level
-            && Self::is_write_query(query)
-        {
-            statement.set_consistency(level);
-        }
-
-        write_guard.insert(query.to_string(), statement.clone());
-
-        Ok(statement)
-    }
-
-    pub async fn reset_prepared_statement_cache(&self) {
-        self.prepared_statement_cache.write().await.clear();
-    }
-
-    fn is_write_query(query: &str) -> bool {
-        let query = query.to_lowercase();
-        query.starts_with("insert") || query.starts_with("update") || query.starts_with("delete")
-    }
 }
 
 impl Deref for Client {
-    type Target = Session;
+    type Target = CachingSession;
 
     fn deref(&self) -> &Self::Target {
         &self.session

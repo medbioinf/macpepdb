@@ -16,6 +16,8 @@ use crate::{
     mass_counter::{Entry, MassCounter},
 };
 
+pub static PROGRESS_METRIC: &str = "mass_partitioner::progress";
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Mass counter error in mass partitioner")]

@@ -131,11 +131,8 @@ impl Peptide {
     }
 
     pub async fn insert(&self, client: &Client) -> Result<(), Error> {
-        let stmt = client
-            .get_prepared_statement(INSERT_STATEMENT.as_str())
-            .await?;
         client
-            .execute_unpaged(&stmt, &self)
+            .execute_unpaged(INSERT_STATEMENT.as_str(), &self)
             .await
             .map_err(|err| Error::CqlExecution(Box::new(err)))?;
         Ok(())
@@ -145,11 +142,8 @@ impl Peptide {
         client: &Client,
         values: impl Iterator<Item = Self>,
     ) -> Result<(), Error> {
-        let stmt = client
-            .get_prepared_statement(INSERT_STATEMENT.as_str())
-            .await?;
-
-        let insert_futures = values.map(|value| client.execute_unpaged(&stmt, value));
+        let insert_futures =
+            values.map(|value| client.execute_unpaged(INSERT_STATEMENT.as_str(), value));
 
         join_all(insert_futures)
             .await
@@ -161,12 +155,8 @@ impl Peptide {
     }
 
     pub async fn select(client: &Client) -> Result<TypedRowStream<Self>, Error> {
-        let stmt = client
-            .get_prepared_statement(SELECT_STATEMENT.as_str())
-            .await?;
-
         Ok(client
-            .execute_iter(stmt, ())
+            .execute_iter(SELECT_STATEMENT.as_str(), ())
             .await
             .map_err(|err| Error::CqlPagedExecution(Box::new(err)))?
             .rows_stream::<Self>()?)

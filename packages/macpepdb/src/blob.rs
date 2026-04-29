@@ -28,16 +28,14 @@ static DELETE_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("DELETE FRO
 pub enum Error {
     #[error("The given data exceeds the maximum blob size {MAX_BLOB_SIZE} with {0}")]
     BlobTooLarge(usize),
-    #[error("Client error in blob: {0}")]
-    Client(#[from] crate::client::Error),
     #[error("CQL execution error in blob: {0}")]
     CqlExecution(#[from] scylla::errors::ExecutionError),
     #[error("CQL next row error in blob: {0}")]
     CqlNextRow(#[from] scylla::errors::NextRowError),
     #[error("CQL paged execution error in blob: {0}")]
     CqlPagedExecution(#[from] scylla::errors::PagerExecutionError),
-    #[error("Unable to prepare statement `{0}`: {1}")]
-    CqlPrepare(String, Box<scylla::errors::PrepareError>),
+    #[error("Unable to prepare statement: `{0}`")]
+    CqlPrepare(#[from] scylla::errors::PrepareError),
     #[error("CQL type check failed in blob: {0}")]
     CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
     #[error("Deserialization error in blob")]
@@ -62,11 +60,8 @@ impl BlobPart {
         client: &Client,
         values: impl Iterator<Item = Self>,
     ) -> Result<(), Error> {
-        let stmt = client
-            .get_prepared_statement(UPSERT_STATEMENT.as_str())
-            .await?;
-
-        let insertion_futures = values.map(|value| client.execute_unpaged(&stmt, value));
+        let insertion_futures =
+            values.map(|value| client.execute_unpaged(UPSERT_STATEMENT.as_str(), value));
 
         join_all(insertion_futures)
             .await
@@ -86,7 +81,7 @@ impl BlobPart {
             .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
 
         Ok(client
-            .query_iter(statement.as_str(), values)
+            .execute_iter(statement.as_str(), values)
             .await?
             .rows_stream::<Self>()?)
     }
@@ -100,12 +95,7 @@ impl BlobPart {
             .map(|addition| format!("{} {}", DELETE_STATEMENT.as_str(), addition))
             .unwrap_or_else(|| DELETE_STATEMENT.as_str().to_string());
 
-        let stmt = client
-            .prepare(statement.as_str())
-            .await
-            .map_err(|err| Error::CqlPrepare(statement.clone(), Box::new(err)))?;
-
-        client.execute_iter(stmt, values).await?;
+        client.execute_iter(statement, values).await?;
 
         Ok(())
     }

@@ -77,11 +77,9 @@ impl Entry {
     }
 
     pub async fn upsert(&self, client: &Client) -> Result<(), Error> {
-        let stmt = client
-            .get_prepared_statement(UPSERT_STATEMENT.as_str())
+        client
+            .execute_unpaged(UPSERT_STATEMENT.as_str(), &self)
             .await?;
-
-        client.execute_unpaged(&stmt, &self).await?;
 
         Ok(())
     }
@@ -90,11 +88,8 @@ impl Entry {
         client: &Client,
         values: impl Iterator<Item = Self>,
     ) -> Result<(), Error> {
-        let stmt = client
-            .get_prepared_statement(UPSERT_STATEMENT.as_str())
-            .await?;
-
-        let upsert_futures = values.map(|value| client.execute_unpaged(&stmt, value));
+        let upsert_futures =
+            values.map(|value| client.execute_unpaged(UPSERT_STATEMENT.as_str(), value));
 
         join_all(upsert_futures)
             .await
@@ -114,7 +109,7 @@ impl Entry {
             .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
 
         Ok(client
-            .query_iter(statement.as_str(), values)
+            .execute_iter(statement, values)
             .await?
             .rows_stream::<Self>()?)
     }
@@ -340,7 +335,7 @@ impl MassIndex {
     pub async fn masses(&self) -> Result<impl Stream<Item = Result<i64, Error>>, Error> {
         Ok(self
             .client
-            .query_iter(SELECT_MASS_STATEMENT.as_str(), ())
+            .execute_iter(SELECT_MASS_STATEMENT.as_str(), ())
             .await?
             .rows_stream::<(i64,)>()?
             .map(|row| Ok(row?.0)))

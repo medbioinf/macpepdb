@@ -53,10 +53,9 @@ impl Protein {
     }
 
     pub async fn insert(&self, client: &Client) -> Result<(), Error> {
-        let stmt = client
-            .get_prepared_statement(INSERT_STATEMENT.as_str())
+        client
+            .execute_unpaged(INSERT_STATEMENT.as_str(), &self)
             .await?;
-        client.execute_unpaged(&stmt, &self).await?;
         Ok(())
     }
 
@@ -64,11 +63,8 @@ impl Protein {
         client: &Client,
         values: impl Iterator<Item = Self>,
     ) -> Result<(), Error> {
-        let stmt = client
-            .get_prepared_statement(INSERT_STATEMENT.as_str())
-            .await?;
-
-        let insert_futures = values.map(|value| client.execute_unpaged(&stmt, value));
+        let insert_futures =
+            values.map(|value| client.execute_unpaged(INSERT_STATEMENT.as_str(), value));
 
         join_all(insert_futures)
             .await
@@ -88,7 +84,7 @@ impl Protein {
             .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
 
         Ok(client
-            .query_iter(statement.as_str(), values)
+            .execute_iter(statement, values)
             .await?
             .rows_stream::<Self>()?)
     }
