@@ -245,8 +245,8 @@ pub struct Client {
     database: String,
     url: String,
     num_nodes: usize,
-    _read_consistency_level: Option<Consistency>,
-    _write_consistency_level: Option<Consistency>,
+    read_consistency_level: Option<Consistency>,
+    write_consistency_level: Option<Consistency>,
 }
 
 impl Client {
@@ -265,8 +265,8 @@ impl Client {
             database: settings.keyspace.clone(),
             url: database_url.to_string(),
             num_nodes: settings.hosts.len(),
-            _read_consistency_level: settings.read_consistency_level,
-            _write_consistency_level: settings.write_consistency_level,
+            read_consistency_level: settings.read_consistency_level,
+            write_consistency_level: settings.write_consistency_level,
         })
     }
 
@@ -284,6 +284,14 @@ impl Client {
 
     pub fn num_nodes(&self) -> usize {
         self.num_nodes
+    }
+
+    pub fn read_consistency_level(&self) -> Option<Consistency> {
+        self.read_consistency_level
+    }
+
+    pub fn write_consistency_level(&self) -> Option<Consistency> {
+        self.write_consistency_level
     }
 }
 
