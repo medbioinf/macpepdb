@@ -21,11 +21,15 @@ pub enum Error {
     #[error("Invalid database URL: {0}")]
     InvalidUrl(String),
     #[error("Failed to create ScyllaDB session: {0}")]
-    Session(#[from] scylla::errors::NewSessionError),
+    Session(Box<scylla::errors::NewSessionError>),
     #[error("Failed to parse attribute {0} with value {2} into {1}")]
     ParsingAttribute(&'static str, &'static str, String),
-    #[error("Unable to prepare statement `{0}`: {1}")]
-    CqlPrepare(String, Box<scylla::errors::PrepareError>),
+}
+
+impl From<scylla::errors::NewSessionError> for Error {
+    fn from(err: scylla::errors::NewSessionError) -> Self {
+        Error::Session(Box::new(err))
+    }
 }
 
 /// Pool type for the ScyllaDB client
