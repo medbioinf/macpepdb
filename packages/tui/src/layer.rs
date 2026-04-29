@@ -133,7 +133,10 @@ impl TuiLayer {
     }
 }
 
-impl<S: Subscriber> Layer<S> for TuiLayer {
+impl<S> Layer<S> for TuiLayer
+where
+    S: Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+{
     fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, S>) {
         let meta = event.metadata();
 

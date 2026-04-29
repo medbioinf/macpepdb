@@ -48,6 +48,8 @@ pub enum Error {
     Prometheus(#[from] crate::monitoring::prometheus_handler::Error),
     #[error("Unable to set global metrics recorder: {0}")]
     SetMetricsRecorder(#[from] metrics::SetRecorderError<Fanout>),
+    #[error("Terminal and TUI are exclusive, choose one")]
+    TerminalAndTuiExclusive,
 }
 
 /// Target for tracing
@@ -55,7 +57,8 @@ pub enum Error {
 pub enum TracingTarget {
     Loki(Url, String),
     File(PathBuf, Rotation),
-    Terminal(TuiLayer),
+    Terminal,
+    Tui(TuiLayer),
 }
 
 /// Target for metrics
@@ -65,7 +68,7 @@ pub enum MetricTarget {
         SocketAddr,
         Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
     ),
-    Terminal(TuiRecorder),
+    Tui(TuiRecorder),
 }
 
 /// Log rotation values for CLI
@@ -145,6 +148,7 @@ impl Monitoring {
         );
 
         // Tracing layers
+        let mut terminal_layer = None;
         let mut tui_layer = None;
         let mut loki_layer = None;
         let mut file_layer = None;
@@ -172,13 +176,25 @@ impl Monitoring {
                     monitoring.loki_handler = Some(tokio::spawn(task));
                     loki_layer = Some(layer);
                 }
-                TracingTarget::Terminal(layer) => {
+                TracingTarget::Terminal => {
+                    if tui_layer.is_some() {
+                        return Err(Error::TerminalAndTuiExclusive);
+                    }
+                    terminal_layer = Some(
+                        tracing_subscriber::fmt::Layer::default().with_writer(std::io::stderr),
+                    );
+                }
+                TracingTarget::Tui(layer) => {
+                    if terminal_layer.is_some() {
+                        return Err(Error::TerminalAndTuiExclusive);
+                    }
                     tui_layer = Some(layer);
                 }
             }
         }
 
         tracing_subscriber::registry()
+            .with(terminal_layer)
             .with(tui_layer)
             .with(file_layer)
             .with(loki_layer)
@@ -197,7 +213,7 @@ impl Monitoring {
                     );
                     prometheus_recorder = Some(recorder);
                 }
-                MetricTarget::Terminal(recorder) => {
+                MetricTarget::Tui(recorder) => {
                     tui_recorder = Some(recorder);
                 }
             }

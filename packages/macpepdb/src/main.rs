@@ -54,9 +54,12 @@ struct Cli {
     /// Batch size of peptides to insert
     #[arg(long, default_value_t = NonZeroUsize::new(1000).unwrap())]
     protien_reader_cache_size: NonZeroUsize,
-    /// Flag to show a terminal UI for tracing and metics
-    #[arg(long, default_value_t = false)]
+    /// Flag to show tracing on the stdout, no tui, no metrics
+    #[arg(long, default_value_t = false, conflicts_with = "tui")]
     terminal: bool,
+    /// Flag to show a terminal UI for tracing and metics
+    #[arg(long, default_value_t = false, conflicts_with = "terminal")]
+    tui: bool,
     /// Batch size of records to insert concurrently
     #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
     threads: NonZeroUsize,
@@ -84,12 +87,16 @@ async fn main() {
     let mut tracing_targets: Vec<TracingTarget> = Vec::new();
     let mut metric_targets: Vec<MetricTarget> = Vec::new();
 
-    let tui = cli.terminal.then(|| {
+    let tui = cli.tui.then(|| {
         let tui = Tui::builder().title(env!("CARGO_CRATE_NAME")).build();
-        tracing_targets.push(TracingTarget::Terminal(tui.layer()));
-        metric_targets.push(MetricTarget::Terminal(tui.recorder()));
+        tracing_targets.push(TracingTarget::Tui(tui.layer()));
+        metric_targets.push(MetricTarget::Tui(tui.recorder()));
         tui.run_raw()
     });
+
+    if cli.terminal {
+        tracing_targets.push(TracingTarget::Terminal);
+    }
 
     if let Some(log_file_path) = cli.log_file {
         tracing_targets.push(TracingTarget::File(
