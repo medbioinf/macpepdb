@@ -1,8 +1,14 @@
-use std::{cell::OnceCell, hash::Hash, sync::LazyLock};
+use std::{
+    hash::Hash,
+    sync::{LazyLock, OnceLock},
+};
 
 use deku::DekuEnumExt;
-use futures::future::join_all;
-use scylla::{DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError};
+use scylla::{
+    DeserializeRow, SerializeRow,
+    client::pager::TypedRowStream,
+    statement::batch::{Batch, BatchType},
+};
 
 use thiserror::Error;
 
@@ -48,7 +54,7 @@ pub struct Peptide {
     mass: i64,
     sequence: Sequence,
     #[scylla(skip)]
-    amino_acid_counts: OnceCell<[u8; MAX_AMINO_ACID_BIT_CODE]>,
+    amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
 }
 
 impl Peptide {
@@ -58,7 +64,7 @@ impl Peptide {
             mass,
             sequence,
             partition: None,
-            amino_acid_counts: OnceCell::new(),
+            amino_acid_counts: OnceLock::new(),
         }
     }
 
@@ -75,7 +81,7 @@ impl Peptide {
             mass,
             sequence,
             partition,
-            amino_acid_counts: OnceCell::new(),
+            amino_acid_counts: OnceLock::new(),
         })
     }
 
@@ -144,17 +150,27 @@ impl Peptide {
         Ok(())
     }
 
-    pub async fn insert_batch(
-        client: &Client,
-        values: impl Iterator<Item = Self>,
-    ) -> Result<(), Error> {
-        let insert_futures =
-            values.map(|value| client.execute_unpaged(INSERT_STATEMENT.as_str(), value));
+    pub async fn insert_batch(client: &Client, values: Vec<Peptide>) -> Result<(), Error> {
+        let batch_type = if values
+            .iter()
+            .all(|value| value.partition() == values[0].partition())
+        {
+            BatchType::Logged
+        } else {
+            BatchType::Unlogged
+        };
 
-        join_all(insert_futures)
+        let mut batch_statement = Batch::new(batch_type);
+        (0..values.len()).for_each(|_| {
+            batch_statement.append_statement(INSERT_STATEMENT.as_str());
+        });
+        if let Some(consistency) = client.write_consistency_level() {
+            batch_statement.set_consistency(consistency);
+        }
+
+        client
+            .batch(&batch_statement, values)
             .await
-            .into_iter()
-            .collect::<Result<Vec<_>, ExecutionError>>()
             .map_err(|err| Error::CqlExecution(Box::new(err)))?;
 
         Ok(())

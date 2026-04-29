@@ -201,7 +201,10 @@ impl ClientSettings {
             builder = builder.pool_size(pool_size);
         }
 
-        let session = builder.build().await?;
+        let session = builder
+            .build()
+            .await
+            .map_err(|e| Error::Session(Box::new(e)))?;
 
         Ok(CachingSession::from(session, self.cache_size))
     }

@@ -138,7 +138,7 @@ impl PeptideTable {
                                 .collect::<Result<Vec<_>, crate::peptide::Error>>()?;
 
                             let peptides_len = peptides.len();
-                            Peptide::insert_batch(client.as_ref(), peptides.into_iter()).await?;
+                            Peptide::insert_batch(client.as_ref(), peptides).await?;
                             inserted_peptides_metric.increment(peptides_len as u64);
                         }
                     }
