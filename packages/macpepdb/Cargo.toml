@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 axum = { workspace = true }
-bitvec = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossbeam = { workspace = true }
 deku = { workspace = true }

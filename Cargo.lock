@@ -1788,7 +1788,6 @@ name = "macpepdb"
 version = "0.1.0"
 dependencies = [
  "axum",
- "bitvec",
  "clap",
  "crossbeam",
  "deku",
