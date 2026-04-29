@@ -14,7 +14,6 @@ fallible-iterator = { workspace = true }
 fancy-regex = { workspace = true }
 futures = { workspace = true }
 itertools = { workspace = true }
-lru = { workspace = true }
 macpepdb_tui = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
@@ -27,7 +26,6 @@ serde_json = { workspace = true }
 scylla = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
-tokio-postgres = { workspace = true, features = ["array-impls"] }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
