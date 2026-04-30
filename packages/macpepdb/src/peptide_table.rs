@@ -112,6 +112,7 @@ impl PeptideTable {
                             protease
                                 .cleave(protein.sequence().to_string().as_str(), true)
                                 .map_err(Error::Protease)?
+                                .filter(|peptide| Ok(peptide.mass() == mass_index_entry.mass()))
                                 .for_each(|peptide| {
                                     peptide_sequences
                                         .insert(ByteSequence::try_from(peptide.into_sequence())?);
