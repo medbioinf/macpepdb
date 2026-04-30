@@ -44,7 +44,7 @@ pub enum Error {
 
 #[derive(DeserializeRow, SerializeRow)]
 pub struct Peptide {
-    partition: Option<i32>,
+    partition: Option<i16>,
     mass: i64,
     sequence: Sequence,
     #[scylla(skip)]
@@ -73,7 +73,7 @@ impl Peptide {
         }
     }
 
-    pub fn partition(&self) -> Option<i32> {
+    pub fn partition(&self) -> Option<i16> {
         self.partition
     }
 

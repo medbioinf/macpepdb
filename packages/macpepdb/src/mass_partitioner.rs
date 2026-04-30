@@ -1,7 +1,7 @@
 use std::{
     cmp::Reverse,
     collections::{BinaryHeap, HashMap},
-    num::NonZeroU32,
+    num::NonZeroU16,
     ops::Deref,
     sync::Arc,
 };
@@ -80,14 +80,14 @@ impl Default for Bin {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
-pub struct Partitioning(HashMap<i64, i32>);
+pub struct Partitioning(HashMap<i64, i16>);
 
 impl Partitioning {
     pub const BLOB_KEY: &'static str = "partitioning";
 }
 
 impl Deref for Partitioning {
-    type Target = HashMap<i64, i32>;
+    type Target = HashMap<i64, i16>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -109,7 +109,7 @@ impl MassPartitioner {
         Self { client }
     }
 
-    pub async fn build(&self, num_bins: NonZeroU32) -> Result<Partitioning, Error> {
+    pub async fn build(&self, num_bins: NonZeroU16) -> Result<Partitioning, Error> {
         let mass_count_entries = MassCounter::new(self.client.clone())
             .entries()
             .await
@@ -151,7 +151,7 @@ impl MassPartitioner {
     /// * If `num_bins` is greater than the number of entries, the surplus bins
     ///   are returned empty (zero total count, no entries).
     /// ```
-    fn distribute_into_bins(mut entries: Vec<Entry>, num_bins: NonZeroU32) -> Vec<Bin> {
+    fn distribute_into_bins(mut entries: Vec<Entry>, num_bins: NonZeroU16) -> Vec<Bin> {
         let k = num_bins.get() as usize;
 
         // Sort descending by count so large entries are placed first.
@@ -192,7 +192,7 @@ impl MassPartitioner {
                 .flat_map(|(bin_idx, bin)| {
                     bin.entries()
                         .iter()
-                        .map(|entry| (entry.mass(), bin_idx as i32))
+                        .map(|entry| (entry.mass(), bin_idx as i16))
                         .collect::<Vec<_>>()
                 })
                 .collect(),
@@ -222,7 +222,7 @@ mod tests {
         ];
         let expected: i64 = entries.iter().map(|e| e.count()).sum();
 
-        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU32::new(3).unwrap());
+        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU16::new(3).unwrap());
 
         assert_eq!(total_records(&bins), expected);
     }
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn test_single_bin() {
         let entries = vec![Entry::new(1, 7), Entry::new(2, 3), Entry::new(3, 11)];
-        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU32::new(1).unwrap());
+        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU16::new(1).unwrap());
 
         assert_eq!(bins.len(), 1);
         assert_eq!(bins[0].entries().len(), 3);
@@ -242,7 +242,7 @@ mod tests {
     #[test]
     fn test_more_bins_than_entries() {
         let entries = vec![Entry::new(1, 5), Entry::new(2, 5)];
-        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU32::new(5).unwrap());
+        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU16::new(5).unwrap());
 
         assert_eq!(bins.len(), 5);
 
@@ -259,7 +259,7 @@ mod tests {
     /// An empty input must produce the requested number of empty bins.
     #[test]
     fn test_empty_entries() {
-        let bins = MassPartitioner::distribute_into_bins(vec![], NonZeroU32::new(4).unwrap());
+        let bins = MassPartitioner::distribute_into_bins(vec![], NonZeroU16::new(4).unwrap());
 
         assert_eq!(bins.len(), 4);
         assert!(bins.iter().all(|b| b.entries().is_empty()));
@@ -271,7 +271,7 @@ mod tests {
     fn test_uniform_entries_are_perfectly_balanced() {
         // 6 entries each with count=10, split into 3 bins → each bin gets 20.
         let entries: Vec<Entry> = (0..6).map(|i| Entry::new(i, 10)).collect();
-        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU32::new(3).unwrap());
+        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU16::new(3).unwrap());
 
         for bin in &bins {
             assert_eq!(bin.total_count(), 20);
@@ -291,7 +291,7 @@ mod tests {
             Entry::new(50, 3),
         ];
 
-        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU32::new(3).unwrap());
+        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU16::new(3).unwrap());
 
         for bin in &bins {
             let masses: Vec<i64> = bin.entries().iter().map(|e| e.mass()).collect();
@@ -320,7 +320,7 @@ mod tests {
         ];
         let max_single = entries.iter().map(|e| e.count()).max().unwrap();
 
-        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU32::new(3).unwrap());
+        let bins = MassPartitioner::distribute_into_bins(entries, NonZeroU16::new(3).unwrap());
 
         let max_total = bins.iter().map(|b| b.total_count()).max().unwrap();
         let min_total = bins.iter().map(|b| b.total_count()).min().unwrap();

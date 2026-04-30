@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS macpepdb.blobs (
 
 DROP TABLE IF EXISTS macpepdb.peptides;
 CREATE TABLE IF NOT EXISTS macpepdb.peptides (
-    partition int,
+    partition smallint,
     mass bigint,
     sequence blob,
     PRIMARY KEY (partition, mass, sequence)

@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    num::{NonZeroU32, NonZeroUsize},
+    num::{NonZeroU16, NonZeroUsize},
     path::PathBuf,
     sync::Arc,
 };
@@ -46,8 +46,8 @@ struct Cli {
     #[arg(long, default_value_t = String::from(env!("CARGO_CRATE_NAME")))]
     loki_label: String,
     /// Number of mass partition
-    #[arg(short, long, default_value_t = NonZeroU32::new(1000).unwrap())]
-    partitions: NonZeroU32,
+    #[arg(short, long, default_value_t = NonZeroU16::new(1000).unwrap())]
+    partitions: NonZeroU16,
     /// Socket for prometheus collection endpoint
     #[arg(long)]
     prometheus: Option<SocketAddr>,
@@ -143,7 +143,7 @@ async fn build_db(
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
     num_threads: NonZeroUsize,
-    num_partitions: NonZeroU32,
+    num_partitions: NonZeroU16,
     tui: Option<&TuiHandle>,
 ) {
     // 1. set insert proteins
@@ -280,7 +280,7 @@ async fn build_db_mass_counter(
 async fn build_db_parititoning(
     client: Arc<Client>,
     insert_batch_size: NonZeroUsize,
-    num_partitions: NonZeroU32,
+    num_partitions: NonZeroU16,
 ) -> Partitioning {
     let now = std::time::Instant::now();
     let partitioning = match Blob::select(client.as_ref(), Partitioning::BLOB_KEY)
