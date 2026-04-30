@@ -155,9 +155,12 @@ impl Peptide {
             .iter()
             .all(|value| value.partition() == values[0].partition())
         {
-            BatchType::Logged
-        } else {
             BatchType::Unlogged
+        } else {
+            tracing::warn!(
+                "Peptide batch insert includes multipe partitions. This should be avoided."
+            );
+            BatchType::Logged
         };
 
         let mut batch_statement = Batch::new(batch_type);
