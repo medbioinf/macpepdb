@@ -7,6 +7,7 @@ edition = "2024"
 axum = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossbeam = { workspace = true }
+dashmap = { workspace = true }
 deku = { workspace = true }
 dihardts_omicstools = { workspace = true }
 fallible-iterator = { workspace = true }

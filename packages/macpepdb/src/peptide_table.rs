@@ -1,14 +1,15 @@
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use crossbeam::queue::ArrayQueue;
+use dashmap::DashSet;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use thiserror::Error;
 
 use crate::{
     client::Client,
-    mass_index::Entry as MassIndexEntry,
-    mass_partitioner::Partitioning,
+    mass_index::MassIndex,
+    mass_partitioning::MassPartitioning,
     peptide::Peptide,
     protease::Protease,
     protein::Protein,
@@ -53,6 +54,8 @@ pub enum Error {
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
+type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, DashSet<i32>)>>>;
+
 pub struct PeptideTable {
     client: Arc<Client>,
 }
@@ -67,11 +70,10 @@ impl PeptideTable {
         protease: &Protease,
         insert_batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
-        partitioning: &Partitioning,
+        partitioning: &MassPartitioning,
+        mass_index: MassIndex,
     ) -> Result<(), Error> {
-        let mut mass_index_entries = MassIndexEntry::select(self.client.as_ref(), None, ()).await?;
-        let queue: Arc<ArrayQueue<Option<MassIndexEntry>>> =
-            Arc::new(ArrayQueue::new(num_threads.get() * 3));
+        let queue: ConcurrentlyBuildQueue = Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
         let partitioning = Arc::new(partitioning.clone());
         let inserted_peptides_metric = Arc::new(metrics::counter!(INSERTED_PEPTIDES_METRIC));
@@ -87,7 +89,7 @@ impl PeptideTable {
 
                 tokio::spawn(async move {
                     loop {
-                        let mass_index_entry = match queue.pop() {
+                        let (mass, protein_ids) = match queue.pop() {
                             Some(Some(entry)) => entry,
                             Some(None) => break,
                             None => {
@@ -96,23 +98,25 @@ impl PeptideTable {
                             }
                         };
 
+                        let protein_ids_len = protein_ids.len();
+
                         let mut proteins = Protein::select(
                             client.as_ref(),
-                            Some("WHERE accession IN ?"),
-                            (mass_index_entry.proteins(),),
+                            Some("WHERE id IN ?"),
+                            (Vec::from_iter(protein_ids.into_iter()),),
                         )
                         .await?;
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
                         let mut peptide_sequences: HashSet<ByteSequence> =
-                            HashSet::with_capacity(2 * mass_index_entry.proteins().len());
+                            HashSet::with_capacity(2 * protein_ids_len);
 
                         while let Some(protein) = proteins.next().await.transpose()? {
                             #[allow(clippy::mutable_key_type)]
                             protease
                                 .cleave(protein.sequence().to_string().as_str(), true)
                                 .map_err(Error::Protease)?
-                                .filter(|peptide| Ok(peptide.mass() == mass_index_entry.mass()))
+                                .filter(|peptide| Ok(peptide.mass() == mass))
                                 .for_each(|peptide| {
                                     peptide_sequences
                                         .insert(ByteSequence::try_from(peptide.into_sequence())?);
@@ -128,12 +132,12 @@ impl PeptideTable {
                             let peptides = chunk
                                 .into_iter()
                                 .map(|seq| {
-                                    Ok(Peptide::new_with_partition(
+                                    Peptide::new_with_partition(
                                         PeptideSequence::try_from(seq)?,
                                         partitioning.as_ref(),
-                                    ))
+                                    )
                                 })
-                                .collect::<Result<Vec<_>, crate::sequence::Error>>()?;
+                                .collect::<Result<Vec<_>, crate::peptide::Error>>()?;
 
                             let peptides_len = peptides.len();
                             Peptide::insert_batch(client.as_ref(), peptides.into_iter()).await?;
@@ -145,7 +149,7 @@ impl PeptideTable {
             })
             .collect::<Vec<_>>();
 
-        while let Some(mass_index_entry) = mass_index_entries.next().await.transpose()? {
+        for mass_index_entry in mass_index.into_iter() {
             let mut mass_index_entry = Some(mass_index_entry);
             loop {
                 mass_index_entry = match queue.push(mass_index_entry) {

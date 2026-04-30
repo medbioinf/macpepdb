@@ -2,9 +2,11 @@ CREATE KEYSPACE IF NOT EXISTS macpepdb WITH REPLICATION = {'class': 'NetworkTopo
 
 DROP TABLE IF EXISTS macpepdb.proteins;
 CREATE TABLE IF NOT EXISTS macpepdb.proteins (
-    accession ascii primary key,
+    id int primary key,
+    accession ascii,
     sequence blob,
 );
+CREATE INDEX prot_acc_idx ON macpepdb.proteins (accession);
 
 DROP TABLE IF EXISTS macpepdb.mass_index;
 CREATE TABLE IF NOT EXISTS macpepdb.mass_index (

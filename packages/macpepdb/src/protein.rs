@@ -11,8 +11,9 @@ use crate::{client::Client, sequence::ProteinSequence as Sequence};
 
 static TABLE_NAME: &str = "proteins";
 
-static INSERT_STATEMENT: LazyLock<String> =
-    LazyLock::new(|| format!("INSERT INTO {TABLE_NAME} (accession, sequence) VALUES (?, ?)"));
+static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!("INSERT INTO {TABLE_NAME} (accession, id, sequence) VALUES (?, ?, ?)")
+});
 
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
 
@@ -33,13 +34,15 @@ pub enum Error {
 #[derive(Debug, DeserializeRow, SerializeRow)]
 pub struct Protein {
     accession: String,
+    id: Option<i32>,
     sequence: Sequence,
 }
 
 impl Protein {
-    pub fn new(accession: String, sequence: Sequence) -> Self {
+    pub fn new(accession: String, id: Option<i32>, sequence: Sequence) -> Self {
         Self {
             accession,
+            id,
             sequence,
         }
     }
@@ -50,6 +53,10 @@ impl Protein {
 
     pub fn sequence(&self) -> &Sequence {
         &self.sequence
+    }
+
+    pub fn id(&self) -> Option<i32> {
+        self.id
     }
 
     pub async fn insert(&self, client: &Client) -> Result<(), Error> {
@@ -102,7 +109,18 @@ impl TryFrom<&uniprot_reader::entry::Entry> for Protein {
 
         Ok(Self {
             accession,
+            id: None,
             sequence: Sequence::try_from(entry.sequence())?,
         })
+    }
+}
+
+impl TryFrom<(i32, &uniprot_reader::entry::Entry)> for Protein {
+    type Error = Error;
+
+    fn try_from((id, entry): (i32, &uniprot_reader::entry::Entry)) -> Result<Self, Error> {
+        let mut protein = Self::try_from(entry)?;
+        protein.id = Some(id);
+        Ok(protein)
     }
 }

@@ -1,5 +1,5 @@
 pub mod amino_acid;
-pub mod mass_partitioner;
+pub mod mass_partitioning;
 #[macro_use]
 pub mod mass;
 // pub mod protein;

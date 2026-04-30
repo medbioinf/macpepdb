@@ -1790,6 +1790,7 @@ dependencies = [
  "axum",
  "clap",
  "crossbeam",
+ "dashmap",
  "deku",
  "dihardts_omicstools",
  "fallible-iterator",

@@ -33,14 +33,15 @@ impl ProteinTable {
         let mut protein_ctr: usize = 0;
         let inserted_proteins_metric = metrics::counter!(INSERTED_PROTEINS_METRIC);
         let mut buffer: Vec<Protein> = Vec::with_capacity(insert_batch_size.get());
+        let mut protein_id: i32 = i32::MIN;
 
         for protein_file_path in protein_file_paths {
             let mut buf_reader = BufReader::new(File::open(protein_file_path)?);
             let entry_reader = ProteinReader::new(&mut buf_reader);
 
             for entry in entry_reader {
-                let protein =
-                    Protein::try_from(entry?.entry()).map_err(|e| Error::Protein(Box::new(e)))?;
+                let protein = Protein::try_from((protein_id, entry?.entry()))
+                    .map_err(|e| Error::Protein(Box::new(e)))?;
                 buffer.push(protein);
                 if buffer.len() == insert_batch_size.get() {
                     protein_ctr += buffer.len();
@@ -49,6 +50,7 @@ impl ProteinTable {
                         .await
                         .map_err(|e| Error::Protein(Box::new(e)))?
                 }
+                protein_id += 1;
             }
         }
 

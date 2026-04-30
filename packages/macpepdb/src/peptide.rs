@@ -9,7 +9,7 @@ use thiserror::Error;
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
     client::Client,
-    mass_partitioner::Partitioning,
+    mass_partitioning::MassPartitioning,
     molecules::WATER_MONO_MASS,
     sequence::{IsSequence, PeptideSequence as Sequence},
 };
@@ -62,22 +62,28 @@ impl Peptide {
         }
     }
 
-    pub fn new_with_partition(sequence: Sequence, partitioning: &Partitioning) -> Self {
+    pub fn new_with_partition(
+        sequence: Sequence,
+        partitioning: &MassPartitioning,
+    ) -> Result<Self, Error> {
         let mass = Self::to_peptide_mass(&sequence);
         let partition = partitioning.get(&mass).cloned();
-        Self {
+        if partition.is_none() {
+            return Err(Error::NoPartition(sequence.to_string(), mass));
+        }
+        Ok(Self {
             mass,
             sequence,
             partition,
             amino_acid_counts: OnceCell::new(),
-        }
+        })
     }
 
     pub fn partition(&self) -> Option<i16> {
         self.partition
     }
 
-    pub fn set_partition(&mut self, partitioning: &Partitioning) -> Result<(), Error> {
+    pub fn set_partition(&mut self, partitioning: &MassPartitioning) -> Result<(), Error> {
         self.partition = partitioning.get(&self.mass).cloned();
         self.partition
             .ok_or(Error::NoPartition(self.sequence().to_string(), self.mass))?;

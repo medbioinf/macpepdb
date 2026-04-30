@@ -12,7 +12,7 @@ use macpepdb::{
     client::Client,
     mass_counter::MassCounter,
     mass_index::MassIndex,
-    mass_partitioner::{MassPartitioner, Partitioning},
+    mass_partitioning::MassPartitioning,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide_table::PeptideTable,
     protease::Protease,
@@ -167,8 +167,7 @@ async fn build_db(
             protein_ctr as f64,
         ));
     }
-    let mass_ctr =
-        build_db_mass_index(client.clone(), insert_batch_size, protease, num_threads).await;
+    let mass_index = build_db_mass_index(client.clone(), protease, num_threads).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
     }
@@ -178,31 +177,38 @@ async fn build_db(
         tui.add_metric(MetricConfig::progress(
             macpepdb::mass_counter::PROGESS_METRIC,
             macpepdb::mass_counter::PROGESS_METRIC,
-            mass_ctr as f64,
+            mass_index.len() as f64,
         ));
         tui.add_metric(MetricConfig::counter(
             macpepdb::mass_counter::PEPTIDES_METRIC,
             macpepdb::mass_counter::PEPTIDES_METRIC,
         ));
     }
-    let peptide_ctr =
-        build_db_mass_counter(client.clone(), insert_batch_size, protease, num_threads).await;
+    let mass_counter =
+        build_db_mass_counter(client.clone(), &mass_index, protease, num_threads).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_counter::PROGESS_METRIC);
         tui.remove_metric(macpepdb::mass_counter::PEPTIDES_METRIC);
     }
 
+    let peptides_len = mass_counter.peptides_len();
+
     // 4. caluclate partitioning by going through masses and count peptides
     // partitioning is currently not implemented, let's see first if we need it.
-    let partitioning =
-        build_db_parititoning(client.clone(), insert_batch_size, num_partitions).await;
+    let partitioning = build_db_parititoning(
+        client.clone(),
+        mass_counter,
+        insert_batch_size,
+        num_partitions,
+    )
+    .await;
 
     // 5. go through masses and digest the proteins collect distinct peptides and upsert them with proteins
     if let Some(tui) = &tui {
         tui.add_metric(MetricConfig::progress(
             macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
             macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
-            peptide_ctr as f64,
+            peptides_len as f64,
         ));
     }
     build_db_peptides(
@@ -210,6 +216,7 @@ async fn build_db(
         insert_batch_size,
         protease,
         &partitioning,
+        mass_index,
         num_threads,
     )
     .await;
@@ -239,51 +246,51 @@ async fn build_db_proteins(
 
 async fn build_db_mass_index(
     client: Arc<Client>,
-    insert_batch_size: NonZeroUsize,
     protease: &Protease,
     num_threads: NonZeroUsize,
-) -> usize {
+) -> MassIndex {
     let now = std::time::Instant::now();
-    let mass_ctr = MassIndex::new(client)
-        .build_concurrently(protease, insert_batch_size, num_threads)
+    let index = MassIndex::build_concurrently(client.as_ref(), protease, num_threads)
         .await
         .unwrap();
     tracing::info!(
-        "db mass index: time = {:.2?} s; #masses = {mass_ctr}",
+        "db mass index: time = {:.2?} s; #masses = {}",
         now.elapsed().as_secs_f32(),
+        index.len()
     );
 
-    mass_ctr
+    index
 }
 
 async fn build_db_mass_counter(
     client: Arc<Client>,
-    insert_batch_size: NonZeroUsize,
+    mass_index: &MassIndex,
     protease: &Protease,
     threads: NonZeroUsize,
-) -> usize {
+) -> MassCounter {
     let now = std::time::Instant::now();
 
-    let peptides_ctr = MassCounter::new(client)
-        .count_concurrently(protease, insert_batch_size, threads)
+    let counter = MassCounter::count_concurrently(client.clone(), protease, mass_index, threads)
         .await
         .unwrap();
 
     tracing::info!(
-        "db mass counter: time = {:.2?} s; #peptides = {peptides_ctr}",
+        "db mass counter: time = {:.2?} s; #peptides = {}",
         now.elapsed().as_secs_f32(),
+        counter.peptides_len()
     );
 
-    peptides_ctr
+    counter
 }
 
 async fn build_db_parititoning(
     client: Arc<Client>,
+    mass_counter: MassCounter,
     insert_batch_size: NonZeroUsize,
     num_partitions: NonZeroU16,
-) -> Partitioning {
+) -> MassPartitioning {
     let now = std::time::Instant::now();
-    let partitioning = match Blob::select(client.as_ref(), Partitioning::BLOB_KEY)
+    let partitioning = match Blob::select(client.as_ref(), MassPartitioning::BLOB_KEY)
         .await
         .unwrap()
     {
@@ -292,8 +299,7 @@ async fn build_db_parititoning(
             partitioning
         }
         None => {
-            let partitioning = MassPartitioner::new(client.clone())
-                .build(num_partitions)
+            let partitioning = MassPartitioning::build(mass_counter, num_partitions)
                 .await
                 .unwrap();
             Blob::insert(client.as_ref(), &partitioning, insert_batch_size)
@@ -316,12 +322,19 @@ async fn build_db_peptides(
     client: Arc<Client>,
     insert_batch_size: NonZeroUsize,
     protease: &Protease,
-    partitioning: &Partitioning,
+    partitioning: &MassPartitioning,
+    mass_index: MassIndex,
     num_threads: NonZeroUsize,
 ) {
     let now = std::time::Instant::now();
     PeptideTable::new(client)
-        .build_concurrently(protease, insert_batch_size, num_threads, partitioning)
+        .build_concurrently(
+            protease,
+            insert_batch_size,
+            num_threads,
+            partitioning,
+            mass_index,
+        )
         .await
         .unwrap();
     tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);
