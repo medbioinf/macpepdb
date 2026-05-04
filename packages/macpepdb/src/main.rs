@@ -32,7 +32,7 @@ struct Cli {
     #[arg(short, long, default_value_t = String::from("scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb"))]
     database_url: String,
     /// Batch size of records to insert concurrently
-    #[arg(short, long, default_value_t = NonZeroUsize::new(1000).unwrap())]
+    #[arg(short, long, default_value_t = NonZeroUsize::new(100).unwrap())]
     insert_batch_size: NonZeroUsize,
     /// Path to optional log file
     #[arg(long)]
