@@ -51,9 +51,6 @@ struct Cli {
     /// Socket for prometheus collection endpoint
     #[arg(long)]
     prometheus: Option<SocketAddr>,
-    /// Batch size of peptides to insert
-    #[arg(long, default_value_t = NonZeroUsize::new(1000).unwrap())]
-    protien_reader_cache_size: NonZeroUsize,
     /// Flag to show tracing on the stdout, no tui, no metrics
     #[arg(long, default_value_t = false, conflicts_with = "tui")]
     terminal: bool,
