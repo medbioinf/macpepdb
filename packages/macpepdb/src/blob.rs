@@ -115,6 +115,9 @@ impl Blob {
             return Err(Error::BlobTooLarge(data.len()));
         }
 
+        // Starting with i16::MAX and using wrapping_add to start with i16::MIN in first iterations
+        // just return BlobPart directly and to create and store blob part temprorarily in memory so I can increase the
+        // counter afterwards. I know. It is kinda stupid.
         let mut part_ctr = i16::MAX;
 
         let blob_parts = data
@@ -122,7 +125,7 @@ impl Blob {
             .chunks(MAX_BLOB_PART_SIZE)
             .into_iter()
             .map(|data_chunk| {
-                part_ctr += 1;
+                part_ctr = part_ctr.wrapping_add(1);
                 BlobPart {
                     key: blob.key().to_string(),
                     part: part_ctr, // TODO: implement part numbering
