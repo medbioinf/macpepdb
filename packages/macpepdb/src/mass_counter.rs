@@ -146,6 +146,11 @@ impl MassCounter {
                         counter.insert(mass, peptide_sequences.len());
 
                         progress_metric.increment(1);
+
+                        tracing::warn!(
+                            "current index size: {}",
+                            Self::inner_size(counter.as_ref()).await,
+                        );
                     }
 
                     Ok::<_, Error>(())
@@ -215,6 +220,15 @@ impl MassCounter {
 
     pub fn peptides_len(&self) -> usize {
         self.0.iter().fold(0, |acc, entry| acc + entry.value())
+    }
+
+    async fn inner_size(index: &DashMap<i64, usize>) -> usize {
+        std::mem::size_of::<DashMap<i64, usize>>()
+            + index.capacity() * (std::mem::size_of::<i64>() + std::mem::size_of::<usize>())
+    }
+
+    pub async fn size(&self) -> usize {
+        Self::inner_size(&self.0).await + std::mem::size_of::<Self>()
     }
 }
 

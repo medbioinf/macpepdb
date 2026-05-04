@@ -122,6 +122,10 @@ impl MassIndex {
                                 .insert(protein.id().ok_or(Error::MissingProteinId)?);
                         }
                         progress_metric.increment(1);
+                        tracing::warn!(
+                            "current index size: {}",
+                            MassIndex::inner_size(index.as_ref()).await,
+                        );
                     }
 
                     Ok::<_, Error>(())
@@ -184,6 +188,19 @@ impl MassIndex {
         }
 
         Error::NoErroredThread
+    }
+
+    async fn inner_size(index: &DashMap<i64, DashSet<i32>>) -> usize {
+        std::mem::size_of::<DashMap<i64, DashSet<i32>>>()
+            + index.capacity()
+                * (std::mem::size_of::<usize>() + std::mem::size_of::<DashSet<i32>>())
+            + index.iter().fold(0_usize, |acc, entry| {
+                acc + entry.capacity() * std::mem::size_of::<i32>()
+            })
+    }
+
+    pub async fn size(&self) -> usize {
+        Self::inner_size(&self.0).await + std::mem::size_of::<Self>()
     }
 }
 
