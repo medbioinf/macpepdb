@@ -103,7 +103,7 @@ impl PeptideTable {
                         let mut proteins = Protein::select(
                             client.as_ref(),
                             Some("WHERE id IN ?"),
-                            (Vec::from_iter(protein_ids.into_iter()),),
+                            (Vec::from_iter(protein_ids),),
                         )
                         .await?;
 
@@ -124,9 +124,8 @@ impl PeptideTable {
                                 })?;
                         }
 
-                        let mut peptide_sequence_stream =
-                            futures::stream::iter(peptide_sequences.into_iter())
-                                .chunks(insert_batch_size.get());
+                        let mut peptide_sequence_stream = futures::stream::iter(peptide_sequences)
+                            .chunks(insert_batch_size.get());
 
                         while let Some(chunk) = peptide_sequence_stream.next().await {
                             let peptides = chunk
