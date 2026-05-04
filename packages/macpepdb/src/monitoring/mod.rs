@@ -5,6 +5,7 @@ use std::{collections::HashMap, fmt::Display, net::SocketAddr, path::PathBuf, pi
 use clap::ValueEnum;
 use macpepdb_tui::{TuiLayer, TuiRecorder};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
+use metrics_peek::MetricsPeek;
 use metrics_util::layers::{Fanout, FanoutBuilder};
 use thiserror::Error;
 use tokio::task::JoinHandle;
@@ -69,6 +70,7 @@ pub enum MetricTarget {
         Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
     ),
     Tui(TuiRecorder),
+    Tracing(u64),
 }
 
 /// Log rotation values for CLI
@@ -203,6 +205,7 @@ impl Monitoring {
 
         let mut tui_recorder: Option<TuiRecorder> = None;
         let mut prometheus_recorder: Option<PrometheusRecorder> = None;
+        let mut peek_recorder: Option<MetricsPeek<_>> = None;
 
         for metric_target in metric_targets {
             match metric_target {
@@ -216,6 +219,19 @@ impl Monitoring {
                 MetricTarget::Tui(recorder) => {
                     tui_recorder = Some(recorder);
                 }
+                MetricTarget::Tracing(milliseconds) => {
+                    let log_mode = if milliseconds == 0 {
+                        metrics_peek::LogMode::Immediate
+                    } else {
+                        metrics_peek::LogMode::Periodic(milliseconds)
+                    };
+
+                    peek_recorder = Some(MetricsPeek::new(
+                        log_mode,
+                        |msg| tracing::info!("{msg}"),
+                        |err| tracing::error!("Error in metrics recorder: {err}"),
+                    ));
+                }
             }
         }
 
@@ -224,6 +240,9 @@ impl Monitoring {
             fanout_builder = fanout_builder.add_recorder(recorder);
         }
         if let Some(recorder) = prometheus_recorder {
+            fanout_builder = fanout_builder.add_recorder(recorder);
+        }
+        if let Some(recorder) = peek_recorder {
             fanout_builder = fanout_builder.add_recorder(recorder);
         }
 

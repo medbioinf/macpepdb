@@ -55,6 +55,9 @@ struct Cli {
     /// Flag to show tracing on the stdout, no tui, no metrics
     #[arg(long, default_value_t = false, conflicts_with = "tui")]
     terminal: bool,
+    /// If set
+    #[arg(long)]
+    metrics_to_logs: Option<u64>,
     /// Flag to show a terminal UI for tracing and metics
     #[arg(long, default_value_t = false, conflicts_with = "terminal")]
     tui: bool,
@@ -112,6 +115,10 @@ async fn main() {
             prometheus_socket,
             Box::pin(axum_shutdown_signal()),
         ));
+    }
+
+    if let Some(metrics_to_logs_period) = cli.metrics_to_logs {
+        metric_targets.push(MetricTarget::Tracing(metrics_to_logs_period));
     }
 
     let _monitoring = Monitoring::new(

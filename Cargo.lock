@@ -1800,6 +1800,7 @@ dependencies = [
  "macpepdb_tui",
  "metrics",
  "metrics-exporter-prometheus",
+ "metrics-peek",
  "metrics-util",
  "num-traits",
  "pastey",
@@ -1897,6 +1898,13 @@ dependencies = [
  "metrics-util",
  "quanta",
  "thiserror",
+]
+
+[[package]]
+name = "metrics-peek"
+version = "0.1.0"
+dependencies = [
+ "metrics",
 ]
 
 [[package]]

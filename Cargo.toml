@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "packages/macpepdb",
+    "packages/metrics-peek",
     "packages/uniprot_reader",
     "packages/tui",
 ]
@@ -41,5 +42,6 @@ url = "2.5"
 
 # workspace
 macpepdb = { path = "packages/macpepdb" }
+metrics-peek = { path = "packages/metrics-peek" }
 macpepdb_tui = { path = "packages/tui" }
 uniprot_reader = { path = "packages/uniprot_reader" }

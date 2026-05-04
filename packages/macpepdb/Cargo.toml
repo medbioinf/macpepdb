@@ -17,6 +17,7 @@ itertools = { workspace = true }
 macpepdb_tui = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+metrics-peek = { workspace = true }
 metrics-util = { workspace = true }
 num-traits = { workspace = true }
 pastey = { workspace = true }
