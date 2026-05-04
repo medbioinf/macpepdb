@@ -1,40 +1,53 @@
+networks:
+  cassandra-net:
+    driver: bridge
+
 services:
-  master:
-    container_name: "${COMPOSE_PROJECT_NAME:-citus}_master"
-    image: "citusdata/citus:14"
+
+  cassandra-1:
+    image: "cassandra:latest"  # cassandra:4.1.3
+    container_name: "cassandra1"
+    hostname: cassandra1
     ports:
-      - "${COORDINATOR_EXTERNAL_PORT:-5432}:5432"
-    labels:
-      - "com.citusdata.role=Master"
-    environment: &AUTH
-      POSTGRES_USER: "${POSTGRES_USER:-postgres}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-postgres}"
-      PGUSER: "${POSTGRES_USER:-postgres}"
-      PGPASSWORD: "${POSTGRES_PASSWORD:-postgres}"
-      POSTGRES_HOST_AUTH_METHOD: "${POSTGRES_HOST_AUTH_METHOD:-trust}"
-  worker1: &worker
-    image: "citusdata/citus:14"
-    labels:
-      - "com.citusdata.role=Worker"
+      - 7000:7000
+      - 9042:9042
+    networks:
+      - cassandra-net
+    environment: &environment
+      CASSANDRA_CLUSTER_NAME: macpepdb-cluster
+      CASSANDRA_DC: macpepdb-dc
+      CASSANDRA_rack: macpepdb-rack
+      CASSANDRA_START_RPC: true
+      CASSANDRA_RPC_ADDRESS: 0.0.0.0
+      CASSANDRA_LISTEN_ADDRESS: auto
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_NUM_TOKENS: 4
+      CASSANDRA_SEEDS: cassandra1
+    volumes:
+      - cassandra-node-1:/var/lib/cassandra:rw
+    healthcheck: &healthcheck
+      test: ["CMD-SHELL", "nodetool status"]
+      interval: 2m
+      start_period: 2m
+      timeout: 10s
+      retries: 5
+
+  cassandra-2:
+    image: "cassandra:latest"  # cassandra:4.1.3
+    container_name: "cassandra2"
+    hostname: cassandra2
+    ports:
+      - 9043:9042
+    networks:
+      - cassandra-net
+    environment: *environment
     depends_on:
-      - manager
-    environment: *AUTH
-    command:
-      - "/citus-overrides/wait-for-manager.sh"
-      - "-c"
-      - "config_file=/citus-overrides/postgresql.conf"
+      cassandra-1:
+        condition: service_healthy
     volumes:
-      - healthcheck-volume:/healthcheck
-      - ./docker/compose/citus:/citus-overrides
-  worker2:
-    <<: *worker
-  manager:
-    container_name: "${COMPOSE_PROJECT_NAME:-citus}_manager"
-    image: "ghcr.io/medbioinf/citusdata-membership-manager:fixed-docker-api"
-    volumes:
-      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
-      - healthcheck-volume:/healthcheck
-    depends_on: [master]
-    environment: *AUTH
+      - cassandra-node-2:/var/lib/cassandra:rw
+    healthcheck: *healthcheck
+
 volumes:
-  healthcheck-volume:
+  cassandra-node-1:
+  cassandra-node-2:
