@@ -11,6 +11,7 @@ use thiserror::Error;
 use crate::{client::Client, protease::Protease, protein::Protein};
 
 pub static PROGRESS_METRIC: &str = "mass_index::progress";
+pub static SIZE_METRIC: &str = "mass_index::size";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -82,7 +83,10 @@ impl MassIndex {
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
         let progress_metric = Arc::new(metrics::counter!(PROGRESS_METRIC));
+        let size_metric = Arc::new(metrics::counter!(SIZE_METRIC));
         let index: Arc<DashMap<i64, DashSet<i32>>> = Arc::new(DashMap::new());
+
+        size_metric.increment(std::mem::size_of::<DashMap<i64, DashSet<i32>>>() as u64);
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -90,6 +94,7 @@ impl MassIndex {
                 let queue = queue.clone();
                 let protease = protease.clone();
                 let progress_metric = progress_metric.clone();
+                let size_metric = size_metric.clone();
                 let index = index.clone();
 
                 tokio::spawn(async move {
@@ -116,16 +121,22 @@ impl MassIndex {
                             .collect::<HashSet<_>>();
 
                         for mass in masses {
-                            index
+                            if index
                                 .entry(mass)
-                                .or_default()
-                                .insert(protein.id().ok_or(Error::MissingProteinId)?);
+                                .or_insert_with(|| {
+                                    size_metric.increment(
+                                        (std::mem::size_of::<i64>()
+                                            + std::mem::size_of::<DashSet<i32>>())
+                                            as u64,
+                                    );
+                                    DashSet::new()
+                                })
+                                .insert(protein.id().ok_or(Error::MissingProteinId)?)
+                            {
+                                size_metric.increment(std::mem::size_of::<i32>() as u64);
+                            }
                         }
                         progress_metric.increment(1);
-                        tracing::warn!(
-                            "current index size: {}",
-                            MassIndex::inner_size(index.as_ref()).await,
-                        );
                     }
 
                     Ok::<_, Error>(())
