@@ -55,7 +55,7 @@ impl MassCounter {
             let mut proteins = Protein::select(
                 client,
                 Some("WHERE id IN ?"),
-                (Vec::from_iter(entry.value().iter().map(|id| *id)),),
+                (Vec::from_iter(entry.value().iter().cloned()),),
             )
             .await?;
 
@@ -162,10 +162,7 @@ impl MassCounter {
             .collect::<Vec<_>>();
 
         for entry in mass_index.iter() {
-            let mut entry = Some((
-                *entry.key(),
-                Vec::from_iter(entry.value().iter().map(|id| *id)),
-            ));
+            let mut entry = Some((*entry.key(), Vec::from_iter(entry.value().iter().cloned())));
             loop {
                 entry = match queue.push(entry) {
                     Ok(()) => break,
