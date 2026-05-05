@@ -3,7 +3,7 @@ use std::{
 };
 
 use crossbeam::queue::ArrayQueue;
-use dashmap::{DashMap, DashSet, iter::OwningIter};
+use dashmap::{DashMap, iter::OwningIter};
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use thiserror::Error;
@@ -39,12 +39,12 @@ pub enum Error {
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-pub struct MassIndex(DashMap<i64, DashSet<i32>>);
+pub struct MassIndex(DashMap<i64, HashSet<i32>>);
 
 impl MassIndex {
     pub async fn build(client: &Client, protease: &Protease) -> Result<Self, Error> {
         let mut proteins = Protein::select(client, None, ()).await?;
-        let index: DashMap<i64, DashSet<i32>> = DashMap::new();
+        let index: DashMap<i64, HashSet<i32>> = DashMap::new();
         let progress_metric = metrics::counter!(PROGRESS_METRIC);
 
         while let Some(protein) = proteins.next().await.transpose()? {
@@ -84,9 +84,9 @@ impl MassIndex {
         let protease = Arc::new(protease.clone());
         let progress_metric = Arc::new(metrics::counter!(PROGRESS_METRIC));
         let size_metric = Arc::new(metrics::counter!(SIZE_METRIC));
-        let index: Arc<DashMap<i64, DashSet<i32>>> = Arc::new(DashMap::new());
+        let index: Arc<DashMap<i64, HashSet<i32>>> = Arc::new(DashMap::new());
 
-        size_metric.increment(std::mem::size_of::<DashMap<i64, DashSet<i32>>>() as u64);
+        size_metric.increment(std::mem::size_of::<DashMap<i64, HashSet<i32>>>() as u64);
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -126,10 +126,10 @@ impl MassIndex {
                                 .or_insert_with(|| {
                                     size_metric.increment(
                                         (std::mem::size_of::<i64>()
-                                            + std::mem::size_of::<DashSet<i32>>())
+                                            + std::mem::size_of::<HashSet<i32>>())
                                             as u64,
                                     );
-                                    DashSet::new()
+                                    HashSet::new()
                                 })
                                 .insert(protein.id().ok_or(Error::MissingProteinId)?)
                             {
@@ -201,10 +201,10 @@ impl MassIndex {
         Error::NoErroredThread
     }
 
-    async fn inner_size(index: &DashMap<i64, DashSet<i32>>) -> usize {
-        std::mem::size_of::<DashMap<i64, DashSet<i32>>>()
+    async fn inner_size(index: &DashMap<i64, HashSet<i32>>) -> usize {
+        std::mem::size_of::<DashMap<i64, HashSet<i32>>>()
             + index.capacity()
-                * (std::mem::size_of::<usize>() + std::mem::size_of::<DashSet<i32>>())
+                * (std::mem::size_of::<usize>() + std::mem::size_of::<HashSet<i32>>())
             + index.iter().fold(0_usize, |acc, entry| {
                 acc + entry.capacity() * std::mem::size_of::<i32>()
             })
@@ -216,25 +216,25 @@ impl MassIndex {
 }
 
 impl Deref for MassIndex {
-    type Target = DashMap<i64, DashSet<i32>>;
+    type Target = DashMap<i64, HashSet<i32>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl From<MassIndex> for DashMap<i64, DashSet<i32>> {
+impl From<MassIndex> for DashMap<i64, HashSet<i32>> {
     fn from(index: MassIndex) -> Self {
         index.0
     }
 }
 
 impl IntoIterator for MassIndex {
-    type Item = (i64, DashSet<i32>);
-    type IntoIter = OwningIter<i64, DashSet<i32>>;
+    type Item = (i64, HashSet<i32>);
+    type IntoIter = OwningIter<i64, HashSet<i32>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        DashMap::<i64, DashSet<i32>>::from(self).into_iter()
+        DashMap::<i64, HashSet<i32>>::from(self).into_iter()
     }
 }
 

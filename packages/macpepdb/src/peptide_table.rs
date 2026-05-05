@@ -1,7 +1,6 @@
 use std::{collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
 
 use crossbeam::queue::ArrayQueue;
-use dashmap::DashSet;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use thiserror::Error;
@@ -54,7 +53,7 @@ pub enum Error {
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, DashSet<i32>)>>>;
+type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, HashSet<i32>)>>>;
 
 pub struct PeptideTable {
     client: Arc<Client>,
