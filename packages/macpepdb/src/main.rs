@@ -23,7 +23,8 @@ use macpepdb::{
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
 use url::Url;
 
-// jemalloc
+// Allocator
+//// jemalloc
 #[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
 use tikv_jemallocator::Jemalloc;
 
@@ -31,13 +32,21 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-// mimalloc
+//// mimalloc
 #[cfg(feature = "mimalloc")]
 use mimalloc::MiMalloc;
 
 #[cfg(feature = "mimalloc")]
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
+
+//// tcmalloc
+#[cfg(feature = "tcmalloc")]
+use tcmalloc2::TcMalloc;
+
+#[cfg(feature = "tcmalloc")]
+#[global_allocator]
+static GLOBAL: TcMalloc = TcMalloc;
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]

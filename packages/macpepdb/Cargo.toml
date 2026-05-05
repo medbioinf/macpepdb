@@ -26,6 +26,7 @@ postcard = { workspace = true, features = ["alloc"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 scylla = { workspace = true }
+tcmalloc2 = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tower-http = { workspace = true, features = ["cors"] }
@@ -46,3 +47,4 @@ dihardts_omicstools = { workspace = true }
 [features]
 jemalloc = ["dep:tikv-jemallocator"]
 mimalloc = ["dep:mimalloc"]
+tcmalloc = ["dep:tcmalloc2"]
