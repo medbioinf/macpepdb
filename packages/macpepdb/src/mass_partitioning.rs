@@ -77,6 +77,7 @@ pub struct MassPartitioning(HashMap<i64, i16>);
 impl MassPartitioning {
     pub const BLOB_KEY: &'static str = "partitioning";
 
+    // TODO: Remove async
     pub async fn build(mass_counter: MassCounter, num_bins: NonZeroU16) -> Result<Self, Error> {
         let mass_count_entries = mass_counter.into_iter().collect::<Vec<_>>();
 
@@ -156,6 +157,12 @@ impl MassPartitioning {
                     .collect::<Vec<_>>()
             })
             .collect())
+    }
+
+    /// Just for internal use int test
+    #[cfg(test)]
+    pub(crate) fn from_iter(iter: impl Iterator<Item = (i64, i16)>) -> Self {
+        Self(iter.collect())
     }
 }
 

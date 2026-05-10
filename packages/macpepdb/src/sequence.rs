@@ -2,6 +2,7 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     num::NonZeroUsize,
+    ops::Index,
 };
 
 use deku::prelude::*;
@@ -20,6 +21,7 @@ use thiserror::Error;
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
     cql::ensure_not_null_slice,
+    mass::to_float as mass_to_float,
 };
 
 #[derive(Debug, Error)]
@@ -43,20 +45,25 @@ pub enum Error {
     ),
 }
 
-pub trait IsSequence<T: num_traits::PrimInt>:
-    Clone
-    + Debug
-    + Display
-    + Eq
-    + Hash
+pub trait IsSimpleSequence: Clone + Display + Eq + Hash + PartialEq + Send + Sync {
+    fn amino_acids(&self) -> impl Iterator<Item = &'static AminoAcid>;
+    fn amino_acid_bit_codes(&self) -> impl Iterator<Item = &AminoAcidBitCode>;
+    fn len(&self) -> usize;
+    fn is_empty(&self) -> bool;
+    fn first(&self) -> Option<&AminoAcidBitCode>;
+    fn last(&self) -> Option<&AminoAcidBitCode>;
+}
+
+pub trait IsBitSequence<T: num_traits::PrimInt>:
+    Debug
     + TryInto<Vec<u8>>
     + TryInto<ByteSequence>
-    + PartialEq
     + for<'a> TryFrom<&'a str>
     + for<'a> DekuReader<'a>
     + DekuWriter
     + for<'frame, 'metadata> DeserializeValue<'frame, 'metadata>
     + SerializeValue
+    + IsSimpleSequence
 {
     const MIN_LENGTH: NonZeroUsize;
     const MAX_LENGTH: NonZeroUsize;
@@ -85,22 +92,6 @@ pub trait IsSequence<T: num_traits::PrimInt>:
 
         Ok(())
     }
-
-    fn amino_acids(&self) -> impl Iterator<Item = &'static AminoAcid> {
-        self.data().iter().map(<&'static AminoAcid>::from)
-    }
-
-    fn amino_acid_bit_codes(&self) -> impl Iterator<Item = &AminoAcidBitCode> {
-        self.data().iter()
-    }
-
-    fn len(&self) -> usize {
-        self.data().len()
-    }
-
-    fn is_empty(&self) -> bool {
-        self.data().is_empty()
-    }
 }
 
 macro_rules! make_sequence {
@@ -120,8 +111,34 @@ macro_rules! make_sequence {
                 }
             }
 
+            impl IsSimpleSequence for [< $name:camel >] {
+                fn amino_acids(&self) -> impl Iterator<Item = &'static AminoAcid> {
+                    self.data.iter().map(<&'static AminoAcid>::from)
+                }
 
-            impl IsSequence<$count_type> for [< $name:camel >] {
+                fn amino_acid_bit_codes(&self) -> impl Iterator<Item = &AminoAcidBitCode> {
+                    self.data.iter()
+                }
+
+                fn len(&self) -> usize {
+                    self.data.len()
+                }
+
+                fn is_empty(&self) -> bool {
+                    self.data.is_empty()
+                }
+
+                fn first(&self) -> Option<&AminoAcidBitCode> {
+                    self.data.first()
+                }
+
+                fn last(&self) -> Option<&AminoAcidBitCode> {
+                    self.data.last()
+                }
+            }
+
+
+            impl IsBitSequence<$count_type> for [< $name:camel >] {
                 const MIN_LENGTH: NonZeroUsize = NonZeroUsize::new($min_len).unwrap();
                 const MAX_LENGTH: NonZeroUsize = NonZeroUsize::new($max_len).unwrap();
 
@@ -205,6 +222,23 @@ macro_rules! make_sequence {
                 }
             }
 
+            impl Index <usize> for [< $name:camel >] {
+                type Output = AminoAcidBitCode;
+
+                fn index(&self, index: usize) -> &Self::Output {
+                    &self.data[index]
+                }
+            }
+
+            impl IntoIterator for [< $name:camel >] {
+                type Item = AminoAcidBitCode;
+                type IntoIter = std::vec::IntoIter<AminoAcidBitCode>;
+
+                fn into_iter(self) -> Self::IntoIter {
+                    self.data.into_iter()
+                }
+            }
+
             impl SerializeValue for [< $name:camel >] {
                 fn serialize<'b>(
                     &self,
@@ -268,6 +302,163 @@ make_sequence!(ProteinSequence, u16, 16, 1, u16::MAX as usize);
 /// maps, sets etc.
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct ByteSequence(Vec<u8>);
+
+/// Part of the a modified sequence which can keep amino acids as well as modifications (as strings)
+///
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub enum ModifiedSequencePart {
+    AminoAcid(AminoAcidBitCode),
+    CTerminalModification(i64),
+    GlobalModifications(Vec<(i64, AminoAcidBitCode)>),
+    NTerminalModification(i64),
+    PositionModification(i64),
+}
+
+impl Display for ModifiedSequencePart {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ModifiedSequencePart::AminoAcid(aa) => {
+                write!(f, "{}", AminoAcid::by_bit_code(aa).code())
+            }
+            ModifiedSequencePart::CTerminalModification(mass) => {
+                write!(f, "-[{}]", mass_to_float(*mass))
+            }
+            ModifiedSequencePart::GlobalModifications(modifications) => {
+                let mods = modifications
+                    .iter()
+                    .map(|(mass, aa)| {
+                        format!(
+                            "[{:+}]@{}",
+                            mass_to_float(*mass),
+                            AminoAcid::by_bit_code(aa).code()
+                        )
+                    })
+                    .collect::<Vec<String>>()
+                    .join(",");
+                write!(f, "<{}>", mods)
+            }
+            ModifiedSequencePart::NTerminalModification(mass) => {
+                write!(f, "[{}]-", mass_to_float(*mass))
+            }
+            ModifiedSequencePart::PositionModification(mass) => {
+                write!(f, "[{}]", mass_to_float(*mass))
+            }
+        }
+    }
+}
+
+/// Seqeunces which can contain both amino acids and modifications (ProForma compatible),
+#[derive(Clone, Eq, Hash, PartialEq)]
+pub struct ModifiedSequence(Vec<ModifiedSequencePart>);
+
+impl ModifiedSequence {
+    pub fn first(&self) -> Option<&AminoAcidBitCode> {
+        self.0.iter().find_map(|part| {
+            if let ModifiedSequencePart::AminoAcid(aa) = part {
+                Some(aa)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ModifiedSequencePart> {
+        self.0.iter()
+    }
+
+    pub fn last(&self) -> Option<&AminoAcidBitCode> {
+        self.0.iter().rev().find_map(|part| {
+            if let ModifiedSequencePart::AminoAcid(aa) = part {
+                Some(aa)
+            } else {
+                None
+            }
+        })
+    }
+
+    pub(crate) fn push(&mut self, part: ModifiedSequencePart) {
+        self.0.push(part);
+    }
+
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self(Vec::with_capacity(capacity))
+    }
+}
+
+impl Display for ModifiedSequence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for part in &self.0 {
+            write!(f, "{}", part)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<PeptideSequence> for ModifiedSequence {
+    fn from(peptide_sequence: PeptideSequence) -> Self {
+        Self(
+            peptide_sequence
+                .into_iter()
+                .map(ModifiedSequencePart::AminoAcid)
+                .collect(),
+        )
+    }
+}
+
+impl IsSimpleSequence for ModifiedSequence {
+    fn amino_acids(&self) -> impl Iterator<Item = &'static AminoAcid> {
+        self.0.iter().filter_map(|part| {
+            if let ModifiedSequencePart::AminoAcid(aa) = part {
+                Some(AminoAcid::by_bit_code(aa))
+            } else {
+                None
+            }
+        })
+    }
+
+    fn amino_acid_bit_codes(&self) -> impl Iterator<Item = &AminoAcidBitCode> {
+        self.0.iter().filter_map(|part| {
+            if let ModifiedSequencePart::AminoAcid(aa) = part {
+                Some(aa)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn len(&self) -> usize {
+        self.0
+            .iter()
+            .filter(|part| matches!(part, ModifiedSequencePart::AminoAcid(_)))
+            .count()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0
+            .iter()
+            .all(|part| !matches!(part, ModifiedSequencePart::AminoAcid(_)))
+    }
+
+    fn first(&self) -> Option<&AminoAcidBitCode> {
+        self.0.iter().find_map(|part| {
+            if let ModifiedSequencePart::AminoAcid(aa) = part {
+                Some(aa)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn last(&self) -> Option<&AminoAcidBitCode> {
+        self.0.iter().rev().find_map(|part| {
+            if let ModifiedSequencePart::AminoAcid(aa) = part {
+                Some(aa)
+            } else {
+                None
+            }
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {

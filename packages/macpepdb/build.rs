@@ -20,13 +20,17 @@ fn create_amino_acid_bit_code(amino_acid: &impl AminoAcid) -> Result<u8, String>
     Ok(bit_code)
 }
 
-fn create_amino_acid_tuple_for_macro_call(amino_acid: &impl AminoAcid) -> String {
+fn create_amino_acid_tuple_for_macro_call(
+    amino_acid: &impl AminoAcid,
+    is_canonical: bool,
+) -> String {
     format!(
-        "(\"{}\"; '{}'; {}; {})",
+        "(\"{}\"; '{}'; {}; {}; {})",
         amino_acid.get_name(),
         amino_acid.get_code(),
         amino_acid.get_mono_mass(),
-        create_amino_acid_bit_code(amino_acid).unwrap()
+        create_amino_acid_bit_code(amino_acid).unwrap(),
+        is_canonical
     )
 }
 
@@ -39,13 +43,13 @@ fn main() {
 
     let mut amino_acids: Vec<String> = CANONICAL_AMINO_ACIDS
         .iter()
-        .map(create_amino_acid_tuple_for_macro_call)
+        .map(|amino_acid| create_amino_acid_tuple_for_macro_call(amino_acid, true))
         .collect();
 
     amino_acids.extend(
         NON_CANONICAL_AMINO_ACIDS
             .iter()
-            .map(create_amino_acid_tuple_for_macro_call)
+            .map(|amino_acid| create_amino_acid_tuple_for_macro_call(amino_acid, false))
             .collect::<Vec<String>>(),
     );
 

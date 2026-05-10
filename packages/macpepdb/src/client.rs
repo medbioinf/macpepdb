@@ -85,6 +85,8 @@ impl ClientSettings {
             .map(|s| s.trim().to_string())
             .collect();
 
+        tracing::info!("hosts {:?}", hosts);
+
         let keyspace = matches
             .name("keyspace")
             .ok_or(Error::InvalidUrl("keyspace not found".to_string()))?

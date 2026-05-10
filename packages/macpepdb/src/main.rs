@@ -7,20 +7,28 @@ use std::{
     time::Duration,
 };
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use futures::StreamExt;
 use macpepdb::{
     blob::Blob,
     client::Client,
+    configuration::Configuration,
+    mass::to_float as mass_to_float,
     mass_counter::MassCounter,
     mass_index::MassIndex,
     mass_partitioning::MassPartitioning,
+    mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
+    peptide::Peptidoform,
+    peptide_search::{MultiTaskSearch, Search},
     peptide_table::PeptideTable,
+    post_translational_modification::{PTMCollection, PostTranslationalModification},
     protease::Protease,
     protein_table::ProteinTable,
-    sequence::{IsSequence, PeptideSequence},
+    sequence::{IsBitSequence, PeptideSequence},
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
+use tokio::io::AsyncWriteExt;
 use url::Url;
 
 // Allocator
@@ -48,6 +56,69 @@ use tcmalloc2::TcMalloc;
 #[global_allocator]
 static GLOBAL: TcMalloc = TcMalloc;
 
+#[derive(Subcommand)]
+enum Command {
+    /// Build the database
+    Build {
+        // Optional and default arguments
+        /// Batch size of records to insert concurrently
+        #[arg(short, long, default_value_t = NonZeroUsize::new(100).unwrap())]
+        insert_batch_size: NonZeroUsize,
+        /// Number of mass partition
+        #[arg(short, long, default_value_t = NonZeroU16::new(1000).unwrap())]
+        partitions: NonZeroU16,
+        /// Batch size of records to insert concurrently
+        #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
+        threads: NonZeroUsize,
+        // Positional default arguments
+        /// Protein files
+        #[arg(value_delimiter = ' ', num_args = 0..)]
+        protein_file_paths: Vec<PathBuf>,
+    },
+    /// Search for a specific mass
+    Search {
+        // Optional and default arguments
+        /// Flag allows duplicates in results can lead to lower memory usage.
+        #[arg(short, long, default_value_t = true, action = clap::ArgAction::SetTrue)]
+        allow_duplicates: bool,
+        /// Controlls which peptides are returned.
+        /// true: Only SwissProt; false: Only TrEMBL
+        #[arg(long)]
+        is_reviewed: Option<bool>,
+        /// Lower mass tolerance in PPM
+        #[arg(short, long, default_value_t = 10)]
+        lower_mass_tolerance_ppm: i64,
+        /// Maximum variable modifiction considered per peptides
+        #[arg(short, long, default_value_t = 3)]
+        max_variable_modifications: usize,
+        /// Optional PTM file format, TODO add format
+        #[arg(short, long)]
+        ptm_file_path: Option<PathBuf>,
+        /// Stops returning ProForma compliant sequences
+        /// and fall back to canonical sequences only
+        #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        only_canonical: bool,
+        /// Proteome IDs to filter for, can be used multiple times, if not set, all proteome IDs are included
+        #[arg(short, long, action = clap::ArgAction::Append)]
+        proteome_ids: Vec<String>,
+        /// Taxanomy IDs to filter for, can be used multiple times, if not set, all taxonomy IDs are included
+        #[arg(short, long, action = clap::ArgAction::Append)]
+        taxonomy_ids: Vec<i32>,
+        /// Concurrent searches of condition
+        #[arg(long, default_value_t = NonZeroUsize::new(16).unwrap())]
+        threads: NonZeroUsize,
+        /// Upper mass tolerance in PPM
+        #[arg(short, long, default_value_t = 10)]
+        upper_mass_tolerance_ppm: i64,
+
+        // Positional arguments
+        /// Canoncial mass to search for
+        mass: f64,
+        /// Path to output file
+        output_file_path: PathBuf,
+    },
+}
+
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
@@ -57,9 +128,6 @@ struct Cli {
     /// Database URL, format `scylla://[<user:string>[:<url-safe-password:string>]@]<host[:<port>]>[,<host[:<port>]>...]/<keyspace>`
     #[arg(short, long, default_value_t = String::from("scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb"))]
     database_url: String,
-    /// Batch size of records to insert concurrently
-    #[arg(short, long, default_value_t = NonZeroUsize::new(100).unwrap())]
-    insert_batch_size: NonZeroUsize,
     /// Path to optional log file
     #[arg(long)]
     log_file: Option<PathBuf>,
@@ -71,9 +139,6 @@ struct Cli {
     /// Label to  distinguish logs from this app instance in Loki
     #[arg(long, default_value_t = String::from(env!("CARGO_CRATE_NAME")))]
     loki_label: String,
-    /// Number of mass partition
-    #[arg(short, long, default_value_t = NonZeroU16::new(1000).unwrap())]
-    partitions: NonZeroU16,
     /// Socket for prometheus collection endpoint
     #[arg(long)]
     prometheus: Option<SocketAddr>,
@@ -86,29 +151,17 @@ struct Cli {
     /// Flag to show a terminal UI for tracing and metics
     #[arg(long, default_value_t = false, conflicts_with = "terminal")]
     tui: bool,
-    /// Batch size of records to insert concurrently
-    #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
-    threads: NonZeroUsize,
     /// Increases log level each time it is used. 10 and above will activating level tracing for all crates included.
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
-    /// Protein files
-    #[arg(value_delimiter = ' ', num_args = 0..)]
-    protein_file_paths: Vec<PathBuf>,
+
+    #[command(subcommand)]
+    command: Command,
 }
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
-
-    let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
-    let protease = Protease::get_by_name(
-        "trypsin",
-        Some(PeptideSequence::MIN_LENGTH.get()),
-        Some(PeptideSequence::MAX_LENGTH.get()),
-        Some(2),
-    )
-    .unwrap();
 
     let mut tracing_targets: Vec<TracingTarget> = Vec::new();
     let mut metric_targets: Vec<MetricTarget> = Vec::new();
@@ -155,16 +208,69 @@ async fn main() {
     .await
     .unwrap();
 
-    build_db(
-        client,
-        &cli.protein_file_paths,
-        cli.insert_batch_size,
-        &protease,
-        cli.threads,
-        cli.partitions,
-        tui.as_ref(),
-    )
-    .await;
+    match cli.command {
+        Command::Build {
+            insert_batch_size,
+            partitions,
+            protein_file_paths,
+            threads,
+        } => {
+            let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
+            let protease = Protease::get_by_name(
+                "trypsin",
+                Some(PeptideSequence::MIN_LENGTH.get()),
+                Some(PeptideSequence::MAX_LENGTH.get()),
+                Some(2),
+            )
+            .unwrap();
+
+            build_db(
+                client,
+                &protein_file_paths,
+                insert_batch_size,
+                &protease,
+                threads,
+                partitions,
+                tui.as_ref(),
+            )
+            .await;
+        }
+        Command::Search {
+            allow_duplicates,
+            is_reviewed,
+            lower_mass_tolerance_ppm,
+            max_variable_modifications,
+            ptm_file_path,
+            only_canonical,
+            proteome_ids,
+            taxonomy_ids,
+            threads,
+            upper_mass_tolerance_ppm,
+            mass,
+            output_file_path,
+        } => {
+            let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
+            let mass = mass_to_int!(mass);
+
+            peptide_search(
+                client,
+                allow_duplicates,
+                is_reviewed,
+                lower_mass_tolerance_ppm,
+                max_variable_modifications,
+                ptm_file_path,
+                only_canonical,
+                proteome_ids,
+                taxonomy_ids,
+                threads,
+                upper_mass_tolerance_ppm,
+                mass,
+                output_file_path,
+                tui.as_ref(),
+            )
+            .await;
+        }
+    }
 
     tokio::time::sleep(Duration::from_millis(2000)).await;
 }
@@ -402,4 +508,144 @@ async fn axum_shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn peptide_search(
+    client: Arc<Client>,
+    allow_duplicates: bool,
+    is_reviewed: Option<bool>,
+    lower_mass_tolerance_ppm: i64,
+    max_variable_modifications: usize,
+    ptm_file_path: Option<PathBuf>,
+    only_canonical: bool,
+    proteome_ids: Vec<String>,
+    taxonomy_ids: Vec<i32>,
+    threads: NonZeroUsize,
+    upper_mass_tolerance_ppm: i64,
+    mass: i64,
+    output_file_path: PathBuf,
+    tui: Option<&TuiHandle>,
+) {
+    let mass_partitioning: MassPartitioning =
+        Blob::select(client.as_ref(), MassPartitioning::BLOB_KEY)
+            .await
+            .unwrap()
+            .unwrap();
+
+    let configuration = Arc::new(Configuration::new(mass_partitioning, Some(6), Some(50)));
+
+    let taxonomy_ids = if taxonomy_ids.is_empty() {
+        None
+    } else {
+        Some(taxonomy_ids)
+    };
+    let proteome_ids = if proteome_ids.is_empty() {
+        None
+    } else {
+        Some(proteome_ids)
+    };
+
+    let ptms = ptm_file_path
+        .map(|path| {
+            csv::ReaderBuilder::new()
+                .delimiter(b'\t')
+                .has_headers(true)
+                .from_path(path)
+                .unwrap()
+                .deserialize()
+                .map(|result| result.map(Arc::new))
+                .collect::<Result<Vec<Arc<PostTranslationalModification>>, csv::Error>>()
+                .unwrap()
+        })
+        .unwrap_or_default();
+
+    let ptm_collection = Arc::new(PTMCollection::new(ptms).unwrap());
+
+    tracing::info!("[main::peptide_search] PTMs {ptm_collection}");
+
+    let mut outfile = tokio::io::BufWriter::new(
+        tokio::fs::File::options()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(output_file_path)
+            .await
+            .unwrap(),
+    );
+
+    let mut peptide_stream = MultiTaskSearch::search(
+        client,
+        configuration,
+        mass,
+        lower_mass_tolerance_ppm,
+        upper_mass_tolerance_ppm,
+        max_variable_modifications,
+        !allow_duplicates,
+        taxonomy_ids,
+        proteome_ids,
+        is_reviewed,
+        ptm_collection,
+        !only_canonical,
+        threads,
+    )
+    .await
+    .unwrap();
+
+    if let Some(tui) = &tui {
+        tui.add_metric(MetricConfig::counter(
+            peptide_stream.matching_peptide_metric(),
+            macpepdb::peptide_search::MATCHING_PEPTIDE_METRIC,
+        ));
+    }
+
+    tracing::info!("[main::peptide_search] Start streaming peptides");
+
+    let mut peptide_counter: usize = 0;
+    while let Some(result) = peptide_stream.next().await {
+        match result {
+            Ok(peptidoforms) => {
+                for peptidoform in peptidoforms {
+                    write_peptidoform(&mut outfile, peptide_counter, peptidoform)
+                        .await
+                        .unwrap();
+                    peptide_counter += 1;
+                }
+            }
+            Err(e) => {
+                tracing::error!("error searching for peptides: {e}");
+            }
+        }
+        if peptide_counter.is_multiple_of(1000) {
+            outfile.flush().await.unwrap();
+        }
+    }
+
+    outfile.flush().await.unwrap();
+
+    if let Some(tui) = &tui {
+        tui.remove_metric(peptide_stream.matching_peptide_metric());
+    }
+}
+
+async fn write_peptidoform<T: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut T,
+    peptide_counter: usize,
+    peptide: Peptidoform,
+) -> Result<(), std::io::Error> {
+    writer.write_all(b">mdb|").await?;
+    writer
+        .write_all(peptide_counter.to_string().as_bytes())
+        .await?;
+    writer.write_all(b"|").await?;
+    writer
+        .write_all(mass_to_float(peptide.mass()).to_string().as_bytes())
+        .await?;
+    writer.write_all(b"\n").await?;
+    writer
+        .write_all(peptide.sequence().to_string().as_bytes())
+        .await?;
+    writer.write_all(b"\n").await?;
+
+    Ok(())
 }

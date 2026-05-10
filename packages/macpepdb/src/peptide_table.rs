@@ -9,7 +9,7 @@ use crate::{
     client::Client,
     mass_index::MassIndex,
     mass_partitioning::MassPartitioning,
-    peptide::Peptide,
+    peptide::{IsPeptide, Peptide},
     protease::Protease,
     protein::Protein,
     sequence::{ByteSequence, PeptideSequence},

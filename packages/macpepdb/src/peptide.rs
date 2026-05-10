@@ -17,7 +17,9 @@ use crate::{
     client::Client,
     mass_partitioning::MassPartitioning,
     molecules::WATER_MONO_MASS,
-    sequence::{IsSequence, PeptideSequence as Sequence},
+    sequence::{
+        IsSimpleSequence, ModifiedSequence, ModifiedSequencePart, PeptideSequence as Sequence,
+    },
 };
 
 pub const TABLE_NAME: &str = "peptides";
@@ -28,7 +30,7 @@ static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
 
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
 
-const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A') as usize;
+pub const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A') as usize;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -46,6 +48,30 @@ pub enum Error {
     Sequence(#[from] crate::sequence::Error),
     #[error("Amino acid error in peptide: {0}")]
     AminoAcid(#[from] crate::amino_acid::Error),
+}
+
+pub trait IsPeptide: Send + Sync {
+    type Sequence: IsSimpleSequence;
+
+    fn sequence(&self) -> &Self::Sequence;
+    fn mass(&self) -> i64;
+
+    fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE];
+
+    fn amino_acid_count(&self, amino_acid: &'static AminoAcid) -> u8 {
+        let idx = (amino_acid.code() as u8 - b'A') as usize;
+        self.amino_acid_counts()[idx]
+    }
+
+    fn amino_acid_count_by_code(&self, code: char) -> Result<u8, Error> {
+        let amino_acid = AminoAcid::by_code(code)?;
+        Ok(self.amino_acid_count(amino_acid))
+    }
+
+    fn amino_acid_count_by_bit_code(&self, code: AminoAcidBitCode) -> u8 {
+        let amino_acid = AminoAcid::by_bit_code(&code);
+        self.amino_acid_count(amino_acid)
+    }
 }
 
 #[derive(DeserializeRow, SerializeRow)]
@@ -96,14 +122,6 @@ impl Peptide {
         Ok(())
     }
 
-    pub fn mass(&self) -> i64 {
-        self.mass
-    }
-
-    pub fn sequence(&self) -> &Sequence {
-        &self.sequence
-    }
-
     pub fn len(&self) -> usize {
         self.sequence.len()
     }
@@ -114,32 +132,6 @@ impl Peptide {
 
     pub fn into_sequence(self) -> Sequence {
         self.sequence
-    }
-
-    pub fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE] {
-        self.amino_acid_counts.get_or_init(|| {
-            let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
-
-            self.sequence
-                .amino_acid_bit_codes()
-                .for_each(|bit_code| counts[bit_code.deku_id().unwrap() as usize] += 1);
-            counts
-        })
-    }
-
-    pub fn amino_acid_count(&self, amino_acid: &'static AminoAcid) -> u8 {
-        let idx = (amino_acid.code() as u8 - b'A') as usize;
-        self.amino_acid_counts()[idx]
-    }
-
-    pub fn amino_acid_count_by_code(&self, code: char) -> Result<u8, Error> {
-        let amino_acid = AminoAcid::by_code(code)?;
-        Ok(self.amino_acid_count(amino_acid))
-    }
-
-    pub fn amino_acid_count_by_bit_code(&self, code: AminoAcidBitCode) -> u8 {
-        let amino_acid = AminoAcid::by_bit_code(&code);
-        self.amino_acid_count(amino_acid)
     }
 
     pub async fn insert(&self, client: &Client) -> Result<(), Error> {
@@ -179,9 +171,18 @@ impl Peptide {
         Ok(())
     }
 
-    pub async fn select(client: &Client) -> Result<TypedRowStream<Self>, Error> {
+    pub async fn select(
+        client: impl AsRef<Client>,
+        select_addition: Option<&str>,
+        values: impl scylla::serialize::row::SerializeRow,
+    ) -> Result<TypedRowStream<Self>, Error> {
+        let statement = select_addition
+            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
+            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
+
         Ok(client
-            .execute_iter(SELECT_STATEMENT.as_str(), ())
+            .as_ref()
+            .execute_iter(statement, values)
             .await
             .map_err(|err| Error::CqlPagedExecution(Box::new(err)))?
             .rows_stream::<Self>()?)
@@ -208,6 +209,130 @@ impl Hash for Peptide {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.mass.hash(state);
         self.sequence.hash(state);
+    }
+}
+
+impl IsPeptide for Peptide {
+    type Sequence = Sequence;
+
+    fn sequence(&self) -> &Self::Sequence {
+        &self.sequence
+    }
+
+    fn mass(&self) -> i64 {
+        self.mass
+    }
+
+    fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE] {
+        self.amino_acid_counts.get_or_init(|| {
+            let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
+
+            self.sequence
+                .amino_acid_bit_codes()
+                .for_each(|bit_code| counts[bit_code.deku_id().unwrap() as usize] += 1);
+            counts
+        })
+    }
+}
+
+pub struct Peptidoform {
+    sequence: ModifiedSequence,
+    mass: i64,
+    amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
+}
+
+impl Peptidoform {
+    pub fn new(sequence: ModifiedSequence, mass: i64) -> Self {
+        Self {
+            sequence,
+            mass,
+            amino_acid_counts: OnceLock::new(),
+        }
+    }
+
+    pub fn sequence(&self) -> &ModifiedSequence {
+        &self.sequence
+    }
+
+    pub fn mass(&self) -> i64 {
+        self.mass
+    }
+
+    pub fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE] {
+        self.amino_acid_counts.get_or_init(|| {
+            let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
+
+            self.sequence
+                .iter()
+                .filter_map(|part| match part {
+                    ModifiedSequencePart::AminoAcid(aa) => Some(*aa),
+                    _ => None,
+                })
+                .for_each(|bit_code| counts[bit_code.deku_id().unwrap() as usize] += 1);
+            counts
+        })
+    }
+
+    pub fn amino_acid_count(&self, amino_acid: &'static AminoAcid) -> u8 {
+        let idx = (amino_acid.code() as u8 - b'A') as usize;
+        self.amino_acid_counts()[idx]
+    }
+
+    pub fn amino_acid_count_by_bit_code(&self, code: AminoAcidBitCode) -> u8 {
+        let amino_acid = AminoAcid::by_bit_code(&code);
+        self.amino_acid_count(amino_acid)
+    }
+}
+
+impl From<Peptide> for Peptidoform {
+    fn from(peptide: Peptide) -> Self {
+        Self {
+            mass: peptide.mass(),
+            sequence: peptide.into_sequence().into(),
+            amino_acid_counts: OnceLock::new(),
+        }
+    }
+}
+
+impl Eq for Peptidoform {}
+
+impl Hash for Peptidoform {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.mass.hash(state);
+        self.sequence.hash(state);
+    }
+}
+
+impl PartialEq for Peptidoform {
+    fn eq(&self, other: &Self) -> bool {
+        self.mass == other.mass && self.sequence == other.sequence
+    }
+}
+
+impl IsPeptide for Peptidoform {
+    type Sequence = ModifiedSequence;
+
+    fn sequence(&self) -> &Self::Sequence {
+        &self.sequence
+    }
+
+    fn mass(&self) -> i64 {
+        self.mass
+    }
+
+    fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE] {
+        self.amino_acid_counts.get_or_init(|| {
+            let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
+
+            self.sequence
+                .iter()
+                .filter_map(|part| match part {
+                    ModifiedSequencePart::AminoAcid(aa) => Some(*aa),
+                    _ => None,
+                })
+                .for_each(|bit_code| counts[bit_code.deku_id().unwrap() as usize] += 1);
+            counts
+        })
     }
 }
 

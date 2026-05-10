@@ -8,7 +8,7 @@ use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use thiserror::Error;
 
-use crate::{client::Client, protease::Protease, protein::Protein};
+use crate::{client::Client, peptide::IsPeptide, protease::Protease, protein::Protein};
 
 pub static PROGRESS_METRIC: &str = "mass_index::progress";
 pub static SIZE_METRIC: &str = "mass_index::size";

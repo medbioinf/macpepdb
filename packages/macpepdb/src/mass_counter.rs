@@ -9,8 +9,8 @@ use futures::StreamExt;
 use thiserror::Error;
 
 use crate::{
-    client::Client, mass_index::MassIndex, protease::Protease, protein::Protein,
-    sequence::ByteSequence,
+    client::Client, mass_index::MassIndex, peptide::IsPeptide, protease::Protease,
+    protein::Protein, sequence::ByteSequence,
 };
 
 pub static PROGESS_METRIC: &str = "mass_counter::progress";

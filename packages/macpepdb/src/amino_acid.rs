@@ -1,3 +1,5 @@
+use std::sync::LazyLock;
+
 use deku::prelude::*;
 use pastey::paste;
 use thiserror::Error;
@@ -14,10 +16,12 @@ pub enum Error {
     InvalidAminoAcidBitCode(u8),
 }
 
+#[derive(Debug)]
 pub struct AminoAcid {
     code: char,
     mono_mass: i64,
     bit_code: AminoAcidBitCode,
+    is_canonical: bool,
 }
 
 impl AminoAcid {
@@ -34,13 +38,17 @@ impl AminoAcid {
     pub fn bit_code(&self) -> &AminoAcidBitCode {
         &self.bit_code
     }
+
+    pub fn is_canonical(&self) -> bool {
+        self.is_canonical
+    }
 }
 
 macro_rules! create_const_amino_acids {
-    ([$(($name:literal; $one_letter_code:literal; $mass:literal; $bit_code:literal)),* $(,)?]) => {
+    ([$(($name:literal; $one_letter_code:literal; $mass:literal; $bit_code:literal; $is_canonical:literal)),* $(,)?]) => {
         paste! {
 
-            #[derive(Clone, Debug, Eq, Hash, PartialEq, DekuRead, DekuWrite)]
+            #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, DekuRead, DekuWrite)]
             #[deku(id_type = "u8", bits = "5")]
             pub enum AminoAcidBitCode {
                 $(
@@ -54,14 +62,24 @@ macro_rules! create_const_amino_acids {
                     code: $one_letter_code,
                     mono_mass: mass_to_int!{$mass},
                     bit_code: AminoAcidBitCode::[< $one_letter_code:upper>],
+                    is_canonical: $is_canonical,
                 };
              )+
 
-             const ALL: &[&'static AminoAcid] = &[
+             static ALL: &[&'static AminoAcid] = &[
                  $(
                      &[< $name:replace(" ", "_"):snake:upper >],
                  )+
              ];
+
+             static CANONICAL: LazyLock<&'static [&'static AminoAcid]> = LazyLock::new(|| {
+                 ALL.iter().filter(|aa| aa.is_canonical).cloned().collect::<Vec<_>>().leak()
+             });
+
+
+             static NON_CANONICAL: LazyLock<&'static [&'static AminoAcid]> = LazyLock::new(|| {
+                 ALL.iter().filter(|aa| aa.is_canonical).cloned().collect::<Vec<_>>().leak()
+             });
 
 
              impl AminoAcid {
@@ -95,17 +113,25 @@ macro_rules! create_const_amino_acids {
                  pub fn all() -> &'static [&'static AminoAcid] {
                      ALL
                  }
-             }
 
-             impl From<&AminoAcidBitCode> for &'static AminoAcid {
-                 fn from(bit_code: &AminoAcidBitCode) -> Self {
-                     match bit_code {
-                         $(
-                             AminoAcidBitCode::[< $one_letter_code:upper >] => &[< $name:replace(" ", "_"):snake:upper >],
-                         )+
-                     }
+                 pub fn canonical() ->  &'static [&'static AminoAcid] {
+                     CANONICAL.as_ref()
                  }
-             }
+
+                pub fn non_canonical() -> &'static [&'static AminoAcid] {
+                    NON_CANONICAL.as_ref()
+                }
+            }
+
+            impl From<&AminoAcidBitCode> for &'static AminoAcid {
+                fn from(bit_code: &AminoAcidBitCode) -> Self {
+                    match bit_code {
+                        $(
+                            AminoAcidBitCode::[< $one_letter_code:upper >] => &[< $name:replace(" ", "_"):snake:upper >],
+                        )+
+                    }
+                }
+            }
         }
     };
 }
