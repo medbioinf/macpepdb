@@ -305,15 +305,10 @@ async fn build_db(
             macpepdb::mass_index::PROGRESS_METRIC,
             protein_ctr as f64,
         ));
-        tui.add_metric(MetricConfig::counter(
-            macpepdb::mass_index::SIZE_METRIC,
-            macpepdb::mass_index::SIZE_METRIC,
-        ));
     }
     let mass_index = build_db_mass_index(client.clone(), protease, num_threads).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
-        tui.remove_metric(macpepdb::mass_index::SIZE_METRIC);
     }
 
     // 3. count masses for partitions
@@ -327,17 +322,12 @@ async fn build_db(
             macpepdb::mass_counter::PEPTIDES_METRIC,
             macpepdb::mass_counter::PEPTIDES_METRIC,
         ));
-        tui.add_metric(MetricConfig::counter(
-            macpepdb::mass_counter::SIZE_METRIC,
-            macpepdb::mass_counter::SIZE_METRIC,
-        ));
     }
     let mass_counter =
         build_db_mass_counter(client.clone(), &mass_index, protease, num_threads).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_counter::PROGESS_METRIC);
         tui.remove_metric(macpepdb::mass_counter::PEPTIDES_METRIC);
-        tui.remove_metric(macpepdb::mass_counter::SIZE_METRIC);
     }
 
     let peptides_len = mass_counter.peptides_len();

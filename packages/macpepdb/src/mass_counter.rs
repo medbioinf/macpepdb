@@ -15,7 +15,6 @@ use crate::{
 
 pub static PROGESS_METRIC: &str = "mass_counter::progress";
 pub static PEPTIDES_METRIC: &str = "mass_counter::peptides";
-pub static SIZE_METRIC: &str = "mass_counter::size";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -95,7 +94,6 @@ impl MassCounter {
 
         let protease = Arc::new(protease.clone());
         let progress_metric = Arc::new(metrics::counter!(PROGESS_METRIC));
-        let size_metric = Arc::new(metrics::counter!(SIZE_METRIC));
         let peptides_metric = Arc::new(metrics::counter!(PEPTIDES_METRIC));
 
         let counter: Arc<DashMap<i64, usize>> = Arc::new(DashMap::new());
@@ -108,13 +106,11 @@ impl MassCounter {
                 let protease = protease.clone();
                 let progress_metric = progress_metric.clone();
                 let peptides_metric = peptides_metric.clone();
-                let size_metric = size_metric.clone();
                 let counter = counter.clone();
                 let protein_table = ProteinTable::new(client);
 
-                size_metric.increment(std::mem::size_of::<Self>() as u64);
-
                 tokio::spawn(async move {
+                    let mut peptide_metric_buffer: usize = 0;
                     loop {
                         let (mass, protein_ids) = match queue.pop() {
                             Some(Some(entry)) => entry,
@@ -150,9 +146,6 @@ impl MassCounter {
 
                         counter.insert(mass, peptide_sequences.len());
 
-                        size_metric.increment(
-                            (std::mem::size_of::<i64>() + std::mem::size_of::<usize>()) as u64,
-                        );
                         progress_metric.increment(1);
                     }
 
