@@ -1,0 +1,10 @@
+# Ignore all files and directories, to make the images as clean as possible
+*
+
+# Allow the following files and directories
+!/build.rs
+!/Cargo.toml
+!/Cargo.lock
+!/README.md
+!/packages/**/*
+!/test_files/**/*
