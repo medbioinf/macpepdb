@@ -216,11 +216,12 @@ async fn main() {
             threads,
         } => {
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
-            let protease = Protease::get_by_name(
+            let protease = Protease::by_name(
                 "trypsin",
                 Some(PeptideSequence::MIN_LENGTH.get()),
                 Some(PeptideSequence::MAX_LENGTH.get()),
                 Some(2),
+                false,
             )
             .unwrap();
 

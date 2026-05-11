@@ -2,7 +2,7 @@ use std::{
     fmt::{Debug, Display},
     hash::Hash,
     num::NonZeroUsize,
-    ops::Index,
+    ops::{Index, Range},
 };
 
 use deku::prelude::*;
@@ -52,6 +52,7 @@ pub trait IsSimpleSequence: Clone + Display + Eq + Hash + PartialEq + Send + Syn
     fn is_empty(&self) -> bool;
     fn first(&self) -> Option<&AminoAcidBitCode>;
     fn last(&self) -> Option<&AminoAcidBitCode>;
+    fn contains(&self, aa: &AminoAcid) -> bool;
 }
 
 pub trait IsBitSequence<T: num_traits::PrimInt>:
@@ -91,6 +92,10 @@ pub trait IsBitSequence<T: num_traits::PrimInt>:
         }
 
         Ok(())
+    }
+
+    fn get(&self, index: usize) -> Option<&AminoAcidBitCode> {
+        self.data().get(index)
     }
 }
 
@@ -135,6 +140,16 @@ macro_rules! make_sequence {
                 fn last(&self) -> Option<&AminoAcidBitCode> {
                     self.data.last()
                 }
+
+                fn contains(&self, aa: &AminoAcid) -> bool {
+                    self.data().contains(aa.bit_code())
+                }
+            }
+
+            impl AsRef<[AminoAcidBitCode]> for [< $name:camel >] {
+                fn as_ref(&self) -> &[AminoAcidBitCode] {
+                    self.data.as_ref()
+                }
             }
 
 
@@ -158,6 +173,19 @@ macro_rules! make_sequence {
                     })
                 }
             }
+
+
+            impl TryFrom<&[&[AminoAcidBitCode]]> for [< $name:camel >] {
+                type Error = Error;
+
+                fn try_from(values: &[&[AminoAcidBitCode]]) -> Result<Self, Self::Error> {
+                    let data = values.iter().flat_map(|sequence| sequence.iter()).cloned().collect::<Vec<_>>();
+                    Self::new(
+                        data
+                    )
+                }
+            }
+
 
             impl TryFrom<&str> for [< $name:camel >] {
                 type Error = Error;
@@ -222,7 +250,16 @@ macro_rules! make_sequence {
                 }
             }
 
-            impl Index <usize> for [< $name:camel >] {
+            impl Index<Range<usize>> for [< $name:camel >] {
+                type Output = [AminoAcidBitCode];
+
+                fn index(&self, range: Range<usize>) -> &Self::Output {
+                    &self.data[range]
+                }
+            }
+
+
+            impl Index<usize> for [< $name:camel >] {
                 type Output = AminoAcidBitCode;
 
                 fn index(&self, index: usize) -> &Self::Output {
@@ -457,6 +494,11 @@ impl IsSimpleSequence for ModifiedSequence {
                 None
             }
         })
+    }
+
+    fn contains(&self, aa: &AminoAcid) -> bool {
+        self.0
+            .contains(&ModifiedSequencePart::AminoAcid(*aa.bit_code()))
     }
 }
 

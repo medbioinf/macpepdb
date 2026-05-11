@@ -55,8 +55,7 @@ impl MassIndex {
         while let Some(protein) = proteins.next().await.transpose()? {
             #[allow(clippy::mutable_key_type)]
             let peptides = protease
-                .cleave(protein.sequence().to_string().as_str(), true)
-                .map_err(Error::Protease)?
+                .cleave(protein.sequence().as_ref())
                 .collect::<HashSet<_>>()
                 .map_err(Error::Protease)?;
 
@@ -117,8 +116,7 @@ impl MassIndex {
 
                         #[allow(clippy::mutable_key_type)]
                         let peptides = protease
-                            .cleave(protein.sequence().to_string().as_str(), true)
-                            .map_err(Error::Protease)?
+                            .cleave(protein.sequence().as_ref())
                             .collect::<HashSet<_>>()
                             .map_err(Error::Protease)?;
 

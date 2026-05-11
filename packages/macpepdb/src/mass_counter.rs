@@ -67,8 +67,7 @@ impl MassCounter {
             while let Some(protein) = proteins.next().await.transpose()? {
                 #[allow(clippy::mutable_key_type)]
                 protease
-                    .cleave(protein.sequence().to_string().as_str(), true)
-                    .map_err(Error::Protease)?
+                    .cleave(protein.sequence().as_ref())
                     .filter(|peptide| Ok(peptide.mass() == *entry.key()))
                     .for_each(|peptide| {
                         peptide_sequences.insert(ByteSequence::try_from(peptide.into_sequence())?);
@@ -139,8 +138,7 @@ impl MassCounter {
                         while let Some(protein) = proteins.next().await.transpose()? {
                             #[allow(clippy::mutable_key_type)]
                             protease
-                                .cleave(protein.sequence().to_string().as_str(), true)
-                                .map_err(Error::Protease)?
+                                .cleave(protein.sequence().as_ref())
                                 .filter(|peptide| Ok(peptide.mass() == mass))
                                 .for_each(|peptide| {
                                     peptide_sequences

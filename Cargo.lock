@@ -1880,6 +1880,7 @@ dependencies = [
  "http 1.4.0",
  "itertools 0.14.0",
  "macpepdb_tui",
+ "memchr",
  "metrics",
  "metrics-exporter-prometheus",
  "metrics-peek",

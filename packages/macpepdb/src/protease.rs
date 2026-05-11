@@ -1,21 +1,18 @@
 use std::fmt::{Debug, Display};
 
+use deku::DekuEnumExt;
 use fallible_iterator::FallibleIterator;
+use itertools::Itertools;
 use thiserror::Error;
 
-use dihardts_omicstools::proteomics::{
-    peptide::Peptide as CleavedPeptide,
-    proteases::{
-        functions::get_by_name as get_protease_by_name, protease::Protease as InnerProtease,
-    },
+use crate::{
+    amino_acid::{ARGININE, AminoAcidBitCode, LYSINE, PROLINE, UNKNOWN},
+    peptide::Peptide,
+    sequence::{IsBitSequence, PeptideSequence as Sequence},
 };
-
-use crate::{amino_acid::UNKNOWN, peptide::Peptide, sequence::PeptideSequence as Sequence};
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Unable to cleave sequence: {0}")]
-    UnableToCleave(String),
     #[error("Unknown amino acid encountered: {0}")]
     UnknownAminoAcid(String),
     #[error("Unable to get partition for mass: {0}")]
@@ -26,83 +23,244 @@ pub enum Error {
     Sequence(#[from] crate::sequence::Error),
     #[error("Peptide error in protease: {0}")]
     Peptide(#[from] crate::peptide::Error),
+    #[error("Unkown protease `{0}`")]
+    UnkownProtease(String),
 }
 
-/// Wrapper around dihardts_omicstools protease to produce MacPepDB compatible peptides
+/// Trait defining the behavior for a protease
 ///
-///
+pub trait IsProtease: Send + Sync {
+    /// Returns the name of the enzyme
+    fn name(&self) -> &'static str;
+
+    /// Returns the sequence digested with zero missed cleavages
+    ///
+    /// # Arguments
+    /// * `sequence` - Amino acid sequence
+    ///
+    fn full_digest<'a>(&self, sequence: &'a [AminoAcidBitCode]) -> Vec<&'a [AminoAcidBitCode]>;
+
+    /// Count missed cleavages
+    ///
+    fn count_missed_cleavages(&self, sequence: &[AminoAcidBitCode]) -> usize;
+}
+
+struct Trypsin;
+
+impl Trypsin {
+    const NAME: &'static str = "trypsin";
+}
+
+impl IsProtease for Trypsin {
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+
+    fn full_digest<'a>(&self, sequence: &'a [AminoAcidBitCode]) -> Vec<&'a [AminoAcidBitCode]> {
+        let lysine_byte: u8 = LYSINE.bit_code().deku_id().unwrap();
+        let arginine_byte: u8 = ARGININE.bit_code().deku_id().unwrap();
+        let proline_byte: u8 = PROLINE.bit_code().deku_id().unwrap();
+
+        let mut last_cleavage_pos: usize = 0;
+        memchr::memchr2_iter(
+            lysine_byte,
+            arginine_byte,
+            sequence
+                .iter()
+                .map(|bit_code| bit_code.deku_id().unwrap())
+                .collect::<Vec<u8>>()
+                .as_slice(),
+        )
+        .map(|pos| {
+            (
+                pos + 1,
+                sequence
+                    .get(pos + 1)
+                    .map(|bit_code| bit_code.deku_id().unwrap()),
+            )
+        })
+        .filter_map(|(pos, next_aa)| {
+            if let Some(next_aa) = next_aa
+                && next_aa == proline_byte
+            {
+                None
+            } else {
+                Some(pos)
+            }
+        })
+        .chain(std::iter::once(sequence.len()))
+        .sorted()
+        .map(|pos| {
+            let start = last_cleavage_pos;
+            last_cleavage_pos = pos;
+            &sequence[start..pos]
+        })
+        .collect()
+    }
+
+    fn count_missed_cleavages(&self, sequence: &[AminoAcidBitCode]) -> usize {
+        let lysine_byte: u8 = LYSINE.bit_code().deku_id().unwrap();
+        let arginine_byte: u8 = ARGININE.bit_code().deku_id().unwrap();
+        let proline_byte: u8 = PROLINE.bit_code().deku_id().unwrap();
+
+        memchr::memchr2_iter(
+            lysine_byte,
+            arginine_byte,
+            sequence
+                .iter()
+                .map(|bit_code| bit_code.deku_id().unwrap())
+                .collect::<Vec<u8>>()
+                .as_slice(),
+        )
+        .map(|pos| {
+            sequence
+                .get(pos + 1)
+                .map(|bit_code| bit_code.deku_id().unwrap())
+        })
+        .filter_map(|next_aa| {
+            if let Some(next_aa) = next_aa
+                && next_aa == proline_byte
+            {
+                None
+            } else {
+                Some(())
+            }
+        })
+        .count()
+    }
+}
+
+struct Unspecific;
+
+impl Unspecific {
+    const NAME: &'static str = "unspecific";
+}
+
+impl IsProtease for Unspecific {
+    fn name(&self) -> &'static str {
+        Self::NAME
+    }
+
+    fn full_digest<'a>(&self, sequence: &'a [AminoAcidBitCode]) -> Vec<&'a [AminoAcidBitCode]> {
+        (1..sequence.len())
+            .map(|pos| &sequence[(pos - 1)..pos])
+            .collect()
+    }
+
+    fn count_missed_cleavages(&self, sequence: &[AminoAcidBitCode]) -> usize {
+        sequence.len()
+    }
+}
+
 pub struct Protease {
-    inner_protease: Box<dyn InnerProtease>,
+    inner: Box<dyn IsProtease>,
+    min_length: usize,
+    max_length: usize,
+    max_missed_cleavages: Option<usize>,
+    keep_unknown: bool,
 }
 
 impl Protease {
-    pub fn cleave<'a>(
+    /// Cleaves a protein into peptides and returns a iterator over the peptides
+    ///
+    /// # Arguments
+    /// * `sequence` - Amino acid sequence
+    ///
+    pub fn cleave(
         &self,
-        sequence: &str,
-        remove_unknown: bool,
-    ) -> Result<impl FallibleIterator<Item = Peptide, Error = Error> + 'a, Error> {
-        let iter = self
-            .inner_protease
-            .cleave(sequence)
-            .map_err(|err| Error::UnableToCleave(err.to_string()))?
-            .map_err(|err| Error::UnableToCleave(err.to_string())) // convert the elements' errors
-            .filter(move |pep| {
-                if remove_unknown {
-                    Ok(!pep.get_sequence().contains(UNKNOWN.code()))
-                } else {
-                    Ok(true)
+        sequence: &[AminoAcidBitCode],
+    ) -> impl FallibleIterator<Item = Peptide, Error = Error> {
+        let max_window_size = self.max_missed_cleavages().unwrap_or(sequence.len()) + 2;
+        let full_digest = self.inner.full_digest(sequence);
+        let n = full_digest.len();
+        let mut window_size = 1_usize;
+        let mut pos = 0_usize;
+
+        fallible_iterator::from_fn(move || {
+            loop {
+                if window_size >= max_window_size {
+                    return Ok(None);
                 }
-            })
-            .map(move |pep| {
-                let peptide = Self::to_internal_peptide(pep)?;
-                Ok::<Peptide, Error>(peptide)
-            });
-        Ok(iter)
+                if pos + window_size > n {
+                    window_size += 1;
+                    pos = 0;
+                    continue;
+                }
+                let window = &full_digest[pos..pos + window_size];
+                pos += 1;
+
+                let length = window.iter().map(|seq| seq.len()).sum::<usize>();
+                if !self.keep_unknown
+                    && window
+                        .iter()
+                        .flat_map(|seq| seq.iter())
+                        .any(|aa| aa == UNKNOWN.bit_code())
+                {
+                    continue;
+                }
+                if length < self.min_length {
+                    continue;
+                }
+
+                if length > self.max_length {
+                    continue;
+                }
+
+                return Ok(Some(Sequence::try_from(window).map(Peptide::new)?));
+            }
+        })
     }
 
-    fn to_internal_peptide(pep: CleavedPeptide) -> Result<Peptide, Error> {
-        let sequence = Sequence::try_from(pep.get_sequence().as_str())?;
-        Ok(Peptide::new(sequence))
-    }
-
-    pub fn get_by_name(
+    pub fn by_name(
         name: &str,
-        min_len: Option<usize>,
-        max_len: Option<usize>,
+        min_length: Option<usize>,
+        max_length: Option<usize>,
         max_missed_cleavages: Option<usize>,
+        keep_unknown: bool,
     ) -> Result<Self, Error> {
-        Ok(
-            get_protease_by_name(name, min_len, max_len, max_missed_cleavages)
-                .map_err(|err| Error::FailedCreation(err.to_string()))?
-                .into(),
-        )
+        let min_length = min_length.unwrap_or(Sequence::MIN_LENGTH.get());
+        let max_length = max_length.unwrap_or(Sequence::MAX_LENGTH.get());
+
+        let inner: Box<dyn IsProtease> = match name.to_lowercase().as_str() {
+            Trypsin::NAME => Box::new(Trypsin {}),
+            Unspecific::NAME => Box::new(Unspecific {}),
+            _ => return Err(Error::UnkownProtease(name.to_string())),
+        };
+
+        Ok(Self {
+            min_length,
+            max_length,
+            max_missed_cleavages,
+            keep_unknown,
+            inner,
+        })
     }
 
     pub fn name(&self) -> &str {
-        self.inner_protease.get_name()
+        self.inner.name()
     }
 
-    pub fn min_length(&self) -> Option<usize> {
-        self.inner_protease.get_min_length()
+    pub fn min_length(&self) -> usize {
+        self.min_length
     }
 
-    pub fn max_length(&self) -> Option<usize> {
-        self.inner_protease.get_max_length()
+    pub fn max_length(&self) -> usize {
+        self.max_length
     }
 
     pub fn max_missed_cleavages(&self) -> Option<usize> {
-        self.inner_protease.get_max_missed_cleavages()
+        self.max_missed_cleavages
     }
 }
 
 impl Clone for Protease {
     fn clone(&self) -> Self {
-        // Unwrap should be save as the inner protease is working
-        Self::get_by_name(
+        Self::by_name(
             self.name(),
-            self.min_length(),
-            self.max_length(),
-            self.max_missed_cleavages(),
+            Some(self.min_length),
+            Some(self.max_length),
+            self.max_missed_cleavages,
+            self.keep_unknown,
         )
         .unwrap()
     }
@@ -112,11 +270,12 @@ impl Debug for Protease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Protease {{ name: {}, min_length: {:?}, max_length: {:?}, max_missed_cleavages: {:?} }}",
+            "Protease {{ name: {}, min_length: {:?}, max_length: {:?}, max_missed_cleavages: {:?}, keep_unknown: {} }}",
             self.name(),
             self.min_length(),
             self.max_length(),
             self.max_missed_cleavages(),
+            self.keep_unknown
         )
     }
 }
@@ -125,24 +284,15 @@ impl Display for Protease {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "name: {}, peptide length {} - {}, max. missed_cleavages: {}",
+            "name: {}, peptide length {} - {}, max. missed_cleavages: {}, keep unknown: {}",
             self.name(),
-            self.min_length().unwrap_or(0),
-            self.max_length()
-                .map(|max_length| max_length.to_string())
-                .unwrap_or("∞".to_string()),
+            self.min_length,
+            self.max_length,
             self.max_missed_cleavages()
                 .map(|missed_cleavages| missed_cleavages.to_string())
                 .unwrap_or("after each amino acid".to_string()),
+            self.keep_unknown
         )
-    }
-}
-
-impl From<Box<dyn InnerProtease>> for Protease {
-    fn from(inner: Box<dyn InnerProtease>) -> Self {
-        Self {
-            inner_protease: inner,
-        }
     }
 }
 
@@ -152,5 +302,83 @@ impl PartialEq for Protease {
             && self.min_length() == other.min_length()
             && self.max_length() == other.max_length()
             && self.max_missed_cleavages() == other.max_missed_cleavages()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use crate::sequence::ProteinSequence;
+
+    use super::*;
+
+    #[test]
+    fn test_trypsin() {
+        let leptin = ProteinSequence::try_from(
+            "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
+        ).unwrap();
+
+        let expected_peps_zero_missed_cleavages: HashSet<Sequence> = HashSet::from_iter([
+            Sequence::try_from("SCHLPWASGLETLDSLGGVLEASGYSTEVVALSR").unwrap(),
+            Sequence::try_from("MHWGTLCGFLWLWPYLFYVQAVPIQK").unwrap(),
+            Sequence::try_from("VTGLDFIPGLHPILTLSK").unwrap(),
+            Sequence::try_from("MDQTLAVYQQILTSMPSR").unwrap(),
+            Sequence::try_from("LQGSLQDMLWQLDLSPGC").unwrap(),
+            Sequence::try_from("NVIQISNDLENLR").unwrap(),
+            Sequence::try_from("INDISHTQSVSSK").unwrap(),
+            Sequence::try_from("DLLHVLAFSK").unwrap(),
+            Sequence::try_from("VQDDTK").unwrap(),
+        ]);
+
+        let trypsin = Protease::by_name("trypsin", Some(6), Some(50), Some(0), false).unwrap();
+
+        let peps = trypsin
+            .cleave(leptin.as_ref())
+            .map(|peptide| Ok(peptide.into_sequence()))
+            .collect::<HashSet<Sequence>>()
+            .unwrap();
+
+        assert_eq!(peps, expected_peps_zero_missed_cleavages);
+
+        let expected_peps_two_missed_cleavages: HashSet<Sequence> = HashSet::from_iter([
+            Sequence::try_from("VTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLR").unwrap(),
+            Sequence::try_from("DLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSR").unwrap(),
+            Sequence::try_from("MDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSK").unwrap(),
+            Sequence::try_from("QKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSR").unwrap(),
+            Sequence::try_from("VTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSR").unwrap(),
+            Sequence::try_from("MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIK").unwrap(),
+            Sequence::try_from("SCHLPWASGLETLDSLGGVLEASGYSTEVVALSR").unwrap(),
+            Sequence::try_from("INDISHTQSVSSKQKVTGLDFIPGLHPILTLSK").unwrap(),
+            Sequence::try_from("MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTK").unwrap(),
+            Sequence::try_from("MDQTLAVYQQILTSMPSRNVIQISNDLENLR").unwrap(),
+            Sequence::try_from("MHWGTLCGFLWLWPYLFYVQAVPIQK").unwrap(),
+            Sequence::try_from("NVIQISNDLENLRDLLHVLAFSK").unwrap(),
+            Sequence::try_from("TLIKTIVTRINDISHTQSVSSK").unwrap(),
+            Sequence::try_from("QKVTGLDFIPGLHPILTLSK").unwrap(),
+            Sequence::try_from("TIVTRINDISHTQSVSSKQK").unwrap(),
+            Sequence::try_from("VTGLDFIPGLHPILTLSK").unwrap(),
+            Sequence::try_from("TIVTRINDISHTQSVSSK").unwrap(),
+            Sequence::try_from("LQGSLQDMLWQLDLSPGC").unwrap(),
+            Sequence::try_from("MDQTLAVYQQILTSMPSR").unwrap(),
+            Sequence::try_from("INDISHTQSVSSKQK").unwrap(),
+            Sequence::try_from("VQDDTKTLIKTIVTR").unwrap(),
+            Sequence::try_from("INDISHTQSVSSK").unwrap(),
+            Sequence::try_from("NVIQISNDLENLR").unwrap(),
+            Sequence::try_from("DLLHVLAFSK").unwrap(),
+            Sequence::try_from("VQDDTKTLIK").unwrap(),
+            Sequence::try_from("TLIKTIVTR").unwrap(),
+            Sequence::try_from("VQDDTK").unwrap(),
+        ]);
+
+        let trypsin = Protease::by_name("trypsin", Some(6), Some(50), Some(2), false).unwrap();
+
+        let peps = trypsin
+            .cleave(leptin.as_ref())
+            .map(|peptide| Ok(peptide.into_sequence()))
+            .collect::<HashSet<Sequence>>()
+            .unwrap();
+
+        assert_eq!(peps, expected_peps_two_missed_cleavages);
     }
 }

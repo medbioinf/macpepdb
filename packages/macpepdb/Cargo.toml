@@ -17,6 +17,7 @@ futures = { workspace = true }
 http = { workspace = true }
 itertools = { workspace = true }
 macpepdb_tui = { workspace = true }
+memchr = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 metrics-peek = { workspace = true }
