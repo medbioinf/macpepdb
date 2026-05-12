@@ -8,7 +8,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{blob::IsBlob, mass_counter::MassCounter};
+use crate::mass_counter::MassCounter;
 
 pub static PROGRESS_METRIC: &str = "mass_partitioner::progress";
 
@@ -75,8 +75,6 @@ impl Default for Bin {
 pub struct MassPartitioning(HashMap<i64, i16>);
 
 impl MassPartitioning {
-    pub const BLOB_KEY: &'static str = "partitioning";
-
     // TODO: Remove async
     pub async fn build(mass_counter: MassCounter, num_bins: NonZeroU16) -> Result<Self, Error> {
         let mass_count_entries = mass_counter.into_iter().collect::<Vec<_>>();
@@ -170,12 +168,6 @@ impl Deref for MassPartitioning {
 
     fn deref(&self) -> &Self::Target {
         &self.0
-    }
-}
-
-impl IsBlob for MassPartitioning {
-    fn key(&self) -> &str {
-        Self::BLOB_KEY
     }
 }
 

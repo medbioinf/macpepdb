@@ -689,10 +689,7 @@ impl Search for MultiTaskSearch {
         let proteome_ids = proteome_ids.map(Arc::new);
 
         if !ptm_collection.is_empty() {
-            let min_mass = match configuration.min_peptide_length() {
-                Some(min_length) => GLYCINE.mono_mass() * min_length.get() as i64,
-                None => 0,
-            };
+            let min_mass = configuration.protease().min_length() as i64 * GLYCINE.mono_mass();
 
             // Calulcate max mass as stated in PeptideCondition::from_ptm_collection() 2.3
             let largest_negative_static_ptm = ptm_collection

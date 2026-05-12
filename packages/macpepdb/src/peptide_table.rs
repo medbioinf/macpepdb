@@ -16,10 +16,9 @@ use thiserror::Error;
 
 use crate::{
     client::Client,
+    configuration::Configuration,
     mass_index::MassIndex,
-    mass_partitioning::MassPartitioning,
     peptide::{IsPeptide, Peptide},
-    protease::Protease,
     protein_table::ProteinTable,
     sequence::{ByteSequence, PeptideSequence},
 };
@@ -137,24 +136,19 @@ impl PeptideTable {
 
     pub async fn build_concurrently(
         &self,
-        protease: &Protease,
+        configuration: Arc<Configuration>,
         insert_batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
-        partitioning: &MassPartitioning,
         mass_index: MassIndex,
     ) -> Result<(), Error> {
         let queue: ConcurrentlyBuildQueue = Arc::new(ArrayQueue::new(num_threads.get() * 3));
-        let protease = Arc::new(protease.clone());
-        let partitioning = Arc::new(partitioning.clone());
         let inserted_peptides_metric = Arc::new(metrics::counter!(INSERTED_PEPTIDES_METRIC));
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
-                let protease = protease.clone();
+                let configuration = configuration.clone();
                 let queue = queue.clone();
                 let client = self.client.clone();
-                let protease = protease.clone();
-                let partitioning = partitioning.clone();
                 let inserted_peptides_metric = inserted_peptides_metric.clone();
 
                 tokio::spawn(async move {
@@ -183,7 +177,8 @@ impl PeptideTable {
 
                         while let Some(protein) = proteins.next().await.transpose()? {
                             #[allow(clippy::mutable_key_type)]
-                            protease
+                            configuration
+                                .protease()
                                 .cleave(protein.sequence().as_ref())
                                 .filter(|peptide| Ok(peptide.mass() == mass))
                                 .for_each(|peptide| {
@@ -202,7 +197,7 @@ impl PeptideTable {
                                 .map(|seq| {
                                     Peptide::new_with_partition(
                                         PeptideSequence::try_from(seq)?,
-                                        partitioning.as_ref(),
+                                        configuration.mass_partitioning(),
                                     )
                                 })
                                 .collect::<Result<Vec<_>, crate::peptide::Error>>()?;

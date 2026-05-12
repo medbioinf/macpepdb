@@ -2,6 +2,7 @@ use std::fmt::{Debug, Display};
 
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use zerocopy::IntoBytes;
 
@@ -138,7 +139,9 @@ impl IsProtease for Unspecific {
     }
 }
 
+#[derive(Deserialize, Serialize)]
 pub struct Protease {
+    #[serde(with = "is_protease_serde")]
     inner: Box<dyn IsProtease>,
     min_length: usize,
     max_length: usize,
@@ -207,11 +210,7 @@ impl Protease {
         let min_length = min_length.unwrap_or(Sequence::MIN_LENGTH.get());
         let max_length = max_length.unwrap_or(Sequence::MAX_LENGTH.get());
 
-        let inner: Box<dyn IsProtease> = match name.to_lowercase().as_str() {
-            Trypsin::NAME => Box::new(Trypsin {}),
-            Unspecific::NAME => Box::new(Unspecific {}),
-            _ => return Err(Error::UnkownProtease(name.to_string())),
-        };
+        let inner = Self::inner_by_name(name)?;
 
         Ok(Self {
             min_length,
@@ -220,6 +219,14 @@ impl Protease {
             keep_unknown,
             inner,
         })
+    }
+
+    fn inner_by_name(name: &str) -> Result<Box<dyn IsProtease>, Error> {
+        match name.to_lowercase().as_str() {
+            Trypsin::NAME => Ok(Box::new(Trypsin {})),
+            Unspecific::NAME => Ok(Box::new(Unspecific {})),
+            _ => Err(Error::UnkownProtease(name.to_string())),
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -288,6 +295,27 @@ impl PartialEq for Protease {
             && self.min_length() == other.min_length()
             && self.max_length() == other.max_length()
             && self.max_missed_cleavages() == other.max_missed_cleavages()
+    }
+}
+
+mod is_protease_serde {
+    use super::*;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[allow(clippy::borrowed_box)]
+    pub fn serialize<S>(protease: &Box<dyn IsProtease>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        protease.name().serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Box<dyn IsProtease>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let name = String::deserialize(deserializer)?;
+        Protease::inner_by_name(&name).map_err(serde::de::Error::custom)
     }
 }
 
