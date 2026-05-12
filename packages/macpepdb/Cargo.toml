@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = { workspace = true }
+async-stream = { workspace = true }
+axum = { workspace = true, features = ["json", "http2", "matched-path"] }
+base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossbeam = { workspace = true }
 csv = { workspace = true }
@@ -26,6 +28,7 @@ mimalloc = { workspace = true, optional = true }
 num-traits = { workspace = true }
 pastey = { workspace = true }
 postcard = { workspace = true, features = ["alloc"] }
+reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 scylla = { workspace = true }
@@ -39,8 +42,10 @@ tracing-loki = { workspace = true }
 tracing-subscriber = { workspace = true }
 uniprot_reader = { workspace = true, features = ["serde"] }
 url = { workspace = true }
-uuid = { workspace = true, features = ["v1"] }
+urlencoding = { workspace = true }
+uuid = { workspace = true, features = ["v1", "v7"] }
 zerocopy = { workspace = true, features = ["derive"] }
+xxhash-rust = { workspace = true, features = ["xxh3"] }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { workspace = true, optional = true }

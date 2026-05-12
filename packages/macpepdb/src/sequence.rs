@@ -16,6 +16,7 @@ use scylla::{
         writers::{CellWriter, WrittenCellProof},
     },
 };
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::{
@@ -102,7 +103,8 @@ pub trait IsBitSequence<T: num_traits::PrimInt>:
 macro_rules! make_sequence {
     ($name:ident, $count_type:ty, $count_bits:literal, $min_len:expr, $max_len:expr) => {
         paste! {
-            #[derive(Clone, Eq, Hash, PartialEq, DekuRead, DekuWrite)]
+            #[derive(Clone, Eq, Hash, PartialEq, DekuRead, DekuWrite, Serialize)]
+            #[serde(into = "String")]
             pub struct [< $name:camel >] {
                 #[deku(update = "self.update_count()", bits = $count_bits)]
                 count: $count_type,
@@ -276,6 +278,12 @@ macro_rules! make_sequence {
                 }
             }
 
+            impl From<[< $name:camel >]> for String {
+                fn from(value: [< $name:camel >]) -> Self {
+                    value.to_string()
+                }
+            }
+
             impl SerializeValue for [< $name:camel >] {
                 fn serialize<'b>(
                     &self,
@@ -384,8 +392,15 @@ impl Display for ModifiedSequencePart {
     }
 }
 
+impl From<ModifiedSequencePart> for String {
+    fn from(part: ModifiedSequencePart) -> Self {
+        part.to_string()
+    }
+}
+
 /// Seqeunces which can contain both amino acids and modifications (ProForma compatible),
-#[derive(Clone, Eq, Hash, PartialEq)]
+#[derive(Clone, Eq, Hash, PartialEq, Serialize)]
+#[serde(into = "String")]
 pub struct ModifiedSequence(Vec<ModifiedSequencePart>);
 
 impl ModifiedSequence {
@@ -439,6 +454,12 @@ impl From<PeptideSequence> for ModifiedSequence {
                 .map(ModifiedSequencePart::AminoAcid)
                 .collect(),
         )
+    }
+}
+
+impl From<ModifiedSequence> for String {
+    fn from(value: ModifiedSequence) -> Self {
+        value.0.into_iter().map(String::from).collect()
     }
 }
 

@@ -3,6 +3,7 @@ use std::{
     net::SocketAddr,
     num::{NonZeroU16, NonZeroUsize},
     path::PathBuf,
+    str::FromStr,
     sync::Arc,
     time::Duration,
 };
@@ -58,6 +59,15 @@ static GLOBAL: TcMalloc = TcMalloc;
 
 #[derive(Subcommand)]
 enum Command {
+    /// Web api
+    Api {
+        // Optional and default arguments
+        #[arg(long, default_value_t = NonZeroUsize::new(16).unwrap())]
+        concurrent_searches: NonZeroUsize,
+
+        #[arg(default_value_t = SocketAddr::from_str("127.0.0.1:8080").unwrap())]
+        socket: SocketAddr,
+    },
     /// Build the database
     Build {
         // Optional and default arguments
@@ -209,6 +219,23 @@ async fn main() {
     .unwrap();
 
     match cli.command {
+        Command::Api {
+            concurrent_searches,
+            socket,
+        } => {
+            let client = Client::new(&cli.database_url).await.unwrap();
+
+            macpepdb::web::server::start(
+                client,
+                socket,
+                false,
+                concurrent_searches,
+                None,
+                Box::pin(axum_shutdown_signal()),
+            )
+            .await
+            .unwrap();
+        }
         Command::Build {
             insert_batch_size,
             partitions,

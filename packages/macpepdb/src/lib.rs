@@ -18,3 +18,5 @@ pub mod protease;
 pub mod protein;
 pub mod protein_table;
 pub mod sequence;
+pub mod web;
+

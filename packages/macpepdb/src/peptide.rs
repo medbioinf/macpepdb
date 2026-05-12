@@ -2,6 +2,7 @@ use std::{hash::Hash, sync::OnceLock};
 
 use scylla::{DeserializeRow, SerializeRow};
 
+use serde::Serialize;
 use thiserror::Error;
 use zerocopy::IntoBytes;
 
@@ -58,12 +59,13 @@ pub trait IsPeptide: Send + Sync {
     }
 }
 
-#[derive(DeserializeRow, SerializeRow)]
+#[derive(DeserializeRow, Serialize, SerializeRow)]
 pub struct Peptide {
     partition: Option<i16>,
     mass: i64,
     sequence: Sequence,
     #[scylla(skip)]
+    #[serde(skip)]
     amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
 }
 
@@ -174,9 +176,11 @@ impl TryFrom<(&str, &MassPartitioning)> for Peptide {
     }
 }
 
+#[derive(Serialize)]
 pub struct Peptidoform {
     sequence: ModifiedSequence,
     mass: i64,
+    #[serde(skip)]
     amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
 }
 
