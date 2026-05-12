@@ -1,6 +1,5 @@
 use std::{hash::Hash, sync::OnceLock};
 
-use deku::DekuEnumExt;
 use scylla::{DeserializeRow, SerializeRow};
 
 use thiserror::Error;

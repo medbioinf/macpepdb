@@ -358,7 +358,7 @@ impl Display for ModifiedSequencePart {
                 write!(f, "{}", AminoAcid::by_bit_code(aa).code())
             }
             ModifiedSequencePart::CTerminalModification(mass) => {
-                write!(f, "-[{}]", mass_to_float(*mass))
+                write!(f, "-[{:+}]", mass_to_float(*mass))
             }
             ModifiedSequencePart::GlobalModifications(modifications) => {
                 let mods = modifications
@@ -375,10 +375,10 @@ impl Display for ModifiedSequencePart {
                 write!(f, "<{}>", mods)
             }
             ModifiedSequencePart::NTerminalModification(mass) => {
-                write!(f, "[{}]-", mass_to_float(*mass))
+                write!(f, "[{:+}]-", mass_to_float(*mass))
             }
             ModifiedSequencePart::PositionModification(mass) => {
-                write!(f, "[{}]", mass_to_float(*mass))
+                write!(f, "[{:+}]", mass_to_float(*mass))
             }
         }
     }

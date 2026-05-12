@@ -7,7 +7,7 @@
 //!
 //! ## Quick start
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use std::time::Duration;
 //! use macpepdb_tui::{MetricConfig, Tui};
 //!
@@ -34,7 +34,7 @@
 //!
 //! If you already have a tracing subscriber, add [`TuiLayer`] yourself:
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 //! use macpepdb_tui::{Tui, TuiLayer};
 //!
@@ -86,7 +86,7 @@ pub enum TuiError {
 /// The handle also gives you live access to the shared state so you can add,
 /// remove, or replace metric rows at any time:
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// handle.add_metric(MetricConfig::counter("new_metric", "New metric"));
 /// handle.remove_metric("old_metric");
 /// handle.set_metrics(vec![

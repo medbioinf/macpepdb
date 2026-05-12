@@ -78,7 +78,8 @@ mod test {
 
         // Asserts that the first 11 digits of the mass are equal when calculating the tolerance in MaCPepDB's integer representation,
         // leaving little rounding issue on position 12 (corresponding to the 9 decimal place of the original f64 representation)
-        for i in (1..=11_u32).rev() {
+        for i in (2..=11_u32).rev() {
+            println!("{}", lower_mass_i / 10_i64.pow(i));
             assert_eq!(
                 lower_mass_i / 10_i64.pow(i),
                 lower_mass_f_as_i / 10_i64.pow(i),

@@ -117,7 +117,6 @@ impl MassPartitioning {
 
         // Sort descending by count so large entries are placed first.
         entries.sort_by_key(|entry| entry.0);
-        entries.reverse();
 
         // Min-heap keyed by (current_total, bin_index).
         // `Reverse` turns Rust's max-heap into a min-heap.

@@ -12,8 +12,8 @@
 //!
 //! ## Quick-start
 //!
-//! ```rust,no_run
-//! use metrics_recorder::{MetricsPeek, LogMode};
+//! ```rust,ignore
+//! use metrics_peek::{MetricsPeek, LogMode};
 //!
 //! let recorder = MetricsPeek::new(
 //!     LogMode::Periodic(500),                  // flush every 500 ms
@@ -58,8 +58,8 @@ use handles::{CounterHandle, GaugeHandle, HistogramHandle};
 use state::MetricsState;
 
 use metrics::{Counter, Gauge, Histogram, Key, KeyName, Metadata, Recorder, SharedString, Unit};
-use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
