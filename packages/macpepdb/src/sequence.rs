@@ -119,7 +119,7 @@ pub trait IsBitSequence<T: num_traits::Unsigned>:
 macro_rules! make_sequence {
     ($name:ident, $count_type:ty, $count_bits:literal, $min_len:expr, $max_len:expr) => {
         paste! {
-            #[derive(Clone, Eq, Hash, PartialEq, DekuRead, DekuWrite, Serialize)]
+            #[derive(Clone, Eq, Hash, PartialEq, Serialize)]
             #[serde(into = "String")]
             pub struct [< $name:camel >] {
                 data: Vec<AminoAcidBitCode>,
@@ -269,6 +269,7 @@ macro_rules! make_sequence {
                 fn try_from(value: &[< $name:camel >]) -> Result<Self, Self::Error> {
                     let n = value.data.len();
                     let total_bits = [< $name:camel >]::LENGTH_BITS as usize + n * 5;
+                    #[allow(clippy::manual_div_ceil)]
                     let num_bytes = (total_bits + 7) / 8;
                     let mut out = Vec::with_capacity(num_bytes);
 
