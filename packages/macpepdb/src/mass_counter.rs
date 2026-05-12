@@ -110,7 +110,6 @@ impl MassCounter {
                 let protein_table = ProteinTable::new(client);
 
                 tokio::spawn(async move {
-                    let mut peptide_metric_buffer: usize = 0;
                     loop {
                         let (mass, protein_ids) = match queue.pop() {
                             Some(Some(entry)) => entry,

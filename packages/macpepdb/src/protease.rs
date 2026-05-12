@@ -1,9 +1,9 @@
 use std::fmt::{Debug, Display};
 
-use deku::DekuEnumExt;
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
 use thiserror::Error;
+use zerocopy::IntoBytes;
 
 use crate::{
     amino_acid::{ARGININE, AminoAcidBitCode, LYSINE, PROLINE, UNKNOWN},
@@ -57,66 +57,52 @@ impl IsProtease for Trypsin {
     }
 
     fn full_digest<'a>(&self, sequence: &'a [AminoAcidBitCode]) -> Vec<&'a [AminoAcidBitCode]> {
-        let lysine_byte: u8 = LYSINE.bit_code().deku_id().unwrap();
-        let arginine_byte: u8 = ARGININE.bit_code().deku_id().unwrap();
-        let proline_byte: u8 = PROLINE.bit_code().deku_id().unwrap();
+        let lysine_byte: u8 = LYSINE.bit_code().as_bytes()[0];
+        let arginine_byte: u8 = ARGININE.bit_code().as_bytes()[0];
+        let proline_byte: u8 = PROLINE.bit_code().as_bytes()[0];
 
         let mut last_cleavage_pos: usize = 0;
-        memchr::memchr2_iter(
-            lysine_byte,
-            arginine_byte,
-            sequence
-                .iter()
-                .map(|bit_code| bit_code.deku_id().unwrap())
-                .collect::<Vec<u8>>()
-                .as_slice(),
-        )
-        .map(|pos| {
-            (
-                pos + 1,
-                sequence
-                    .get(pos + 1)
-                    .map(|bit_code| bit_code.deku_id().unwrap()),
-            )
-        })
-        .filter_map(|(pos, next_aa)| {
-            if let Some(next_aa) = next_aa
-                && next_aa == proline_byte
-            {
-                None
-            } else {
-                Some(pos)
-            }
-        })
-        .chain(std::iter::once(sequence.len()))
-        .sorted()
-        .map(|pos| {
-            let start = last_cleavage_pos;
-            last_cleavage_pos = pos;
-            &sequence[start..pos]
-        })
-        .collect()
+        memchr::memchr2_iter(lysine_byte, arginine_byte, sequence.as_bytes())
+            .map(|pos| {
+                (
+                    pos + 1,
+                    sequence.get(pos + 1).map(|bit_code| bit_code.as_bytes()[0]),
+                )
+            })
+            .filter_map(|(pos, next_aa)| {
+                if let Some(next_aa) = next_aa
+                    && next_aa == proline_byte
+                {
+                    None
+                } else {
+                    Some(pos)
+                }
+            })
+            .chain(std::iter::once(sequence.len()))
+            .sorted()
+            .map(|pos| {
+                let start = last_cleavage_pos;
+                last_cleavage_pos = pos;
+                &sequence[start..pos]
+            })
+            .collect()
     }
 
     fn count_missed_cleavages(&self, sequence: &[AminoAcidBitCode]) -> usize {
-        let lysine_byte: u8 = LYSINE.bit_code().deku_id().unwrap();
-        let arginine_byte: u8 = ARGININE.bit_code().deku_id().unwrap();
-        let proline_byte: u8 = PROLINE.bit_code().deku_id().unwrap();
+        let lysine_byte: u8 = LYSINE.bit_code().as_bytes()[0];
+        let arginine_byte: u8 = ARGININE.bit_code().as_bytes()[0];
+        let proline_byte: u8 = PROLINE.bit_code().as_bytes()[0];
 
         memchr::memchr2_iter(
             lysine_byte,
             arginine_byte,
             sequence
                 .iter()
-                .map(|bit_code| bit_code.deku_id().unwrap())
+                .map(|bit_code| bit_code.as_bytes()[0])
                 .collect::<Vec<u8>>()
                 .as_slice(),
         )
-        .map(|pos| {
-            sequence
-                .get(pos + 1)
-                .map(|bit_code| bit_code.deku_id().unwrap())
-        })
+        .map(|pos| sequence.get(pos + 1).map(|bit_code| bit_code.as_bytes()[0]))
         .filter_map(|next_aa| {
             if let Some(next_aa) = next_aa
                 && next_aa == proline_byte

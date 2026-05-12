@@ -4,6 +4,7 @@ use deku::DekuEnumExt;
 use scylla::{DeserializeRow, SerializeRow};
 
 use thiserror::Error;
+use zerocopy::IntoBytes;
 
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
@@ -159,7 +160,7 @@ impl IsPeptide for Peptide {
 
             self.sequence
                 .amino_acid_bit_codes()
-                .for_each(|bit_code| counts[bit_code.deku_id().unwrap() as usize] += 1);
+                .for_each(|bit_code| counts[bit_code.as_bytes()[0] as usize] += 1);
             counts
         })
     }
@@ -207,7 +208,7 @@ impl Peptidoform {
                     ModifiedSequencePart::AminoAcid(aa) => Some(*aa),
                     _ => None,
                 })
-                .for_each(|bit_code| counts[bit_code.deku_id().unwrap() as usize] += 1);
+                .for_each(|bit_code| counts[bit_code.as_bytes()[0] as usize] += 1);
             counts
         })
     }
@@ -269,7 +270,7 @@ impl IsPeptide for Peptidoform {
                     ModifiedSequencePart::AminoAcid(aa) => Some(*aa),
                     _ => None,
                 })
-                .for_each(|bit_code| counts[bit_code.deku_id().unwrap() as usize] += 1);
+                .for_each(|bit_code| counts[bit_code.as_bytes()[0] as usize] += 1);
             counts
         })
     }

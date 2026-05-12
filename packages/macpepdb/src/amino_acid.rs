@@ -48,12 +48,12 @@ macro_rules! create_const_amino_acids {
     ([$(($name:literal; $one_letter_code:literal; $mass:literal; $bit_code:literal; $is_canonical:literal)),* $(,)?]) => {
         paste! {
 
-            #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, DekuRead, DekuWrite)]
+            #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, DekuRead, DekuWrite, zerocopy::IntoBytes, zerocopy::KnownLayout, zerocopy::Immutable)]
             #[deku(id_type = "u8", bits = "5")]
+            #[repr(u8)]
             pub enum AminoAcidBitCode {
                 $(
-                    #[deku(id = $bit_code)]
-                    [< $one_letter_code:upper>],
+                    [< $one_letter_code:upper >] = $bit_code,
                 )+
             }
 
