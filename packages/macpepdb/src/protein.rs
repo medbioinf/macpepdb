@@ -1,32 +1,10 @@
-use std::sync::LazyLock;
-
-use futures::future::join_all;
-use scylla::{
-    DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError,
-    serialize::row::SerializeRow,
-};
+use scylla::{DeserializeRow, SerializeRow};
 use thiserror::Error;
 
-use crate::{client::Client, sequence::ProteinSequence as Sequence};
-
-static TABLE_NAME: &str = "proteins";
-
-static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!("INSERT INTO {TABLE_NAME} (accession, id, sequence) VALUES (?, ?, ?)")
-});
-
-static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
+use crate::sequence::ProteinSequence as Sequence;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Client error in protein: {0}")]
-    Client(#[from] crate::client::Error),
-    #[error("CQL execution error in protein: {0}")]
-    CqlExecution(#[from] scylla::errors::ExecutionError),
-    #[error("CQL paged execution error in protein: {0}")]
-    CqlPagedExecution(#[from] scylla::errors::PagerExecutionError),
-    #[error("CQL type check failed in protein: {0}")]
-    CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
     #[error("Sequence error in protein: {0}")]
     Sequence(#[from] crate::sequence::Error),
 }
@@ -57,43 +35,6 @@ impl Protein {
 
     pub fn id(&self) -> Option<i32> {
         self.id
-    }
-
-    pub async fn insert(&self, client: &Client) -> Result<(), Error> {
-        client
-            .execute_unpaged(INSERT_STATEMENT.as_str(), &self)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn insert_batch(
-        client: &Client,
-        values: impl Iterator<Item = Self>,
-    ) -> Result<(), Error> {
-        let insert_futures =
-            values.map(|value| client.execute_unpaged(INSERT_STATEMENT.as_str(), value));
-
-        join_all(insert_futures)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, ExecutionError>>()?;
-
-        Ok(())
-    }
-
-    pub async fn select(
-        client: &Client,
-        select_addition: Option<&str>,
-        values: impl SerializeRow,
-    ) -> Result<TypedRowStream<Self>, Error> {
-        let statement = select_addition
-            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
-            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
-
-        Ok(client
-            .execute_iter(statement, values)
-            .await?
-            .rows_stream::<Self>()?)
     }
 }
 

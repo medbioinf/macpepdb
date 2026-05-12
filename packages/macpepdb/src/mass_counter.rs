@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     client::Client, mass_index::MassIndex, peptide::IsPeptide, protease::Protease,
-    protein::Protein, sequence::ByteSequence,
+    protein_table::ProteinTable, sequence::ByteSequence,
 };
 
 pub static PROGESS_METRIC: &str = "mass_counter::progress";
@@ -31,8 +31,8 @@ pub enum Error {
     NoErroredThread,
     #[error("Protease error in mass index: {0}")]
     Protease(#[from] crate::protease::Error),
-    #[error("Protein error in mass index: {0}")]
-    Protein(#[from] crate::protein::Error),
+    #[error("Protein rable error in mass index: {0}")]
+    ProteinTable(#[from] crate::protein_table::Error),
     #[error("UnipotReader error in mass index: {0}")]
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
@@ -43,21 +43,22 @@ pub struct MassCounter(DashMap<i64, usize>);
 
 impl MassCounter {
     pub async fn count(
-        client: &Client,
+        client: Arc<Client>,
         protease: &Protease,
         mass_index: &MassIndex,
     ) -> Result<Self, Error> {
+        let protein_table = ProteinTable::new(client);
         let progress_metric = metrics::counter!(PROGESS_METRIC);
         let peptides_metric = metrics::counter!(PEPTIDES_METRIC);
         let counter: DashMap<i64, usize> = DashMap::new();
 
         for entry in mass_index.iter() {
-            let mut proteins = Protein::select(
-                client,
-                Some("WHERE id IN ?"),
-                (Vec::from_iter(entry.value().iter().cloned()),),
-            )
-            .await?;
+            let mut proteins = protein_table
+                .select(
+                    Some("WHERE id IN ?"),
+                    (Vec::from_iter(entry.value().iter().cloned()),),
+                )
+                .await?;
 
             // Using the more compact form of the sequence to keep the peptide in memory, mass is not important now.
             let mut peptide_sequences: HashSet<ByteSequence> =
@@ -110,6 +111,7 @@ impl MassCounter {
                 let peptides_metric = peptides_metric.clone();
                 let size_metric = size_metric.clone();
                 let counter = counter.clone();
+                let protein_table = ProteinTable::new(client);
 
                 size_metric.increment(std::mem::size_of::<Self>() as u64);
 
@@ -126,9 +128,9 @@ impl MassCounter {
 
                         let protein_ids_len = protein_ids.len();
 
-                        let mut proteins =
-                            Protein::select(client.as_ref(), Some("WHERE id IN ?"), (protein_ids,))
-                                .await?;
+                        let mut proteins = protein_table
+                            .select(Some("WHERE id IN ?"), (protein_ids,))
+                            .await?;
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
                         let mut peptide_sequences: HashSet<ByteSequence> =

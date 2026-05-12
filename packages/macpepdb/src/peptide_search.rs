@@ -19,6 +19,7 @@ use crate::configuration::Configuration;
 use crate::mass_partitioning::MassPartitioning;
 use crate::molecules::WATER_MONO_MASS;
 use crate::peptide::{IsPeptide, Peptidoform};
+use crate::peptide_table::PeptideTable;
 // use crate::entities::configuration::Configuration;
 // use crate::entities::peptide::MatchingPeptide;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
@@ -31,10 +32,16 @@ pub static MATCHING_PEPTIDE_METRIC: &str = "peptide_search:matching_peptides";
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Peptide error in peptide search: {0}")]
-    Peptide(#[from] crate::peptide::Error),
+    #[error("Peptide table error in peptide search: {0}")]
+    PeptideTable(Box<crate::peptide_table::Error>),
     #[error("Unable to get next peptide from stream: {0}")]
     NextRow(#[from] scylla::errors::NextRowError),
+}
+
+impl From<crate::peptide_table::Error> for Error {
+    fn from(err: crate::peptide_table::Error) -> Self {
+        Self::PeptideTable(Box::new(err))
+    }
 }
 
 /// Trait to check conditions on peptides
@@ -390,12 +397,12 @@ impl ConditionalPeptideStream {
         resolve_modification: bool,
     ) -> Result<Self, Error> {
         let inner = Box::pin(
-            Peptide::select(
-                client,
-                Some("WHERE partition = ? AND mass = ?"),
-                (condition.partition(), condition.mass()),
-            )
-            .await?,
+            PeptideTable::new(client)
+                .select(
+                    Some("WHERE partition = ? AND mass = ?"),
+                    (condition.partition(), condition.mass()),
+                )
+                .await?,
         );
         Ok(Self {
             resolve_modification,
@@ -683,7 +690,7 @@ impl Search for MultiTaskSearch {
 
         if !ptm_collection.is_empty() {
             let min_mass = match configuration.min_peptide_length() {
-                Some(min_length) => GLYCINE.mono_mass() * min_length as i64,
+                Some(min_length) => GLYCINE.mono_mass() * min_length.get() as i64,
                 None => 0,
             };
 

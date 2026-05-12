@@ -20,6 +20,7 @@ dihardts_omicstools = "~3.1.0"
 fallible-iterator = "~0.3.0"
 fancy-regex = "~0.17.0"
 futures = "~0.3.32"
+http = "1.4.0"
 itertools = "~0.14.0"
 metrics = "0.24"
 metrics-exporter-prometheus = {version = "0.18.1", default-features = false}

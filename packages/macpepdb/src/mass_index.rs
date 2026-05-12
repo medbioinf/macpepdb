@@ -8,7 +8,10 @@ use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use thiserror::Error;
 
-use crate::{client::Client, peptide::IsPeptide, protease::Protease, protein::Protein};
+use crate::{
+    client::Client, peptide::IsPeptide, protease::Protease, protein::Protein,
+    protein_table::ProteinTable,
+};
 
 pub static PROGRESS_METRIC: &str = "mass_index::progress";
 pub static SIZE_METRIC: &str = "mass_index::size";
@@ -29,8 +32,8 @@ pub enum Error {
     NoErroredThread,
     #[error("Protease error in mass index: {0}")]
     Protease(#[from] crate::protease::Error),
-    #[error("Protein error in mass index: {0}")]
-    Protein(#[from] crate::protein::Error),
+    #[error("Protein table error in mass index: {0}")]
+    ProteinTable(#[from] crate::protein_table::Error),
     #[error("Unable to unwrap index from Arc")]
     IndexUnwrap,
     // #[error("Protein reader thread error: {0}")]
@@ -42,8 +45,10 @@ pub enum Error {
 pub struct MassIndex(DashMap<i64, HashSet<i32>>);
 
 impl MassIndex {
-    pub async fn build(client: &Client, protease: &Protease) -> Result<Self, Error> {
-        let mut proteins = Protein::select(client, None, ()).await?;
+    pub async fn build(client: Arc<Client>, protease: &Protease) -> Result<Self, Error> {
+        let protein_table = ProteinTable::new(client);
+
+        let mut proteins = protein_table.select(None, ()).await?;
         let index: DashMap<i64, HashSet<i32>> = DashMap::new();
         let progress_metric = metrics::counter!(PROGRESS_METRIC);
 
@@ -74,11 +79,13 @@ impl MassIndex {
     }
 
     pub async fn build_concurrently(
-        client: &Client,
+        client: Arc<Client>,
         protease: &Protease,
         num_threads: NonZeroUsize,
     ) -> Result<Self, Error> {
-        let mut proteins = Protein::select(client, None, ()).await?;
+        let protein_table = ProteinTable::new(client);
+
+        let mut proteins = protein_table.select(None, ()).await?;
         let queue: Arc<ArrayQueue<Option<Protein>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());

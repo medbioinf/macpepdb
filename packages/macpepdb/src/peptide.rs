@@ -1,34 +1,18 @@
-use std::{
-    hash::Hash,
-    sync::{LazyLock, OnceLock},
-};
+use std::{hash::Hash, sync::OnceLock};
 
 use deku::DekuEnumExt;
-use scylla::{
-    DeserializeRow, SerializeRow,
-    client::pager::TypedRowStream,
-    statement::batch::{Batch, BatchType},
-};
+use scylla::{DeserializeRow, SerializeRow};
 
 use thiserror::Error;
 
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
-    client::Client,
     mass_partitioning::MassPartitioning,
     molecules::WATER_MONO_MASS,
     sequence::{
         IsSimpleSequence, ModifiedSequence, ModifiedSequencePart, PeptideSequence as Sequence,
     },
 };
-
-pub const TABLE_NAME: &str = "peptides";
-
-static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!("INSERT INTO {TABLE_NAME} (partition, mass, sequence) VALUES (?, ?, ?)")
-});
-
-static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
 
 pub const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A') as usize;
 
@@ -134,60 +118,6 @@ impl Peptide {
         self.sequence
     }
 
-    pub async fn insert(&self, client: &Client) -> Result<(), Error> {
-        client
-            .execute_unpaged(INSERT_STATEMENT.as_str(), &self)
-            .await
-            .map_err(|err| Error::CqlExecution(Box::new(err)))?;
-        Ok(())
-    }
-
-    pub async fn insert_batch(client: &Client, values: Vec<Peptide>) -> Result<(), Error> {
-        let batch_type = if values
-            .iter()
-            .all(|value| value.partition() == values[0].partition())
-        {
-            BatchType::Unlogged
-        } else {
-            tracing::warn!(
-                "Peptide batch insert includes multipe partitions. This should be avoided."
-            );
-            BatchType::Logged
-        };
-
-        let mut batch_statement = Batch::new(batch_type);
-        (0..values.len()).for_each(|_| {
-            batch_statement.append_statement(INSERT_STATEMENT.as_str());
-        });
-        if let Some(consistency) = client.write_consistency_level() {
-            batch_statement.set_consistency(consistency);
-        }
-
-        client
-            .batch(&batch_statement, values)
-            .await
-            .map_err(|err| Error::CqlExecution(Box::new(err)))?;
-
-        Ok(())
-    }
-
-    pub async fn select(
-        client: impl AsRef<Client>,
-        select_addition: Option<&str>,
-        values: impl scylla::serialize::row::SerializeRow,
-    ) -> Result<TypedRowStream<Self>, Error> {
-        let statement = select_addition
-            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
-            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
-
-        Ok(client
-            .as_ref()
-            .execute_iter(statement, values)
-            .await
-            .map_err(|err| Error::CqlPagedExecution(Box::new(err)))?
-            .rows_stream::<Self>()?)
-    }
-
     pub fn to_peptide_mass(sequence: &Sequence) -> i64 {
         sequence
             .amino_acids()
@@ -232,6 +162,15 @@ impl IsPeptide for Peptide {
                 .for_each(|bit_code| counts[bit_code.deku_id().unwrap() as usize] += 1);
             counts
         })
+    }
+}
+
+impl TryFrom<(&str, &MassPartitioning)> for Peptide {
+    type Error = Error;
+
+    fn try_from((sequence, partitioning): (&str, &MassPartitioning)) -> Result<Self, Self::Error> {
+        let sequence = Sequence::try_from(sequence)?;
+        Self::new_with_partition(sequence, partitioning)
     }
 }
 

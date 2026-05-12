@@ -1,8 +1,17 @@
-use std::{collections::HashSet, num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    num::NonZeroUsize,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
+use scylla::{
+    client::pager::TypedRowStream,
+    statement::batch::{Batch, BatchType},
+};
 use thiserror::Error;
 
 use crate::{
@@ -11,9 +20,17 @@ use crate::{
     mass_partitioning::MassPartitioning,
     peptide::{IsPeptide, Peptide},
     protease::Protease,
-    protein::Protein,
+    protein_table::ProteinTable,
     sequence::{ByteSequence, PeptideSequence},
 };
+
+pub const TABLE_NAME: &str = "peptides";
+
+static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!("INSERT INTO {TABLE_NAME} (partition, mass, sequence) VALUES (?, ?, ?)")
+});
+
+static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
 
 pub static INSERTED_PEPTIDES_METRIC: &str = "peptides_table::build::inserted_peptides";
 
@@ -41,8 +58,8 @@ pub enum Error {
     NoErroredThread,
     #[error("Protease error in peptide table: {0}")]
     Protease(#[from] crate::protease::Error),
-    #[error("Protein error in peptide table: {0}")]
-    Protein(#[from] crate::protein::Error),
+    #[error("Protein table error in peptide table: {0}")]
+    ProteinTable(#[from] crate::protein_table::Error),
     #[error("Peptide error in peptide table: {0}")]
     Peptide(#[from] crate::peptide::Error),
     #[error("Sequence error in peptide table: {0}")]
@@ -62,6 +79,60 @@ pub struct PeptideTable {
 impl PeptideTable {
     pub fn new(client: Arc<Client>) -> Self {
         Self { client }
+    }
+
+    pub async fn insert(&self, peptide: &Peptide) -> Result<(), Error> {
+        self.client
+            .execute_unpaged(INSERT_STATEMENT.as_str(), peptide)
+            .await
+            .map_err(Error::CqlExecution)?;
+        Ok(())
+    }
+
+    pub async fn insert_batch(&self, values: Vec<Peptide>) -> Result<(), Error> {
+        let batch_type = if values
+            .iter()
+            .all(|value| value.partition() == values[0].partition())
+        {
+            BatchType::Unlogged
+        } else {
+            tracing::warn!(
+                "Peptide batch insert includes multipe partitions. This should be avoided."
+            );
+            BatchType::Logged
+        };
+
+        let mut batch_statement = Batch::new(batch_type);
+        (0..values.len()).for_each(|_| {
+            batch_statement.append_statement(INSERT_STATEMENT.as_str());
+        });
+        if let Some(consistency) = self.client.write_consistency_level() {
+            batch_statement.set_consistency(consistency);
+        }
+
+        self.client
+            .batch(&batch_statement, values)
+            .await
+            .map_err(Error::CqlExecution)?;
+
+        Ok(())
+    }
+
+    pub async fn select(
+        &self,
+        select_addition: Option<&str>,
+        values: impl scylla::serialize::row::SerializeRow,
+    ) -> Result<TypedRowStream<Peptide>, Error> {
+        let statement = select_addition
+            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
+            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
+
+        Ok(self
+            .client
+            .execute_iter(statement, values)
+            .await
+            .map_err(Error::CqlPagedExecution)?
+            .rows_stream::<Peptide>()?)
     }
 
     pub async fn build_concurrently(
@@ -87,6 +158,9 @@ impl PeptideTable {
                 let inserted_peptides_metric = inserted_peptides_metric.clone();
 
                 tokio::spawn(async move {
+                    let peptide_table = PeptideTable::new(client.clone());
+                    let protein_table = ProteinTable::new(client);
+
                     loop {
                         let (mass, protein_ids) = match queue.pop() {
                             Some(Some(entry)) => entry,
@@ -99,12 +173,9 @@ impl PeptideTable {
 
                         let protein_ids_len = protein_ids.len();
 
-                        let mut proteins = Protein::select(
-                            client.as_ref(),
-                            Some("WHERE id IN ?"),
-                            (Vec::from_iter(protein_ids),),
-                        )
-                        .await?;
+                        let mut proteins = protein_table
+                            .select(Some("WHERE id IN ?"), (Vec::from_iter(protein_ids),))
+                            .await?;
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
                         let mut peptide_sequences: HashSet<ByteSequence> =
@@ -138,7 +209,7 @@ impl PeptideTable {
                                 .collect::<Result<Vec<_>, crate::peptide::Error>>()?;
 
                             let peptides_len = peptides.len();
-                            Peptide::insert_batch(client.as_ref(), peptides).await?;
+                            peptide_table.insert_batch(peptides).await?;
                             inserted_peptides_metric.increment(peptides_len as u64);
                         }
                     }

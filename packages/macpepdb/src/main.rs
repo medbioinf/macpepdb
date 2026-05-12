@@ -398,7 +398,7 @@ async fn build_db_mass_index(
     num_threads: NonZeroUsize,
 ) -> MassIndex {
     let now = std::time::Instant::now();
-    let index = MassIndex::build_concurrently(client.as_ref(), protease, num_threads)
+    let index = MassIndex::build_concurrently(client, protease, num_threads)
         .await
         .unwrap();
     tracing::info!(
@@ -418,7 +418,7 @@ async fn build_db_mass_counter(
 ) -> MassCounter {
     let now = std::time::Instant::now();
 
-    let counter = MassCounter::count_concurrently(client.clone(), protease, mass_index, threads)
+    let counter = MassCounter::count_concurrently(client, protease, mass_index, threads)
         .await
         .unwrap();
 
@@ -533,7 +533,11 @@ async fn peptide_search(
             .unwrap()
             .unwrap();
 
-    let configuration = Arc::new(Configuration::new(mass_partitioning, Some(6), Some(50)));
+    let configuration = Arc::new(Configuration::new(
+        mass_partitioning,
+        Some(NonZeroUsize::new(6).unwrap()),
+        Some(NonZeroUsize::new(50).unwrap()),
+    ));
 
     let taxonomy_ids = if taxonomy_ids.is_empty() {
         None
