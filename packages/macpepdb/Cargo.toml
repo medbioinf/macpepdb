@@ -12,7 +12,6 @@ console-subscriber = { workspace = true, optional = true, features = ["env-filte
 crossbeam = { workspace = true }
 csv = { workspace = true }
 dashmap = { workspace = true }
-deku = { workspace = true }
 dihardts_omicstools = { workspace = true }
 fallible-iterator = { workspace = true }
 fancy-regex = { workspace = true }

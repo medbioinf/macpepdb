@@ -20,7 +20,7 @@ use crate::{
     mass_index::MassIndex,
     peptide::{IsPeptide, Peptide},
     protein_table::ProteinTable,
-    sequence::{ByteSequence, PeptideSequence},
+    sequence::{CompactSequence, PeptideSequence},
 };
 
 pub const TABLE_NAME: &str = "peptides";
@@ -172,7 +172,7 @@ impl PeptideTable {
                             .await?;
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
-                        let mut peptide_sequences: HashSet<ByteSequence> =
+                        let mut peptide_sequences: HashSet<CompactSequence> =
                             HashSet::with_capacity(2 * protein_ids_len);
 
                         while let Some(protein) = proteins.next().await.transpose()? {
@@ -182,8 +182,9 @@ impl PeptideTable {
                                 .cleave(protein.sequence().as_ref())
                                 .filter(|peptide| Ok(peptide.mass() == mass))
                                 .for_each(|peptide| {
-                                    peptide_sequences
-                                        .insert(ByteSequence::try_from(peptide.into_sequence())?);
+                                    peptide_sequences.insert(CompactSequence::try_from(
+                                        peptide.into_sequence(),
+                                    )?);
                                     Ok(())
                                 })?;
                         }

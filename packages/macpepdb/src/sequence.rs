@@ -1,11 +1,10 @@
 use std::{
     fmt::{Debug, Display},
     hash::Hash,
-    num::NonZeroUsize,
+    num::{NonZeroU8, NonZeroUsize},
     ops::{Index, Range},
 };
 
-use deku::prelude::*;
 use pastey::paste;
 use scylla::{
     cluster::metadata::{ColumnType, NativeType},
@@ -18,6 +17,7 @@ use scylla::{
 };
 use serde::Serialize;
 use thiserror::Error;
+use zerocopy::IntoBytes;
 
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
@@ -29,12 +29,12 @@ use crate::{
 pub enum Error {
     #[error("Amino acid in sequence: {0}")]
     AminoAcid(#[from] crate::amino_acid::Error),
-    #[error("Deku error in seqeunce: {0}")]
-    Bytes(#[from] deku::error::DekuError),
     #[error("CQL value too large for blob")]
     CqlValueTooLarge,
     #[error("Internal CQL error in seqeunce: {0}")]
     InternalCql(#[from] crate::cql::Error),
+    #[error("Malformed byte: {0:?}")]
+    MalformedBytes(CompactSequence),
     #[error("Sequence too large {length} exceeds max {max_length})")]
     TooLong { length: usize, max_length: usize },
     #[error("Sequence too short {length} exceeds min {min_length})")]
@@ -44,6 +44,26 @@ pub enum Error {
         scylla::cluster::metadata::ColumnType<'static>,
         scylla::cluster::metadata::ColumnType<'static>,
     ),
+}
+
+/// A more compact version of sequence, which stores the amino acids as
+/// as 5 bits + x bits for the length, rounded to the next byte.
+/// This can safe up to 30% memory depending on the length of the seqeunce.
+/// This version is ment to be compact, not feature rich (because non byte logic is slow), so more of it can be stored in
+/// maps, sets, databases etc.
+#[derive(Debug, Eq, Hash, PartialEq)]
+pub struct CompactSequence(Vec<u8>);
+
+impl From<CompactSequence> for Vec<u8> {
+    fn from(compact_sequence: CompactSequence) -> Self {
+        compact_sequence.0
+    }
+}
+
+impl AsRef<[u8]> for CompactSequence {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
 }
 
 pub trait IsSimpleSequence: Clone + Display + Eq + Hash + PartialEq + Send + Sync {
@@ -56,21 +76,17 @@ pub trait IsSimpleSequence: Clone + Display + Eq + Hash + PartialEq + Send + Syn
     fn contains(&self, aa: &AminoAcid) -> bool;
 }
 
-pub trait IsBitSequence<T: num_traits::PrimInt>:
+pub trait IsBitSequence<T: num_traits::Unsigned>:
     Debug
-    + TryInto<Vec<u8>>
-    + TryInto<ByteSequence>
+    + TryFrom<CompactSequence>
     + for<'a> TryFrom<&'a str>
-    + for<'a> DekuReader<'a>
-    + DekuWriter
     + for<'frame, 'metadata> DeserializeValue<'frame, 'metadata>
     + SerializeValue
     + IsSimpleSequence
 {
     const MIN_LENGTH: NonZeroUsize;
     const MAX_LENGTH: NonZeroUsize;
-
-    fn count(&self) -> T;
+    const COUNT_BIT_WIDTH: NonZeroU8;
 
     fn data(&self) -> &[AminoAcidBitCode];
 
@@ -106,19 +122,15 @@ macro_rules! make_sequence {
             #[derive(Clone, Eq, Hash, PartialEq, DekuRead, DekuWrite, Serialize)]
             #[serde(into = "String")]
             pub struct [< $name:camel >] {
-                #[deku(update = "self.update_count()", bits = $count_bits)]
-                count: $count_type,
-                #[deku(count = "count")]
                 data: Vec<AminoAcidBitCode>,
             }
 
             impl [< $name:camel >] {
-                fn update_count(&self) -> $count_type {
-                    self.data.len() as [< $count_type >]
-                }
+                const LENGTH_BITS: u8 = $count_bits;
             }
 
             impl IsSimpleSequence for [< $name:camel >] {
+
                 fn amino_acids(&self) -> impl Iterator<Item = &'static AminoAcid> {
                     self.data.iter().map(<&'static AminoAcid>::from)
                 }
@@ -158,10 +170,8 @@ macro_rules! make_sequence {
             impl IsBitSequence<$count_type> for [< $name:camel >] {
                 const MIN_LENGTH: NonZeroUsize = NonZeroUsize::new($min_len).unwrap();
                 const MAX_LENGTH: NonZeroUsize = NonZeroUsize::new($max_len).unwrap();
+                const COUNT_BIT_WIDTH: NonZeroU8 = NonZeroU8::new($count_bits).unwrap();
 
-                fn count(&self) -> $count_type {
-                    self.count
-                }
 
                 fn data(&self) -> &[AminoAcidBitCode] {
                     &self.data
@@ -170,7 +180,6 @@ macro_rules! make_sequence {
                 fn new(data: Vec<AminoAcidBitCode>) -> Result<Self, Error> {
                     Self::validate_length(&data)?;
                     Ok(Self {
-                        count: data.len() as $count_type,
                         data,
                     })
                 }
@@ -206,29 +215,102 @@ macro_rules! make_sequence {
                 }
             }
 
-            impl TryFrom<&[< $name:camel >]> for Vec<u8> {
+            impl TryFrom<CompactSequence> for [< $name:camel >] {
                 type Error = Error;
+
+                fn try_from(value: CompactSequence) -> Result<Self, Self::Error> {
+                    let mut buf: u64 = 0;
+                    let mut bits: u8 = 0;
+                    let mut byte_iter = value.0.iter();
+
+                    // Accumulate bytes until we have at least COUNT_BITS bits available.
+                    while bits < [< $name:camel >]::LENGTH_BITS {
+                        match byte_iter.next() {
+                            Some(&b) => {
+                                buf = (buf << 8) | (b as u64);
+                                bits += 8;
+                            }
+                            None => return Err(Error::MalformedBytes(value)),
+                        }
+                    }
+                    // Extract the count by consuming the COUNT_BITS most-significant bits.
+                    // After the subtraction `bits` is in 0..=7, so (1u64 << bits) never
+                    // overflows, and the cast to $count_type acts as the natural mask.
+                    bits -= [< $name:camel >]::LENGTH_BITS;
+                    let count = ((buf >> bits) as $count_type) as usize;
+                    buf &= (1u64 << bits) - 1;
+
+                    // Read count × 5 bits, one amino acid at a time.
+                    let mut data = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        while bits < 5 {
+                            match byte_iter.next() {
+                                Some(&b) => {
+                                    buf = (buf << 8) | (b as u64);
+                                    bits += 8;
+                                }
+                                None => return Err(Error::MalformedBytes(value)),
+                            }
+                        }
+                        bits -= 5;
+                        let v = ((buf >> bits) & 0x1F) as u8;
+                        buf &= (1u64 << bits) - 1;
+                        data.push(AminoAcidBitCode::try_from(v)?);
+                    }
+
+                    Self::validate_length(&data)?;
+                    Ok(Self { data })
+                }
+            }
+
+            impl TryFrom<&[< $name:camel >]> for CompactSequence {
+                type Error = Error;
+
                 fn try_from(value: &[< $name:camel >]) -> Result<Self, Self::Error> {
-                    value.to_bytes().map_err(Error::Bytes)
+                    let n = value.data.len();
+                    let total_bits = [< $name:camel >]::LENGTH_BITS as usize + n * 5;
+                    let num_bytes = (total_bits + 7) / 8;
+                    let mut out = Vec::with_capacity(num_bytes);
+
+                    // Seed the window with the length value occupying the LENGTH_BITS
+                    // most-significant bits.
+                    let mut buf: u64 = n as u64;
+                    let mut bits: u8 = [< $name:camel >]::LENGTH_BITS;
+
+                    for aa in value.data.iter() {
+                        // Flush complete bytes *before* shifting in the next 5-bit
+                        // value so the buffer never overflows (important when
+                        // LENGTH_BITS = 64).
+                        while bits >= 8 {
+                            bits -= 8;
+                            out.push((buf >> bits) as u8);
+                            buf &= (1u64 << bits) - 1;
+                        }
+                        buf = (buf << 5) | (*aa as u8 as u64);
+                        bits += 5;
+                    }
+
+                    // Flush remaining complete bytes …
+                    while bits >= 8 {
+                        bits -= 8;
+                        out.push((buf >> bits) as u8);
+                        buf &= (1u64 << bits) - 1;
+                    }
+                    // … and the partial trailing byte (zero-padded at the LSB).
+                    if bits > 0 {
+                        out.push((buf << (8 - bits)) as u8);
+                    }
+                    Ok(CompactSequence(out))
                 }
             }
 
-            impl TryFrom<ByteSequence> for [< $name:camel >] {
-                type Error = Error;
-
-                fn try_from(value: ByteSequence) -> Result<Self, Self::Error> {
-                    let (_, sequence) = [< $name:camel >]::from_bytes((value.0.as_slice(), 0))?;
-                    Ok(sequence)
-                }
-            }
-
-            impl TryFrom<[< $name:camel >]> for ByteSequence {
+             impl TryFrom<[< $name:camel >]> for CompactSequence {
                 type Error = Error;
 
                 fn try_from(value: [< $name:camel >]) -> Result<Self, Self::Error> {
-                    Ok(ByteSequence(value.to_bytes()?))
+                    Self::try_from(&value)
                 }
-            }
+             }
 
             impl Display for [< $name:camel >] {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -239,16 +321,14 @@ macro_rules! make_sequence {
 
             impl Debug for [< $name:camel >] {
                 fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                    let bit_string = match self.to_bytes() {
-                        Ok(bytes) => bytes
-                            .into_iter()
-                            .map(|byte| format!("{byte:0>5b}"))
-                            .collect::<Vec<String>>()
-                            .join("_"),
-                        Err(e) => format!("Error converting to bytes: {e}"),
-                    };
+                    let byte_string = self
+                        .data
+                        .iter()
+                        .map(|aa| format!("{:#X}", aa.as_bytes()[0]))
+                        .collect::<Vec<String>>()
+                        .join(" ");
 
-                    write!(f, "Sequence({bit_string} ({self}))")
+                    write!(f, "Sequence({byte_string} ({self}))")
                 }
             }
 
@@ -297,12 +377,9 @@ macro_rules! make_sequence {
                         )));
                     }
 
-                    let blob = self
-                        .to_bytes()
-                        .map_err(Error::Bytes)
-                        .map_err(SerializationError::new)?;
+                    let byte_sequence = CompactSequence::try_from(self).map_err(|err| SerializationError::new(err))?;
                     writer
-                        .set_value(&blob)
+                        .set_value(byte_sequence.as_ref())
                         .map_err(|_| SerializationError::new(Error::CqlValueTooLarge))
                 }
             }
@@ -325,9 +402,8 @@ macro_rules! make_sequence {
                     v: Option<scylla::deserialize::FrameSlice<'frame>>,
                 ) -> Result<Self, scylla::errors::DeserializationError> {
                     let val = ensure_not_null_slice::<&[u8]>(typ, v)?;
-                    let (_, sequence) = Self::from_bytes((val, 0))
-                        .map_err(|err| scylla::errors::DeserializationError::new(Error::Bytes(err)))?;
-                    Ok(sequence)
+                    let compact_sequence = CompactSequence(val.to_vec());
+                    Self::try_from(compact_sequence).map_err(|err| scylla::errors::DeserializationError::new(err))
                 }
             }
         }
@@ -339,14 +415,6 @@ make_sequence!(PeptideSequence, u8, 6, 1, 50);
 
 // ProteinSeqeunce limited to 1 to 65.536 amino acids length can be stored in 16 bits
 make_sequence!(ProteinSequence, u16, 16, 1, u16::MAX as usize);
-
-/// A more compact version of sequence, which stores the amino acids as
-/// as 5 bits + 6 bit for the length rounded to the next byte.
-/// This can safe up to 30% memory depending on the length of the seqeunce.
-/// This version is ment to be compact, not feature rich (because non byte logic is slow), so more of it can be stored in
-/// maps, sets etc.
-#[derive(Debug, Eq, Hash, PartialEq)]
-pub struct ByteSequence(Vec<u8>);
 
 /// Part of the a modified sequence which can keep amino acids as well as modifications (as strings)
 ///
@@ -557,10 +625,9 @@ mod tests {
         assert!(sequence.is_ok());
 
         let sequence = sequence.unwrap();
-        let bytea = sequence.to_bytes().unwrap();
+        let compact = CompactSequence::try_from(&sequence).unwrap();
 
-        let (_, deserialized_sequence) =
-            PeptideSequence::from_bytes((bytea.as_slice(), 0)).unwrap();
+        let deserialized_sequence = PeptideSequence::try_from(compact).unwrap();
         assert_eq!(sequence, deserialized_sequence);
         assert_eq!(sequence.to_string(), known_aa_seq);
     }

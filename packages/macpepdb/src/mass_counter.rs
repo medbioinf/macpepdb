@@ -10,7 +10,7 @@ use thiserror::Error;
 
 use crate::{
     client::Client, mass_index::MassIndex, peptide::IsPeptide, protease::Protease,
-    protein_table::ProteinTable, sequence::ByteSequence,
+    protein_table::ProteinTable, sequence::CompactSequence,
 };
 
 pub static PROGESS_METRIC: &str = "mass_counter::progress";
@@ -60,7 +60,7 @@ impl MassCounter {
                 .await?;
 
             // Using the more compact form of the sequence to keep the peptide in memory, mass is not important now.
-            let mut peptide_sequences: HashSet<ByteSequence> =
+            let mut peptide_sequences: HashSet<CompactSequence> =
                 HashSet::with_capacity(2 * entry.value().len());
 
             while let Some(protein) = proteins.next().await.transpose()? {
@@ -69,7 +69,8 @@ impl MassCounter {
                     .cleave(protein.sequence().as_ref())
                     .filter(|peptide| Ok(peptide.mass() == *entry.key()))
                     .for_each(|peptide| {
-                        peptide_sequences.insert(ByteSequence::try_from(peptide.into_sequence())?);
+                        peptide_sequences
+                            .insert(CompactSequence::try_from(peptide.into_sequence())?);
                         Ok(())
                     })?;
             }
@@ -127,7 +128,7 @@ impl MassCounter {
                             .await?;
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
-                        let mut peptide_sequences: HashSet<ByteSequence> =
+                        let mut peptide_sequences: HashSet<CompactSequence> =
                             HashSet::with_capacity(2 * protein_ids_len);
 
                         while let Some(protein) = proteins.next().await.transpose()? {
@@ -136,8 +137,9 @@ impl MassCounter {
                                 .cleave(protein.sequence().as_ref())
                                 .filter(|peptide| Ok(peptide.mass() == mass))
                                 .for_each(|peptide| {
-                                    peptide_sequences
-                                        .insert(ByteSequence::try_from(peptide.into_sequence())?);
+                                    peptide_sequences.insert(CompactSequence::try_from(
+                                        peptide.into_sequence(),
+                                    )?);
                                     Ok(())
                                 })?;
                         }

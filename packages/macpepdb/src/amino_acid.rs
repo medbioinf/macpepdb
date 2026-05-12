@@ -1,6 +1,5 @@
 use std::sync::LazyLock;
 
-use deku::prelude::*;
 use pastey::paste;
 use thiserror::Error;
 
@@ -48,13 +47,25 @@ macro_rules! create_const_amino_acids {
     ([$(($name:literal; $one_letter_code:literal; $mass:literal; $bit_code:literal; $is_canonical:literal)),* $(,)?]) => {
         paste! {
 
-            #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, DekuRead, DekuWrite, zerocopy::IntoBytes, zerocopy::KnownLayout, zerocopy::Immutable)]
-            #[deku(id_type = "u8", bits = "5")]
+            #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, zerocopy::IntoBytes, zerocopy::KnownLayout, zerocopy::Immutable)]
             #[repr(u8)]
             pub enum AminoAcidBitCode {
                 $(
                     [< $one_letter_code:upper >] = $bit_code,
                 )+
+            }
+
+            impl TryFrom<u8> for AminoAcidBitCode {
+                type Error = Error;
+
+                fn try_from(value: u8) -> Result<Self, Self::Error> {
+                    match value {
+                        $(
+                            $bit_code => Ok(AminoAcidBitCode::[< $one_letter_code:upper >]),
+                        )+
+                        _ => Err(Error::InvalidAminoAcidBitCode(value)),
+                    }
+                }
             }
 
              $(
