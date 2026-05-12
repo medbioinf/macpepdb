@@ -8,6 +8,7 @@ async-stream = { workspace = true }
 axum = { workspace = true, features = ["json", "http2", "matched-path"] }
 base64 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+console-subscriber = { workspace = true, optional = true, features = ["env-filter", "grpc-web"] }
 crossbeam = { workspace = true }
 csv = { workspace = true }
 dashmap = { workspace = true }
@@ -58,3 +59,4 @@ dihardts_omicstools = { workspace = true }
 jemalloc = ["dep:tikv-jemallocator"]
 mimalloc = ["dep:mimalloc"]
 tcmalloc = ["dep:tcmalloc2"]
+tokio-console = ["dep:console-subscriber", "tokio/tracing"]

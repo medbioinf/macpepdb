@@ -132,9 +132,12 @@ enum Command {
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// Optional path to save index
-    // #[arg(short, long)]
-    // index_file_path: Option<PathBuf>,
+    /// Flag to start tokio console API
+    #[arg(long, default_value_t = false)]
+    console: bool,
+    /// Socket for tokio console API
+    #[arg(long)]
+    console_socket: Option<SocketAddr>,
     /// Database URL, format `scylla://[<user:string>[:<url-safe-password:string>]@]<host[:<port>]>[,<host[:<port>]>...]/<keyspace>`
     #[arg(short, long, default_value_t = String::from("scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb"))]
     database_url: String,
@@ -185,6 +188,11 @@ async fn main() {
 
     if cli.terminal {
         tracing_targets.push(TracingTarget::Terminal);
+    }
+
+    #[cfg(feature = "tokio-console")]
+    if cli.console {
+        tracing_targets.push(TracingTarget::Console(cli.console_socket));
     }
 
     if let Some(log_file_path) = cli.log_file {

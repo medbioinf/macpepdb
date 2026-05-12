@@ -60,6 +60,8 @@ pub enum TracingTarget {
     File(PathBuf, Rotation),
     Terminal,
     Tui(TuiLayer),
+    #[cfg(feature = "tokio-console")]
+    Console(Option<SocketAddr>),
 }
 
 /// Target for metrics
@@ -133,27 +135,13 @@ impl Monitoring {
                 .for_each(|(_, level)| *level = Level::TRACE);
         }
 
-        let mut filter = filters.iter().try_fold(
-            EnvFilter::from_default_env(),
-            |filter: EnvFilter, (target, level): (&&str, &Level)| {
-                let directive: Directive = format!("{target}={}", level.to_string().to_lowercase())
-                    .parse()
-                    .map_err(Error::InvalidFilterDirective)?;
-                Ok::<EnvFilter, Error>(filter.add_directive(directive))
-            },
-        )?;
-
-        filter = filter.add_directive(
-            format!("{log_level}")
-                .parse()
-                .map_err(Error::InvalidFilterDirective)?,
-        );
-
         // Tracing layers
         let mut terminal_layer = None;
         let mut tui_layer = None;
         let mut loki_layer = None;
         let mut file_layer = None;
+        #[cfg(feature = "tokio-console")]
+        let mut console_layer = None;
 
         for tracing_target in tracing_targets {
             match tracing_target {
@@ -192,16 +180,47 @@ impl Monitoring {
                     }
                     tui_layer = Some(layer);
                 }
+                #[cfg(feature = "tokio-console")]
+                TracingTarget::Console(socket) => {
+                    filters.insert("tokio", Level::TRACE);
+                    filters.insert("runtime", Level::TRACE);
+                    let mut builder = console_subscriber::ConsoleLayer::builder()
+                        .with_default_env()
+                        .enable_grpc_web(true);
+                    if let Some(socket) = socket {
+                        builder = builder.server_addr(socket);
+                    }
+                    console_layer = Some(builder.spawn());
+                }
             }
         }
 
-        tracing_subscriber::registry()
+        let mut filter = filters.iter().try_fold(
+            EnvFilter::from_default_env(),
+            |filter: EnvFilter, (target, level): (&&str, &Level)| {
+                let directive: Directive = format!("{target}={}", level.to_string().to_lowercase())
+                    .parse()
+                    .map_err(Error::InvalidFilterDirective)?;
+                Ok::<EnvFilter, Error>(filter.add_directive(directive))
+            },
+        )?;
+
+        filter = filter.add_directive(
+            format!("{log_level}")
+                .parse()
+                .map_err(Error::InvalidFilterDirective)?,
+        );
+
+        let registry = tracing_subscriber::registry()
             .with(terminal_layer)
             .with(tui_layer)
             .with(file_layer)
-            .with(loki_layer)
-            .with(filter)
-            .init();
+            .with(loki_layer);
+
+        #[cfg(feature = "tokio-console")]
+        let registry = registry.with(console_layer);
+
+        registry.with(filter).init();
 
         let mut tui_recorder: Option<TuiRecorder> = None;
         let mut prometheus_recorder: Option<PrometheusRecorder> = None;
