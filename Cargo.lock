@@ -2159,6 +2159,7 @@ dependencies = [
  "fallible-iterator",
  "fancy-regex 0.17.0",
  "futures",
+ "glob",
  "http 1.4.0",
  "itertools 0.14.0",
  "macpepdb_tui",

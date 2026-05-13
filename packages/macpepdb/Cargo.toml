@@ -17,6 +17,7 @@ dihardts_omicstools = { workspace = true }
 fallible-iterator = { workspace = true }
 fancy-regex = { workspace = true }
 futures = { workspace = true }
+glob = { workspace = true }
 http = { workspace = true }
 itertools = { workspace = true }
 macpepdb_tui = { workspace = true }

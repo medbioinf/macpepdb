@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     net::SocketAddr,
     num::{NonZeroU16, NonZeroUsize},
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
     time::Duration,
@@ -29,6 +29,7 @@ use macpepdb::{
     sequence::{IsBitSequence, PeptideSequence},
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
+use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use url::Url;
 
@@ -56,6 +57,14 @@ use tcmalloc2::TcMalloc;
 #[cfg(feature = "tcmalloc")]
 #[global_allocator]
 static GLOBAL: TcMalloc = TcMalloc;
+
+#[derive(Debug, Error)]
+enum Error {
+    #[error("Glob pattern error: {0}")]
+    GlobPattern(#[from] glob::PatternError),
+    #[error("Glob error: {0}")]
+    Glob(#[from] glob::GlobError),
+}
 
 #[derive(Subcommand)]
 enum Command {
@@ -98,7 +107,7 @@ enum Command {
         // Positional default arguments
         /// Protein files
         #[arg(value_delimiter = ' ', num_args = 0..)]
-        protein_file_paths: Vec<PathBuf>,
+        protein_file_paths: Vec<String>,
     },
     /// Search for a specific mass
     Search {
@@ -271,6 +280,17 @@ async fn main() {
             threads,
         } => {
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
+            let protein_file_paths =
+                convert_str_paths_and_resolve_globs(protein_file_paths).unwrap();
+
+            tracing::info!(
+                "Resolved protein files:\n\t, {}",
+                protein_file_paths
+                    .iter()
+                    .map(|path| format!("{}", path.display()))
+                    .collect::<Vec<String>>()
+                    .join("\n\t")
+            );
 
             let protease = Protease::by_name(
                 &protease,
@@ -677,4 +697,32 @@ async fn write_peptidoform<T: tokio::io::AsyncWrite + Unpin>(
     writer.write_all(b"\n").await?;
 
     Ok(())
+}
+
+/// Converts a vector of strings to a vector of paths and resolves glob patterns.
+///
+/// # Arguments
+/// * `paths` - Vector of paths as strings
+///
+fn convert_str_paths_and_resolve_globs(paths: Vec<String>) -> Result<Vec<PathBuf>, Error> {
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            if !path.contains("*") {
+                // Return plain path in vector if no glob pattern is found
+                Ok(vec![Path::new(&path).to_path_buf()])
+            } else {
+                // Resolve glob pattern and return array of paths
+                Ok(glob::glob(&path)?
+                    .map(|x| x.map_err(Error::Glob))
+                    .collect::<Result<Vec<PathBuf>, Error>>()?)
+            }
+        })
+        .collect::<Result<Vec<_>, Error>>()? // Collect and resolve errors from parsing/resolving
+        .into_iter()
+        .flatten() // flatten the vectors which
+        .filter(|path| {
+            path.is_file() // Filter out directories, only include files
+        })
+        .collect())
 }
