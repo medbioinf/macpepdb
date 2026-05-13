@@ -1,4 +1,8 @@
-use std::fmt::{Debug, Display};
+use std::{
+    cmp::min,
+    fmt::{Debug, Display},
+    rc::Rc,
+};
 
 use fallible_iterator::FallibleIterator;
 use itertools::Itertools;
@@ -129,8 +133,8 @@ impl IsProtease for Unspecific {
     }
 
     fn full_digest<'a>(&self, sequence: &'a [AminoAcidBitCode]) -> Vec<&'a [AminoAcidBitCode]> {
-        (1..sequence.len())
-            .map(|pos| &sequence[(pos - 1)..pos])
+        (0..sequence.len())
+            .map(|pos| &sequence[pos..(pos + 1)])
             .collect()
     }
 
@@ -145,7 +149,7 @@ pub struct Protease {
     inner: Box<dyn IsProtease>,
     min_length: usize,
     max_length: usize,
-    max_missed_cleavages: Option<usize>,
+    max_missed_cleavages: usize,
     keep_unknown: bool,
 }
 
@@ -155,49 +159,49 @@ impl Protease {
     /// # Arguments
     /// * `sequence` - Amino acid sequence
     ///
-    pub fn cleave(
-        &self,
-        sequence: &[AminoAcidBitCode],
-    ) -> impl FallibleIterator<Item = Peptide, Error = Error> {
-        let max_window_size = self.max_missed_cleavages().unwrap_or(sequence.len()) + 2;
-        let full_digest = self.inner.full_digest(sequence);
-        let n = full_digest.len();
-        let mut window_size = 1_usize;
-        let mut pos = 0_usize;
+    pub fn cleave<'a>(
+        &'a self,
+        sequence: &'a [AminoAcidBitCode],
+    ) -> impl FallibleIterator<Item = Peptide, Error = Error> + 'a {
+        let full_digest = Rc::new(self.inner.full_digest(sequence));
+        let max_window_size = self.max_missed_cleavages + 1;
 
-        fallible_iterator::from_fn(move || {
-            loop {
-                if window_size >= max_window_size {
-                    return Ok(None);
-                }
-                if pos + window_size > n {
-                    window_size += 1;
-                    pos = 0;
-                    continue;
-                }
-                let window = &full_digest[pos..pos + window_size];
-                pos += 1;
-
-                let length = window.iter().map(|seq| seq.len()).sum::<usize>();
-                if !self.keep_unknown
-                    && window
+        fallible_iterator::convert((0..full_digest.len()).flat_map(move |start| {
+            let full_digest = full_digest.clone();
+            (1..=max_window_size)
+                .map(move |window_size| {
+                    (
+                        full_digest.clone(),
+                        start..min(start + window_size, full_digest.len()),
+                    )
+                })
+                .filter_map(|(full_digest, range)| {
+                    let full_digest_slice = &full_digest[range];
+                    // make checks before sequence allocation
+                    // check length
+                    let full_digest_slice_len = full_digest_slice
                         .iter()
-                        .flat_map(|seq| seq.iter())
-                        .any(|aa| aa == UNKNOWN.bit_code())
-                {
-                    continue;
-                }
-                if length < self.min_length {
-                    continue;
-                }
+                        .map(|peptide| peptide.len())
+                        .sum::<usize>();
+                    if full_digest_slice_len < self.min_length
+                        || full_digest_slice_len > self.max_length
+                    {
+                        return None;
+                    }
+                    // check if any of the fully digested peptides contains UNKOWN
+                    if !self.keep_unknown
+                        && full_digest_slice.iter().any(|peptide| {
+                            memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], peptide.as_bytes())
+                                .is_some()
+                        })
+                    {
+                        return None;
+                    }
 
-                if length > self.max_length {
-                    continue;
-                }
-
-                return Ok(Some(Sequence::try_from(window).map(Peptide::new)?));
-            }
-        })
+                    Some(Sequence::try_from(full_digest_slice).map_err(Error::from))
+                })
+        }))
+        .map(move |seq| Ok(Peptide::new(seq)))
     }
 
     pub fn by_name(
@@ -209,6 +213,9 @@ impl Protease {
     ) -> Result<Self, Error> {
         let min_length = min_length.unwrap_or(Sequence::MIN_LENGTH.get());
         let max_length = max_length.unwrap_or(Sequence::MAX_LENGTH.get());
+        // worst case each full digested peptide is only one amino acid long (e.g. when unspecifically cleaved)
+        // a peptided can only contain as many missed cleavages as there a are amino acids allowed
+        let max_missed_cleavages = max_missed_cleavages.unwrap_or(max_length);
 
         let inner = Self::inner_by_name(name)?;
 
@@ -241,7 +248,7 @@ impl Protease {
         self.max_length
     }
 
-    pub fn max_missed_cleavages(&self) -> Option<usize> {
+    pub fn max_missed_cleavages(&self) -> usize {
         self.max_missed_cleavages
     }
 }
@@ -252,7 +259,7 @@ impl Clone for Protease {
             self.name(),
             Some(self.min_length),
             Some(self.max_length),
-            self.max_missed_cleavages,
+            Some(self.max_missed_cleavages),
             self.keep_unknown,
         )
         .unwrap()
@@ -281,9 +288,7 @@ impl Display for Protease {
             self.name(),
             self.min_length,
             self.max_length,
-            self.max_missed_cleavages()
-                .map(|missed_cleavages| missed_cleavages.to_string())
-                .unwrap_or("after each amino acid".to_string()),
+            self.max_missed_cleavages,
             self.keep_unknown
         )
     }
@@ -353,6 +358,7 @@ mod tests {
             .collect::<HashSet<Sequence>>()
             .unwrap();
 
+        assert_eq!(peps.len(), expected_peps_zero_missed_cleavages.len());
         assert_eq!(peps, expected_peps_zero_missed_cleavages);
 
         let expected_peps_two_missed_cleavages: HashSet<Sequence> = HashSet::from_iter([
@@ -393,6 +399,43 @@ mod tests {
             .collect::<HashSet<Sequence>>()
             .unwrap();
 
+        assert_eq!(peps.len(), expected_peps_two_missed_cleavages.len());
         assert_eq!(peps, expected_peps_two_missed_cleavages);
+    }
+
+    #[test]
+    fn test_unspecific() {
+        let leptin = ProteinSequence::try_from(
+            "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
+        ).unwrap();
+
+        // cannot test unspecific digest with zero missed cleavages as this would require a sequence with only one amino acid which is not implemented.
+
+        let unspecific = Protease::by_name("unspecific", Some(6), Some(50), None, false).unwrap();
+
+        let expected_pepts_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("unspecific_6_50.digest.txt");
+
+        let expected_peps: HashSet<Sequence> = std::fs::read_to_string(expected_pepts_file_path)
+            .unwrap()
+            .split("\n")
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .map(|line| Sequence::try_from(line).unwrap())
+            .collect();
+
+        let peps = unspecific
+            .cleave(leptin.as_ref())
+            .map(|peptide| Ok(peptide.into_sequence()))
+            .collect::<HashSet<Sequence>>()
+            .unwrap();
+
+        assert_eq!(peps.len(), expected_peps.len());
+        assert_eq!(peps, expected_peps);
     }
 }
