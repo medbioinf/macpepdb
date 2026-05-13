@@ -335,7 +335,7 @@ macro_rules! make_sequence {
 }
 
 // Peptide seqeunce limited to 6 to 50 amino acids, length can be stored in 6 bits
-make_sequence!(PeptideSequence, u8, 6, 6, 50);
+make_sequence!(PeptideSequence, u8, 6, 1, 50);
 
 // ProteinSeqeunce limited to 1 to 65.536 amino acids length can be stored in 16 bits
 make_sequence!(ProteinSequence, u16, 16, 1, u16::MAX as usize);

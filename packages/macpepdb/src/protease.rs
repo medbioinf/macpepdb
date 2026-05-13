@@ -409,7 +409,32 @@ mod tests {
             "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
         ).unwrap();
 
-        // cannot test unspecific digest with zero missed cleavages as this would require a sequence with only one amino acid which is not implemented.
+        let unspecific = Protease::by_name("unspecific", Some(1), Some(1), Some(0), false).unwrap();
+
+        let expected_pepts_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("unspecific_full.digest.txt");
+
+        let expected_peps: HashSet<Sequence> = std::fs::read_to_string(expected_pepts_file_path)
+            .unwrap()
+            .split("\n")
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .map(|line| Sequence::try_from(line).unwrap())
+            .collect();
+
+        let peps = unspecific
+            .cleave(leptin.as_ref())
+            .map(|peptide| Ok(peptide.into_sequence()))
+            .collect::<HashSet<Sequence>>()
+            .unwrap();
+
+        assert_eq!(peps.len(), expected_peps.len());
+        assert_eq!(peps, expected_peps);
 
         let unspecific = Protease::by_name("unspecific", Some(6), Some(50), None, false).unwrap();
 
