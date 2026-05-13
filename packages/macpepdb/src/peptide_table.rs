@@ -32,6 +32,7 @@ static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
 
 pub static INSERTED_PEPTIDES_METRIC: &str = "peptides_table::build::inserted_peptides";
+pub static QUEUE_METRIC: &str = "peptides_table::queue";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -143,6 +144,7 @@ impl PeptideTable {
     ) -> Result<(), Error> {
         let queue: ConcurrentlyBuildQueue = Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let inserted_peptides_metric = Arc::new(metrics::counter!(INSERTED_PEPTIDES_METRIC));
+        let queue_metric = metrics::gauge!(QUEUE_METRIC);
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -233,6 +235,7 @@ impl PeptideTable {
                     }
                 };
             }
+            queue_metric.set(queue.len() as f64);
         }
 
         // Send none to signal stop

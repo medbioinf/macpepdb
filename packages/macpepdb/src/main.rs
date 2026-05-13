@@ -398,12 +398,17 @@ async fn build_db(
             macpepdb::mass_counter::PEPTIDES_METRIC,
             macpepdb::mass_counter::PEPTIDES_METRIC,
         ));
+        tui.add_metric(MetricConfig::gauge(
+            macpepdb::mass_counter::QUEUE_METRIC,
+            macpepdb::mass_counter::QUEUE_METRIC,
+        ));
     }
     let mass_counter =
         build_db_mass_counter(client.clone(), &mass_index, &protease, num_threads).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_counter::PROGESS_METRIC);
         tui.remove_metric(macpepdb::mass_counter::PEPTIDES_METRIC);
+        tui.remove_metric(macpepdb::mass_counter::QUEUE_METRIC);
     }
 
     let peptides_len = mass_counter.peptides_len();
@@ -434,6 +439,10 @@ async fn build_db(
             macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
             peptides_len as f64,
         ));
+        tui.add_metric(MetricConfig::gauge(
+            macpepdb::peptide_table::QUEUE_METRIC,
+            macpepdb::peptide_table::QUEUE_METRIC,
+        ));
     }
     build_db_peptides(
         client.clone(),
@@ -445,6 +454,7 @@ async fn build_db(
     .await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC);
+        tui.remove_metric(macpepdb::peptide_table::QUEUE_METRIC);
     }
 
     // 6. Collect metadata

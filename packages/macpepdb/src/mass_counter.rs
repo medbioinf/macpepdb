@@ -15,6 +15,7 @@ use crate::{
 
 pub static PROGESS_METRIC: &str = "mass_counter::progress";
 pub static PEPTIDES_METRIC: &str = "mass_counter::peptides";
+pub static QUEUE_METRIC: &str = "mass_counter::queue";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -96,6 +97,7 @@ impl MassCounter {
         let protease = Arc::new(protease.clone());
         let progress_metric = Arc::new(metrics::counter!(PROGESS_METRIC));
         let peptides_metric = Arc::new(metrics::counter!(PEPTIDES_METRIC));
+        let queue_metric = metrics::gauge!(QUEUE_METRIC);
 
         let counter: Arc<DashMap<i64, usize>> = Arc::new(DashMap::new());
 
@@ -175,6 +177,7 @@ impl MassCounter {
                     }
                 };
             }
+            queue_metric.set(queue.len() as f64);
         }
 
         // Send none to signal stop
