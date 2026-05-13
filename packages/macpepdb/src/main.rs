@@ -24,7 +24,7 @@ use macpepdb::{
     peptide_search::{MultiTaskSearch, Search},
     peptide_table::PeptideTable,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
-    protease::Protease,
+    protease::{Protease, Trypsin},
     protein_table::ProteinTable,
     sequence::{IsBitSequence, PeptideSequence},
 };
@@ -74,9 +74,24 @@ enum Command {
         /// Batch size of records to insert concurrently
         #[arg(short, long, default_value_t = NonZeroUsize::new(100).unwrap())]
         insert_batch_size: NonZeroUsize,
+        /// If set, peptides with unknown amino acid (X) ar kept. Be aware that X has no mass.
+        #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        keep_unknown: bool,
+        /// Max peptide length
+        #[arg(long, default_value_t = PeptideSequence::MAX_LENGTH)]
+        max_length: NonZeroUsize,
+        /// Min peptide length
+        #[arg(long, default_value_t = NonZeroUsize::new(6).unwrap())]
+        min_length: NonZeroUsize,
+        /// Missed cleavages
+        #[arg(short, long)]
+        max_missed_cleavages: Option<usize>,
         /// Number of mass partition
         #[arg(short, long, default_value_t = NonZeroU16::new(1000).unwrap())]
         partitions: NonZeroU16,
+        /// Protease name
+        #[arg(long, default_value_t = Trypsin::NAME.to_string())]
+        protease: String,
         /// Batch size of records to insert concurrently
         #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
         threads: NonZeroUsize,
@@ -246,15 +261,30 @@ async fn main() {
         }
         Command::Build {
             insert_batch_size,
+            keep_unknown,
+            max_length,
+            min_length,
+            max_missed_cleavages,
             partitions,
+            protease,
             protein_file_paths,
             threads,
         } => {
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
 
+            let protease = Protease::by_name(
+                &protease,
+                Some(min_length),
+                Some(max_length),
+                max_missed_cleavages,
+                keep_unknown,
+            )
+            .unwrap();
+
             build_db(
                 client,
                 &protein_file_paths,
+                protease,
                 insert_batch_size,
                 threads,
                 partitions,
@@ -305,21 +335,12 @@ async fn main() {
 async fn build_db(
     client: Arc<Client>,
     protein_file_paths: &[PathBuf],
+    protease: Protease,
     insert_batch_size: NonZeroUsize,
     num_threads: NonZeroUsize,
     num_partitions: NonZeroU16,
     tui: Option<&TuiHandle>,
 ) {
-    // TODO: make this full configurable by CLI
-    let protease = Protease::by_name(
-        "trypsin",
-        Some(PeptideSequence::MIN_LENGTH.get()),
-        Some(PeptideSequence::MAX_LENGTH.get()),
-        Some(2),
-        false,
-    )
-    .unwrap();
-
     // 1. set insert proteins
     if let Some(tui) = &tui {
         tui.add_metric(MetricConfig::rate(

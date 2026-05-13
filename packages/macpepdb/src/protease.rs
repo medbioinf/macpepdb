@@ -1,6 +1,7 @@
 use std::{
     cmp::min,
     fmt::{Debug, Display},
+    num::NonZeroUsize,
     rc::Rc,
 };
 
@@ -18,16 +19,20 @@ use crate::{
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Unknown amino acid encountered: {0}")]
-    UnknownAminoAcid(String),
-    #[error("Unable to get partition for mass: {0}")]
-    UnableToGetPartition(String),
     #[error("Protease creation failed: {0}")]
     FailedCreation(String),
-    #[error("Sequence error in protease: {0}")]
-    Sequence(#[from] crate::sequence::Error),
+    #[error("Max peptide length must be equal to or smaller than {expected} but is {0}", expected = Sequence::MAX_LENGTH.get())]
+    MaxLengthTooLarge(usize),
+    #[error("Min peptide length must be equal to or greater than {expected} but is {0}", expected = Sequence::MIN_LENGTH.get())]
+    MinLengthTooSmall(usize),
     #[error("Peptide error in protease: {0}")]
     Peptide(#[from] crate::peptide::Error),
+    #[error("Unable to get partition for mass: {0}")]
+    UnableToGetPartition(String),
+    #[error("Sequence error in protease: {0}")]
+    Sequence(#[from] crate::sequence::Error),
+    #[error("Unknown amino acid encountered: {0}")]
+    UnknownAminoAcid(String),
     #[error("Unkown protease `{0}`")]
     UnkownProtease(String),
 }
@@ -50,10 +55,10 @@ pub trait IsProtease: Send + Sync {
     fn count_missed_cleavages(&self, sequence: &[AminoAcidBitCode]) -> usize;
 }
 
-struct Trypsin;
+pub struct Trypsin;
 
 impl Trypsin {
-    const NAME: &'static str = "trypsin";
+    pub const NAME: &'static str = "trypsin";
 }
 
 impl IsProtease for Trypsin {
@@ -121,10 +126,10 @@ impl IsProtease for Trypsin {
     }
 }
 
-struct Unspecific;
+pub struct Unspecific;
 
 impl Unspecific {
-    const NAME: &'static str = "unspecific";
+    pub const NAME: &'static str = "unspecific";
 }
 
 impl IsProtease for Unspecific {
@@ -147,8 +152,8 @@ impl IsProtease for Unspecific {
 pub struct Protease {
     #[serde(with = "is_protease_serde")]
     inner: Box<dyn IsProtease>,
-    min_length: usize,
-    max_length: usize,
+    min_length: NonZeroUsize,
+    max_length: NonZeroUsize,
     max_missed_cleavages: usize,
     keep_unknown: bool,
 }
@@ -183,8 +188,8 @@ impl Protease {
                         .iter()
                         .map(|peptide| peptide.len())
                         .sum::<usize>();
-                    if full_digest_slice_len < self.min_length
-                        || full_digest_slice_len > self.max_length
+                    if full_digest_slice_len < self.min_length.get()
+                        || full_digest_slice_len > self.max_length.get()
                     {
                         return None;
                     }
@@ -206,16 +211,22 @@ impl Protease {
 
     pub fn by_name(
         name: &str,
-        min_length: Option<usize>,
-        max_length: Option<usize>,
+        min_length: Option<NonZeroUsize>,
+        max_length: Option<NonZeroUsize>,
         max_missed_cleavages: Option<usize>,
         keep_unknown: bool,
     ) -> Result<Self, Error> {
-        let min_length = min_length.unwrap_or(Sequence::MIN_LENGTH.get());
-        let max_length = max_length.unwrap_or(Sequence::MAX_LENGTH.get());
+        let min_length = min_length.unwrap_or(Sequence::MIN_LENGTH);
+        if min_length.get() < Sequence::MIN_LENGTH.get() {
+            return Err(Error::MinLengthTooSmall(min_length.get()));
+        }
+        let max_length = max_length.unwrap_or(Sequence::MAX_LENGTH);
+        if max_length.get() > Sequence::MAX_LENGTH.get() {
+            return Err(Error::MaxLengthTooLarge(max_length.get()));
+        }
         // worst case each full digested peptide is only one amino acid long (e.g. when unspecifically cleaved)
         // a peptided can only contain as many missed cleavages as there a are amino acids allowed
-        let max_missed_cleavages = max_missed_cleavages.unwrap_or(max_length);
+        let max_missed_cleavages = max_missed_cleavages.unwrap_or(max_length.get());
 
         let inner = Self::inner_by_name(name)?;
 
@@ -240,11 +251,11 @@ impl Protease {
         self.inner.name()
     }
 
-    pub fn min_length(&self) -> usize {
+    pub fn min_length(&self) -> NonZeroUsize {
         self.min_length
     }
 
-    pub fn max_length(&self) -> usize {
+    pub fn max_length(&self) -> NonZeroUsize {
         self.max_length
     }
 
@@ -350,7 +361,14 @@ mod tests {
             Sequence::try_from("VQDDTK").unwrap(),
         ]);
 
-        let trypsin = Protease::by_name("trypsin", Some(6), Some(50), Some(0), false).unwrap();
+        let trypsin = Protease::by_name(
+            "trypsin",
+            Some(NonZeroUsize::new(6).unwrap()),
+            Some(NonZeroUsize::new(50).unwrap()),
+            Some(0),
+            false,
+        )
+        .unwrap();
 
         let peps = trypsin
             .cleave(leptin.as_ref())
@@ -391,7 +409,14 @@ mod tests {
             Sequence::try_from("VQDDTK").unwrap(),
         ]);
 
-        let trypsin = Protease::by_name("trypsin", Some(6), Some(50), Some(2), false).unwrap();
+        let trypsin = Protease::by_name(
+            "trypsin",
+            Some(NonZeroUsize::new(6).unwrap()),
+            Some(NonZeroUsize::new(50).unwrap()),
+            Some(2),
+            false,
+        )
+        .unwrap();
 
         let peps = trypsin
             .cleave(leptin.as_ref())
@@ -409,7 +434,14 @@ mod tests {
             "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
         ).unwrap();
 
-        let unspecific = Protease::by_name("unspecific", Some(1), Some(1), Some(0), false).unwrap();
+        let unspecific = Protease::by_name(
+            "unspecific",
+            Some(NonZeroUsize::new(1).unwrap()),
+            Some(NonZeroUsize::new(1).unwrap()),
+            Some(0),
+            false,
+        )
+        .unwrap();
 
         let expected_pepts_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
@@ -436,7 +468,14 @@ mod tests {
         assert_eq!(peps.len(), expected_peps.len());
         assert_eq!(peps, expected_peps);
 
-        let unspecific = Protease::by_name("unspecific", Some(6), Some(50), None, false).unwrap();
+        let unspecific = Protease::by_name(
+            "unspecific",
+            Some(NonZeroUsize::new(6).unwrap()),
+            Some(NonZeroUsize::new(50).unwrap()),
+            None,
+            false,
+        )
+        .unwrap();
 
         let expected_pepts_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
