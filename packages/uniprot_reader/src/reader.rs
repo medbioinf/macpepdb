@@ -71,7 +71,7 @@ where
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut entry = Entry::default();
-        let mut read_bytes = 0;
+        let mut read_bytes: usize = 0;
         loop {
             self.line_buffer.clear();
             read_bytes += match self.inner.read_until(b'\n', &mut self.line_buffer) {
@@ -123,6 +123,42 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        fs::File,
+        io::{BufRead, BufReader},
+    };
+
+    use flate2::read::GzDecoder;
+
+    static EXPECTED_OFFSETS: &[(u64, u64)] = &[
+        (0, 19320),
+        (19321, 39107),
+        (39108, 58572),
+        (58573, 74110),
+        (74111, 85411),
+        (85412, 103073),
+        (103074, 116424),
+        (116425, 134135),
+        (134136, 143180),
+        (143181, 162179),
+        (162180, 179420),
+    ];
+
+    fn test_reader_generic<R: BufRead>(buf_reader: &mut R) {
+        let uniprot_reader = super::Reader::new(buf_reader);
+
+        let mut entry_ctr = 0_usize;
+        for (item, expected_offset) in uniprot_reader.zip(EXPECTED_OFFSETS) {
+            assert!(item.is_ok());
+            entry_ctr += 1;
+            let item = item.unwrap();
+            assert_eq!(item.offset().start(), expected_offset.0);
+            assert_eq!(item.offset().end(), expected_offset.1);
+        }
+
+        assert_eq!(entry_ctr, 11);
+    }
+
     #[test]
     fn test_reader() {
         let test_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -133,33 +169,23 @@ mod tests {
             .join("test_data")
             .join("some_human_proteins.uniprot.txt");
 
-        let expected_offsets: &[(u64, u64)] = &[
-            (0, 19320),
-            (19321, 39107),
-            (39108, 58572),
-            (58573, 74110),
-            (74111, 85411),
-            (85412, 103073),
-            (103074, 116424),
-            (116425, 134135),
-            (134136, 143180),
-            (143181, 162179),
-            (162180, 179420),
-        ];
+        let mut buf_reader = Box::new(std::io::BufReader::new(
+            std::fs::File::open(test_file_path).unwrap(),
+        ));
 
-        let mut buf_reader = std::io::BufReader::new(std::fs::File::open(test_file_path).unwrap());
+        test_reader_generic(&mut buf_reader);
 
-        let uniprot_reader = super::Reader::new(&mut buf_reader);
+        let test_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("some_human_proteins.uniprot.txt.gz");
 
-        let mut entry_ctr = 0_usize;
-        for (item, expected_offset) in uniprot_reader.zip(expected_offsets) {
-            assert!(item.is_ok());
-            entry_ctr += 1;
-            let item = item.unwrap();
-            assert_eq!(item.offset().start(), expected_offset.0);
-            assert_eq!(item.offset().end(), expected_offset.1);
-        }
-
-        assert_eq!(entry_ctr, 11);
+        let test_file = File::open(test_file_path).unwrap();
+        let gz_reader = GzDecoder::new(test_file);
+        let mut buf_reader = Box::new(BufReader::new(gz_reader));
+        test_reader_generic(&mut buf_reader);
     }
 }

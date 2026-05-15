@@ -1,11 +1,12 @@
 use std::{
     fs::File,
-    io::BufReader,
+    io::{BufRead, BufReader},
     num::NonZeroUsize,
     path::PathBuf,
     sync::{Arc, LazyLock},
 };
 
+use flate2::read::GzDecoder;
 use futures::future::join_all;
 use scylla::{client::pager::TypedRowStream, errors::ExecutionError, serialize::row::SerializeRow};
 use thiserror::Error;
@@ -97,7 +98,15 @@ impl ProteinTable {
         let mut protein_id: i32 = i32::MIN;
 
         for protein_file_path in protein_file_paths {
-            let mut buf_reader = BufReader::new(File::open(protein_file_path)?);
+            let protein_file = File::open(protein_file_path)?;
+
+            let mut buf_reader: Box<dyn BufRead> =
+                if protein_file_path.extension().and_then(|ext| ext.to_str()) == Some("gz") {
+                    Box::new(BufReader::new(GzDecoder::new(protein_file)))
+                } else {
+                    Box::new(BufReader::new(protein_file))
+                };
+
             let entry_reader = ProteinReader::new(&mut buf_reader);
 
             for entry in entry_reader {

@@ -2170,6 +2170,7 @@ dependencies = [
  "dihardts_omicstools",
  "fallible-iterator",
  "fancy-regex 0.17.0",
+ "flate2",
  "futures",
  "glob",
  "http 1.4.0",
@@ -4266,6 +4267,8 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 name = "uniprot_reader"
 version = "0.1.0"
 dependencies = [
+ "flate2",
+ "memchr",
  "serde",
  "thiserror",
 ]
