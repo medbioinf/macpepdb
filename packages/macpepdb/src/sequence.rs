@@ -185,12 +185,16 @@ macro_rules! make_sequence {
                 }
             }
 
-
             impl TryFrom<&[&[AminoAcidBitCode]]> for [< $name:camel >] {
                 type Error = Error;
 
                 fn try_from(values: &[&[AminoAcidBitCode]]) -> Result<Self, Self::Error> {
-                    let data = values.iter().flat_map(|sequence| sequence.iter()).cloned().collect::<Vec<_>>();
+                    let mut data: Vec<AminoAcidBitCode> = Vec::with_capacity(values.iter().map(|sequence| sequence.len()).sum());
+
+                    for slice in values {
+                        data.extend_from_slice(slice);
+                    }
+
                     Self::new(
                         data
                     )
