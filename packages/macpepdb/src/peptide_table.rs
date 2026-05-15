@@ -224,6 +224,7 @@ impl PeptideTable {
                         };
 
                         let mut protein_ids = Vec::from_iter(protein_ids);
+
                         let protein_ids_len = protein_ids.len();
 
                         let mut proteins = protein_table
