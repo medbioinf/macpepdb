@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS macpepdb.blobs (
 
 DROP TABLE IF EXISTS macpepdb.peptides;
 CREATE TABLE IF NOT EXISTS macpepdb.peptides (
-    partition smallint,
+    partition bigint,
     mass bigint,
     sequence blob,
     protein_ids list<int>,

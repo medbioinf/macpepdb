@@ -8,10 +8,9 @@ use zerocopy::IntoBytes;
 
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
-    mass_partitioning::MassPartitioning,
     molecules::WATER_MONO_MASS,
     sequence::{
-        IsBitSequence, IsSimpleSequence, ModifiedSequence, ModifiedSequencePart,
+        CompactSequence, IsBitSequence, IsSimpleSequence, ModifiedSequence, ModifiedSequencePart,
         PeptideSequence as Sequence,
     },
 };
@@ -62,7 +61,7 @@ pub trait IsPeptide: Send + Sync {
 
 #[derive(DeserializeRow, Serialize, SerializeRow)]
 pub struct Peptide {
-    partition: Option<i16>,
+    partition: Option<i64>,
     mass: i64,
     sequence: Sequence,
     protein_ids: Vec<i32>,
@@ -92,38 +91,12 @@ impl Peptide {
         }
     }
 
-    pub fn new_with_partition(
-        sequence: Sequence,
-        protein_ids: Vec<i32>,
-        unique_taxonomy_ids: Vec<i32>,
-        non_unique_taxonomy_ids: Vec<i32>,
-        partitioning: &MassPartitioning,
-    ) -> Result<Self, Error> {
-        let mass = Self::to_peptide_mass(&sequence);
-        let partition = partitioning.get(&mass).cloned();
-        if partition.is_none() {
-            return Err(Error::NoPartition(sequence.to_string(), mass));
-        }
-        Ok(Self {
-            mass,
-            sequence,
-            protein_ids,
-            partition,
-            unique_taxonomy_ids,
-            non_unique_taxonomy_ids,
-            amino_acid_counts: OnceLock::new(),
-        })
-    }
-
-    pub fn partition(&self) -> Option<i16> {
+    pub fn partition(&self) -> Option<i64> {
         self.partition
     }
 
-    pub fn set_partition(&mut self, partitioning: &MassPartitioning) -> Result<(), Error> {
-        self.partition = partitioning.get(&self.mass).cloned();
-        self.partition
-            .ok_or(Error::NoPartition(self.sequence().to_string(), self.mass))?;
-        Ok(())
+    pub(crate) fn set_partition(&mut self, partition: i64) {
+        self.partition = Some(partition);
     }
 
     pub fn len(&self) -> usize {
@@ -165,6 +138,12 @@ impl Peptide {
     }
 }
 
+impl AsRef<Peptide> for Peptide {
+    fn as_ref(&self) -> &Peptide {
+        self
+    }
+}
+
 impl Eq for Peptide {}
 
 impl PartialEq for Peptide {
@@ -203,12 +182,29 @@ impl IsPeptide for Peptide {
     }
 }
 
-impl TryFrom<(&str, &MassPartitioning)> for Peptide {
+impl TryFrom<&str> for Peptide {
     type Error = Error;
 
-    fn try_from((sequence, partitioning): (&str, &MassPartitioning)) -> Result<Self, Self::Error> {
+    fn try_from(sequence: &str) -> Result<Self, Self::Error> {
         let sequence = Sequence::try_from(sequence)?;
-        Self::new_with_partition(sequence, Vec::new(), Vec::new(), Vec::new(), partitioning)
+        Ok(Self::new(sequence, Vec::new(), Vec::new(), Vec::new()))
+    }
+}
+
+impl TryFrom<String> for Peptide {
+    type Error = Error;
+
+    fn try_from(sequence: String) -> Result<Self, Self::Error> {
+        Self::try_from(sequence.as_str())
+    }
+}
+
+impl TryFrom<CompactSequence> for Peptide {
+    type Error = Error;
+
+    fn try_from(sequence: CompactSequence) -> Result<Self, Self::Error> {
+        let sequence = Sequence::try_from(sequence)?;
+        Ok(Self::new(sequence, Vec::new(), Vec::new(), Vec::new()))
     }
 }
 

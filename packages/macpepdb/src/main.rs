@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    num::{NonZeroU16, NonZeroUsize},
+    num::NonZeroUsize,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -14,9 +14,7 @@ use macpepdb::{
     client::Client,
     configuration::Configuration,
     mass::to_float as mass_to_float,
-    mass_counter::MassCounter,
     mass_index::MassIndex,
-    mass_partitioning::MassPartitioning,
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide::Peptidoform,
@@ -66,6 +64,11 @@ enum Error {
 }
 
 #[derive(Subcommand)]
+enum ConfigCommand {
+    Show,
+}
+
+#[derive(Subcommand)]
 enum Command {
     /// Web api
     Api {
@@ -98,9 +101,9 @@ enum Command {
         /// Missed cleavages
         #[arg(short, long)]
         max_missed_cleavages: Option<usize>,
-        /// Number of mass partition
-        #[arg(short, long, default_value_t = NonZeroU16::new(1000).unwrap())]
-        partitions: NonZeroU16,
+        /// Print configuration to the given file
+        #[arg(long)]
+        print_config: Option<PathBuf>,
         /// Protease name
         #[arg(long, default_value_t = Trypsin::NAME.to_string())]
         protease: String,
@@ -117,6 +120,10 @@ enum Command {
         /// Protein files
         #[arg(value_delimiter = ' ', num_args = 0..)]
         protein_file_paths: Vec<String>,
+    },
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
     },
     /// Search for a specific mass
     Search {
@@ -284,7 +291,7 @@ async fn main() {
             max_length,
             min_length,
             max_missed_cleavages,
-            partitions,
+            print_config,
             protease,
             protein_file_paths,
             skip_protein_associations,
@@ -327,7 +334,7 @@ async fn main() {
                 skip_protein_associations,
                 skip_taxonomies,
                 threads,
-                partitions,
+                print_config,
                 tui.as_ref(),
             )
             .await;
@@ -337,6 +344,16 @@ async fn main() {
             );
             shutdown_signal().await;
         }
+        Command::Config { command } => match command {
+            ConfigCommand::Show => {
+                let client = Client::new(&cli.database_url).await.unwrap();
+                let configuration: Configuration = Blob::select(&client, Configuration::BLOB_KEY)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                println!("{}", serde_json::to_string_pretty(&configuration).unwrap());
+            }
+        },
         Command::Search {
             allow_duplicates,
             is_reviewed,
@@ -385,7 +402,7 @@ async fn build_db(
     skip_protein_associations: bool,
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
-    num_partitions: NonZeroU16,
+    print_config: Option<PathBuf>,
     tui: Option<&TuiHandle>,
 ) {
     // 1. set insert proteins
@@ -414,79 +431,52 @@ async fn build_db(
         tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
     }
 
-    // 3. count masses for partitions
-    if let Some(tui) = &tui {
-        tui.add_metric(MetricConfig::progress(
-            macpepdb::mass_counter::PROGESS_METRIC,
-            macpepdb::mass_counter::PROGESS_METRIC,
-            mass_index.len() as f64,
-        ));
-        tui.add_metric(MetricConfig::counter(
-            macpepdb::mass_counter::PEPTIDES_METRIC,
-            macpepdb::mass_counter::PEPTIDES_METRIC,
-        ));
-        tui.add_metric(MetricConfig::gauge(
-            macpepdb::mass_counter::QUEUE_METRIC,
-            macpepdb::mass_counter::QUEUE_METRIC,
-        ));
-    }
-    let mass_counter =
-        build_db_mass_counter(client.clone(), &mass_index, &protease, num_threads).await;
-    if let Some(tui) = &tui {
-        tui.remove_metric(macpepdb::mass_counter::PROGESS_METRIC);
-        tui.remove_metric(macpepdb::mass_counter::PEPTIDES_METRIC);
-        tui.remove_metric(macpepdb::mass_counter::QUEUE_METRIC);
-    }
-
-    let peptides_len = mass_counter.peptides_len();
-
-    // 4. caluclate partitioning by going through masses and count peptides
-    // partitioning is currently not implemented, let's see first if we need it.
-    let configuration = match Blob::select(client.as_ref(), Configuration::BLOB_KEY)
-        .await
-        .unwrap()
-    {
-        Some(configuration) => configuration,
-        None => {
-            let configuration = Configuration::new(
-                build_db_parititoning(mass_counter, num_partitions).await,
-                protease,
-            );
-            Blob::insert(client.as_ref(), &configuration, concurrent_batch_size)
-                .await
-                .unwrap();
-            configuration
-        }
-    };
-
     // 5. go through masses and digest the proteins collect distinct peptides and upsert them with proteins
     if let Some(tui) = &tui {
         tui.add_metric(MetricConfig::progress(
+            macpepdb::peptide_table::PROGRESS_METRIC,
+            macpepdb::peptide_table::PROGRESS_METRIC,
+            mass_index.len() as f64,
+        ));
+        tui.add_metric(MetricConfig::counter(
             macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
             macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
-            peptides_len as f64,
         ));
         tui.add_metric(MetricConfig::gauge(
             macpepdb::peptide_table::QUEUE_METRIC,
             macpepdb::peptide_table::QUEUE_METRIC,
         ));
     }
-    build_db_peptides(
+
+    let mass_to_partitions_map = build_db_peptides(
         client.clone(),
-        Arc::new(configuration),
         skip_protein_associations,
         skip_taxonomies,
+        Arc::new(protease.clone()),
         batch_size_limit,
         mass_index,
         num_threads,
     )
     .await;
     if let Some(tui) = &tui {
+        tui.remove_metric(macpepdb::peptide_table::PROGRESS_METRIC);
         tui.remove_metric(macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC);
         tui.remove_metric(macpepdb::peptide_table::QUEUE_METRIC);
     }
+    let configuration = Configuration::new(mass_to_partitions_map, protease);
 
-    // 6. Collect metadata
+    if let Some(print_config_path) = print_config {
+        tokio::fs::write(
+            print_config_path,
+            serde_json::to_string_pretty(&configuration).unwrap(),
+        )
+        .await
+        .unwrap();
+    }
+
+    Blob::insert(client.as_ref(), &configuration, concurrent_batch_size)
+        .await
+        .unwrap();
 }
 
 async fn build_db_proteins(
@@ -524,58 +514,21 @@ async fn build_db_mass_index(
     index
 }
 
-async fn build_db_mass_counter(
-    client: Arc<Client>,
-    mass_index: &MassIndex,
-    protease: &Protease,
-    threads: NonZeroUsize,
-) -> MassCounter {
-    let now = std::time::Instant::now();
-
-    let counter = MassCounter::count_concurrently(client, protease, mass_index, threads)
-        .await
-        .unwrap();
-
-    tracing::info!(
-        "db mass counter: time = {:.2?} s; #peptides = {}",
-        now.elapsed().as_secs_f32(),
-        counter.peptides_len()
-    );
-
-    counter
-}
-
-async fn build_db_parititoning(
-    mass_counter: MassCounter,
-    num_partitions: NonZeroU16,
-) -> MassPartitioning {
-    let now = std::time::Instant::now();
-    let partitioning = MassPartitioning::build(mass_counter, num_partitions)
-        .await
-        .unwrap();
-    tracing::info!(
-        "db partitioning: time = {:.2?} s;",
-        now.elapsed().as_secs_f32(),
-    );
-
-    partitioning
-}
-
 async fn build_db_peptides(
     client: Arc<Client>,
-    configuration: Arc<Configuration>,
     skip_protein_associations: bool,
     skip_taxonomies: bool,
+    protease: Arc<Protease>,
     batch_size_limit: NonZeroUsize,
     mass_index: MassIndex,
     num_threads: NonZeroUsize,
-) {
+) -> HashMap<i64, Vec<i64>> {
     let now = std::time::Instant::now();
-    PeptideTable::new(client)
+    let mass_to_partitions_map = PeptideTable::new(client)
         .build_concurrently(
-            configuration,
             skip_protein_associations,
             skip_taxonomies,
+            protease,
             batch_size_limit,
             num_threads,
             mass_index,
@@ -583,6 +536,8 @@ async fn build_db_peptides(
         .await
         .unwrap();
     tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);
+
+    mass_to_partitions_map
 }
 
 /// Axum shutdown signal handler for ctrl-c and terminate signals

@@ -3,7 +3,7 @@ use std::{
     iter::Peekable,
     num::NonZeroUsize,
     ops::AddAssign,
-    sync::{Arc, LazyLock},
+    sync::{Arc, LazyLock, atomic::AtomicI64},
     time::Duration,
 };
 
@@ -13,15 +13,16 @@ use futures::StreamExt;
 use metrics::Counter;
 use scylla::{
     client::pager::TypedRowStream,
+    serialize::batch::BatchValuesFromIterator,
     statement::batch::{Batch, BatchType},
 };
 use thiserror::Error;
 
 use crate::{
     client::Client,
-    configuration::Configuration,
     mass_index::MassIndex,
     peptide::{IsPeptide, Peptide},
+    protease::Protease,
     protein_table::ProteinTable,
     sequence::{CompactSequence, PeptideSequence},
 };
@@ -36,6 +37,7 @@ static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
 
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
 
+pub static PROGRESS_METRIC: &str = "peptides_table::build::progress";
 pub static INSERTED_PEPTIDES_METRIC: &str = "peptides_table::build::inserted_peptides";
 pub static QUEUE_METRIC: &str = "peptides_table::queue";
 
@@ -86,6 +88,23 @@ into_thiserror_boxed!(crate::protein_table::Error, Error, ProteinTable);
 
 type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, HashSet<i32>)>>>;
 
+struct NextPartitionGuard {
+    next_partition: AtomicI64,
+}
+
+impl NextPartitionGuard {
+    fn new() -> Self {
+        Self {
+            next_partition: AtomicI64::new(0),
+        }
+    }
+
+    fn next_partition(&self) -> i64 {
+        self.next_partition
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
 pub struct PeptideTable {
     client: Arc<Client>,
 }
@@ -104,7 +123,7 @@ impl PeptideTable {
 
     async fn insert_batch(
         &self,
-        peptides: Peekable<impl Iterator<Item = Result<Peptide, Error>>>,
+        peptides: Peekable<impl Iterator<Item = Peptide>>,
         batch_size_limit: NonZeroUsize,
         inserted_peptides_metric: Arc<Counter>,
     ) -> Result<(), Error> {
@@ -114,15 +133,15 @@ impl PeptideTable {
         let mut peptides = peptides.into_iter().peekable();
 
         while let Some(peptide) = peptides.next() {
-            let peptide = peptide?;
             peptide_buffer_cql_size += peptide.cql_size();
             peptide_buffer.push(peptide);
 
-            if let Some(Ok(next_peptide)) = peptides.peek()
+            if let Some(next_peptide) = peptides.peek()
                 && peptide_buffer_cql_size + next_peptide.cql_size() < batch_size_limit.get()
             {
                 continue;
             }
+
             let peptide_buffer_len = peptide_buffer.len();
             let mut batch_statement = Batch::new(BatchType::Unlogged);
             (0..peptide_buffer_len).for_each(|_| {
@@ -132,24 +151,14 @@ impl PeptideTable {
                 batch_statement.set_consistency(consistency);
             }
             self.client
-                .batch(&batch_statement, std::mem::take(&mut peptide_buffer))
+                .batch(
+                    &batch_statement,
+                    BatchValuesFromIterator::new(peptide_buffer.iter()),
+                )
                 .await?;
 
             peptide_buffer_cql_size = 0;
-            inserted_peptides_metric.increment(peptide_buffer_len as u64);
-        }
-
-        if !peptide_buffer.is_empty() {
-            let peptide_buffer_len = peptide_buffer.len();
-            let mut batch_statement = Batch::new(BatchType::Unlogged);
-            (0..peptide_buffer_len).for_each(|_| {
-                batch_statement.append_statement(INSERT_STATEMENT.as_str());
-            });
-            if let Some(consistency) = self.client.write_consistency_level() {
-                batch_statement.set_consistency(consistency);
-            }
-
-            self.client.batch(&batch_statement, peptide_buffer).await?;
+            peptide_buffer.clear();
             inserted_peptides_metric.increment(peptide_buffer_len as u64);
         }
 
@@ -174,27 +183,35 @@ impl PeptideTable {
 
     pub async fn build_concurrently(
         &self,
-        configuration: Arc<Configuration>,
         skip_protein_associations: bool,
         skip_taxonomies: bool,
+        protease: Arc<Protease>,
         batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
         mass_index: MassIndex,
-    ) -> Result<(), Error> {
+    ) -> Result<HashMap<i64, Vec<i64>>, Error> {
         let queue: ConcurrentlyBuildQueue = Arc::new(ArrayQueue::new(num_threads.get() * 3));
+        let progress_metric = Arc::new(metrics::gauge!(PROGRESS_METRIC));
         let inserted_peptides_metric = Arc::new(metrics::counter!(INSERTED_PEPTIDES_METRIC));
         let queue_metric = metrics::gauge!(QUEUE_METRIC);
+        let next_partition_guard = Arc::new(NextPartitionGuard::new());
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
-                let configuration = configuration.clone();
+                let protease = protease.clone();
                 let queue = queue.clone();
                 let client = self.client.clone();
+                let progress_metric = progress_metric.clone();
                 let inserted_peptides_metric = inserted_peptides_metric.clone();
+                let next_partition_guard = next_partition_guard.clone();
 
                 tokio::spawn(async move {
                     let peptide_table = PeptideTable::new(client.clone());
                     let protein_table = ProteinTable::new(client);
+                    let mut mass_partition_map: HashMap<i64, Vec<i64>> = HashMap::new();
+                    let mut peptide_buffer: Vec<Peptide> = Vec::new();
+                    let mut partition_cql_size: usize = 0;
+                    let mut partition = next_partition_guard.next_partition();
 
                     loop {
                         let (mass, protein_ids) = match queue.pop() {
@@ -223,8 +240,7 @@ impl PeptideTable {
 
                         while let Some(protein) = proteins.next().await.transpose()? {
                             #[allow(clippy::mutable_key_type)]
-                            configuration
-                                .protease()
+                            protease
                                 .cleave(protein.sequence().as_ref())
                                 .filter(|peptide| Ok(peptide.mass() == mass))
                                 .for_each(|peptide| {
@@ -238,7 +254,7 @@ impl PeptideTable {
                                 })?;
                         }
 
-                        let peptide_iter = peptide_sequences
+                        let mut peptide_iter = peptide_sequences
                             .into_iter()
                             .map(|(seq, taxonomies)| {
                                 let unique_taxonomy_ids = taxonomies
@@ -253,26 +269,54 @@ impl PeptideTable {
                                     .map(|(taxonomy_id, _)| taxonomy_id)
                                     .collect::<Vec<_>>();
 
-                                Peptide::new_with_partition(
+                                Ok::<_, Error>(Peptide::new(
                                     PeptideSequence::try_from(seq).map_err(Error::Sequence)?,
                                     protein_ids.clone(),
                                     unique_taxonomy_ids,
                                     non_unique_taxonomy_ids,
-                                    configuration.mass_partitioning(),
-                                )
-                                .map_err(Error::Peptide)
+                                ))
                             })
                             .peekable();
 
-                        peptide_table
-                            .insert_batch(
-                                peptide_iter,
-                                batch_size,
-                                inserted_peptides_metric.clone(),
-                            )
-                            .await?;
+                        while let Some(peptide_res) = peptide_iter.next() {
+                            let mut peptide = peptide_res?;
+                            peptide.set_partition(partition);
+                            partition_cql_size += peptide.cql_size();
+                            peptide_buffer.push(peptide);
+
+                            if let Some(Ok(next_peptide)) = peptide_iter.peek()
+                                && partition_cql_size + next_peptide.cql_size()
+                                    < crate::cql::MAX_PARTITION_SIZE
+                            {
+                                continue;
+                            }
+
+                            tracing::info!(
+                                "Inserting {} peptides with mass {mass} into partition {partition}; parititon cql size {}/{}",
+                                peptide_buffer.len(),
+                                partition_cql_size as f32 / 1000.0 / 1000.0,
+                                crate::cql::MAX_PARTITION_SIZE  as f32 / 1000.0 / 1000.0,
+                            );
+                            peptide_table
+                                .insert_batch(
+                                    peptide_buffer.drain(..).peekable(),
+                                    batch_size,
+                                    inserted_peptides_metric.clone(),
+                                )
+                                .await?;
+                            mass_partition_map.entry(mass).or_default().push(partition);
+
+                            // if iteratior is not empty yet, the insertion ment the parition
+                            // limit is reached, so we need a new partition
+                            if peptide_iter.peek().is_some() {
+                                partition_cql_size = 0;
+                                partition = next_partition_guard.next_partition();
+                            }
+                        }
+
+                        progress_metric.increment(1);
                     }
-                    Ok::<_, Error>(())
+                    Ok::<_, Error>(mass_partition_map)
                 })
             })
             .collect::<Vec<_>>();
@@ -310,20 +354,26 @@ impl PeptideTable {
             }
         }
 
+        let mut final_mass_to_partitions_map: HashMap<i64, Vec<i64>> = HashMap::new();
+
         for thread in digest_and_insertion_threads {
-            thread.await.map_err(|err| Error::Join(err.to_string()))??;
+            match thread.await.map_err(|err| Error::Join(err.to_string()))? {
+                Ok(map) => final_mass_to_partitions_map.extend(map),
+                Err(err) => return Err(err),
+            }
         }
 
-        Ok(())
+        Ok(final_mass_to_partitions_map)
     }
 
+    #[allow(clippy::type_complexity)]
     async fn find_errored_thread(
-        threads: Vec<tokio::task::JoinHandle<Result<(), Error>>>,
+        threads: Vec<tokio::task::JoinHandle<Result<HashMap<i64, Vec<i64>>, Error>>>,
     ) -> Error {
         for thread in threads {
             if thread.is_finished() {
                 match thread.await {
-                    Ok(Ok(())) => continue,
+                    Ok(Ok(_)) => continue,
                     Ok(Err(err)) => return err,
                     Err(_err) => continue,
                 }

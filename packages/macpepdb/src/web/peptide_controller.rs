@@ -153,10 +153,7 @@ pub async fn get_peptide(
     Path(sequence): Path<String>,
     Query(_query): Query<GetPeptideRequestQuery>,
 ) -> Result<Json<Peptide>, Error> {
-    let peptide = Peptide::try_from((
-        sequence.as_str(),
-        server_state.configuration_as_ref().mass_partitioning(),
-    ))?;
+    let peptide = Peptide::try_from(sequence)?;
 
     let peptide_table = PeptideTable::new(server_state.db_client());
 
@@ -236,10 +233,7 @@ pub async fn get_peptide_existence(
     State(server_state): State<Arc<ServerState>>,
     Path(sequence): Path<String>,
 ) -> Result<Response, Error> {
-    let peptide = Peptide::try_from((
-        sequence.as_str(),
-        server_state.configuration_as_ref().mass_partitioning(),
-    ))?;
+    let peptide = Peptide::try_from(sequence)?;
 
     let peptide_opt = PeptideTable::new(server_state.db_client())
         .select(

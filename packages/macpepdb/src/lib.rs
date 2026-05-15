@@ -1,6 +1,5 @@
 pub mod amino_acid;
 pub mod configuration;
-pub mod mass_partitioning;
 #[macro_use]
 pub mod mass;
 pub mod blob;
@@ -8,7 +7,6 @@ pub mod client;
 pub mod cql;
 #[macro_use]
 pub mod error;
-pub mod mass_counter;
 pub mod mass_index;
 pub mod molecules;
 pub mod monitoring;

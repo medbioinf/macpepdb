@@ -1,24 +1,26 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
-use crate::{blob::IsBlob, mass_partitioning::MassPartitioning, protease::Protease};
+use crate::{blob::IsBlob, protease::Protease};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Configuration {
-    mass_partitioning: MassPartitioning,
+    mass_partitioning: HashMap<i64, Vec<i64>>,
     protease: Protease,
 }
 
 impl Configuration {
     pub const BLOB_KEY: &str = "configuration";
 
-    pub fn new(mass_partitioning: MassPartitioning, protease: Protease) -> Self {
+    pub fn new(mass_partitioning: HashMap<i64, Vec<i64>>, protease: Protease) -> Self {
         Self {
             mass_partitioning,
             protease,
         }
     }
 
-    pub fn mass_partitioning(&self) -> &MassPartitioning {
+    pub fn mass_partitioning(&self) -> &HashMap<i64, Vec<i64>> {
         &self.mass_partitioning
     }
 
