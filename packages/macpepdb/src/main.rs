@@ -5,7 +5,6 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
-    time::Duration,
 };
 
 use clap::{Parser, Subcommand};
@@ -233,7 +232,7 @@ async fn main() {
     if let Some(prometheus_socket) = cli.prometheus {
         metric_targets.push(MetricTarget::Prometheus(
             prometheus_socket,
-            Box::pin(axum_shutdown_signal()),
+            Box::pin(shutdown_signal()),
         ));
     }
 
@@ -263,7 +262,7 @@ async fn main() {
                 false,
                 concurrent_searches,
                 None,
-                Box::pin(axum_shutdown_signal()),
+                Box::pin(shutdown_signal()),
             )
             .await
             .unwrap();
@@ -311,6 +310,11 @@ async fn main() {
                 tui.as_ref(),
             )
             .await;
+
+            tracing::error!(
+                "Done. Hit ctrl-c twice to end. (yes this is a bug I need to solve. first is shutting down TUI, second is stoping the rest)"
+            );
+            shutdown_signal().await;
         }
         Command::Search {
             allow_duplicates,
@@ -348,8 +352,6 @@ async fn main() {
             .await;
         }
     }
-
-    tokio::time::sleep(Duration::from_millis(2000)).await;
 }
 
 async fn build_db(
@@ -550,7 +552,7 @@ async fn build_db_peptides(
 
 /// Axum shutdown signal handler for ctrl-c and terminate signals
 ///
-async fn axum_shutdown_signal() {
+async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
