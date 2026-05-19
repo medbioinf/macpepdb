@@ -206,7 +206,7 @@ impl Protease {
                     Some(Sequence::try_from(full_digest_slice).map_err(Error::from))
                 })
         }))
-        .map(move |seq| Ok(Peptide::new(seq)))
+        .map(move |seq| Ok(Peptide::new(seq, Vec::new(), Vec::new())))
     }
 
     pub fn by_name(

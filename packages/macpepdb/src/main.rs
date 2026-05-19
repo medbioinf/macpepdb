@@ -100,6 +100,9 @@ enum Command {
         /// Protease name
         #[arg(long, default_value_t = Trypsin::NAME.to_string())]
         protease: String,
+        /// If set no taxonomies will be collected on peptide level
+        #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        skip_taxonomies: bool,
         /// Batch size of records to insert concurrently
         #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
         threads: NonZeroUsize,
@@ -276,6 +279,7 @@ async fn main() {
             partitions,
             protease,
             protein_file_paths,
+            skip_taxonomies,
             threads,
         } => {
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
@@ -305,6 +309,7 @@ async fn main() {
                 &protein_file_paths,
                 protease,
                 insert_batch_size,
+                skip_taxonomies,
                 threads,
                 partitions,
                 tui.as_ref(),
@@ -354,11 +359,13 @@ async fn main() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_db(
     client: Arc<Client>,
     protein_file_paths: &[PathBuf],
     protease: Protease,
     insert_batch_size: NonZeroUsize,
+    skip_taxonomies: bool,
     num_threads: NonZeroUsize,
     num_partitions: NonZeroU16,
     tui: Option<&TuiHandle>,
@@ -449,6 +456,7 @@ async fn build_db(
     build_db_peptides(
         client.clone(),
         Arc::new(configuration),
+        skip_taxonomies,
         insert_batch_size,
         mass_index,
         num_threads,
@@ -537,14 +545,20 @@ async fn build_db_parititoning(
 async fn build_db_peptides(
     client: Arc<Client>,
     configuration: Arc<Configuration>,
+    skip_taxonomies: bool,
     insert_batch_size: NonZeroUsize,
-
     mass_index: MassIndex,
     num_threads: NonZeroUsize,
 ) {
     let now = std::time::Instant::now();
     PeptideTable::new(client)
-        .build_concurrently(configuration, insert_batch_size, num_threads, mass_index)
+        .build_concurrently(
+            configuration,
+            skip_taxonomies,
+            insert_batch_size,
+            num_threads,
+            mass_index,
+        )
         .await
         .unwrap();
     tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);

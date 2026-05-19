@@ -5,6 +5,7 @@ CREATE TABLE IF NOT EXISTS macpepdb.proteins (
     id int primary key,
     accession ascii,
     sequence blob,
+    taxonomy_id int,
 );
 CREATE INDEX prot_acc_idx ON macpepdb.proteins (accession);
 
@@ -21,5 +22,7 @@ CREATE TABLE IF NOT EXISTS macpepdb.peptides (
     partition smallint,
     mass bigint,
     sequence blob,
+    unique_taxonomy_ids list<int>,
+    non_unique_taxonomy_ids list<int>,
     PRIMARY KEY (partition, mass, sequence)
 );

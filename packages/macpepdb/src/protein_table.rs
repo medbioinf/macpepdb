@@ -15,7 +15,7 @@ use uniprot_reader::reader::Reader as ProteinReader;
 static TABLE_NAME: &str = "proteins";
 
 static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!("INSERT INTO {TABLE_NAME} (accession, id, sequence) VALUES (?, ?, ?)")
+    format!("INSERT INTO {TABLE_NAME} (accession, id, sequence, taxonomy_id) VALUES (?, ?, ?, ?)")
 });
 
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));

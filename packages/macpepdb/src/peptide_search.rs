@@ -1625,7 +1625,11 @@ mod tests {
         let mass = 3060.516981066636;
         let mass_int = mass_to_int!(mass);
 
-        let peptide = Peptide::new(PeptideSequence::try_from(sequence).unwrap());
+        let peptide = Peptide::new(
+            PeptideSequence::try_from(sequence).unwrap(),
+            Vec::new(),
+            Vec::new(),
+        );
 
         let carbamidomethylation_c = Arc::new(PostTranslationalModification::new(
             "carba of C",

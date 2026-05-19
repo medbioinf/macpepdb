@@ -1,6 +1,7 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     num::NonZeroUsize,
+    ops::AddAssign,
     sync::{Arc, LazyLock},
     time::Duration,
 };
@@ -26,7 +27,9 @@ use crate::{
 pub const TABLE_NAME: &str = "peptides";
 
 static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!("INSERT INTO {TABLE_NAME} (partition, mass, sequence) VALUES (?, ?, ?)")
+    format!(
+        "INSERT INTO {TABLE_NAME} (partition, mass, sequence, unique_taxonomy_ids, non_unique_taxonomy_ids) VALUES (?, ?, ?, ?, ?)"
+    )
 });
 
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
@@ -138,6 +141,7 @@ impl PeptideTable {
     pub async fn build_concurrently(
         &self,
         configuration: Arc<Configuration>,
+        skip_taxonomies: bool,
         insert_batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
         mass_index: MassIndex,
@@ -174,8 +178,8 @@ impl PeptideTable {
                             .await?;
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
-                        let mut peptide_sequences: HashSet<CompactSequence> =
-                            HashSet::with_capacity(2 * protein_ids_len);
+                        let mut peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>> =
+                            HashMap::with_capacity(2 * protein_ids_len);
 
                         while let Some(protein) = proteins.next().await.transpose()? {
                             #[allow(clippy::mutable_key_type)]
@@ -184,22 +188,38 @@ impl PeptideTable {
                                 .cleave(protein.sequence().as_ref())
                                 .filter(|peptide| Ok(peptide.mass() == mass))
                                 .for_each(|peptide| {
-                                    peptide_sequences.insert(CompactSequence::try_from(
-                                        peptide.into_sequence(),
-                                    )?);
+                                    peptide_sequences
+                                        .entry(CompactSequence::try_from(peptide.into_sequence())?)
+                                        .or_default()
+                                        .entry(protein.taxonomy_id())
+                                        .or_insert(0)
+                                        .add_assign(1);
                                     Ok(())
                                 })?;
                         }
-
                         let mut peptide_sequence_stream = futures::stream::iter(peptide_sequences)
                             .chunks(insert_batch_size.get());
 
                         while let Some(chunk) = peptide_sequence_stream.next().await {
                             let peptides = chunk
                                 .into_iter()
-                                .map(|seq| {
+                                .map(|(seq, taxonomies)| {
+                                    let unique_taxonomy_ids = taxonomies
+                                        .iter()
+                                        .filter(|(_, count)| **count == 1 && !skip_taxonomies)
+                                        .map(|(taxonomy_id, _)| *taxonomy_id)
+                                        .collect::<Vec<_>>();
+
+                                    let non_unique_taxonomy_ids = taxonomies
+                                        .into_iter()
+                                        .filter(|(_, count)| *count > 1 && !skip_taxonomies)
+                                        .map(|(taxonomy_id, _)| taxonomy_id)
+                                        .collect::<Vec<_>>();
+
                                     Peptide::new_with_partition(
                                         PeptideSequence::try_from(seq)?,
+                                        unique_taxonomy_ids,
+                                        non_unique_taxonomy_ids,
                                         configuration.mass_partitioning(),
                                     )
                                 })

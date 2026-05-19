@@ -64,17 +64,25 @@ pub struct Peptide {
     partition: Option<i16>,
     mass: i64,
     sequence: Sequence,
+    unique_taxonomy_ids: Vec<i32>,
+    non_unique_taxonomy_ids: Vec<i32>,
     #[scylla(skip)]
     #[serde(skip)]
     amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
 }
 
 impl Peptide {
-    pub fn new(sequence: Sequence) -> Self {
+    pub fn new(
+        sequence: Sequence,
+        unique_taxonomy_ids: Vec<i32>,
+        non_unique_taxonomy_ids: Vec<i32>,
+    ) -> Self {
         let mass = Self::to_peptide_mass(&sequence);
         Self {
             mass,
             sequence,
+            unique_taxonomy_ids,
+            non_unique_taxonomy_ids,
             partition: None,
             amino_acid_counts: OnceLock::new(),
         }
@@ -82,6 +90,8 @@ impl Peptide {
 
     pub fn new_with_partition(
         sequence: Sequence,
+        unique_taxonomy_ids: Vec<i32>,
+        non_unique_taxonomy_ids: Vec<i32>,
         partitioning: &MassPartitioning,
     ) -> Result<Self, Error> {
         let mass = Self::to_peptide_mass(&sequence);
@@ -93,6 +103,8 @@ impl Peptide {
             mass,
             sequence,
             partition,
+            unique_taxonomy_ids,
+            non_unique_taxonomy_ids,
             amino_acid_counts: OnceLock::new(),
         })
     }
@@ -126,6 +138,14 @@ impl Peptide {
             .fold(WATER_MONO_MASS, |acc, amino_acid| {
                 acc + amino_acid.mono_mass()
             })
+    }
+
+    pub fn unique_taxonomy_ids(&self) -> &[i32] {
+        &self.unique_taxonomy_ids
+    }
+
+    pub fn non_unique_taxonomy_ids(&self) -> &[i32] {
+        &self.non_unique_taxonomy_ids
     }
 }
 
@@ -172,7 +192,7 @@ impl TryFrom<(&str, &MassPartitioning)> for Peptide {
 
     fn try_from((sequence, partitioning): (&str, &MassPartitioning)) -> Result<Self, Self::Error> {
         let sequence = Sequence::try_from(sequence)?;
-        Self::new_with_partition(sequence, partitioning)
+        Self::new_with_partition(sequence, Vec::new(), Vec::new(), partitioning)
     }
 }
 
