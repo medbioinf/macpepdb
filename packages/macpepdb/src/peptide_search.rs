@@ -1629,6 +1629,7 @@ mod tests {
             PeptideSequence::try_from(sequence).unwrap(),
             Vec::new(),
             Vec::new(),
+            Vec::new(),
         );
 
         let carbamidomethylation_c = Arc::new(PostTranslationalModification::new(

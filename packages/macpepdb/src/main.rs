@@ -102,6 +102,9 @@ enum Command {
         protease: String,
         /// If set no taxonomies will be collected on peptide level
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        skip_protein_associations: bool,
+        /// If set no taxonomies will be collected on peptide level
+        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         skip_taxonomies: bool,
         /// Batch size of records to insert concurrently
         #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
@@ -279,6 +282,7 @@ async fn main() {
             partitions,
             protease,
             protein_file_paths,
+            skip_protein_associations,
             skip_taxonomies,
             threads,
         } => {
@@ -309,6 +313,7 @@ async fn main() {
                 &protein_file_paths,
                 protease,
                 insert_batch_size,
+                skip_protein_associations,
                 skip_taxonomies,
                 threads,
                 partitions,
@@ -365,6 +370,7 @@ async fn build_db(
     protein_file_paths: &[PathBuf],
     protease: Protease,
     insert_batch_size: NonZeroUsize,
+    skip_protein_associations: bool,
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
     num_partitions: NonZeroU16,
@@ -456,6 +462,7 @@ async fn build_db(
     build_db_peptides(
         client.clone(),
         Arc::new(configuration),
+        skip_protein_associations,
         skip_taxonomies,
         insert_batch_size,
         mass_index,
@@ -545,6 +552,7 @@ async fn build_db_parititoning(
 async fn build_db_peptides(
     client: Arc<Client>,
     configuration: Arc<Configuration>,
+    skip_protein_associations: bool,
     skip_taxonomies: bool,
     insert_batch_size: NonZeroUsize,
     mass_index: MassIndex,
@@ -554,6 +562,7 @@ async fn build_db_peptides(
     PeptideTable::new(client)
         .build_concurrently(
             configuration,
+            skip_protein_associations,
             skip_taxonomies,
             insert_batch_size,
             num_threads,

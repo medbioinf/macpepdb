@@ -64,6 +64,7 @@ pub struct Peptide {
     partition: Option<i16>,
     mass: i64,
     sequence: Sequence,
+    protein_ids: Vec<i32>,
     unique_taxonomy_ids: Vec<i32>,
     non_unique_taxonomy_ids: Vec<i32>,
     #[scylla(skip)]
@@ -74,6 +75,7 @@ pub struct Peptide {
 impl Peptide {
     pub fn new(
         sequence: Sequence,
+        protein_ids: Vec<i32>,
         unique_taxonomy_ids: Vec<i32>,
         non_unique_taxonomy_ids: Vec<i32>,
     ) -> Self {
@@ -81,6 +83,7 @@ impl Peptide {
         Self {
             mass,
             sequence,
+            protein_ids,
             unique_taxonomy_ids,
             non_unique_taxonomy_ids,
             partition: None,
@@ -90,6 +93,7 @@ impl Peptide {
 
     pub fn new_with_partition(
         sequence: Sequence,
+        protein_ids: Vec<i32>,
         unique_taxonomy_ids: Vec<i32>,
         non_unique_taxonomy_ids: Vec<i32>,
         partitioning: &MassPartitioning,
@@ -102,6 +106,7 @@ impl Peptide {
         Ok(Self {
             mass,
             sequence,
+            protein_ids,
             partition,
             unique_taxonomy_ids,
             non_unique_taxonomy_ids,
@@ -192,7 +197,7 @@ impl TryFrom<(&str, &MassPartitioning)> for Peptide {
 
     fn try_from((sequence, partitioning): (&str, &MassPartitioning)) -> Result<Self, Self::Error> {
         let sequence = Sequence::try_from(sequence)?;
-        Self::new_with_partition(sequence, Vec::new(), Vec::new(), partitioning)
+        Self::new_with_partition(sequence, Vec::new(), Vec::new(), Vec::new(), partitioning)
     }
 }
 

@@ -28,7 +28,7 @@ pub const TABLE_NAME: &str = "peptides";
 
 static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "INSERT INTO {TABLE_NAME} (partition, mass, sequence, unique_taxonomy_ids, non_unique_taxonomy_ids) VALUES (?, ?, ?, ?, ?)"
+        "INSERT INTO {TABLE_NAME} (partition, mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids) VALUES (?, ?, ?, ?, ?, ?)"
     )
 });
 
@@ -141,6 +141,7 @@ impl PeptideTable {
     pub async fn build_concurrently(
         &self,
         configuration: Arc<Configuration>,
+        skip_protein_associations: bool,
         skip_taxonomies: bool,
         insert_batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
@@ -171,11 +172,16 @@ impl PeptideTable {
                             }
                         };
 
+                        let mut protein_ids = Vec::from_iter(protein_ids);
                         let protein_ids_len = protein_ids.len();
 
                         let mut proteins = protein_table
-                            .select(Some("WHERE id IN ?"), (Vec::from_iter(protein_ids),))
+                            .select(Some("WHERE id IN ?"), (&protein_ids,))
                             .await?;
+
+                        if skip_protein_associations {
+                            protein_ids = Vec::new();
+                        }
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
                         let mut peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>> =
@@ -218,6 +224,7 @@ impl PeptideTable {
 
                                     Peptide::new_with_partition(
                                         PeptideSequence::try_from(seq)?,
+                                        protein_ids.clone(),
                                         unique_taxonomy_ids,
                                         non_unique_taxonomy_ids,
                                         configuration.mass_partitioning(),

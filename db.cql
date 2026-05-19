@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS macpepdb.peptides (
     partition smallint,
     mass bigint,
     sequence blob,
+    protein_ids list<int>,
     unique_taxonomy_ids list<int>,
     non_unique_taxonomy_ids list<int>,
     PRIMARY KEY (partition, mass, sequence)
