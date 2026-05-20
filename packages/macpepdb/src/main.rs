@@ -79,9 +79,13 @@ enum Command {
     /// Build the database
     Build {
         // Optional and default arguments
-        /// Batch size of records to insert concurrently
-        #[arg(short, long, default_value_t = NonZeroUsize::new(100).unwrap())]
-        insert_batch_size: NonZeroUsize,
+        /// Concurrent number of inserts for non-partitioned batches to insert
+        #[arg(long, default_value_t = NonZeroUsize::new(100).unwrap())]
+        concurrent_batch_size: NonZeroUsize,
+        /// commitlog_segment_size_in_mb as set in the cassandra cluster settingss.
+        /// This controls how large CQL-batch inserts can be.
+        #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
+        commitlog_segment_size_in_mb: NonZeroUsize,
         /// If set, peptides with unknown amino acid (X) ar kept. Be aware that X has no mass.
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         keep_unknown: bool,
@@ -274,7 +278,8 @@ async fn main() {
             .unwrap();
         }
         Command::Build {
-            insert_batch_size,
+            concurrent_batch_size,
+            commitlog_segment_size_in_mb,
             keep_unknown,
             max_length,
             min_length,
@@ -289,6 +294,11 @@ async fn main() {
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
             let protein_file_paths =
                 convert_str_paths_and_resolve_globs(protein_file_paths).unwrap();
+
+            // let's use 3/4 of the max batch size limit of commitlog_segment_size_in_mb / 2 to accomodate for overhead
+            let batch_size_limit =
+                NonZeroUsize::new((commitlog_segment_size_in_mb.get() * 1000 * 1000 * 3) / (2 * 4))
+                    .unwrap();
 
             tracing::info!(
                 "Resolved protein files:\n\t, {}",
@@ -312,7 +322,8 @@ async fn main() {
                 client,
                 &protein_file_paths,
                 protease,
-                insert_batch_size,
+                batch_size_limit,
+                concurrent_batch_size,
                 skip_protein_associations,
                 skip_taxonomies,
                 threads,
@@ -369,7 +380,8 @@ async fn build_db(
     client: Arc<Client>,
     protein_file_paths: &[PathBuf],
     protease: Protease,
-    insert_batch_size: NonZeroUsize,
+    batch_size_limit: NonZeroUsize,
+    concurrent_batch_size: NonZeroUsize,
     skip_protein_associations: bool,
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
@@ -384,7 +396,7 @@ async fn build_db(
         ));
     }
     let protein_ctr =
-        build_db_proteins(client.clone(), protein_file_paths, insert_batch_size).await;
+        build_db_proteins(client.clone(), protein_file_paths, concurrent_batch_size).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::protein_table::INSERTED_PROTEINS_METRIC);
     }
@@ -440,7 +452,7 @@ async fn build_db(
                 build_db_parititoning(mass_counter, num_partitions).await,
                 protease,
             );
-            Blob::insert(client.as_ref(), &configuration, insert_batch_size)
+            Blob::insert(client.as_ref(), &configuration, concurrent_batch_size)
                 .await
                 .unwrap();
             configuration
@@ -464,7 +476,7 @@ async fn build_db(
         Arc::new(configuration),
         skip_protein_associations,
         skip_taxonomies,
-        insert_batch_size,
+        batch_size_limit,
         mass_index,
         num_threads,
     )
@@ -480,11 +492,11 @@ async fn build_db(
 async fn build_db_proteins(
     client: Arc<Client>,
     protein_file_paths: &[PathBuf],
-    insert_batch_size: NonZeroUsize,
+    concurrent_batch_size: NonZeroUsize,
 ) -> usize {
     let now = std::time::Instant::now();
     let protein_ctr = ProteinTable::new(client)
-        .build(protein_file_paths.iter(), insert_batch_size)
+        .build(protein_file_paths.iter(), concurrent_batch_size)
         .await
         .unwrap();
     tracing::info!(
@@ -554,7 +566,7 @@ async fn build_db_peptides(
     configuration: Arc<Configuration>,
     skip_protein_associations: bool,
     skip_taxonomies: bool,
-    insert_batch_size: NonZeroUsize,
+    batch_size_limit: NonZeroUsize,
     mass_index: MassIndex,
     num_threads: NonZeroUsize,
 ) {
@@ -564,7 +576,7 @@ async fn build_db_peptides(
             configuration,
             skip_protein_associations,
             skip_taxonomies,
-            insert_batch_size,
+            batch_size_limit,
             num_threads,
             mass_index,
         )

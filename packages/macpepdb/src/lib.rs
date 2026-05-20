@@ -6,6 +6,8 @@ pub mod mass;
 pub mod blob;
 pub mod client;
 pub mod cql;
+#[macro_use]
+pub mod error;
 pub mod mass_counter;
 pub mod mass_index;
 pub mod molecules;
@@ -19,4 +21,3 @@ pub mod protein;
 pub mod protein_table;
 pub mod sequence;
 pub mod web;
-

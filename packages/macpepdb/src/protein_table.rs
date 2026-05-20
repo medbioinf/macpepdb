@@ -90,11 +90,11 @@ impl ProteinTable {
     pub async fn build(
         &self,
         protein_file_paths: impl Iterator<Item = &PathBuf>,
-        insert_batch_size: NonZeroUsize,
+        concurrent_batch_size: NonZeroUsize,
     ) -> Result<usize, Error> {
         let mut protein_ctr: usize = 0;
         let inserted_proteins_metric = metrics::counter!(INSERTED_PROTEINS_METRIC);
-        let mut buffer: Vec<Protein> = Vec::with_capacity(insert_batch_size.get());
+        let mut buffer: Vec<Protein> = Vec::with_capacity(concurrent_batch_size.get());
         let mut protein_id: i32 = i32::MIN;
 
         for protein_file_path in protein_file_paths {
@@ -113,7 +113,7 @@ impl ProteinTable {
                 let protein = Protein::try_from((protein_id, entry?.entry()))
                     .map_err(|e| Error::Protein(Box::new(e)))?;
                 buffer.push(protein);
-                if buffer.len() == insert_batch_size.get() {
+                if buffer.len() == concurrent_batch_size.get() {
                     protein_ctr += buffer.len();
                     inserted_proteins_metric.increment(buffer.len() as u64);
                     self.insert_batch(buffer.drain(..)).await?

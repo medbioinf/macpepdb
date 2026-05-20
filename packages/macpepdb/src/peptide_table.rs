@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    iter::Peekable,
     num::NonZeroUsize,
     ops::AddAssign,
     sync::{Arc, LazyLock},
@@ -9,6 +10,7 @@ use std::{
 use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
+use metrics::Counter;
 use scylla::{
     client::pager::TypedRowStream,
     statement::batch::{Batch, BatchType},
@@ -42,9 +44,9 @@ pub enum Error {
     #[error("Client error in peptide table: {0}")]
     Client(#[from] crate::client::Error),
     #[error("CQL execution error in peptide table: {0}")]
-    CqlExecution(#[from] scylla::errors::ExecutionError),
+    CqlExecution(Box<scylla::errors::ExecutionError>),
     #[error("CQL paged execution error in peptide table: {0}")]
-    CqlPagedExecution(#[from] scylla::errors::PagerExecutionError),
+    CqlPagedExecution(Box<scylla::errors::PagerExecutionError>),
     #[error("CQL type check failed in peptide table: {0}")]
     CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
     #[error("CQL next row error in peptide table: {0}")]
@@ -56,13 +58,13 @@ pub enum Error {
     #[error("Unable to join insertion task: {0}")]
     Join(String),
     #[error("Mass index error in peptide table: {0}")]
-    MassIndex(#[from] crate::mass_index::Error),
+    MassIndex(Box<crate::mass_index::Error>),
     #[error("No errored thread found in peptide table, but one finished early.")]
     NoErroredThread,
     #[error("Protease error in peptide table: {0}")]
     Protease(#[from] crate::protease::Error),
     #[error("Protein table error in peptide table: {0}")]
-    ProteinTable(#[from] crate::protein_table::Error),
+    ProteinTable(Box<crate::protein_table::Error>),
     #[error("Peptide error in peptide table: {0}")]
     Peptide(#[from] crate::peptide::Error),
     #[error("Sequence error in peptide table: {0}")]
@@ -72,6 +74,15 @@ pub enum Error {
     #[error("UnipotReader error in peptide table: {0}")]
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
+
+into_thiserror_boxed!(scylla::errors::ExecutionError, Error, CqlExecution);
+into_thiserror_boxed!(
+    scylla::errors::PagerExecutionError,
+    Error,
+    CqlPagedExecution
+);
+into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
+into_thiserror_boxed!(crate::protein_table::Error, Error, ProteinTable);
 
 type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, HashSet<i32>)>>>;
 
@@ -87,36 +98,60 @@ impl PeptideTable {
     pub async fn insert(&self, peptide: &Peptide) -> Result<(), Error> {
         self.client
             .execute_unpaged(INSERT_STATEMENT.as_str(), peptide)
-            .await
-            .map_err(Error::CqlExecution)?;
+            .await?;
         Ok(())
     }
 
-    pub async fn insert_batch(&self, values: Vec<Peptide>) -> Result<(), Error> {
-        let batch_type = if values
-            .iter()
-            .all(|value| value.partition() == values[0].partition())
-        {
-            BatchType::Unlogged
-        } else {
-            tracing::warn!(
-                "Peptide batch insert includes multipe partitions. This should be avoided."
-            );
-            BatchType::Logged
-        };
+    async fn insert_batch(
+        &self,
+        peptides: Peekable<impl Iterator<Item = Result<Peptide, Error>>>,
+        batch_size_limit: NonZeroUsize,
+        inserted_peptides_metric: Arc<Counter>,
+    ) -> Result<(), Error> {
+        let mut peptide_buffer_cql_size = 0;
+        let mut peptide_buffer: Vec<Peptide> = Vec::new();
 
-        let mut batch_statement = Batch::new(batch_type);
-        (0..values.len()).for_each(|_| {
-            batch_statement.append_statement(INSERT_STATEMENT.as_str());
-        });
-        if let Some(consistency) = self.client.write_consistency_level() {
-            batch_statement.set_consistency(consistency);
+        let mut peptides = peptides.into_iter().peekable();
+
+        while let Some(peptide) = peptides.next() {
+            let peptide = peptide?;
+            peptide_buffer_cql_size += peptide.cql_size();
+            peptide_buffer.push(peptide);
+
+            if let Some(Ok(next_peptide)) = peptides.peek()
+                && peptide_buffer_cql_size + next_peptide.cql_size() < batch_size_limit.get()
+            {
+                continue;
+            }
+            let peptide_buffer_len = peptide_buffer.len();
+            let mut batch_statement = Batch::new(BatchType::Unlogged);
+            (0..peptide_buffer_len).for_each(|_| {
+                batch_statement.append_statement(INSERT_STATEMENT.as_str());
+            });
+            if let Some(consistency) = self.client.write_consistency_level() {
+                batch_statement.set_consistency(consistency);
+            }
+            self.client
+                .batch(&batch_statement, std::mem::take(&mut peptide_buffer))
+                .await?;
+
+            peptide_buffer_cql_size = 0;
+            inserted_peptides_metric.increment(peptide_buffer_len as u64);
         }
 
-        self.client
-            .batch(&batch_statement, values)
-            .await
-            .map_err(Error::CqlExecution)?;
+        if !peptide_buffer.is_empty() {
+            let peptide_buffer_len = peptide_buffer.len();
+            let mut batch_statement = Batch::new(BatchType::Unlogged);
+            (0..peptide_buffer_len).for_each(|_| {
+                batch_statement.append_statement(INSERT_STATEMENT.as_str());
+            });
+            if let Some(consistency) = self.client.write_consistency_level() {
+                batch_statement.set_consistency(consistency);
+            }
+
+            self.client.batch(&batch_statement, peptide_buffer).await?;
+            inserted_peptides_metric.increment(peptide_buffer_len as u64);
+        }
 
         Ok(())
     }
@@ -133,8 +168,7 @@ impl PeptideTable {
         Ok(self
             .client
             .execute_iter(statement, values)
-            .await
-            .map_err(Error::CqlPagedExecution)?
+            .await?
             .rows_stream::<Peptide>()?)
     }
 
@@ -143,7 +177,7 @@ impl PeptideTable {
         configuration: Arc<Configuration>,
         skip_protein_associations: bool,
         skip_taxonomies: bool,
-        insert_batch_size: NonZeroUsize,
+        batch_size: NonZeroUsize,
         num_threads: NonZeroUsize,
         mass_index: MassIndex,
     ) -> Result<(), Error> {
@@ -203,39 +237,40 @@ impl PeptideTable {
                                     Ok(())
                                 })?;
                         }
-                        let mut peptide_sequence_stream = futures::stream::iter(peptide_sequences)
-                            .chunks(insert_batch_size.get());
 
-                        while let Some(chunk) = peptide_sequence_stream.next().await {
-                            let peptides = chunk
-                                .into_iter()
-                                .map(|(seq, taxonomies)| {
-                                    let unique_taxonomy_ids = taxonomies
-                                        .iter()
-                                        .filter(|(_, count)| **count == 1 && !skip_taxonomies)
-                                        .map(|(taxonomy_id, _)| *taxonomy_id)
-                                        .collect::<Vec<_>>();
+                        let peptide_iter = peptide_sequences
+                            .into_iter()
+                            .map(|(seq, taxonomies)| {
+                                let unique_taxonomy_ids = taxonomies
+                                    .iter()
+                                    .filter(|(_, count)| **count == 1 && !skip_taxonomies)
+                                    .map(|(taxonomy_id, _)| *taxonomy_id)
+                                    .collect::<Vec<_>>();
 
-                                    let non_unique_taxonomy_ids = taxonomies
-                                        .into_iter()
-                                        .filter(|(_, count)| *count > 1 && !skip_taxonomies)
-                                        .map(|(taxonomy_id, _)| taxonomy_id)
-                                        .collect::<Vec<_>>();
+                                let non_unique_taxonomy_ids = taxonomies
+                                    .into_iter()
+                                    .filter(|(_, count)| *count > 1 && !skip_taxonomies)
+                                    .map(|(taxonomy_id, _)| taxonomy_id)
+                                    .collect::<Vec<_>>();
 
-                                    Peptide::new_with_partition(
-                                        PeptideSequence::try_from(seq)?,
-                                        protein_ids.clone(),
-                                        unique_taxonomy_ids,
-                                        non_unique_taxonomy_ids,
-                                        configuration.mass_partitioning(),
-                                    )
-                                })
-                                .collect::<Result<Vec<_>, crate::peptide::Error>>()?;
+                                Peptide::new_with_partition(
+                                    PeptideSequence::try_from(seq).map_err(Error::Sequence)?,
+                                    protein_ids.clone(),
+                                    unique_taxonomy_ids,
+                                    non_unique_taxonomy_ids,
+                                    configuration.mass_partitioning(),
+                                )
+                                .map_err(Error::Peptide)
+                            })
+                            .peekable();
 
-                            let peptides_len = peptides.len();
-                            peptide_table.insert_batch(peptides).await?;
-                            inserted_peptides_metric.increment(peptides_len as u64);
-                        }
+                        peptide_table
+                            .insert_batch(
+                                peptide_iter,
+                                batch_size,
+                                inserted_peptides_metric.clone(),
+                            )
+                            .await?;
                     }
                     Ok::<_, Error>(())
                 })

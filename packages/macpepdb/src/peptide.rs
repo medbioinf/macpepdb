@@ -11,7 +11,8 @@ use crate::{
     mass_partitioning::MassPartitioning,
     molecules::WATER_MONO_MASS,
     sequence::{
-        IsSimpleSequence, ModifiedSequence, ModifiedSequencePart, PeptideSequence as Sequence,
+        IsBitSequence, IsSimpleSequence, ModifiedSequence, ModifiedSequencePart,
+        PeptideSequence as Sequence,
     },
 };
 
@@ -151,6 +152,16 @@ impl Peptide {
 
     pub fn non_unique_taxonomy_ids(&self) -> &[i32] {
         &self.non_unique_taxonomy_ids
+    }
+
+    pub fn cql_size(&self) -> usize {
+        // partition + mass + protein_ids + taxonomyies + sequence
+        std::mem::size_of::<i64>()
+            + std::mem::size_of::<i64>()
+            + self.protein_ids.len() * std::mem::size_of::<i32>()
+            + std::mem::size_of::<i32>()
+                * (self.unique_taxonomy_ids.len() + self.non_unique_taxonomy_ids.len())
+            + self.sequence.cql_size()
     }
 }
 
@@ -305,4 +316,22 @@ impl IsPeptide for Peptidoform {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    #[test]
+    fn test_cql_size() {
+        use super::*;
+
+        let peptide = Peptide::new(
+            Sequence::try_from("VTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLR").unwrap(),
+            vec![1],
+            vec![1, 2],
+            vec![1, 2, 3],
+        );
+        //   8 = partition (i64)
+        // + 8 = mass (i64)
+        // + 4 = 1x protein_ids
+        // + 20 = 5x taxonomy_ids
+        // + sequence.cql_size() (32)
+        assert_eq!(peptide.cql_size(), 72);
+    }
+}

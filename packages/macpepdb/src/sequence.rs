@@ -114,6 +114,13 @@ pub trait IsBitSequence<T: num_traits::Unsigned>:
     fn get(&self, index: usize) -> Option<&AminoAcidBitCode> {
         self.data().get(index)
     }
+
+    fn cql_size(&self) -> usize {
+        // The size of the compact representation in bytes, which is ceil((COUNT_BIT_WIDTH + 5 * len) / 8)
+        let total_bits =
+            Self::COUNT_BIT_WIDTH.get() as usize + AminoAcid::BIT_CODE_LEN * self.len();
+        total_bits.div_ceil(8)
+    }
 }
 
 macro_rules! make_sequence {
@@ -635,5 +642,14 @@ mod tests {
         let deserialized_sequence = PeptideSequence::try_from(compact).unwrap();
         assert_eq!(sequence, deserialized_sequence);
         assert_eq!(sequence.to_string(), known_aa_seq);
+    }
+
+    #[test]
+    fn test_cql_size() {
+        let peptide =
+            PeptideSequence::try_from("VTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLR").unwrap();
+
+        // (5 (amino acid bit code) * length + count bits).div_ceil(8)
+        assert_eq!(peptide.cql_size(), 32);
     }
 }

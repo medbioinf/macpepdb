@@ -107,7 +107,7 @@ impl Blob {
     pub async fn insert<T: IsBlob>(
         client: &Client,
         blob: &T,
-        insert_batch_size: NonZeroUsize,
+        concurrent_batch_size: NonZeroUsize,
     ) -> Result<(), Error> {
         let data = postcard::to_allocvec(blob).map_err(|_| Error::Serialize)?;
 
@@ -141,7 +141,7 @@ impl Blob {
         )
         .await?;
 
-        for blob_part_batch in &blob_parts.into_iter().chunks(insert_batch_size.get()) {
+        for blob_part_batch in &blob_parts.into_iter().chunks(concurrent_batch_size.get()) {
             BlobPart::upsert_batch(client, blob_part_batch).await?;
         }
 
