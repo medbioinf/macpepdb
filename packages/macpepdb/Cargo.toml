@@ -57,6 +57,7 @@ dihardts_omicstools = { workspace = true }
 
 
 [features]
+default = ["mimalloc"]
 jemalloc = ["dep:tikv-jemallocator"]
 mimalloc = ["dep:mimalloc"]
 tcmalloc = ["dep:tcmalloc2"]

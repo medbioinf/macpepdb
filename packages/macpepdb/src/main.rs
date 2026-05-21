@@ -33,7 +33,7 @@ use tokio::io::AsyncWriteExt;
 use url::Url;
 
 // Allocator
-//// jemalloc
+// jemalloc
 #[cfg(all(feature = "jemalloc", not(target_env = "msvc")))]
 use tikv_jemallocator::Jemalloc;
 
@@ -41,7 +41,7 @@ use tikv_jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
-//// mimalloc
+// mimalloc
 #[cfg(feature = "mimalloc")]
 use mimalloc::MiMalloc;
 
@@ -49,7 +49,7 @@ use mimalloc::MiMalloc;
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
-//// tcmalloc
+// tcmalloc
 #[cfg(feature = "tcmalloc")]
 use tcmalloc2::TcMalloc;
 
