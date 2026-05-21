@@ -121,6 +121,10 @@ pub trait IsBitSequence<T: num_traits::Unsigned>:
             Self::COUNT_BIT_WIDTH.get() as usize + AminoAcid::BIT_CODE_LEN * self.len();
         total_bits.div_ceil(8)
     }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<Vec<AminoAcidBitCode>>() + self.data().len()
+    }
 }
 
 macro_rules! make_sequence {

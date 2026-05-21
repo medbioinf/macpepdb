@@ -9,8 +9,7 @@ use futures::StreamExt;
 use thiserror::Error;
 
 use crate::{
-    client::Client, peptide::IsPeptide, protease::Protease, protein::Protein,
-    protein_table::ProteinTable,
+    database_build::IsProteinAccess, peptide::IsPeptide, protease::Protease, protein::Protein,
 };
 
 pub static PROGRESS_METRIC: &str = "mass_index::progress";
@@ -31,8 +30,8 @@ pub enum Error {
     NoErroredThread,
     #[error("Protease error in mass index: {0}")]
     Protease(#[from] crate::protease::Error),
-    #[error("Protein table error in mass index: {0}")]
-    ProteinTable(#[from] crate::protein_table::Error),
+    #[error("Protein access error in mass index: {0}")]
+    ProteinAccess(#[from] crate::database_build::Error),
     #[error("Unable to unwrap index from Arc")]
     IndexUnwrap,
     // #[error("Protein reader thread error: {0}")]
@@ -44,47 +43,13 @@ pub enum Error {
 pub struct MassIndex(DashMap<i64, HashSet<i32>>);
 
 impl MassIndex {
-    pub async fn build(client: Arc<Client>, protease: &Protease) -> Result<Self, Error> {
-        let protein_table = ProteinTable::new(client);
-
-        let mut proteins = protein_table.select(None, ()).await?;
-        let index: DashMap<i64, HashSet<i32>> = DashMap::new();
-        let progress_metric = metrics::counter!(PROGRESS_METRIC);
-
-        while let Some(protein) = proteins.next().await.transpose()? {
-            #[allow(clippy::mutable_key_type)]
-            let peptides = protease
-                .cleave(protein.sequence().as_ref())
-                .collect::<HashSet<_>>()
-                .map_err(Error::Protease)?;
-
-            let masses = peptides
-                .iter()
-                .map(|peptide| peptide.mass())
-                .collect::<HashSet<_>>();
-
-            for mass in masses.into_iter() {
-                index
-                    .entry(mass)
-                    .or_default()
-                    .insert(protein.id().ok_or(Error::MissingProteinId)?);
-            }
-
-            progress_metric.increment(1);
-        }
-
-        Ok(Self(index))
-    }
-
     pub async fn build_concurrently(
-        client: Arc<Client>,
+        protein_access: Arc<Box<dyn IsProteinAccess>>,
         protease: &Protease,
         num_threads: NonZeroUsize,
     ) -> Result<Self, Error> {
-        let protein_table = ProteinTable::new(client);
-
-        let mut proteins = protein_table.select(None, ()).await?;
-        let queue: Arc<ArrayQueue<Option<Protein>>> =
+        let mut proteins = protein_access.all().await?;
+        let queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
         let progress_metric = Arc::new(metrics::counter!(PROGRESS_METRIC));

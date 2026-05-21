@@ -20,10 +20,10 @@ use thiserror::Error;
 
 use crate::{
     client::Client,
+    database_build::IsProteinAccess,
     mass_index::MassIndex,
     peptide::{IsPeptide, Peptide},
     protease::Protease,
-    protein_table::ProteinTable,
     sequence::{CompactSequence, PeptideSequence},
 };
 
@@ -65,8 +65,8 @@ pub enum Error {
     NoErroredThread,
     #[error("Protease error in peptide table: {0}")]
     Protease(#[from] crate::protease::Error),
-    #[error("Protein table error in peptide table: {0}")]
-    ProteinTable(Box<crate::protein_table::Error>),
+    #[error("Protein access error in peptide table: {0}")]
+    ProteinAccess(Box<crate::database_build::Error>),
     #[error("Peptide error in peptide table: {0}")]
     Peptide(#[from] crate::peptide::Error),
     #[error("Sequence error in peptide table: {0}")]
@@ -84,7 +84,7 @@ into_thiserror_boxed!(
     CqlPagedExecution
 );
 into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
-into_thiserror_boxed!(crate::protein_table::Error, Error, ProteinTable);
+into_thiserror_boxed!(crate::database_build::Error, Error, ProteinAccess);
 
 type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, HashSet<i32>)>>>;
 
@@ -181,8 +181,10 @@ impl PeptideTable {
             .rows_stream::<Peptide>()?)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn build_concurrently(
         &self,
+        protein_access: Arc<Box<dyn IsProteinAccess>>,
         skip_protein_associations: bool,
         skip_taxonomies: bool,
         protease: Arc<Protease>,
@@ -198,6 +200,7 @@ impl PeptideTable {
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
+                let protein_access = protein_access.clone();
                 let protease = protease.clone();
                 let queue = queue.clone();
                 let client = self.client.clone();
@@ -207,7 +210,6 @@ impl PeptideTable {
 
                 tokio::spawn(async move {
                     let peptide_table = PeptideTable::new(client.clone());
-                    let protein_table = ProteinTable::new(client);
                     let mut mass_partition_map: HashMap<i64, Vec<i64>> = HashMap::new();
                     let mut peptide_buffer: Vec<Peptide> = Vec::new();
                     let mut partition_cql_size: usize = 0;
@@ -223,17 +225,17 @@ impl PeptideTable {
                             }
                         };
 
-                        let mut protein_ids = Vec::from_iter(protein_ids);
+                        let protein_ids = Vec::from_iter(protein_ids);
 
                         let protein_ids_len = protein_ids.len();
 
-                        let mut proteins = protein_table
-                            .select(Some("WHERE id IN ?"), (&protein_ids,))
-                            .await?;
+                        let mut proteins = protein_access.by_ids(&protein_ids).await?;
 
-                        if skip_protein_associations {
-                            protein_ids = Vec::new();
-                        }
+                        let protein_ids = if skip_protein_associations {
+                            Vec::new()
+                        } else {
+                            protein_ids.clone()
+                        };
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
                         let mut peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>> =
