@@ -292,12 +292,6 @@ impl PeptideTable {
                                 continue;
                             }
 
-                            tracing::info!(
-                                "Inserting {} peptides with mass {mass} into partition {partition}; parititon cql size {}/{}",
-                                peptide_buffer.len(),
-                                partition_cql_size as f32 / 1000.0 / 1000.0,
-                                crate::cql::MAX_PARTITION_SIZE  as f32 / 1000.0 / 1000.0,
-                            );
                             peptide_table
                                 .insert_batch(
                                     peptide_buffer.drain(..).peekable(),
