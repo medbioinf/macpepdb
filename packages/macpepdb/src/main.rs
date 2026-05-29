@@ -357,10 +357,10 @@ async fn main() -> Result<(), Error> {
             )
             .await;
 
-            tracing::error!(
-                "Done. Hit ctrl-c twice to end. (yes this is a bug I need to solve. first is shutting down TUI, second is stoping the rest)"
-            );
-            shutdown_signal().await;
+            if let Some(mut tui) = tui {
+                tracing::info!("Done. Press Ctrl+C or q to exit.");
+                tui.wait().await;
+            }
         }
         Command::Config { command } => match command {
             ConfigCommand::Show => {
@@ -406,6 +406,11 @@ async fn main() -> Result<(), Error> {
                 tui.as_ref(),
             )
             .await;
+
+            // Keep TUI open so the user can review logs before exiting with q or Ctrl+C
+            if let Some(mut tui) = tui {
+                tui.wait().await;
+            }
         }
     }
 
