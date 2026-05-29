@@ -90,10 +90,9 @@ enum Command {
         /// Concurrent number of inserts for non-partitioned batches to insert
         #[arg(long, default_value_t = NonZeroUsize::new(100).unwrap())]
         concurrent_batch_size: NonZeroUsize,
-        /// commitlog_segment_size_in_mb as set in the cassandra cluster settingss.
-        /// This controls how large CQL-batch inserts can be.
-        #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
-        commitlog_segment_size_in_mb: NonZeroUsize,
+        /// This controls how large CQL-batch inserts can be in kb.
+        #[arg(short, long, default_value_t = NonZeroUsize::new(512).unwrap())]
+        batch_size_limit: NonZeroUsize,
         /// If set, peptides with unknown amino acid (X) ar kept. Be aware that X has no mass.
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         keep_unknown: bool,
@@ -298,7 +297,7 @@ async fn main() -> Result<(), Error> {
         }
         Command::Build {
             concurrent_batch_size,
-            commitlog_segment_size_in_mb,
+            batch_size_limit,
             keep_unknown,
             max_length,
             min_length,
@@ -318,11 +317,6 @@ async fn main() -> Result<(), Error> {
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
             let protein_file_paths =
                 convert_str_paths_and_resolve_globs(protein_file_paths).unwrap();
-
-            // let's use 3/4 of the max batch size limit of commitlog_segment_size_in_mb / 2 to accomodate for overhead
-            let batch_size_limit =
-                NonZeroUsize::new((commitlog_segment_size_in_mb.get() * 1000 * 1000 * 3) / (2 * 4))
-                    .unwrap();
 
             tracing::info!(
                 "Resolved protein files:\n\t, {}",
@@ -459,7 +453,7 @@ async fn build_db(
             macpepdb::mass_index::PROGRESS_METRIC,
             protein_ctr as f64,
         ));
-    }
+    }   
     let mass_index = build_db_mass_index(protein_access.clone(), &protease, num_threads).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
