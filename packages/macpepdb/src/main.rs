@@ -442,6 +442,7 @@ async fn build_db(
         client.clone(),
         protein_file_paths,
         concurrent_batch_size,
+        num_threads,
         proteins_memory_limit,
     )
     .await;
@@ -517,11 +518,12 @@ async fn build_db_proteins(
     client: Arc<Client>,
     protein_file_paths: &[PathBuf],
     concurrent_batch_size: NonZeroUsize,
+    num_insertion_threads: NonZeroUsize,
     proteins_memory_limit: f64,
 ) -> (usize, Box<dyn IsProteinAccess>) {
     let now = std::time::Instant::now();
     let (protein_ctr, proteins_size) = ProteinTable::new(client.clone())
-        .build(protein_file_paths.iter(), concurrent_batch_size)
+        .build(protein_file_paths.iter(), concurrent_batch_size, num_insertion_threads)
         .await
         .unwrap();
     tracing::info!(
