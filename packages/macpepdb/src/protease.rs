@@ -1,8 +1,6 @@
 use std::{
-    cmp::min,
     fmt::{Debug, Display},
     num::NonZeroUsize,
-    rc::Rc,
 };
 
 use fallible_iterator::FallibleIterator;
@@ -164,50 +162,75 @@ impl Protease {
     /// # Arguments
     /// * `sequence` - Amino acid sequence
     ///
-    pub fn cleave<'a>(
-        &'a self,
-        sequence: &'a [AminoAcidBitCode],
-    ) -> impl FallibleIterator<Item = Peptide, Error = Error> + 'a {
-        let full_digest = Rc::new(self.inner.full_digest(sequence));
-        let max_window_size = self.max_missed_cleavages + 1;
+pub fn cleave<'a>(
+    &'a self,
+    sequence: &'a [AminoAcidBitCode],
+) -> impl FallibleIterator<Item = Peptide, Error = Error> + 'a {
+    let full_digest = self.inner.full_digest(sequence);
+    let len = full_digest.len();
+    let max_window_size = self.max_missed_cleavages + 1;
 
-        fallible_iterator::convert((0..full_digest.len()).flat_map(move |start| {
-            let full_digest = full_digest.clone();
-            (1..=max_window_size)
-                .map(move |window_size| {
-                    (
-                        full_digest.clone(),
-                        start..min(start + window_size, full_digest.len()),
-                    )
-                })
-                .filter_map(|(full_digest, range)| {
-                    let full_digest_slice = &full_digest[range];
-                    // make checks before sequence allocation
-                    // check length
-                    let full_digest_slice_len = full_digest_slice
-                        .iter()
-                        .map(|peptide| peptide.len())
-                        .sum::<usize>();
-                    if full_digest_slice_len < self.min_length.get()
-                        || full_digest_slice_len > self.max_length.get()
-                    {
-                        return None;
-                    }
-                    // check if any of the fully digested peptides contains UNKOWN
-                    if !self.keep_unknown
-                        && full_digest_slice.iter().any(|peptide| {
-                            memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], peptide.as_bytes())
-                                .is_some()
-                        })
-                    {
-                        return None;
-                    }
+    let mut prefix_len = Vec::with_capacity(len);
+    let mut acc = 0usize;
 
-                    Some(Sequence::try_from(full_digest_slice).map_err(Error::from))
-                })
-        }))
-        .map(move |seq| Ok(Peptide::new(seq, Vec::new(), Vec::new(), Vec::new())))
+    for frag in &full_digest {
+        acc += frag.len();
+        prefix_len.push(acc);
     }
+
+    let mut has_unknown = Vec::with_capacity(len);
+
+    for frag in &full_digest {
+        has_unknown.push(
+            !self.keep_unknown
+                && memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], frag.as_bytes()).is_some()
+        );
+    }
+
+    fallible_iterator::convert((0..len).flat_map(move |start| {
+        let full_digest = &full_digest;
+        let prefix_len = &prefix_len;
+        let has_unknown = &has_unknown;
+        let len = len;
+        let max_window_size = max_window_size;
+
+        let mut out = Vec::with_capacity(max_window_size);
+
+        for window_size in 1..=max_window_size {
+            let end = (start + window_size).min(len);
+
+            if start >= end {
+                continue;
+            }
+
+            let total_len = if start == 0 {
+                prefix_len[end - 1]
+            } else {
+                prefix_len[end - 1] - prefix_len[start - 1]
+            };
+
+            if total_len < self.min_length.get()
+                || total_len > self.max_length.get()
+            {
+                continue;
+            }
+
+            if has_unknown[start..end].iter().any(|&x| x) {
+                continue;
+            }
+
+            let slice = &full_digest[start..end];
+
+            out.push(Sequence::try_from(slice).map_err(Error::from));
+        }
+
+        out.into_iter()
+    }))
+    .map(move |seq| {
+        Ok(Peptide::new(seq, Vec::new(), Vec::new(), Vec::new()))
+    })
+    }
+
 
     pub fn by_name(
         name: &str,
