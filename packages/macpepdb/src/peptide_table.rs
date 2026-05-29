@@ -137,7 +137,8 @@ impl PeptideTable {
             peptide_buffer.push(peptide);
 
             if let Some(next_peptide) = peptides.peek()
-                && peptide_buffer_cql_size + next_peptide.cql_size() < batch_size_limit.get()
+                && peptide_buffer.len() < 100
+                && peptide_buffer_cql_size + next_peptide.cql_size() < batch_size_limit.get() * 1000
             {
                 continue;
             }
@@ -215,15 +216,60 @@ impl PeptideTable {
                     let mut partition_cql_size: usize = 0;
                     let mut partition = next_partition_guard.next_partition();
 
+                    // Track which masses have peptides in the current buffer
+                    let mut buffer_masses: HashSet<i64> = HashSet::new();
+
                     loop {
                         let (mass, protein_ids) = match queue.pop() {
                             Some(Some(entry)) => entry,
-                            Some(None) => break,
+                            Some(None) => {
+                                if !peptide_buffer.is_empty() {
+                                    for &m in &buffer_masses {
+                                        mass_partition_map.entry(m).or_default().push(partition);
+                                    }
+                                    tracing::debug!(
+                                        "Final flush: {} peptides into partition {partition}; cql size {}/{}",
+                                        peptide_buffer.len(),
+                                        partition_cql_size as f32 / 1000.0 / 1000.0,
+                                        crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
+                                    );
+                                    peptide_table
+                                        .insert_batch(
+                                            peptide_buffer.drain(..).peekable(),
+                                            batch_size,
+                                            inserted_peptides_metric.clone(),
+                                        )
+                                        .await?;
+                                }
+                                break;
+                            }
                             None => {
                                 tokio::time::sleep(Duration::from_millis(50)).await;
                                 continue;
                             }
                         };
+
+                        // Flush buffer if it's large enough before processing new mass
+                        if partition_cql_size >= batch_size.get() {
+                            for &m in &buffer_masses {
+                                mass_partition_map.entry(m).or_default().push(partition);
+                            }
+                            tracing::debug!(
+                                "Inserting {} peptides into partition {partition}; cql size {}/{}",
+                                peptide_buffer.len(),
+                                partition_cql_size as f32 / 1000.0 / 1000.0,
+                                crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
+                            );
+                            peptide_table
+                                .insert_batch(
+                                    peptide_buffer.drain(..).peekable(),
+                                    batch_size,
+                                    inserted_peptides_metric.clone(),
+                                )
+                                .await?;
+                            partition_cql_size = 0;
+                            buffer_masses.clear();
+                        }
 
                         let protein_ids = Vec::from_iter(protein_ids);
 
@@ -257,7 +303,7 @@ impl PeptideTable {
                                 })?;
                         }
 
-                        let mut peptide_iter = peptide_sequences
+                        let peptides: Vec<Peptide> = peptide_sequences
                             .into_iter()
                             .map(|(seq, taxonomies)| {
                                 let unique_taxonomy_ids = taxonomies
@@ -279,36 +325,40 @@ impl PeptideTable {
                                     non_unique_taxonomy_ids,
                                 ))
                             })
-                            .peekable();
+                            .collect::<Result<_, _>>()?;
 
-                        while let Some(peptide_res) = peptide_iter.next() {
-                            let mut peptide = peptide_res?;
-                            peptide.set_partition(partition);
-                            partition_cql_size += peptide.cql_size();
-                            peptide_buffer.push(peptide);
-
-                            if let Some(Ok(next_peptide)) = peptide_iter.peek()
-                                && partition_cql_size + next_peptide.cql_size()
-                                    < crate::cql::MAX_PARTITION_SIZE
+                        for mut peptide in peptides {
+                            // If adding this peptide would exceed partition size, flush and start new partition
+                            if !peptide_buffer.is_empty()
+                                && partition_cql_size + peptide.cql_size()
+                                    >= crate::cql::MAX_PARTITION_SIZE
                             {
-                                continue;
-                            }
-
-                            peptide_table
-                                .insert_batch(
-                                    peptide_buffer.drain(..).peekable(),
-                                    batch_size,
-                                    inserted_peptides_metric.clone(),
-                                )
-                                .await?;
-                            mass_partition_map.entry(mass).or_default().push(partition);
-
-                            // if iteratior is not empty yet, the insertion ment the parition
-                            // limit is reached, so we need a new partition
-                            if peptide_iter.peek().is_some() {
+                                for &m in &buffer_masses {
+                                    mass_partition_map.entry(m).or_default().push(partition);
+                                }
+                                tracing::debug!(
+                                    "Partition full: {} peptides into partition {partition}; cql size {}/{}",
+                                    peptide_buffer.len(),
+                                    partition_cql_size as f32 / 1000.0 / 1000.0,
+                                    crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
+                                );
+                                peptide_table
+                                    .insert_batch(
+                                        peptide_buffer.drain(..).peekable(),
+                                        batch_size,
+                                        inserted_peptides_metric.clone(),
+                                    )
+                                    .await?;
                                 partition_cql_size = 0;
+                                buffer_masses.clear();
                                 partition = next_partition_guard.next_partition();
                             }
+
+                            let cql_size = peptide.cql_size();
+                            peptide.set_partition(partition);
+                            peptide_buffer.push(peptide);
+                            partition_cql_size += cql_size;
+                            buffer_masses.insert(mass);
                         }
 
                         progress_metric.increment(1);
@@ -380,3 +430,4 @@ impl PeptideTable {
         Error::NoErroredThread
     }
 }
+
