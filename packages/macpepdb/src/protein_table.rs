@@ -41,8 +41,8 @@ pub enum Error {
     OpenFile(#[from] std::io::Error),
     #[error("Protein error in protein table: {0}")]
     Protein(Box<crate::protein::Error>),
-    #[error("Protein reader error in protein table: {0}")]
-    ProteinReader(#[from] uniprot_reader::reader::Error),
+    #[error("Protein reader error in protein table on file {0}: {1}")]
+    ProteinReader(PathBuf, uniprot_reader::reader::Error),
     #[error("Unable to join insertion task: {0}")]
     Join(String),
 }
@@ -139,9 +139,7 @@ impl ProteinTable {
                         let batch_size: usize = batch.iter().map(|p| p.size()).sum();
 
                         // Insert the batch
-                        protein_table
-                            .insert_batch(batch.into_iter())
-                            .await?;
+                        protein_table.insert_batch(batch.into_iter()).await?;
 
                         // Update shared counters
                         protein_ctr.fetch_add(batch_len, Ordering::SeqCst);
@@ -170,8 +168,13 @@ impl ProteinTable {
 
             for entry in entry_reader {
                 let pid = protein_id.fetch_add(1, Ordering::SeqCst);
-                let protein = Protein::try_from((pid, entry?.entry()))
-                    .map_err(|e| Error::Protein(Box::new(e)))?;
+                let protein = Protein::try_from((
+                    pid,
+                    entry
+                        .map_err(|err| Error::ProteinReader(protein_file_path.clone(), err))?
+                        .entry(),
+                ))
+                .map_err(|e| Error::Protein(Box::new(e)))?;
                 buffer.push(protein);
 
                 if buffer.len() == concurrent_batch_size.get() {
@@ -234,8 +237,7 @@ impl ProteinTable {
 
         // Await all insertion tasks and collect errors
         for task in insertion_tasks {
-            task.await
-                .map_err(|e| Error::Join(e.to_string()))??;
+            task.await.map_err(|e| Error::Join(e.to_string()))??;
         }
 
         Ok((
@@ -244,9 +246,7 @@ impl ProteinTable {
         ))
     }
 
-    async fn find_errored_task(
-        tasks: Vec<tokio::task::JoinHandle<Result<(), Error>>>,
-    ) -> Error {
+    async fn find_errored_task(tasks: Vec<tokio::task::JoinHandle<Result<(), Error>>>) -> Error {
         for task in tasks {
             if task.is_finished() {
                 match task.await {

@@ -453,7 +453,7 @@ async fn build_db(
             macpepdb::mass_index::PROGRESS_METRIC,
             protein_ctr as f64,
         ));
-    }   
+    }
     let mass_index = build_db_mass_index(protein_access.clone(), &protease, num_threads).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
@@ -517,7 +517,11 @@ async fn build_db_proteins(
 ) -> (usize, Box<dyn IsProteinAccess>) {
     let now = std::time::Instant::now();
     let (protein_ctr, proteins_size) = ProteinTable::new(client.clone())
-        .build(protein_file_paths.iter(), concurrent_batch_size, num_insertion_threads)
+        .build(
+            protein_file_paths.iter(),
+            concurrent_batch_size,
+            num_insertion_threads,
+        )
         .await
         .unwrap();
     tracing::info!(

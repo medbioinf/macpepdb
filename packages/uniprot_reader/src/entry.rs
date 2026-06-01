@@ -274,9 +274,12 @@ impl Entry {
             b"//" => {
                 return Ok(true);
             }
+            b"**" => {
+                // Comment line, ignore
+            }
             _ => {
                 return Err(Error::UnknownLineType(
-                    String::from_utf8_lossy(line_type).to_string(),
+                    String::from_utf8_lossy(line).to_string(),
                 ));
             }
         }
