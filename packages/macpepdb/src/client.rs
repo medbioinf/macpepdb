@@ -8,7 +8,7 @@ use scylla::{
 };
 use thiserror::Error;
 
-pub static URL_PASER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+pub static URL_PARSER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)scylla://((?P<credentials>[^:]*?:[^:]+)@){0,1}(?P<hosts>.+)/(?P<keyspace>[^/?]+)(\?(?P<attributes>.+)){0,1}").unwrap()
 });
 
@@ -67,7 +67,7 @@ struct ClientSettings {
 impl ClientSettings {
     pub fn new(database_url: &str) -> Result<Self, Error> {
         // Parse url
-        let matches = URL_PASER_REGEX
+        let matches = URL_PARSER_REGEX
             .captures(database_url)
             .map_err(|_| {
                 Error::InvalidUrl("Format seems not to correspond to the expectations".to_string())

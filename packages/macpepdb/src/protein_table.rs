@@ -3,9 +3,14 @@ use std::{
     io::{BufRead, BufReader},
     num::NonZeroUsize,
     path::PathBuf,
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicI32, AtomicUsize, Ordering},
+    },
+    time::Duration,
 };
 
+use crossbeam::queue::ArrayQueue;
 use flate2::read::GzDecoder;
 use futures::future::join_all;
 use scylla::{client::pager::TypedRowStream, errors::ExecutionError, serialize::row::SerializeRow};
@@ -38,8 +43,12 @@ pub enum Error {
     Protein(Box<crate::protein::Error>),
     #[error("Protein reader error in protein table: {0}")]
     ProteinReader(#[from] uniprot_reader::reader::Error),
+    #[error("Unable to join insertion task: {0}")]
+    Join(String),
 }
 use crate::{client::Client, protein::Protein};
+
+type ProteinBuildQueue = Arc<ArrayQueue<Option<Vec<Protein>>>>;
 
 pub struct ProteinTable {
     client: Arc<Client>,
@@ -91,11 +100,61 @@ impl ProteinTable {
         &self,
         protein_file_paths: impl Iterator<Item = &PathBuf>,
         concurrent_batch_size: NonZeroUsize,
-    ) -> Result<usize, Error> {
-        let mut protein_ctr: usize = 0;
-        let inserted_proteins_metric = metrics::counter!(INSERTED_PROTEINS_METRIC);
+        num_insertion_threads: NonZeroUsize,
+    ) -> Result<(usize, usize), Error> {
+        let queue: ProteinBuildQueue = Arc::new(ArrayQueue::new(num_insertion_threads.get() * 3));
+        let protein_ctr = Arc::new(AtomicUsize::new(0));
+        let proteins_size = Arc::new(AtomicUsize::new(0));
+        let inserted_proteins_metric = Arc::new(metrics::counter!(INSERTED_PROTEINS_METRIC));
+        let protein_id = Arc::new(AtomicI32::new(i32::MIN));
+
+        // Spawn consumer (insertion) worker tasks
+        let insertion_tasks = (0..num_insertion_threads.get())
+            .map(|_| {
+                let client = self.client.clone();
+                let queue = queue.clone();
+                let protein_ctr = protein_ctr.clone();
+                let proteins_size = proteins_size.clone();
+                let inserted_proteins_metric = inserted_proteins_metric.clone();
+
+                tokio::spawn(async move {
+                    let protein_table = ProteinTable::new(client);
+                    loop {
+                        // Try to pop from queue, spin if empty
+                        let batch = match queue.pop() {
+                            Some(batch) => batch,
+                            None => {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                                continue;
+                            }
+                        };
+
+                        // None sentinel signals shutdown
+                        let batch = match batch {
+                            Some(batch) => batch,
+                            None => break,
+                        };
+
+                        let batch_len = batch.len();
+                        let batch_size: usize = batch.iter().map(|p| p.size()).sum();
+
+                        // Insert the batch
+                        protein_table
+                            .insert_batch(batch.into_iter())
+                            .await?;
+
+                        // Update shared counters
+                        protein_ctr.fetch_add(batch_len, Ordering::SeqCst);
+                        proteins_size.fetch_add(batch_size, Ordering::SeqCst);
+                        inserted_proteins_metric.increment(batch_len as u64);
+                    }
+                    Ok::<(), Error>(())
+                })
+            })
+            .collect::<Vec<_>>();
+
+        // Producer: read files and push batches into queue
         let mut buffer: Vec<Protein> = Vec::with_capacity(concurrent_batch_size.get());
-        let mut protein_id: i32 = i32::MIN;
 
         for protein_file_path in protein_file_paths {
             let protein_file = File::open(protein_file_path)?;
@@ -110,24 +169,93 @@ impl ProteinTable {
             let entry_reader = ProteinReader::new(&mut buf_reader);
 
             for entry in entry_reader {
-                let protein = Protein::try_from((protein_id, entry?.entry()))
+                let pid = protein_id.fetch_add(1, Ordering::SeqCst);
+                let protein = Protein::try_from((pid, entry?.entry()))
                     .map_err(|e| Error::Protein(Box::new(e)))?;
                 buffer.push(protein);
+
                 if buffer.len() == concurrent_batch_size.get() {
-                    protein_ctr += buffer.len();
-                    inserted_proteins_metric.increment(buffer.len() as u64);
-                    self.insert_batch(buffer.drain(..)).await?
+                    // Push batch into queue, spin if full
+                    loop {
+                        match queue.push(Some(std::mem::take(&mut buffer))) {
+                            Ok(()) => break,
+                            Err(Some(batch)) => {
+                                // Queue full, check if any worker finished (error)
+                                if insertion_tasks.iter().any(|t| t.is_finished()) {
+                                    return Err(Self::find_errored_task(insertion_tasks).await);
+                                }
+                                buffer = batch;
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
+                            Err(None) => {
+                                // A None was already in the queue (shouldn't happen in normal flow)
+                                if insertion_tasks.iter().any(|t| t.is_finished()) {
+                                    return Err(Self::find_errored_task(insertion_tasks).await);
+                                }
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                            }
+                        }
+                    }
                 }
-                protein_id += 1;
             }
         }
 
+        // Push remaining buffer
         if !buffer.is_empty() {
-            protein_ctr += buffer.len();
-            inserted_proteins_metric.increment(buffer.len() as u64);
-            self.insert_batch(buffer.drain(..)).await?;
+            loop {
+                match queue.push(Some(std::mem::take(&mut buffer))) {
+                    Ok(()) => break,
+                    Err(Some(batch)) => {
+                        if insertion_tasks.iter().any(|t| t.is_finished()) {
+                            return Err(Self::find_errored_task(insertion_tasks).await);
+                        }
+                        buffer = batch;
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                    Err(None) => {
+                        if insertion_tasks.iter().any(|t| t.is_finished()) {
+                            return Err(Self::find_errored_task(insertion_tasks).await);
+                        }
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
+            }
         }
 
-        Ok(protein_ctr)
+        // Send shutdown sentinel (None) to each worker
+        for _ in 0..num_insertion_threads.get() {
+            loop {
+                if queue.push(None).is_ok() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+
+        // Await all insertion tasks and collect errors
+        for task in insertion_tasks {
+            task.await
+                .map_err(|e| Error::Join(e.to_string()))??;
+        }
+
+        Ok((
+            protein_ctr.load(Ordering::SeqCst),
+            proteins_size.load(Ordering::SeqCst),
+        ))
+    }
+
+    async fn find_errored_task(
+        tasks: Vec<tokio::task::JoinHandle<Result<(), Error>>>,
+    ) -> Error {
+        for task in tasks {
+            if task.is_finished() {
+                match task.await {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(err)) => return err,
+                    Err(e) => return Error::Join(e.to_string()),
+                }
+            }
+        }
+        Error::Join("No errored task found, but one finished early".to_string())
     }
 }

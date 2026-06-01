@@ -7,6 +7,7 @@ pub mod client;
 pub mod cql;
 #[macro_use]
 pub mod error;
+pub mod database_build;
 pub mod mass_index;
 pub mod molecules;
 pub mod monitoring;

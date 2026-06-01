@@ -13,6 +13,7 @@ use macpepdb::{
     blob::Blob,
     client::Client,
     configuration::Configuration,
+    database_build::{DatabaseProteinAccess, InMemoryProteinAccess, IsProteinAccess},
     mass::to_float as mass_to_float,
     mass_index::MassIndex,
     mass_to_int,
@@ -22,10 +23,12 @@ use macpepdb::{
     peptide_table::PeptideTable,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
     protease::{Protease, Trypsin},
+    protein::Protein,
     protein_table::ProteinTable,
     sequence::{IsBitSequence, PeptideSequence},
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
+use sysinfo::System;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use url::Url;
@@ -61,6 +64,8 @@ enum Error {
     GlobPattern(#[from] glob::PatternError),
     #[error("Glob error: {0}")]
     Glob(#[from] glob::GlobError),
+    #[error("proteins_memory_limit should be between 0.0 and 1.0")]
+    ProteinsMemoryLimit,
 }
 
 #[derive(Subcommand)]
@@ -85,11 +90,10 @@ enum Command {
         /// Concurrent number of inserts for non-partitioned batches to insert
         #[arg(long, default_value_t = NonZeroUsize::new(100).unwrap())]
         concurrent_batch_size: NonZeroUsize,
-        /// commitlog_segment_size_in_mb as set in the cassandra cluster settingss.
-        /// This controls how large CQL-batch inserts can be.
-        #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
-        commitlog_segment_size_in_mb: NonZeroUsize,
-        /// If set, peptides with unknown amino acid (X) ar kept. Be aware that X has no mass.
+        /// This controls how large CQL-batch inserts can be in kb.
+        #[arg(short, long, default_value_t = NonZeroUsize::new(512).unwrap())]
+        batch_size_limit: NonZeroUsize,
+        /// If set, peptides with unknown amino acid (X) are kept. Be aware that X has no mass.
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         keep_unknown: bool,
         /// Max peptide length
@@ -107,6 +111,13 @@ enum Command {
         /// Protease name
         #[arg(long, default_value_t = Trypsin::NAME.to_string())]
         protease: String,
+        /// Fraction of free memory to use as limit for keeping proteins in memory.
+        /// Keeping the the proteins in memory can significantly speed up the digestions.
+        /// But it also reduces the amount of memory for the mass index.
+        /// If the mass index runs out of memory, set this to 0.0.
+        /// This will read the proteins from memory
+        #[arg(long, default_value_t = 0.8)]
+        proteins_memory_limit: f64,
         /// If set no taxonomies will be collected on peptide level
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         skip_protein_associations: bool,
@@ -138,7 +149,7 @@ enum Command {
         /// Lower mass tolerance in PPM
         #[arg(short, long, default_value_t = 10)]
         lower_mass_tolerance_ppm: i64,
-        /// Maximum variable modifiction considered per peptides
+        /// Maximum variable modification considered per peptides
         #[arg(short, long, default_value_t = 3)]
         max_variable_modifications: usize,
         /// Optional PTM file format, TODO add format
@@ -151,7 +162,7 @@ enum Command {
         /// Proteome IDs to filter for, can be used multiple times, if not set, all proteome IDs are included
         #[arg(short, long, action = clap::ArgAction::Append)]
         proteome_ids: Vec<String>,
-        /// Taxanomy IDs to filter for, can be used multiple times, if not set, all taxonomy IDs are included
+        /// Taxonomy IDs to filter for, can be used multiple times, if not set, all taxonomy IDs are included
         #[arg(short, long, action = clap::ArgAction::Append)]
         taxonomy_ids: Vec<i32>,
         /// Concurrent searches of condition
@@ -162,7 +173,7 @@ enum Command {
         upper_mass_tolerance_ppm: i64,
 
         // Positional arguments
-        /// Canoncial mass to search for
+        /// Canonical mass to search for
         mass: f64,
         /// Path to output file
         output_file_path: PathBuf,
@@ -213,7 +224,7 @@ struct Cli {
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Error> {
     let cli = Cli::parse();
 
     let mut tracing_targets: Vec<TracingTarget> = Vec::new();
@@ -286,7 +297,7 @@ async fn main() {
         }
         Command::Build {
             concurrent_batch_size,
-            commitlog_segment_size_in_mb,
+            batch_size_limit,
             keep_unknown,
             max_length,
             min_length,
@@ -294,18 +305,18 @@ async fn main() {
             print_config,
             protease,
             protein_file_paths,
+            proteins_memory_limit,
             skip_protein_associations,
             skip_taxonomies,
             threads,
         } => {
+            if !(0.0..=1.0).contains(&proteins_memory_limit) {
+                return Err(Error::ProteinsMemoryLimit);
+            }
+
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
             let protein_file_paths =
                 convert_str_paths_and_resolve_globs(protein_file_paths).unwrap();
-
-            // let's use 3/4 of the max batch size limit of commitlog_segment_size_in_mb / 2 to accomodate for overhead
-            let batch_size_limit =
-                NonZeroUsize::new((commitlog_segment_size_in_mb.get() * 1000 * 1000 * 3) / (2 * 4))
-                    .unwrap();
 
             tracing::info!(
                 "Resolved protein files:\n\t, {}",
@@ -331,6 +342,7 @@ async fn main() {
                 protease,
                 batch_size_limit,
                 concurrent_batch_size,
+                proteins_memory_limit,
                 skip_protein_associations,
                 skip_taxonomies,
                 threads,
@@ -339,10 +351,10 @@ async fn main() {
             )
             .await;
 
-            tracing::error!(
-                "Done. Hit ctrl-c twice to end. (yes this is a bug I need to solve. first is shutting down TUI, second is stoping the rest)"
-            );
-            shutdown_signal().await;
+            if let Some(mut tui) = tui {
+                tracing::info!("Done. Press Ctrl+C or q to exit.");
+                tui.wait().await;
+            }
         }
         Command::Config { command } => match command {
             ConfigCommand::Show => {
@@ -388,8 +400,15 @@ async fn main() {
                 tui.as_ref(),
             )
             .await;
+
+            // Keep TUI open so the user can review logs before exiting with q or Ctrl+C
+            if let Some(mut tui) = tui {
+                tui.wait().await;
+            }
         }
     }
+
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -399,6 +418,7 @@ async fn build_db(
     protease: Protease,
     batch_size_limit: NonZeroUsize,
     concurrent_batch_size: NonZeroUsize,
+    proteins_memory_limit: f64,
     skip_protein_associations: bool,
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
@@ -412,11 +432,19 @@ async fn build_db(
             "Inserted proteins",
         ));
     }
-    let protein_ctr =
-        build_db_proteins(client.clone(), protein_file_paths, concurrent_batch_size).await;
+    let (protein_ctr, protein_access) = build_db_proteins(
+        client.clone(),
+        protein_file_paths,
+        concurrent_batch_size,
+        num_threads,
+        proteins_memory_limit,
+    )
+    .await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::protein_table::INSERTED_PROTEINS_METRIC);
     }
+
+    let protein_access = Arc::new(protein_access);
 
     // 2. step create mass to protein index
     if let Some(tui) = &tui {
@@ -425,8 +453,8 @@ async fn build_db(
             macpepdb::mass_index::PROGRESS_METRIC,
             protein_ctr as f64,
         ));
-    }
-    let mass_index = build_db_mass_index(client.clone(), &protease, num_threads).await;
+    }   
+    let mass_index = build_db_mass_index(protein_access.clone(), &protease, num_threads).await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
     }
@@ -450,6 +478,7 @@ async fn build_db(
 
     let mass_to_partitions_map = build_db_peptides(
         client.clone(),
+        protein_access,
         skip_protein_associations,
         skip_taxonomies,
         Arc::new(protease.clone()),
@@ -483,39 +512,66 @@ async fn build_db_proteins(
     client: Arc<Client>,
     protein_file_paths: &[PathBuf],
     concurrent_batch_size: NonZeroUsize,
-) -> usize {
+    num_insertion_threads: NonZeroUsize,
+    proteins_memory_limit: f64,
+) -> (usize, Box<dyn IsProteinAccess>) {
     let now = std::time::Instant::now();
-    let protein_ctr = ProteinTable::new(client)
-        .build(protein_file_paths.iter(), concurrent_batch_size)
+    let (protein_ctr, proteins_size) = ProteinTable::new(client.clone())
+        .build(protein_file_paths.iter(), concurrent_batch_size, num_insertion_threads)
         .await
         .unwrap();
     tracing::info!(
         "db proteins: time = {:.2?} s; #proteins = {protein_ctr}",
-        now.elapsed().as_secs_f32(),
+        now.elapsed().as_secs_f64(),
     );
-    protein_ctr
+
+    let mut sys = System::new_all();
+    sys.refresh_all();
+    let allowed_usable_memory = (sys.available_memory() as f64 * proteins_memory_limit) as usize;
+    // needed memory is proteins size + an Arc per protein for cheap cloning
+    let needed_memory = proteins_size + std::mem::size_of::<Arc<Protein>>() * protein_ctr;
+
+    let protein_access: Box<dyn IsProteinAccess> = if needed_memory <= allowed_usable_memory {
+        tracing::info!(
+            "Keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
+            needed_memory / (1024 * 1024),
+            allowed_usable_memory / (1024 * 1024)
+        );
+        Box::new(InMemoryProteinAccess::new(client).await.unwrap())
+    } else {
+        tracing::info!(
+            "Not keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
+            needed_memory / (1024 * 1024),
+            allowed_usable_memory / (1024 * 1024)
+        );
+        Box::new(DatabaseProteinAccess::new(client))
+    };
+
+    (protein_ctr, protein_access)
 }
 
 async fn build_db_mass_index(
-    client: Arc<Client>,
+    protein_access: Arc<Box<dyn IsProteinAccess>>,
     protease: &Protease,
     num_threads: NonZeroUsize,
 ) -> MassIndex {
     let now = std::time::Instant::now();
-    let index = MassIndex::build_concurrently(client, protease, num_threads)
+    let index = MassIndex::build_concurrently(protein_access, protease, num_threads)
         .await
         .unwrap();
     tracing::info!(
         "db mass index: time = {:.2?} s; #masses = {}",
-        now.elapsed().as_secs_f32(),
+        now.elapsed().as_secs_f64(),
         index.len()
     );
 
     index
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_db_peptides(
     client: Arc<Client>,
+    protein_access: Arc<Box<dyn IsProteinAccess>>,
     skip_protein_associations: bool,
     skip_taxonomies: bool,
     protease: Arc<Protease>,
@@ -526,6 +582,7 @@ async fn build_db_peptides(
     let now = std::time::Instant::now();
     let mass_to_partitions_map = PeptideTable::new(client)
         .build_concurrently(
+            protein_access,
             skip_protein_associations,
             skip_taxonomies,
             protease,
@@ -535,7 +592,7 @@ async fn build_db_peptides(
         )
         .await
         .unwrap();
-    tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f32(),);
+    tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f64(),);
 
     mass_to_partitions_map
 }

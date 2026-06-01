@@ -67,10 +67,10 @@ fn main() {
     // Molecules
     let molecules_rs_path = Path::new(&out_dir).join("molecules.rs");
     let hydrogen_mono_mass = *get_element_by_symbol("H").unwrap().get_mono_mass();
-    let oxigen_mono_mass = *get_element_by_symbol("O").unwrap().get_mono_mass();
+    let oxygen_mono_mass = *get_element_by_symbol("O").unwrap().get_mono_mass();
     let molecules_rs_content: String = format!(
         r#"
-        pub const WATER_MONO_MASS: i64 = mass_to_int!({hydrogen_mono_mass}) + mass_to_int!({hydrogen_mono_mass}) + mass_to_int!({oxigen_mono_mass});
+        pub const WATER_MONO_MASS: i64 = mass_to_int!({hydrogen_mono_mass}) + mass_to_int!({hydrogen_mono_mass}) + mass_to_int!({oxygen_mono_mass});
         "#,
     );
     fs::write(molecules_rs_path, molecules_rs_content).unwrap();

@@ -113,6 +113,15 @@ impl TuiHandle {
         self.send_shutdown();
     }
 
+    /// Wait for the TUI render task to finish without sending a shutdown signal.
+    ///
+    /// Use this when you want the TUI to remain alive after the main work
+    /// completes, allowing the user to review logs before exiting with q or
+    /// Ctrl+C.
+    pub async fn wait(&mut self) {
+        let _ = (&mut self.join_handle).await;
+    }
+
     fn send_shutdown(&mut self) {
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());

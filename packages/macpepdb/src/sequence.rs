@@ -31,7 +31,7 @@ pub enum Error {
     AminoAcid(#[from] crate::amino_acid::Error),
     #[error("CQL value too large for blob")]
     CqlValueTooLarge,
-    #[error("Internal CQL error in seqeunce: {0}")]
+    #[error("Internal CQL error in sequence: {0}")]
     InternalCql(#[from] crate::cql::Error),
     #[error("Malformed byte: {0:?}")]
     MalformedBytes(CompactSequence),
@@ -48,8 +48,8 @@ pub enum Error {
 
 /// A more compact version of sequence, which stores the amino acids as
 /// as 5 bits + x bits for the length, rounded to the next byte.
-/// This can safe up to 30% memory depending on the length of the seqeunce.
-/// This version is ment to be compact, not feature rich (because non byte logic is slow), so more of it can be stored in
+/// This can save up to 30% memory depending on the length of the sequence.
+/// This version is meant to be compact, not feature rich (because non byte logic is slow), so more of it can be stored in
 /// maps, sets, databases etc.
 #[derive(Debug, Eq, Hash, PartialEq)]
 pub struct CompactSequence(Vec<u8>);
@@ -120,6 +120,10 @@ pub trait IsBitSequence<T: num_traits::Unsigned>:
         let total_bits =
             Self::COUNT_BIT_WIDTH.get() as usize + AminoAcid::BIT_CODE_LEN * self.len();
         total_bits.div_ceil(8)
+    }
+
+    fn size(&self) -> usize {
+        std::mem::size_of::<Vec<AminoAcidBitCode>>() + self.data().len()
     }
 }
 
@@ -422,10 +426,10 @@ macro_rules! make_sequence {
     };
 }
 
-// Peptide seqeunce limited to 6 to 50 amino acids, length can be stored in 6 bits
+// Peptide sequence limited to 6 to 50 amino acids, length can be stored in 6 bits
 make_sequence!(PeptideSequence, u8, 6, 1, 50);
 
-// ProteinSeqeunce limited to 1 to 65.536 amino acids length can be stored in 16 bits
+// Proteinsequence limited to 1 to 65.536 amino acids length can be stored in 16 bits
 make_sequence!(ProteinSequence, u16, 16, 1, u16::MAX as usize);
 
 /// Part of the a modified sequence which can keep amino acids as well as modifications (as strings)
@@ -478,7 +482,7 @@ impl From<ModifiedSequencePart> for String {
     }
 }
 
-/// Seqeunces which can contain both amino acids and modifications (ProForma compatible),
+/// sequences which can contain both amino acids and modifications (ProForma compatible),
 #[derive(Clone, Eq, Hash, PartialEq, Serialize)]
 #[serde(into = "String")]
 pub struct ModifiedSequence(Vec<ModifiedSequencePart>);

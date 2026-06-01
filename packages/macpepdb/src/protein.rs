@@ -1,7 +1,7 @@
 use scylla::{DeserializeRow, SerializeRow};
 use thiserror::Error;
 
-use crate::sequence::ProteinSequence as Sequence;
+use crate::sequence::{IsBitSequence, ProteinSequence as Sequence};
 
 static NCBI_TAXONOMY_ID_ATTRIBUTE_NAME: &str = "NCBI_TaxID=";
 
@@ -17,7 +17,7 @@ pub enum Error {
     TaxonomyIdParsing(std::num::ParseIntError),
 }
 
-#[derive(Debug, DeserializeRow, SerializeRow)]
+#[derive(Clone, Debug, DeserializeRow, SerializeRow)]
 pub struct Protein {
     accession: String,
     id: Option<i32>,
@@ -49,6 +49,14 @@ impl Protein {
 
     pub fn taxonomy_id(&self) -> i32 {
         self.taxonomy_id
+    }
+
+    pub fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + std::mem::size_of::<String>()
+            + self.accession.len()
+            + self.sequence.size()
+            + std::mem::size_of::<i32>() // 4 for id and taxonomy_id
     }
 }
 
