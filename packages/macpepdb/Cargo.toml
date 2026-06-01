@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-compression = { workspace = true, features = ["gzip", "tokio"] }
 async-stream = { workspace = true }
 axum = { workspace = true, features = ["json", "http2", "matched-path"] }
 base64 = { workspace = true }
@@ -43,7 +44,7 @@ tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-loki = { workspace = true }
 tracing-subscriber = { workspace = true }
-uniprot_reader = { workspace = true, features = ["serde"] }
+uniprot_reader = { workspace = true, features = ["async", "serde"] }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v7"] }

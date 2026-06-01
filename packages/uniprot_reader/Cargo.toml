@@ -4,13 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+futures = { workspace = true, optional = true }
 memchr = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
+tokio = { workspace = true , optional = true}
 thiserror = { workspace = true }
 
 [dev-dependencies]
+async-compression = { workspace = true, features = ["gzip", "tokio"] }
 flate2 = { workspace = true }
 
 [features]
-default = []
+default = ["async"]
+async = ["dep:futures", "dep:tokio", "tokio/io-util", "tokio/fs", "tokio/macros", "tokio/rt"]
 serde = ["dep:serde"]

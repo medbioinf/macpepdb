@@ -16,6 +16,10 @@ pub struct Item {
 }
 
 impl Item {
+    pub(crate) fn new(offset: Offset, entry: Entry) -> Self {
+        Self { offset, entry }
+    }
+
     pub fn offset(&self) -> &Offset {
         &self.offset
     }

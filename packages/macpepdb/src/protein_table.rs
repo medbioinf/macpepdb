@@ -1,8 +1,7 @@
 use std::{
-    fs::File,
-    io::{BufRead, BufReader},
     num::NonZeroUsize,
     path::PathBuf,
+    pin::Pin,
     sync::{
         Arc, LazyLock,
         atomic::{AtomicI32, AtomicUsize, Ordering},
@@ -10,12 +9,13 @@ use std::{
     time::Duration,
 };
 
+use async_compression::tokio::bufread::GzipDecoder;
 use crossbeam::queue::ArrayQueue;
-use flate2::read::GzDecoder;
-use futures::future::join_all;
+use futures::{StreamExt, future::join_all};
 use scylla::{client::pager::TypedRowStream, errors::ExecutionError, serialize::row::SerializeRow};
 use thiserror::Error;
-use uniprot_reader::reader::Reader as ProteinReader;
+use tokio::io::{AsyncBufRead, BufReader};
+use uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
 
 static TABLE_NAME: &str = "proteins";
 
@@ -155,18 +155,18 @@ impl ProteinTable {
         let mut buffer: Vec<Protein> = Vec::with_capacity(concurrent_batch_size.get());
 
         for protein_file_path in protein_file_paths {
-            let protein_file = File::open(protein_file_path)?;
-
-            let mut buf_reader: Box<dyn BufRead> =
+            let protein_file = tokio::fs::File::open(protein_file_path).await?;
+            let buf_reader = BufReader::new(protein_file);
+            let mut buf_reader: Pin<Box<dyn AsyncBufRead + Send>> =
                 if protein_file_path.extension().and_then(|ext| ext.to_str()) == Some("gz") {
-                    Box::new(BufReader::new(GzDecoder::new(protein_file)))
+                    Box::pin(BufReader::new(GzipDecoder::new(buf_reader)))
                 } else {
-                    Box::new(BufReader::new(protein_file))
+                    Box::pin(buf_reader)
                 };
 
-            let entry_reader = ProteinReader::new(&mut buf_reader);
+            let mut entry_reader = ProteinReader::new(&mut buf_reader);
 
-            for entry in entry_reader {
+            while let Some(entry) = entry_reader.next().await {
                 let pid = protein_id.fetch_add(1, Ordering::SeqCst);
                 let protein = Protein::try_from((
                     pid,

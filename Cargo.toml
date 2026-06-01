@@ -8,6 +8,7 @@ members = [
 ]
 
 [workspace.dependencies]
+async-compression = "0.4.42"
 async-stream = "0.3.6"
 axum = "0.8.9"
 base64 = "0.22.1"
