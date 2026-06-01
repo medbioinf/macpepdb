@@ -189,7 +189,7 @@ impl PeptideTable {
         skip_protein_associations: bool,
         skip_taxonomies: bool,
         protease: Arc<Protease>,
-        batch_size: NonZeroUsize,
+        batch_size_limit: NonZeroUsize,
         num_threads: NonZeroUsize,
         mass_index: MassIndex,
     ) -> Result<HashMap<i64, Vec<i64>>, Error> {
@@ -214,6 +214,7 @@ impl PeptideTable {
                     let mut mass_partition_map: HashMap<i64, Vec<i64>> = HashMap::new();
                     let mut peptide_buffer: Vec<Peptide> = Vec::new();
                     let mut partition_cql_size: usize = 0;
+                    let mut batch_cql_size: usize = 0;
                     let mut partition = next_partition_guard.next_partition();
 
                     // Track which masses have peptides in the current buffer
@@ -228,7 +229,7 @@ impl PeptideTable {
                                         mass_partition_map.entry(m).or_default().push(partition);
                                     }
                                     tracing::debug!(
-                                        "Final flush: {} peptides into partition {partition}; cql size {}/{}",
+                                        "Inserting {} peptides into partition {partition}; partition size {}/{}",
                                         peptide_buffer.len(),
                                         partition_cql_size as f32 / 1000.0 / 1000.0,
                                         crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
@@ -236,7 +237,7 @@ impl PeptideTable {
                                     peptide_table
                                         .insert_batch(
                                             peptide_buffer.drain(..).peekable(),
-                                            batch_size,
+                                            batch_size_limit,
                                             inserted_peptides_metric.clone(),
                                         )
                                         .await?;
@@ -250,12 +251,12 @@ impl PeptideTable {
                         };
 
                         // Flush buffer if it's large enough before processing new mass
-                        if partition_cql_size >= batch_size.get() {
+                        if batch_cql_size >= batch_size_limit.get() * 1000 {
                             for &m in &buffer_masses {
                                 mass_partition_map.entry(m).or_default().push(partition);
                             }
                             tracing::debug!(
-                                "Inserting {} peptides into partition {partition}; cql size {}/{}",
+                                "Inserting {} peptides into partition {partition}; partition size {}/{}",
                                 peptide_buffer.len(),
                                 partition_cql_size as f32 / 1000.0 / 1000.0,
                                 crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
@@ -263,11 +264,11 @@ impl PeptideTable {
                             peptide_table
                                 .insert_batch(
                                     peptide_buffer.drain(..).peekable(),
-                                    batch_size,
+                                    batch_size_limit,
                                     inserted_peptides_metric.clone(),
                                 )
                                 .await?;
-                            partition_cql_size = 0;
+                            batch_cql_size = 0;
                             buffer_masses.clear();
                         }
 
@@ -345,10 +346,11 @@ impl PeptideTable {
                                 peptide_table
                                     .insert_batch(
                                         peptide_buffer.drain(..).peekable(),
-                                        batch_size,
+                                        batch_size_limit,
                                         inserted_peptides_metric.clone(),
                                     )
                                     .await?;
+                                batch_cql_size = 0;
                                 partition_cql_size = 0;
                                 buffer_masses.clear();
                                 partition = next_partition_guard.next_partition();
@@ -358,6 +360,7 @@ impl PeptideTable {
                             peptide.set_partition(partition);
                             peptide_buffer.push(peptide);
                             partition_cql_size += cql_size;
+                            batch_cql_size += cql_size;
                             buffer_masses.insert(mass);
                         }
 

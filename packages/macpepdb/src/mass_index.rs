@@ -59,7 +59,6 @@ impl MassIndex {
             .map(|_| {
                 let protease = protease.clone();
                 let queue = queue.clone();
-                let protease = protease.clone();
                 let progress_metric = progress_metric.clone();
                 let index = index.clone();
 

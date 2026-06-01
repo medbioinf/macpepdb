@@ -89,7 +89,7 @@ macro_rules! create_const_amino_acids {
 
 
              static NON_CANONICAL: LazyLock<&'static [&'static AminoAcid]> = LazyLock::new(|| {
-                 ALL.iter().filter(|aa| aa.is_canonical).cloned().collect::<Vec<_>>().leak()
+                 ALL.iter().filter(|aa| !aa.is_canonical).cloned().collect::<Vec<_>>().leak()
              });
 
 
