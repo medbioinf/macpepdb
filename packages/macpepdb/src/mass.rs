@@ -11,7 +11,7 @@ pub fn to_int(mass: f64) -> i64 {
     (mass * MASS_CONVERT_FACTOR) as i64
 }
 
-/// Makro for mass to integer conversion. The `to_int`-method is intentionally not used, so the macro can be used in assignments of constants.
+/// Macro for mass to integer conversion. The `to_int`-method is intentionally not used, so the macro can be used in assignments of constants.
 /// Attention: It is not possible to limit the the macros argument to a specific type. Be careful to pass only
 ///
 // used in build.rs
@@ -67,11 +67,11 @@ mod test {
         let lower_mass_f = mass_f - (mass_f / 1_000_000.0_f64 * tolerance_ppm_f);
         let upper_mass_f = mass_f + (mass_f / 1_000_000.0_f64 * tolerance_ppm_f);
 
-        let tollerance_ppm_i: i64 = 10;
+        let tolerance_ppm_i: i64 = 10;
         let mass_i = mass_to_int!(mass_f);
 
-        let lower_mass_i = mass_i - (mass_i / 1_000_000 * tollerance_ppm_i);
-        let upper_mass_i = mass_i + (mass_i / 1_000_000 * tollerance_ppm_i);
+        let lower_mass_i = mass_i - (mass_i / 1_000_000 * tolerance_ppm_i);
+        let upper_mass_i = mass_i + (mass_i / 1_000_000 * tolerance_ppm_i);
 
         let lower_mass_f_as_i = mass_to_int!(lower_mass_f);
         let upper_mass_f_as_i = mass_to_int!(upper_mass_f);

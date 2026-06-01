@@ -6,7 +6,7 @@ use thiserror::Error;
 pub enum Error {
     #[error("Invalid entry format, Entry needs to start with `ID` and stops with `//`")]
     InvalidEntryFormat,
-    #[error("Unkown line type: {0}")]
+    #[error("Unknown line type: {0}")]
     UnknownLineType(String),
 }
 

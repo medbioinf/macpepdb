@@ -332,7 +332,7 @@ pub struct SearchRequestQuery {
 ///         "proteome_id": "UP000000589",
 ///         # Optional flag to search only reviewed proteins
 ///         "is_reviewed": true
-///         # Optional: If the PTMs in seqeunces should be resolved
+///         # Optional: If the PTMs in sequences should be resolved
 ///         "resolve_modifications": true
 ///     }
 ///     ```

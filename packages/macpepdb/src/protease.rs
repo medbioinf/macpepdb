@@ -31,8 +31,8 @@ pub enum Error {
     Sequence(#[from] crate::sequence::Error),
     #[error("Unknown amino acid encountered: {0}")]
     UnknownAminoAcid(String),
-    #[error("Unkown protease `{0}`")]
-    UnkownProtease(String),
+    #[error("Unknown protease `{0}`")]
+    UnknownProtease(String),
 }
 
 /// Trait defining the behavior for a protease
@@ -266,7 +266,7 @@ pub fn cleave<'a>(
         match name.to_lowercase().as_str() {
             Trypsin::NAME => Ok(Box::new(Trypsin {})),
             Unspecific::NAME => Ok(Box::new(Unspecific {})),
-            _ => Err(Error::UnkownProtease(name.to_string())),
+            _ => Err(Error::UnknownProtease(name.to_string())),
         }
     }
 

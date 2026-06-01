@@ -94,7 +94,7 @@ macro_rules! create_const_amino_acids {
 
 
              impl AminoAcid {
-                 /// Returns a canonical or non-canoncial amino acid by one letter code
+                 /// Returns a canonical or non-canonical amino acid by one letter code
                  ///
                  /// # Arguments
                  /// * `code` - One letter code
@@ -108,7 +108,7 @@ macro_rules! create_const_amino_acids {
                      }
                  }
 
-                 /// Returns a canonical or non-canoncial amino acid by MaCPepDB's 5 bit code
+                 /// Returns a canonical or non-canonical amino acid by MaCPepDB's 5 bit code
                  ///
                  /// # Arguments
                  /// * `bit_code` - 5 bit code

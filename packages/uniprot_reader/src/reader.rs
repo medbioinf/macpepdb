@@ -40,7 +40,7 @@ impl Display for Item {
 pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Unkown line type: {0}")]
+    #[error("Unknown line type: {0}")]
     Entry(#[from] EntryError),
 }
 

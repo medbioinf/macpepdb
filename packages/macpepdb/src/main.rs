@@ -93,7 +93,7 @@ enum Command {
         /// This controls how large CQL-batch inserts can be in kb.
         #[arg(short, long, default_value_t = NonZeroUsize::new(512).unwrap())]
         batch_size_limit: NonZeroUsize,
-        /// If set, peptides with unknown amino acid (X) ar kept. Be aware that X has no mass.
+        /// If set, peptides with unknown amino acid (X) are kept. Be aware that X has no mass.
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         keep_unknown: bool,
         /// Max peptide length
@@ -112,7 +112,7 @@ enum Command {
         #[arg(long, default_value_t = Trypsin::NAME.to_string())]
         protease: String,
         /// Fraction of free memory to use as limit for keeping proteins in memory.
-        /// Keeping the the proteins in memory can significantely speed up the digestions.
+        /// Keeping the the proteins in memory can significantly speed up the digestions.
         /// But it also reduces the amount of memory for the mass index.
         /// If the mass index runs out of memory, set this to 0.0.
         /// This will read the proteins from memory
@@ -149,7 +149,7 @@ enum Command {
         /// Lower mass tolerance in PPM
         #[arg(short, long, default_value_t = 10)]
         lower_mass_tolerance_ppm: i64,
-        /// Maximum variable modifiction considered per peptides
+        /// Maximum variable modification considered per peptides
         #[arg(short, long, default_value_t = 3)]
         max_variable_modifications: usize,
         /// Optional PTM file format, TODO add format
@@ -162,7 +162,7 @@ enum Command {
         /// Proteome IDs to filter for, can be used multiple times, if not set, all proteome IDs are included
         #[arg(short, long, action = clap::ArgAction::Append)]
         proteome_ids: Vec<String>,
-        /// Taxanomy IDs to filter for, can be used multiple times, if not set, all taxonomy IDs are included
+        /// Taxonomy IDs to filter for, can be used multiple times, if not set, all taxonomy IDs are included
         #[arg(short, long, action = clap::ArgAction::Append)]
         taxonomy_ids: Vec<i32>,
         /// Concurrent searches of condition
@@ -173,7 +173,7 @@ enum Command {
         upper_mass_tolerance_ppm: i64,
 
         // Positional arguments
-        /// Canoncial mass to search for
+        /// Canonical mass to search for
         mass: f64,
         /// Path to output file
         output_file_path: PathBuf,

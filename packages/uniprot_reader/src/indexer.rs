@@ -33,7 +33,7 @@ impl Display for Offset {
 pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
-    #[error("Unkown line type: {0}")]
+    #[error("Unknown line type: {0}")]
     UnknownLineType(String),
 }
 

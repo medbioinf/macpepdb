@@ -189,8 +189,8 @@ impl Hash for PostTranslationalModification {
 
 /// Collection of post-translational modifications (PTMs).
 /// Rules:
-/// * Static PTMs are applied to every occurence of the targeted amino acid
-/// * Variable PTMs can be applied to any occurence of the targeted amino acid (usually limited to a maximum number of variable modifications).
+/// * Static PTMs are applied to every occurrence of the targeted amino acid
+/// * Variable PTMs can be applied to any occurrence of the targeted amino acid (usually limited to a maximum number of variable modifications).
 ///   Amino acids target cannot be the same as the static PTM.
 /// * N-/C-terminal PTMs are applied to the first/last amino acid of the peptide.
 ///   Treated as variable modifications, although they are not counted for a variable modification limit.

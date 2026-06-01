@@ -89,7 +89,7 @@ pub trait FilterFunction<T: IsPeptide>: Send + Sync + Display {
 /// Makes sure that no peptide is returned twice
 ///
 pub struct ThreadSafeDistinctFilterFunction<T: IsPeptide> {
-    // TODO: This could be change to store ByteSequence instead to safe up some memory in exchange for computational overhead for the conversion
+    // TODO: This could be change to store ByteSequence instead to save up some memory in exchange for computational overhead for the conversion
     sequences: DashSet<T::Sequence>,
 }
 
@@ -231,7 +231,7 @@ impl Display for EqualsNumberOfOccurrencesFilterFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "occurences of '{}' == {}",
+            "occurrences of '{}' == {}",
             AminoAcid::by_bit_code(&self.amino_acid).code(),
             self.amount,
         )
@@ -260,7 +260,7 @@ impl Display for GreaterOrEqualsNumberOfOccurrencesFilterFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "occurences of '{}' >= {}",
+            "occurrences of '{}' >= {}",
             AminoAcid::by_bit_code(&self.amino_acid).code(),
             self.amount,
         )
@@ -288,7 +288,7 @@ impl Display for NoOccurrencesFilterFunction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "occurences of '{}' == 0",
+            "occurrences of '{}' == 0",
             AminoAcid::by_bit_code(&self.amino_acid).code(),
         )
     }
@@ -618,7 +618,7 @@ pub trait Search {
     /// * `proteome_ids` - The proteome IDs to filter the peptides by
     /// * `is_reviewed` - Whether to filter the peptides by SwissProt or TrEMBL
     /// * `ptm_collection` - The PTM collection to use for the query
-    /// * `resolve_modifications` - Wether to resolve modifications and return the modified sequences as ProForma compliant strings
+    /// * `resolve_modifications` - Whether to resolve modifications and return the modified sequences as ProForma compliant strings
     /// * `num_threads` - The number of concurrent searches
     ///
     fn search(
@@ -640,7 +640,7 @@ pub trait Search {
     /// Splitup and sort peptide condition by partition and finalize them.
     ///
     /// # Arguments
-    /// * peptide_conditions - The conditions pepitdes need to fullfill e.g PTMs
+    /// * peptide_conditions - The conditions peptides need to fulfill e.g PTMs
     /// * partition_limits - The partition limits from configuration
     /// * lower_mass_tolerance_ppm - The lower mass tolerance in ppm
     /// * upper_mass_tolerance_ppm - The upper mass tolerance in ppm
@@ -794,8 +794,8 @@ impl PeptideConditionBuilder {
     ///
     /// # Arguments
     /// * `targeted_mass` - Mass of peptides to search for
-    /// * `minimum_mass` - Minimum mass of peptides in the datavase. Usually 6 times Glycine
-    /// * `max_variable_modifications` - Max. variable modification to apply simultaniously
+    /// * `minimum_mass` - Minimum mass of peptides in the database. Usually 6 times Glycine
+    /// * `max_variable_modifications` - Max. variable modification to apply simultaneously
     ///
     pub fn new(targeted_mass: i64) -> Self {
         Self {
@@ -888,7 +888,7 @@ impl PeptideConditionBuilder {
     /// in ProForma format.
     ///
     /// # Arguments
-    /// * `sequence` - The amino acid sequence to apply the condition tos
+    /// * `sequence` - The amino acid sequence to apply the condition to
     ///
     pub fn modify_peptide(&self, peptide: &Peptide) -> Vec<Peptidoform> {
         let static_modifications_map: HashMap<AminoAcidBitCode, &PostTranslationalModification> =
