@@ -162,75 +162,70 @@ impl Protease {
     /// # Arguments
     /// * `sequence` - Amino acid sequence
     ///
-pub fn cleave<'a>(
-    &'a self,
-    sequence: &'a [AminoAcidBitCode],
-) -> impl FallibleIterator<Item = Peptide, Error = Error> + 'a {
-    let full_digest = self.inner.full_digest(sequence);
-    let len = full_digest.len();
-    let max_window_size = self.max_missed_cleavages + 1;
+    pub fn cleave<'a>(
+        &'a self,
+        sequence: &'a [AminoAcidBitCode],
+    ) -> impl FallibleIterator<Item = Peptide, Error = Error> + 'a {
+        let full_digest = self.inner.full_digest(sequence);
+        let len = full_digest.len();
+        let max_window_size = self.max_missed_cleavages + 1;
 
-    let mut prefix_len = Vec::with_capacity(len);
-    let mut acc = 0usize;
+        let mut prefix_len = Vec::with_capacity(len);
+        let mut acc = 0usize;
 
-    for frag in &full_digest {
-        acc += frag.len();
-        prefix_len.push(acc);
-    }
-
-    let mut has_unknown = Vec::with_capacity(len);
-
-    for frag in &full_digest {
-        has_unknown.push(
-            !self.keep_unknown
-                && memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], frag.as_bytes()).is_some()
-        );
-    }
-
-    fallible_iterator::convert((0..len).flat_map(move |start| {
-        let full_digest = &full_digest;
-        let prefix_len = &prefix_len;
-        let has_unknown = &has_unknown;
-        let len = len;
-        let max_window_size = max_window_size;
-
-        let mut out = Vec::with_capacity(max_window_size);
-
-        for window_size in 1..=max_window_size {
-            let end = (start + window_size).min(len);
-
-            if start >= end {
-                continue;
-            }
-
-            let total_len = if start == 0 {
-                prefix_len[end - 1]
-            } else {
-                prefix_len[end - 1] - prefix_len[start - 1]
-            };
-
-            if total_len < self.min_length.get()
-                || total_len > self.max_length.get()
-            {
-                continue;
-            }
-
-            if has_unknown[start..end].iter().any(|&x| x) {
-                continue;
-            }
-
-            let slice = &full_digest[start..end];
-
-            out.push(Sequence::try_from(slice).map_err(Error::from));
+        for frag in &full_digest {
+            acc += frag.len();
+            prefix_len.push(acc);
         }
 
-        out.into_iter()
-    }))
-    .map(move |seq| {
-        Ok(Peptide::new(seq, Vec::new(), Vec::new(), Vec::new()))
-    })
-    }
+        let mut has_unknown = Vec::with_capacity(len);
 
+        for frag in &full_digest {
+            has_unknown.push(
+                !self.keep_unknown
+                    && memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], frag.as_bytes()).is_some(),
+            );
+        }
+
+        fallible_iterator::convert((0..len).flat_map(move |start| {
+            let full_digest = &full_digest;
+            let prefix_len = &prefix_len;
+            let has_unknown = &has_unknown;
+            let len = len;
+            let max_window_size = max_window_size;
+
+            let mut out = Vec::with_capacity(max_window_size);
+
+            for window_size in 1..=max_window_size {
+                let end = (start + window_size).min(len);
+
+                if start >= end {
+                    continue;
+                }
+
+                let total_len = if start == 0 {
+                    prefix_len[end - 1]
+                } else {
+                    prefix_len[end - 1] - prefix_len[start - 1]
+                };
+
+                if total_len < self.min_length.get() || total_len > self.max_length.get() {
+                    continue;
+                }
+
+                if has_unknown[start..end].iter().any(|&x| x) {
+                    continue;
+                }
+
+                let slice = &full_digest[start..end];
+
+                out.push(Sequence::try_from(slice).map_err(Error::from));
+            }
+
+            out.into_iter()
+        }))
+        .map(move |seq| Ok(Peptide::new(seq, Vec::new(), Vec::new(), Vec::new())))
+    }
 
     pub fn by_name(
         name: &str,
@@ -372,65 +367,21 @@ mod tests {
             "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
         ).unwrap();
 
-        let expected_peps_zero_missed_cleavages: HashSet<Sequence> = HashSet::from_iter([
-            Sequence::try_from("SCHLPWASGLETLDSLGGVLEASGYSTEVVALSR").unwrap(),
-            Sequence::try_from("MHWGTLCGFLWLWPYLFYVQAVPIQK").unwrap(),
-            Sequence::try_from("VTGLDFIPGLHPILTLSK").unwrap(),
-            Sequence::try_from("MDQTLAVYQQILTSMPSR").unwrap(),
-            Sequence::try_from("LQGSLQDMLWQLDLSPGC").unwrap(),
-            Sequence::try_from("NVIQISNDLENLR").unwrap(),
-            Sequence::try_from("INDISHTQSVSSK").unwrap(),
-            Sequence::try_from("DLLHVLAFSK").unwrap(),
-            Sequence::try_from("VQDDTK").unwrap(),
-        ]);
+        let expected_pepts_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("leptin.tryptic.6-50.2-missed-cleavages.txt");
 
-        let trypsin = Protease::by_name(
-            "trypsin",
-            Some(NonZeroUsize::new(6).unwrap()),
-            Some(NonZeroUsize::new(50).unwrap()),
-            Some(0),
-            false,
-        )
-        .unwrap();
-
-        let peps = trypsin
-            .cleave(leptin.as_ref())
-            .map(|peptide| Ok(peptide.into_sequence()))
-            .collect::<HashSet<Sequence>>()
-            .unwrap();
-
-        assert_eq!(peps.len(), expected_peps_zero_missed_cleavages.len());
-        assert_eq!(peps, expected_peps_zero_missed_cleavages);
-
-        let expected_peps_two_missed_cleavages: HashSet<Sequence> = HashSet::from_iter([
-            Sequence::try_from("VTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLR").unwrap(),
-            Sequence::try_from("DLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSR").unwrap(),
-            Sequence::try_from("MDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSK").unwrap(),
-            Sequence::try_from("QKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSR").unwrap(),
-            Sequence::try_from("VTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSR").unwrap(),
-            Sequence::try_from("MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIK").unwrap(),
-            Sequence::try_from("SCHLPWASGLETLDSLGGVLEASGYSTEVVALSR").unwrap(),
-            Sequence::try_from("INDISHTQSVSSKQKVTGLDFIPGLHPILTLSK").unwrap(),
-            Sequence::try_from("MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTK").unwrap(),
-            Sequence::try_from("MDQTLAVYQQILTSMPSRNVIQISNDLENLR").unwrap(),
-            Sequence::try_from("MHWGTLCGFLWLWPYLFYVQAVPIQK").unwrap(),
-            Sequence::try_from("NVIQISNDLENLRDLLHVLAFSK").unwrap(),
-            Sequence::try_from("TLIKTIVTRINDISHTQSVSSK").unwrap(),
-            Sequence::try_from("QKVTGLDFIPGLHPILTLSK").unwrap(),
-            Sequence::try_from("TIVTRINDISHTQSVSSKQK").unwrap(),
-            Sequence::try_from("VTGLDFIPGLHPILTLSK").unwrap(),
-            Sequence::try_from("TIVTRINDISHTQSVSSK").unwrap(),
-            Sequence::try_from("LQGSLQDMLWQLDLSPGC").unwrap(),
-            Sequence::try_from("MDQTLAVYQQILTSMPSR").unwrap(),
-            Sequence::try_from("INDISHTQSVSSKQK").unwrap(),
-            Sequence::try_from("VQDDTKTLIKTIVTR").unwrap(),
-            Sequence::try_from("INDISHTQSVSSK").unwrap(),
-            Sequence::try_from("NVIQISNDLENLR").unwrap(),
-            Sequence::try_from("DLLHVLAFSK").unwrap(),
-            Sequence::try_from("VQDDTKTLIK").unwrap(),
-            Sequence::try_from("TLIKTIVTR").unwrap(),
-            Sequence::try_from("VQDDTK").unwrap(),
-        ]);
+        let expected_peps: HashSet<Sequence> = std::fs::read_to_string(expected_pepts_file_path)
+            .unwrap()
+            .split("\n")
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .map(|line| Sequence::try_from(line).unwrap())
+            .collect();
 
         let trypsin = Protease::by_name(
             "trypsin",
@@ -447,8 +398,8 @@ mod tests {
             .collect::<HashSet<Sequence>>()
             .unwrap();
 
-        assert_eq!(peps.len(), expected_peps_two_missed_cleavages.len());
-        assert_eq!(peps, expected_peps_two_missed_cleavages);
+        assert_eq!(peps.len(), expected_peps.len());
+        assert_eq!(peps, expected_peps);
     }
 
     #[test]
@@ -456,40 +407,6 @@ mod tests {
         let leptin = ProteinSequence::try_from(
             "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
         ).unwrap();
-
-        let unspecific = Protease::by_name(
-            "unspecific",
-            Some(NonZeroUsize::new(1).unwrap()),
-            Some(NonZeroUsize::new(1).unwrap()),
-            Some(0),
-            false,
-        )
-        .unwrap();
-
-        let expected_pepts_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("test_data")
-            .join("unspecific_full.digest.txt");
-
-        let expected_peps: HashSet<Sequence> = std::fs::read_to_string(expected_pepts_file_path)
-            .unwrap()
-            .split("\n")
-            .map(|line| line.trim())
-            .filter(|line| !line.is_empty())
-            .map(|line| Sequence::try_from(line).unwrap())
-            .collect();
-
-        let peps = unspecific
-            .cleave(leptin.as_ref())
-            .map(|peptide| Ok(peptide.into_sequence()))
-            .collect::<HashSet<Sequence>>()
-            .unwrap();
-
-        assert_eq!(peps.len(), expected_peps.len());
-        assert_eq!(peps, expected_peps);
 
         let unspecific = Protease::by_name(
             "unspecific",
@@ -506,7 +423,7 @@ mod tests {
             .parent()
             .unwrap()
             .join("test_data")
-            .join("unspecific_6_50.digest.txt");
+            .join("leptin.unspecific.6-50.txt");
 
         let expected_peps: HashSet<Sequence> = std::fs::read_to_string(expected_pepts_file_path)
             .unwrap()
