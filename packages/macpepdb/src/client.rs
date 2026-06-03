@@ -17,7 +17,7 @@ use scylla::{
     statement::Consistency,
 };
 use thiserror::Error;
-use tokio::sync::Notify;
+use tokio::sync::Semaphore;
 
 pub static URL_PARSER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)scylla://((?P<credentials>[^:]*?:[^:]+)@){0,1}(?P<hosts>.+)/(?P<keyspace>[^/?]+)(\?(?P<attributes>.+)){0,1}").unwrap()
@@ -393,9 +393,9 @@ impl Default for CongestionConfig {
             initial_window: 32,
             max_window: 1024,
             increase_by: 1,
-            decrease_factor: 0.9,
-            min_utilisation: 0.8,
-            base_backoff: Duration::from_millis(10),
+            decrease_factor: 0.6,
+            min_utilisation: 0.9,
+            base_backoff: Duration::from_millis(50),
             max_backoff: Duration::from_secs(2),
         }
     }
@@ -413,14 +413,24 @@ enum RetryClass {
 }
 
 struct WindowState {
+    /// Target window: the number of requests allowed in flight concurrently.
     limit: usize,
+    /// Requests currently holding a slot.
     in_flight: usize,
+    /// Capacity the window has shrunk by that could not be reclaimed immediately
+    /// because the slots were in flight. Paid down (rather than returned to the
+    /// semaphore) as those requests complete.
+    debt: usize,
 }
 
 struct ControllerInner {
     cfg: CongestionConfig,
+    /// Gate for the window. A permit is acquired (and immediately `forget`-ten) per
+    /// in-flight request, and capacity is handed back explicitly on completion via
+    /// `add_permits`. Releasing only the slots that actually freed up — instead of
+    /// waking every waiter — keeps wakeups O(1) under high fan-out.
+    sem: Semaphore,
     state: Mutex<WindowState>,
-    notify: Notify,
     window_gauge: Gauge,
     in_flight_gauge: Gauge,
     retry_counter: Counter,
@@ -433,38 +443,75 @@ impl ControllerInner {
     }
 
     fn record_success(&self) {
-        let mut state = self.lock();
-        let in_flight_during = state.in_flight;
-        state.in_flight = state.in_flight.saturating_sub(1);
-        if (in_flight_during as f64) >= self.cfg.min_utilisation * (state.limit as f64)
-            && state.limit < self.cfg.max_window
-        {
-            state.limit = (state.limit + self.cfg.increase_by).min(self.cfg.max_window);
-            self.window_gauge.set(state.limit as f64);
+        let give_back = {
+            let mut state = self.lock();
+            let in_flight_during = state.in_flight;
+            state.in_flight = state.in_flight.saturating_sub(1);
+            let give_back = if state.debt > 0 {
+                // Retire the freed slot against outstanding shrink debt rather than
+                // returning it to the pool.
+                state.debt -= 1;
+                0
+            } else if (in_flight_during as f64) >= self.cfg.min_utilisation * (state.limit as f64)
+                && state.limit < self.cfg.max_window
+            {
+                let grow = self.cfg.increase_by.min(self.cfg.max_window - state.limit);
+                state.limit += grow;
+                self.window_gauge.set(state.limit as f64);
+                // Return the freed slot plus the newly opened capacity.
+                1 + grow
+            } else {
+                1
+            };
+            self.in_flight_gauge.set(state.in_flight as f64);
+            give_back
+        };
+        if give_back > 0 {
+            self.sem.add_permits(give_back);
         }
-        self.in_flight_gauge.set(state.in_flight as f64);
-        drop(state);
-        self.notify.notify_waiters();
     }
 
     fn record_overload(&self) {
-        let mut state = self.lock();
-        state.in_flight = state.in_flight.saturating_sub(1);
-        let decreased = ((state.limit as f64) * self.cfg.decrease_factor).floor() as usize;
-        state.limit = decreased.max(self.cfg.min_window);
-        self.window_gauge.set(state.limit as f64);
-        self.in_flight_gauge.set(state.in_flight as f64);
-        drop(state);
+        let give_back = {
+            let mut state = self.lock();
+            state.in_flight = state.in_flight.saturating_sub(1);
+            let new_limit = ((state.limit as f64) * self.cfg.decrease_factor).floor() as usize;
+            let new_limit = new_limit.max(self.cfg.min_window);
+            let cut = state.limit - new_limit;
+            state.limit = new_limit;
+            self.window_gauge.set(state.limit as f64);
+            self.in_flight_gauge.set(state.in_flight as f64);
+            if cut == 0 {
+                1
+            } else {
+                // Drop the freed slot to retire one unit of the shrink; defer the
+                // remainder as debt to be retired as in-flight requests complete.
+                state.debt += cut - 1;
+                0
+            }
+        };
+        if give_back > 0 {
+            self.sem.add_permits(give_back);
+        }
         self.overload_counter.increment(1);
-        self.notify.notify_waiters();
     }
 
     fn release_neutral(&self) {
-        let mut state = self.lock();
-        state.in_flight = state.in_flight.saturating_sub(1);
-        self.in_flight_gauge.set(state.in_flight as f64);
-        drop(state);
-        self.notify.notify_waiters();
+        let give_back = {
+            let mut state = self.lock();
+            state.in_flight = state.in_flight.saturating_sub(1);
+            let give_back = if state.debt > 0 {
+                state.debt -= 1;
+                0
+            } else {
+                1
+            };
+            self.in_flight_gauge.set(state.in_flight as f64);
+            give_back
+        };
+        if give_back > 0 {
+            self.sem.add_permits(give_back);
+        }
     }
 }
 
@@ -484,11 +531,12 @@ impl CongestionController {
         in_flight_gauge.set(0.0);
         Self {
             inner: Arc::new(ControllerInner {
+                sem: Semaphore::new(initial),
                 state: Mutex::new(WindowState {
                     limit: initial,
                     in_flight: 0,
+                    debt: 0,
                 }),
-                notify: Notify::new(),
                 window_gauge,
                 in_flight_gauge,
                 retry_counter: metrics::counter!(CONGESTION_RETRY_METRIC),
@@ -499,24 +547,21 @@ impl CongestionController {
     }
 
     pub async fn acquire(&self) -> CongestionPermit {
-        loop {
-            // Register interest before checking so a release between the check and
-            // the await cannot be lost.
-            let notified = self.inner.notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            {
-                let mut state = self.inner.lock();
-                if state.in_flight < state.limit {
-                    state.in_flight += 1;
-                    self.inner.in_flight_gauge.set(state.in_flight as f64);
-                    return CongestionPermit {
-                        inner: self.inner.clone(),
-                        reported: false,
-                    };
-                }
-            }
-            notified.await;
+        // Take a slot from the window and `forget` it: capacity is accounted for
+        // explicitly and handed back on completion (see `ControllerInner`), so the
+        // permit's own RAII release would double-count it.
+        self.inner
+            .sem
+            .acquire()
+            .await
+            .expect("congestion semaphore unexpectedly closed")
+            .forget();
+        let mut state = self.inner.lock();
+        state.in_flight += 1;
+        self.inner.in_flight_gauge.set(state.in_flight as f64);
+        CongestionPermit {
+            inner: self.inner.clone(),
+            reported: false,
         }
     }
 
@@ -537,7 +582,7 @@ impl CongestionController {
         let base_ms = self.inner.cfg.base_backoff.as_millis() as u64;
         let cap_ms = self.inner.cfg.max_backoff.as_millis().max(1) as u64;
         let ceiling = base_ms.saturating_mul(1u64 << shift).min(cap_ms).max(1);
-        Duration::from_millis(rand::rng().random_range(0..=ceiling))
+        Duration::from_millis(rand::rng().random_range((ceiling / 2)..=ceiling))
     }
 }
 
@@ -677,7 +722,7 @@ mod tests {
     fn overload_shrinks_window_with_floor() {
         let c = controller(10);
         c.inner.record_overload();
-        assert_eq!(c.window(), 9);
+        assert_eq!(c.window(), 6, "floor(10 * 0.6) = 6");
 
         let c = controller(2);
         c.inner.record_overload();
@@ -723,6 +768,54 @@ mod tests {
         assert_eq!(c.in_flight(), 1);
         drop(p2);
         assert_eq!(c.in_flight(), 0);
+    }
+
+    #[tokio::test]
+    async fn shrink_while_saturated_retires_capacity_via_debt() {
+        // Shrinking the window while every slot is in flight cannot reclaim those
+        // slots immediately; the deficit is carried as debt and retired as the
+        // in-flight requests complete, so the gate must never over-supply.
+        let c = CongestionController::new(CongestionConfig {
+            initial_window: 100,
+            min_window: 1,
+            max_window: 1000,
+            decrease_factor: 0.9, // floor(100 * 0.9) = 90 -> a cut of 10
+            ..Default::default()
+        });
+
+        // Saturate the window.
+        let mut permits = Vec::new();
+        for _ in 0..100 {
+            permits.push(c.acquire().await);
+        }
+        assert_eq!(c.in_flight(), 100);
+
+        // One request hits overload: window 100 -> 90. Only the freed slot can be
+        // retired now; the other 9 units of the cut become debt.
+        permits.pop().unwrap().report(Outcome::Overload);
+        assert_eq!(c.window(), 90);
+
+        // Release the rest neutrally; the first 9 pay down debt rather than handing
+        // capacity back, the remaining 90 return their slots.
+        drop(permits);
+        assert_eq!(c.in_flight(), 0);
+        assert_eq!(c.window(), 90);
+
+        // Exactly `window()` slots are acquirable, proving the shrink was retired.
+        let mut held = Vec::new();
+        for _ in 0..c.window() {
+            held.push(c.acquire().await);
+        }
+        assert_eq!(c.in_flight(), 90);
+
+        let c2 = c.clone();
+        let mut pending = Box::pin(c2.acquire());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut pending)
+                .await
+                .is_err(),
+            "acquire must block: the window must not exceed the shrunken limit"
+        );
     }
 
     #[test]
