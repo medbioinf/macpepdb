@@ -116,7 +116,10 @@ impl PeptideTable {
 
     pub async fn insert(&self, peptide: &Peptide) -> Result<(), Error> {
         self.client
-            .execute_unpaged(INSERT_STATEMENT.as_str(), peptide)
+            .run_congested(|| {
+                self.client
+                    .execute_unpaged(INSERT_STATEMENT.as_str(), peptide)
+            })
             .await?;
         Ok(())
     }
@@ -152,10 +155,12 @@ impl PeptideTable {
                 batch_statement.set_consistency(consistency);
             }
             self.client
-                .batch(
-                    &batch_statement,
-                    BatchValuesFromIterator::new(peptide_buffer.iter()),
-                )
+                .run_congested(|| {
+                    self.client.batch(
+                        &batch_statement,
+                        BatchValuesFromIterator::new(peptide_buffer.iter()),
+                    )
+                })
                 .await?;
 
             peptide_buffer_cql_size = 0;
@@ -433,4 +438,3 @@ impl PeptideTable {
         Error::NoErroredThread
     }
 }
-

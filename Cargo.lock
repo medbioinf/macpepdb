@@ -2225,6 +2225,7 @@ dependencies = [
  "num-traits",
  "pastey",
  "postcard",
+ "rand",
  "reqwest 0.13.3",
  "scylla",
  "serde",

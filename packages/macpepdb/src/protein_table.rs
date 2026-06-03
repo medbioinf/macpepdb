@@ -64,15 +64,21 @@ impl ProteinTable {
 
     pub async fn insert(&self, protein: &Protein) -> Result<(), Error> {
         self.client
-            .execute_unpaged(INSERT_STATEMENT.as_str(), protein)
+            .run_congested(|| {
+                self.client
+                    .execute_unpaged(INSERT_STATEMENT.as_str(), protein)
+            })
             .await?;
         Ok(())
     }
 
     pub async fn insert_batch(&self, values: impl Iterator<Item = Protein>) -> Result<(), Error> {
-        let insert_futures = values.map(|value| {
-            self.client
-                .execute_unpaged(INSERT_STATEMENT.as_str(), value)
+        let values: Vec<Protein> = values.collect();
+        let insert_futures = values.iter().map(|value| {
+            self.client.run_congested(move || {
+                self.client
+                    .execute_unpaged(INSERT_STATEMENT.as_str(), value)
+            })
         });
 
         join_all(insert_futures)

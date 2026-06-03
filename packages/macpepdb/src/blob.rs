@@ -60,8 +60,10 @@ impl BlobPart {
         client: &Client,
         values: impl Iterator<Item = Self>,
     ) -> Result<(), Error> {
-        let insertion_futures =
-            values.map(|value| client.execute_unpaged(UPSERT_STATEMENT.as_str(), value));
+        let values: Vec<Self> = values.collect();
+        let insertion_futures = values.iter().map(|value| {
+            client.run_congested(move || client.execute_unpaged(UPSERT_STATEMENT.as_str(), value))
+        });
 
         join_all(insertion_futures)
             .await

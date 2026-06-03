@@ -1,12 +1,23 @@
 // std imports
-use std::{collections::HashMap, num::NonZeroUsize, ops::Deref, sync::LazyLock, time::Duration};
+use std::{
+    collections::HashMap,
+    future::Future,
+    num::NonZeroUsize,
+    ops::Deref,
+    sync::{Arc, LazyLock, Mutex},
+    time::Duration,
+};
 
 use fancy_regex::Regex;
+use metrics::{Counter, Gauge};
+use rand::Rng;
 use scylla::{
     client::{PoolSize, caching_session::CachingSession, session_builder::SessionBuilder},
+    errors::{DbError, ExecutionError, RequestAttemptError},
     statement::Consistency,
 };
 use thiserror::Error;
+use tokio::sync::Notify;
 
 pub static URL_PARSER_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?m)scylla://((?P<credentials>[^:]*?:[^:]+)@){0,1}(?P<hosts>.+)/(?P<keyspace>[^/?]+)(\?(?P<attributes>.+)){0,1}").unwrap()
@@ -252,6 +263,7 @@ pub struct Client {
     num_nodes: usize,
     read_consistency_level: Option<Consistency>,
     write_consistency_level: Option<Consistency>,
+    congestion: CongestionController,
 }
 
 impl Client {
@@ -272,6 +284,7 @@ impl Client {
             num_nodes: settings.hosts.len(),
             read_consistency_level: settings.read_consistency_level,
             write_consistency_level: settings.write_consistency_level,
+            congestion: CongestionController::new(CongestionConfig::default()),
         })
     }
 
@@ -298,6 +311,50 @@ impl Client {
     pub fn write_consistency_level(&self) -> Option<Consistency> {
         self.write_consistency_level
     }
+
+    pub fn congestion(&self) -> &CongestionController {
+        &self.congestion
+    }
+
+    /// Runs `op` under the congestion window: acquires a slot, executes, and on a
+    /// non-deterministic Scylla error shrinks the window and retries with jittered
+    /// backoff. Deterministic errors are propagated immediately without touching
+    /// the window.
+    pub async fn run_congested<T, F, Fut>(&self, mut op: F) -> Result<T, ExecutionError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, ExecutionError>>,
+    {
+        let mut attempt: u32 = 0;
+        loop {
+            let permit = self.congestion.acquire().await;
+            match op().await {
+                Ok(value) => {
+                    permit.report(Outcome::Success);
+                    return Ok(value);
+                }
+                Err(err) => match classify_execution_error(&err) {
+                    RetryClass::Retryable => {
+                        // Writes are idempotent, so retry transient overload
+                        // indefinitely rather than surfacing a failure that would
+                        // abort a long build. Warn periodically so a cluster that
+                        // is down (not just briefly stalled) stays visible.
+                        permit.report(Outcome::Overload);
+                        attempt += 1;
+                        if attempt.is_multiple_of(RETRY_WARN_INTERVAL) {
+                            tracing::warn!("write still retrying after {attempt} attempts: {err}");
+                        }
+                        self.congestion.note_retry();
+                        tokio::time::sleep(self.congestion.backoff(attempt)).await;
+                    }
+                    RetryClass::Fatal => {
+                        drop(permit);
+                        return Err(err);
+                    }
+                },
+            }
+        }
+    }
 }
 
 impl Deref for Client {
@@ -305,6 +362,239 @@ impl Deref for Client {
 
     fn deref(&self) -> &Self::Target {
         &self.session
+    }
+}
+
+pub static CONGESTION_WINDOW_METRIC: &str = "client::congestion::window";
+pub static CONGESTION_IN_FLIGHT_METRIC: &str = "client::congestion::in_flight";
+pub static CONGESTION_RETRY_METRIC: &str = "client::congestion::retries";
+pub static CONGESTION_OVERLOAD_METRIC: &str = "client::congestion::overload_signals";
+
+/// Consecutive retries of a single write between warning logs. Retries are
+/// unbounded, so this surfaces a persistently failing cluster without spamming.
+const RETRY_WARN_INTERVAL: u32 = 20;
+
+#[derive(Debug, Clone)]
+pub struct CongestionConfig {
+    pub min_window: usize,
+    pub initial_window: usize,
+    pub max_window: usize,
+    pub increase_by: usize,
+    pub decrease_factor: f64,
+    pub min_utilisation: f64,
+    pub base_backoff: Duration,
+    pub max_backoff: Duration,
+}
+
+impl Default for CongestionConfig {
+    fn default() -> Self {
+        Self {
+            min_window: 1,
+            initial_window: 32,
+            max_window: 1024,
+            increase_by: 1,
+            decrease_factor: 0.9,
+            min_utilisation: 0.8,
+            base_backoff: Duration::from_millis(10),
+            max_backoff: Duration::from_secs(2),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Outcome {
+    Success,
+    Overload,
+}
+
+enum RetryClass {
+    Retryable,
+    Fatal,
+}
+
+struct WindowState {
+    limit: usize,
+    in_flight: usize,
+}
+
+struct ControllerInner {
+    cfg: CongestionConfig,
+    state: Mutex<WindowState>,
+    notify: Notify,
+    window_gauge: Gauge,
+    in_flight_gauge: Gauge,
+    retry_counter: Counter,
+    overload_counter: Counter,
+}
+
+impl ControllerInner {
+    fn lock(&self) -> std::sync::MutexGuard<'_, WindowState> {
+        self.state.lock().expect("congestion state mutex poisoned")
+    }
+
+    fn record_success(&self) {
+        let mut state = self.lock();
+        let in_flight_during = state.in_flight;
+        state.in_flight = state.in_flight.saturating_sub(1);
+        if (in_flight_during as f64) >= self.cfg.min_utilisation * (state.limit as f64)
+            && state.limit < self.cfg.max_window
+        {
+            state.limit = (state.limit + self.cfg.increase_by).min(self.cfg.max_window);
+            self.window_gauge.set(state.limit as f64);
+        }
+        self.in_flight_gauge.set(state.in_flight as f64);
+        drop(state);
+        self.notify.notify_waiters();
+    }
+
+    fn record_overload(&self) {
+        let mut state = self.lock();
+        state.in_flight = state.in_flight.saturating_sub(1);
+        let decreased = ((state.limit as f64) * self.cfg.decrease_factor).floor() as usize;
+        state.limit = decreased.max(self.cfg.min_window);
+        self.window_gauge.set(state.limit as f64);
+        self.in_flight_gauge.set(state.in_flight as f64);
+        drop(state);
+        self.overload_counter.increment(1);
+        self.notify.notify_waiters();
+    }
+
+    fn release_neutral(&self) {
+        let mut state = self.lock();
+        state.in_flight = state.in_flight.saturating_sub(1);
+        self.in_flight_gauge.set(state.in_flight as f64);
+        drop(state);
+        self.notify.notify_waiters();
+    }
+}
+
+#[derive(Clone)]
+pub struct CongestionController {
+    inner: Arc<ControllerInner>,
+}
+
+impl CongestionController {
+    pub fn new(cfg: CongestionConfig) -> Self {
+        let initial = cfg
+            .initial_window
+            .clamp(cfg.min_window.max(1), cfg.max_window.max(1));
+        let window_gauge = metrics::gauge!(CONGESTION_WINDOW_METRIC);
+        window_gauge.set(initial as f64);
+        let in_flight_gauge = metrics::gauge!(CONGESTION_IN_FLIGHT_METRIC);
+        in_flight_gauge.set(0.0);
+        Self {
+            inner: Arc::new(ControllerInner {
+                state: Mutex::new(WindowState {
+                    limit: initial,
+                    in_flight: 0,
+                }),
+                notify: Notify::new(),
+                window_gauge,
+                in_flight_gauge,
+                retry_counter: metrics::counter!(CONGESTION_RETRY_METRIC),
+                overload_counter: metrics::counter!(CONGESTION_OVERLOAD_METRIC),
+                cfg,
+            }),
+        }
+    }
+
+    pub async fn acquire(&self) -> CongestionPermit {
+        loop {
+            // Register interest before checking so a release between the check and
+            // the await cannot be lost.
+            let notified = self.inner.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            {
+                let mut state = self.inner.lock();
+                if state.in_flight < state.limit {
+                    state.in_flight += 1;
+                    self.inner.in_flight_gauge.set(state.in_flight as f64);
+                    return CongestionPermit {
+                        inner: self.inner.clone(),
+                        reported: false,
+                    };
+                }
+            }
+            notified.await;
+        }
+    }
+
+    pub fn window(&self) -> usize {
+        self.inner.lock().limit
+    }
+
+    pub fn in_flight(&self) -> usize {
+        self.inner.lock().in_flight
+    }
+
+    fn note_retry(&self) {
+        self.inner.retry_counter.increment(1);
+    }
+
+    fn backoff(&self, attempt: u32) -> Duration {
+        let shift = attempt.min(16);
+        let base_ms = self.inner.cfg.base_backoff.as_millis() as u64;
+        let cap_ms = self.inner.cfg.max_backoff.as_millis().max(1) as u64;
+        let ceiling = base_ms.saturating_mul(1u64 << shift).min(cap_ms).max(1);
+        Duration::from_millis(rand::rng().random_range(0..=ceiling))
+    }
+}
+
+pub struct CongestionPermit {
+    inner: Arc<ControllerInner>,
+    reported: bool,
+}
+
+impl CongestionPermit {
+    pub fn report(mut self, outcome: Outcome) {
+        match outcome {
+            Outcome::Success => self.inner.record_success(),
+            Outcome::Overload => self.inner.record_overload(),
+        }
+        self.reported = true;
+    }
+}
+
+impl Drop for CongestionPermit {
+    fn drop(&mut self) {
+        if !self.reported {
+            self.inner.release_neutral();
+        }
+    }
+}
+
+// Deterministic failures (bad query, serialization, auth, ...) map to `Fatal` and
+// are propagated as-is. Only transient overload/availability signals are retried.
+fn classify_execution_error(err: &ExecutionError) -> RetryClass {
+    match err {
+        ExecutionError::RequestTimeout(_) | ExecutionError::ConnectionPoolError(_) => {
+            RetryClass::Retryable
+        }
+        ExecutionError::LastAttemptError(attempt) => classify_attempt_error(attempt),
+        _ => RetryClass::Fatal,
+    }
+}
+
+fn classify_attempt_error(err: &RequestAttemptError) -> RetryClass {
+    match err {
+        RequestAttemptError::UnableToAllocStreamId
+        | RequestAttemptError::BrokenConnectionError(_) => RetryClass::Retryable,
+        RequestAttemptError::DbError(db_error, _) => classify_db_error(db_error),
+        _ => RetryClass::Fatal,
+    }
+}
+
+fn classify_db_error(err: &DbError) -> RetryClass {
+    match err {
+        DbError::Overloaded
+        | DbError::RateLimitReached { .. }
+        | DbError::WriteTimeout { .. }
+        | DbError::ReadTimeout { .. }
+        | DbError::Unavailable { .. }
+        | DbError::IsBootstrapping
+        | DbError::TruncateError => RetryClass::Retryable,
+        _ => RetryClass::Fatal,
     }
 }
 
@@ -374,5 +664,84 @@ mod tests {
         assert_eq!(settings.connection_timeout, None);
         assert_eq!(settings.pool_size, None);
         assert_eq!(settings.pool_type, PoolType::PerHost);
+    }
+
+    fn controller(initial: usize) -> CongestionController {
+        CongestionController::new(CongestionConfig {
+            initial_window: initial,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn overload_shrinks_window_with_floor() {
+        let c = controller(10);
+        c.inner.record_overload();
+        assert_eq!(c.window(), 9);
+
+        let c = controller(2);
+        c.inner.record_overload();
+        assert_eq!(c.window(), 1, "floor() must shrink small windows");
+
+        let c = controller(1);
+        c.inner.record_overload();
+        assert_eq!(c.window(), 1, "must not drop below min_window");
+    }
+
+    #[test]
+    fn success_increases_only_when_saturated() {
+        let c = controller(10);
+        c.inner.lock().in_flight = 4;
+        c.inner.record_success();
+        assert_eq!(c.window(), 10, "low utilisation must not grow the window");
+
+        let c = controller(10);
+        c.inner.lock().in_flight = 9;
+        c.inner.record_success();
+        assert_eq!(c.window(), 11, "high utilisation grows the window");
+    }
+
+    #[tokio::test]
+    async fn gate_blocks_at_limit_and_releases() {
+        let c = controller(1);
+        let p1 = c.acquire().await;
+        assert_eq!(c.in_flight(), 1);
+
+        let c2 = c.clone();
+        let mut pending = Box::pin(c2.acquire());
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut pending)
+                .await
+                .is_err(),
+            "acquire must block while the only slot is held"
+        );
+
+        drop(p1);
+        let p2 = tokio::time::timeout(Duration::from_millis(200), pending)
+            .await
+            .expect("acquire must resolve once the slot is released");
+        assert_eq!(c.in_flight(), 1);
+        drop(p2);
+        assert_eq!(c.in_flight(), 0);
+    }
+
+    #[test]
+    fn classification_separates_transient_from_deterministic() {
+        assert!(matches!(
+            classify_db_error(&DbError::Overloaded),
+            RetryClass::Retryable
+        ));
+        assert!(matches!(
+            classify_db_error(&DbError::SyntaxError),
+            RetryClass::Fatal
+        ));
+        assert!(matches!(
+            classify_db_error(&DbError::Unauthorized),
+            RetryClass::Fatal
+        ));
+        assert!(matches!(
+            classify_attempt_error(&RequestAttemptError::UnableToAllocStreamId),
+            RetryClass::Retryable
+        ));
     }
 }
