@@ -82,18 +82,20 @@ impl MassIndex {
         drop(masses);
 
         let (index_sender, mut index_receiver) =
-            tokio::sync::mpsc::channel::<(i64, i32)>(num_threads.get() * 3);
+            tokio::sync::mpsc::channel::<(HashSet<i64>, i32)>(num_threads.get() * 3);
 
         let collector_task = {
             tokio::spawn(async move {
                 let mut index: HashMap<i64, HashSet<i32>> =
                     HashMap::with_capacity(masses_estimation);
 
-                while let Some((mass, protein_id)) = index_receiver.recv().await {
-                    index
-                        .entry(mass)
-                        .or_insert(HashSet::with_capacity(1000))
-                        .insert(protein_id);
+                while let Some((masses, protein_id)) = index_receiver.recv().await {
+                    for mass in masses {
+                        index
+                            .entry(mass)
+                            .or_insert(HashSet::with_capacity(1000))
+                            .insert(protein_id);
+                    }
                 }
                 index
             })
@@ -120,22 +122,15 @@ impl MassIndex {
                         };
 
                         #[allow(clippy::mutable_key_type)]
-                        let peptides = protease
-                            .cleave(protein.sequence().as_ref(), None)
-                            .collect::<HashSet<_>>()
-                            .map_err(Error::Protease)?;
+                        let masses = protease
+                            .cleave_masses_only(protein.sequence().as_ref())
+                            .collect::<HashSet<_>>()?;
 
-                        let masses = peptides
-                            .iter()
-                            .map(|peptide| peptide.mass())
-                            .collect::<HashSet<_>>();
+                        index_sender
+                            .send((masses, protein.id().ok_or(Error::MissingProteinId)?))
+                            .await
+                            .map_err(|err| Error::Join(err.to_string()))?;
 
-                        for mass in masses {
-                            index_sender
-                                .send((mass, protein.id().ok_or(Error::MissingProteinId)?))
-                                .await
-                                .map_err(|err| Error::Join(err.to_string()))?;
-                        }
                         progress_metric.increment(1);
                     }
 
