@@ -1,9 +1,13 @@
 use std::{
-    collections::HashSet, fmt::Debug, num::NonZeroUsize, ops::Deref, sync::Arc, time::Duration,
+    collections::{HashMap, HashSet, hash_map::IntoIter},
+    fmt::Debug,
+    num::NonZeroUsize,
+    ops::Deref,
+    sync::Arc,
+    time::Duration,
 };
 
 use crossbeam::queue::ArrayQueue;
-use dashmap::{DashMap, iter::OwningIter};
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use thiserror::Error;
@@ -13,6 +17,8 @@ use crate::{
 };
 
 pub static PROGRESS_METRIC: &str = "mass_index::progress";
+
+pub static LOCAL_INDEX_MAX_KEYS: usize = 1000;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -40,7 +46,7 @@ pub enum Error {
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-pub struct MassIndex(DashMap<i64, HashSet<i32>>);
+pub struct MassIndex(HashMap<i64, HashSet<i32>>);
 
 impl MassIndex {
     pub async fn build_concurrently(
@@ -48,19 +54,59 @@ impl MassIndex {
         protease: &Protease,
         num_threads: NonZeroUsize,
     ) -> Result<Self, Error> {
-        let mut proteins = protein_access.all().await?;
         let queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let protease = Arc::new(protease.clone());
         let progress_metric = Arc::new(metrics::counter!(PROGRESS_METRIC));
-        let index: Arc<DashMap<i64, HashSet<i32>>> = Arc::new(DashMap::new());
+
+        let protein_count = protein_access.count().await?;
+        let protein_amount_for_estimation = std::cmp::min(protein_count / 100 * 10, 1);
+
+        let mut masses = HashSet::<i64>::with_capacity(protein_amount_for_estimation * 10);
+        let mut proteins = protein_access
+            .all()
+            .await?
+            .take(protein_amount_for_estimation)
+            .map(|res| res.map_err(Error::from));
+
+        while let Some(protein) = proteins.next().await {
+            let protein = protein?;
+            let peptides = protease
+                .cleave(protein.sequence().as_ref())
+                .collect::<Vec<_>>()
+                .map_err(Error::Protease)?;
+            masses.extend(peptides.into_iter().map(|peptide| peptide.mass()));
+        }
+
+        let masses_estimation = masses.len() * 10;
+        drop(masses);
+
+        let (index_sender, mut index_receiver) =
+            tokio::sync::mpsc::channel::<(i64, i32)>(num_threads.get() * 3);
+
+        let collector_task = {
+            tokio::spawn(async move {
+                let mut index: HashMap<i64, HashSet<i32>> =
+                    HashMap::with_capacity(masses_estimation);
+
+                while let Some((mass, protein_id)) = index_receiver.recv().await {
+                    index
+                        .entry(mass)
+                        .or_insert(HashSet::with_capacity(1000))
+                        .insert(protein_id);
+                }
+                index
+            })
+        };
+
+        let mut proteins = protein_access.all().await?;
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
                 let protease = protease.clone();
                 let queue = queue.clone();
                 let progress_metric = progress_metric.clone();
-                let index = index.clone();
+                let index_sender = index_sender.clone();
 
                 tokio::spawn(async move {
                     loop {
@@ -85,10 +131,10 @@ impl MassIndex {
                             .collect::<HashSet<_>>();
 
                         for mass in masses {
-                            index
-                                .entry(mass)
-                                .or_default()
-                                .insert(protein.id().ok_or(Error::MissingProteinId)?);
+                            index_sender
+                                .send((mass, protein.id().ok_or(Error::MissingProteinId)?))
+                                .await
+                                .map_err(|err| Error::Join(err.to_string()))?;
                         }
                         progress_metric.increment(1);
                     }
@@ -97,6 +143,8 @@ impl MassIndex {
                 })
             })
             .collect::<Vec<_>>();
+
+        drop(index_sender);
 
         while let Some(protein) = proteins.next().await.transpose()? {
             let mut protein = Some(protein);
@@ -134,9 +182,11 @@ impl MassIndex {
             thread.await.map_err(|err| Error::Join(err.to_string()))??;
         }
 
-        Ok(Self(
-            Arc::try_unwrap(index).map_err(|_| Error::IndexUnwrap)?,
-        ))
+        let index = collector_task
+            .await
+            .map_err(|err| Error::Join(err.to_string()))?;
+
+        Ok(MassIndex(index))
     }
 
     async fn find_errored_thread(
@@ -155,12 +205,11 @@ impl MassIndex {
         Error::NoErroredThread
     }
 
-    async fn inner_size(index: &DashMap<i64, HashSet<i32>>) -> usize {
-        std::mem::size_of::<DashMap<i64, HashSet<i32>>>()
-            + index.capacity()
-                * (std::mem::size_of::<usize>() + std::mem::size_of::<HashSet<i32>>())
+    async fn inner_size(index: &HashMap<i64, HashSet<i32>>) -> usize {
+        std::mem::size_of::<HashMap<i64, HashSet<i32>>>()
+            + index.capacity() * (std::mem::size_of::<i64>() + std::mem::size_of::<HashSet<i32>>())
             + index.iter().fold(0_usize, |acc, entry| {
-                acc + entry.capacity() * std::mem::size_of::<i32>()
+                acc + entry.1.capacity() * std::mem::size_of::<i32>()
             })
     }
 
@@ -170,14 +219,14 @@ impl MassIndex {
 }
 
 impl Deref for MassIndex {
-    type Target = DashMap<i64, HashSet<i32>>;
+    type Target = HashMap<i64, HashSet<i32>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl From<MassIndex> for DashMap<i64, HashSet<i32>> {
+impl From<MassIndex> for HashMap<i64, HashSet<i32>> {
     fn from(index: MassIndex) -> Self {
         index.0
     }
@@ -185,10 +234,10 @@ impl From<MassIndex> for DashMap<i64, HashSet<i32>> {
 
 impl IntoIterator for MassIndex {
     type Item = (i64, HashSet<i32>);
-    type IntoIter = OwningIter<i64, HashSet<i32>>;
+    type IntoIter = IntoIter<i64, HashSet<i32>>;
 
     fn into_iter(self) -> Self::IntoIter {
-        DashMap::<i64, HashSet<i32>>::from(self).into_iter()
+        self.0.into_iter()
     }
 }
 

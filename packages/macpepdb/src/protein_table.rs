@@ -11,7 +11,7 @@ use std::{
 
 use async_compression::tokio::bufread::GzipDecoder;
 use crossbeam::queue::ArrayQueue;
-use futures::{StreamExt, future::join_all};
+use futures::{StreamExt, TryStreamExt, future::join_all};
 use scylla::{client::pager::TypedRowStream, errors::ExecutionError, serialize::row::SerializeRow};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, BufReader};
@@ -33,6 +33,8 @@ pub enum Error {
     Client(#[from] crate::client::Error),
     #[error("CQL execution error in protein: {0}")]
     CqlExecution(#[from] scylla::errors::ExecutionError),
+    #[error("CQL unable to fetch next row: {0}")]
+    CqlNextRow(#[from] scylla::errors::NextRowError),
     #[error("CQL paged execution error in protein: {0}")]
     CqlPagedExecution(#[from] scylla::errors::PagerExecutionError),
     #[error("CQL type check failed in protein: {0}")]
@@ -94,6 +96,16 @@ impl ProteinTable {
             .execute_iter(statement, values)
             .await?
             .rows_stream::<Protein>()?)
+    }
+
+    pub(crate) async fn count(&self) -> Result<usize, Error> {
+        self.client
+            .execute_iter(format!("SELECT (TINYINT) 1 FROM {TABLE_NAME}"), ())
+            .await?
+            .rows_stream::<(i8,)>()?
+            .try_fold(0usize, |acc, _row| async move { Ok(acc + 1) })
+            .await
+            .map_err(Error::from)
     }
 
     pub async fn build(

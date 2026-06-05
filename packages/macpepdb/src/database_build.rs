@@ -24,6 +24,7 @@ type BoxedPeptideStreamFuture<'a> =
 pub trait IsProteinAccess: Send + Sync {
     fn by_ids<'a>(&'a self, ids: &'a [i32]) -> BoxedPeptideStreamFuture<'a>;
     fn all<'a>(&'a self) -> BoxedPeptideStreamFuture<'a>;
+    fn count<'a>(&'a self) -> BoxFuture<'a, Result<usize, Error>>;
 }
 
 pub struct DatabaseProteinAccess {
@@ -61,6 +62,10 @@ impl IsProteinAccess for DatabaseProteinAccess {
                 .boxed())
         }
         .boxed()
+    }
+
+    fn count<'a>(&'a self) -> BoxFuture<'a, Result<usize, Error>> {
+        async move { self.protein_table.count().await.map_err(Error::from) }.boxed()
     }
 }
 
@@ -105,5 +110,9 @@ impl IsProteinAccess for InMemoryProteinAccess {
             )
         }
         .boxed()
+    }
+
+    fn count(&self) -> BoxFuture<'_, Result<usize, Error>> {
+        async move { Ok(self.proteins.len()) }.boxed()
     }
 }
