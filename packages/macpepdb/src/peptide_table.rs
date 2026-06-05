@@ -22,7 +22,7 @@ use crate::{
     client::Client,
     database_build::IsProteinAccess,
     mass_index::MassIndex,
-    peptide::{IsPeptide, Peptide},
+    peptide::Peptide,
     protease::Protease,
     sequence::{CompactSequence, PeptideSequence},
 };
@@ -296,8 +296,7 @@ impl PeptideTable {
                         while let Some(protein) = proteins.next().await.transpose()? {
                             #[allow(clippy::mutable_key_type)]
                             protease
-                                .cleave(protein.sequence().as_ref())
-                                .filter(|peptide| Ok(peptide.mass() == mass))
+                                .cleave(protein.sequence().as_ref(), Some(mass..=mass))
                                 .for_each(|peptide| {
                                     peptide_sequences
                                         .entry(CompactSequence::try_from(peptide.into_sequence())?)

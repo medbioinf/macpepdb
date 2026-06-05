@@ -1,6 +1,7 @@
 use std::{
     fmt::{Debug, Display},
     num::NonZeroUsize,
+    ops::RangeInclusive,
 };
 
 use fallible_iterator::FallibleIterator;
@@ -165,6 +166,7 @@ impl Protease {
     pub fn cleave<'a>(
         &'a self,
         sequence: &'a [AminoAcidBitCode],
+        mass_range: Option<RangeInclusive<i64>>,
     ) -> impl FallibleIterator<Item = Peptide, Error = Error> + 'a {
         let full_digest = self.inner.full_digest(sequence);
         let len = full_digest.len();
@@ -193,6 +195,7 @@ impl Protease {
             let has_unknown = &has_unknown;
             let len = len;
             let max_window_size = max_window_size;
+            let mass_range = mass_range.clone();
 
             let mut out = Vec::with_capacity(max_window_size);
 
@@ -215,6 +218,18 @@ impl Protease {
 
                 if has_unknown[start..end].iter().any(|&x| x) {
                     continue;
+                }
+
+                if let Some(mass_range) = mass_range.as_ref() {
+                    let mass = Peptide::peptide_mass_from_amino_acid_bits(
+                        full_digest[start..end]
+                            .iter()
+                            .flat_map(|sequences| sequences.iter()),
+                    );
+
+                    if !mass_range.contains(&mass) {
+                        continue;
+                    }
                 }
 
                 let slice = &full_digest[start..end];
@@ -393,7 +408,7 @@ mod tests {
         .unwrap();
 
         let peps = trypsin
-            .cleave(leptin.as_ref())
+            .cleave(leptin.as_ref(), None)
             .map(|peptide| Ok(peptide.into_sequence()))
             .collect::<HashSet<Sequence>>()
             .unwrap();
@@ -434,7 +449,7 @@ mod tests {
             .collect();
 
         let peps = unspecific
-            .cleave(leptin.as_ref())
+            .cleave(leptin.as_ref(), None)
             .map(|peptide| Ok(peptide.into_sequence()))
             .collect::<HashSet<Sequence>>()
             .unwrap();

@@ -119,6 +119,14 @@ impl Peptide {
             })
     }
 
+    pub fn peptide_mass_from_amino_acid_bits<'a>(
+        amino_acids: impl Iterator<Item = &'a AminoAcidBitCode>,
+    ) -> i64 {
+        amino_acids.fold(WATER_MONO_MASS, |acc, bit_code| {
+            acc + AminoAcid::by_bit_code(bit_code).mono_mass()
+        })
+    }
+
     pub fn unique_taxonomy_ids(&self) -> &[i32] {
         &self.unique_taxonomy_ids
     }

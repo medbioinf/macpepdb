@@ -72,7 +72,7 @@ impl MassIndex {
         while let Some(protein) = proteins.next().await {
             let protein = protein?;
             let peptides = protease
-                .cleave(protein.sequence().as_ref())
+                .cleave(protein.sequence().as_ref(), None)
                 .collect::<Vec<_>>()
                 .map_err(Error::Protease)?;
             masses.extend(peptides.into_iter().map(|peptide| peptide.mass()));
@@ -121,7 +121,7 @@ impl MassIndex {
 
                         #[allow(clippy::mutable_key_type)]
                         let peptides = protease
-                            .cleave(protein.sequence().as_ref())
+                            .cleave(protein.sequence().as_ref(), None)
                             .collect::<HashSet<_>>()
                             .map_err(Error::Protease)?;
 
