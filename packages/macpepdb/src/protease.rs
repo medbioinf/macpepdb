@@ -242,6 +242,74 @@ impl Protease {
         .map(move |seq| Ok(Peptide::new(seq, Vec::new(), Vec::new(), Vec::new())))
     }
 
+    pub(crate) fn cleave_masses_only<'a>(
+        &'a self,
+        sequence: &'a [AminoAcidBitCode],
+    ) -> impl FallibleIterator<Item = i64, Error = Error> + 'a {
+        let full_digest = self.inner.full_digest(sequence);
+        let len = full_digest.len();
+        let max_window_size = self.max_missed_cleavages + 1;
+
+        let mut prefix_len = Vec::with_capacity(len);
+        let mut acc = 0usize;
+
+        for frag in &full_digest {
+            acc += frag.len();
+            prefix_len.push(acc);
+        }
+
+        let mut has_unknown = Vec::with_capacity(len);
+
+        for frag in &full_digest {
+            has_unknown.push(
+                !self.keep_unknown
+                    && memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], frag.as_bytes()).is_some(),
+            );
+        }
+
+        fallible_iterator::convert((0..len).flat_map(move |start| {
+            let full_digest = &full_digest;
+            let prefix_len = &prefix_len;
+            let has_unknown = &has_unknown;
+            let len = len;
+            let max_window_size = max_window_size;
+
+            let mut out = Vec::with_capacity(max_window_size);
+
+            for window_size in 1..=max_window_size {
+                let end = (start + window_size).min(len);
+
+                if start >= end {
+                    continue;
+                }
+
+                let total_len = if start == 0 {
+                    prefix_len[end - 1]
+                } else {
+                    prefix_len[end - 1] - prefix_len[start - 1]
+                };
+
+                if total_len < self.min_length.get() || total_len > self.max_length.get() {
+                    continue;
+                }
+
+                if has_unknown[start..end].iter().any(|&x| x) {
+                    continue;
+                }
+
+                let mass = Peptide::peptide_mass_from_amino_acid_bits(
+                    full_digest[start..end]
+                        .iter()
+                        .flat_map(|sequences| sequences.iter()),
+                );
+
+                out.push(Ok(mass));
+            }
+
+            out.into_iter()
+        }))
+    }
+
     pub fn by_name(
         name: &str,
         min_length: Option<NonZeroUsize>,
