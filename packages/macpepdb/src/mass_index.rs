@@ -60,7 +60,7 @@ impl MassIndex {
         let progress_metric = Arc::new(metrics::counter!(PROGRESS_METRIC));
 
         let protein_count = protein_access.count().await?;
-        let protein_amount_for_estimation = std::cmp::min(protein_count / 100 * 10, 1);
+        let protein_amount_for_estimation = std::cmp::max(protein_count / 100 * 10, 1);
 
         let mut masses = HashSet::<i64>::with_capacity(protein_amount_for_estimation * 10);
         let mut proteins = protein_access
