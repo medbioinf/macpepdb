@@ -2223,6 +2223,7 @@ dependencies = [
  "metrics-util",
  "mimalloc",
  "num-traits",
+ "parking_lot",
  "pastey",
  "postcard",
  "rand",

@@ -79,27 +79,13 @@ impl MassIndex {
         }
 
         let masses_estimation = masses.len() * 10;
+        tracing::info!("Estimate ~{masses_estimation} masses");
+
         drop(masses);
 
-        let (index_sender, mut index_receiver) =
-            tokio::sync::mpsc::channel::<(HashSet<i64>, i32)>(num_threads.get() * 3);
-
-        let collector_task = {
-            tokio::spawn(async move {
-                let mut index: HashMap<i64, HashSet<i32>> =
-                    HashMap::with_capacity(masses_estimation);
-
-                while let Some((masses, protein_id)) = index_receiver.recv().await {
-                    for mass in masses {
-                        index
-                            .entry(mass)
-                            .or_insert(HashSet::with_capacity(1000))
-                            .insert(protein_id);
-                    }
-                }
-                index
-            })
-        };
+        let index = Arc::new(parking_lot::Mutex::new(
+            HashMap::<i64, HashSet<i32>>::with_capacity(masses_estimation),
+        ));
 
         let mut proteins = protein_access.all().await?;
 
@@ -108,7 +94,7 @@ impl MassIndex {
                 let protease = protease.clone();
                 let queue = queue.clone();
                 let progress_metric = progress_metric.clone();
-                let index_sender = index_sender.clone();
+                let index = index.clone();
 
                 tokio::spawn(async move {
                     loop {
@@ -120,16 +106,20 @@ impl MassIndex {
                                 continue;
                             }
                         };
+                        let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
 
                         #[allow(clippy::mutable_key_type)]
                         let masses = protease
                             .cleave_masses_only(protein.sequence().as_ref())
                             .collect::<HashSet<_>>()?;
 
-                        index_sender
-                            .send((masses, protein.id().ok_or(Error::MissingProteinId)?))
-                            .await
-                            .map_err(|err| Error::Join(err.to_string()))?;
+                        let mut index_lock = index.lock();
+                        for mass in masses {
+                            index_lock
+                                .entry(mass)
+                                .or_insert_with(|| HashSet::with_capacity(10))
+                                .insert(protein_id);
+                        }
 
                         progress_metric.increment(1);
                     }
@@ -138,8 +128,6 @@ impl MassIndex {
                 })
             })
             .collect::<Vec<_>>();
-
-        drop(index_sender);
 
         while let Some(protein) = proteins.next().await.transpose()? {
             let mut protein = Some(protein);
@@ -177,9 +165,9 @@ impl MassIndex {
             thread.await.map_err(|err| Error::Join(err.to_string()))??;
         }
 
-        let index = collector_task
-            .await
-            .map_err(|err| Error::Join(err.to_string()))?;
+        let index = Arc::try_unwrap(index)
+            .map_err(|_| Error::IndexUnwrap)?
+            .into_inner();
 
         Ok(MassIndex(index))
     }

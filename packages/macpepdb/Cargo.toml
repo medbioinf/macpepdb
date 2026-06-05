@@ -30,6 +30,7 @@ metrics-util = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 num-traits = { workspace = true }
 pastey = { workspace = true }
+parking_lot = { workspace = true }
 postcard = { workspace = true, features = ["alloc"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
