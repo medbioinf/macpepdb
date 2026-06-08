@@ -17,7 +17,7 @@ use thiserror::Error;
 use tokio::io::{AsyncBufRead, BufReader};
 use uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
 
-use crate::{client::Client, protein::Protein, stats::StatsTable};
+use crate::{client::Client, protein::Protein, stats_table::StatsTable};
 
 static TABLE_NAME: &str = "proteins";
 
@@ -53,7 +53,7 @@ pub enum Error {
     #[error("Protein reader error in protein table on file {0}: {1}")]
     ProteinReader(PathBuf, uniprot_reader::reader::Error),
     #[error("Stats table error in protein table: {0}")]
-    StatsTable(Box<crate::stats::Error>),
+    StatsTable(Box<crate::stats_table::Error>),
     #[error("Unable to join insertion task: {0}")]
     Join(String),
 }
@@ -64,7 +64,7 @@ into_thiserror_boxed!(
     Error,
     CqlPagedExecution
 );
-into_thiserror_boxed!(crate::stats::Error, Error, StatsTable);
+into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
 
 type ProteinBuildQueue = Arc<ArrayQueue<Option<Vec<Protein>>>>;
 type ProteinFilePathBuildQueue = Arc<ArrayQueue<Option<PathBuf>>>;

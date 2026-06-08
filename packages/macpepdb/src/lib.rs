@@ -21,7 +21,7 @@ pub mod protease;
 pub mod protein;
 pub mod protein_table;
 pub mod sequence;
-pub mod stats;
+pub mod stats_table;
 pub mod tools;
 pub mod web;
 

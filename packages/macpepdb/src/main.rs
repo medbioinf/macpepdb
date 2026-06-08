@@ -29,7 +29,7 @@ use macpepdb::{
     protein::Protein,
     protein_table::ProteinTable,
     sequence::{IsBitSequence, PeptideSequence},
-    stats::StatsTable,
+    stats_table::StatsTable,
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
 use sysinfo::System;

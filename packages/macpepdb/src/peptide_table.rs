@@ -27,7 +27,7 @@ use crate::{
     peptide::Peptide,
     protease::Protease,
     sequence::{CompactSequence, PeptideSequence},
-    stats::StatsTable,
+    stats_table::StatsTable,
 };
 
 pub const TABLE_NAME: &str = "peptides";
@@ -82,7 +82,7 @@ pub enum Error {
     // #[error("Protein reader thread error: {0}")]
     // ProteinReaderThread(String),
     #[error("Stats table error in peptide table: {0}")]
-    StatsTable(Box<crate::stats::Error>),
+    StatsTable(Box<crate::stats_table::Error>),
     #[error("UnipotReader error in peptide table: {0}")]
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
@@ -95,7 +95,7 @@ into_thiserror_boxed!(
 );
 into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::database_build::Error, Error, ProteinAccess);
-into_thiserror_boxed!(crate::stats::Error, Error, StatsTable);
+into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
 
 type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, HashSet<i32>)>>>;
 
