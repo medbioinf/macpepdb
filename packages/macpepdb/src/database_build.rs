@@ -178,7 +178,7 @@ pub async fn get_appropriate_protein_access(
         }
     }
 
-    tracing::warn!("All proteins loaded into memory.",);
+    tracing::info!("All proteins loaded into memory.",);
     Ok((
         proteins_count,
         Box::new(InMemoryProteinAccess { proteins }) as Box<dyn IsProteinAccess>,
