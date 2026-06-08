@@ -64,12 +64,18 @@ static GLOBAL: TcMalloc = TcMalloc;
 
 #[derive(Debug, Error)]
 enum Error {
+    #[error("Client error: {0}")]
+    Client(#[from] macpepdb::client::Error),
     #[error("Glob pattern error: {0}")]
     GlobPattern(#[from] glob::PatternError),
     #[error("Glob error: {0}")]
     Glob(#[from] glob::GlobError),
+    #[error("Peptide table error: {0}")]
+    PeptideTable(#[from] macpepdb::peptide_table::Error),
     #[error("proteins_memory_limit should be between 0.0 and 1.0")]
     ProteinsMemoryLimit,
+    #[error("Protein table error: {0}")]
+    ProteinTable(#[from] macpepdb::protein_table::Error),
 }
 
 #[derive(Subcommand)]
@@ -185,6 +191,8 @@ enum Command {
         /// Path to output file
         output_file_path: PathBuf,
     },
+    /// Prints stats
+    Stats {},
 }
 
 #[derive(Parser)]
@@ -413,6 +421,23 @@ async fn main() -> Result<(), Error> {
 
             // Keep TUI open so the user can review logs before exiting with q or Ctrl+C
             if let Some(mut tui) = tui {
+                tui.wait().await;
+            }
+        }
+        Command::Stats {} => {
+            let client = Arc::new(Client::new(&cli.database_url).await?);
+            let protein_count = ProteinTable::new(client.clone()).count().await?;
+            let peptide_count = PeptideTable::new(client.clone()).count().await?;
+            if cli.terminal || cli.tui {
+                tracing::info!("protein count: {protein_count}");
+                tracing::info!("peptide count: {peptide_count}");
+            } else {
+                println!("protein count: {protein_count}");
+                println!("peptide count: {peptide_count}");
+            }
+
+            if let Some(mut tui) = tui {
+                tracing::info!("Done. Press Ctrl+C or q to exit.");
                 tui.wait().await;
             }
         }
