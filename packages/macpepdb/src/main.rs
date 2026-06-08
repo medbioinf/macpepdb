@@ -13,7 +13,10 @@ use macpepdb::{
     blob::Blob,
     client::Client,
     configuration::Configuration,
-    database_build::{DatabaseProteinAccess, InMemoryProteinAccess, IsProteinAccess},
+    database_build::{
+        DatabaseProteinAccess, InMemoryProteinAccess, IsProteinAccess,
+        get_appropriate_protein_access,
+    },
     mass::to_float as mass_to_float,
     mass_index::MassIndex,
     mass_to_int,
@@ -118,6 +121,9 @@ enum Command {
         /// This will read the proteins from memory
         #[arg(long, default_value_t = 0.8)]
         proteins_memory_limit: f64,
+        /// If set protein inserstion will be skipped
+        #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        skip_proteins: bool,
         /// If set no taxonomies will be collected on peptide level
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         skip_protein_associations: bool,
@@ -306,6 +312,7 @@ async fn main() -> Result<(), Error> {
             protease,
             protein_file_paths,
             proteins_memory_limit,
+            skip_proteins,
             skip_protein_associations,
             skip_taxonomies,
             threads,
@@ -343,6 +350,7 @@ async fn main() -> Result<(), Error> {
                 batch_size_limit,
                 concurrent_batch_size,
                 proteins_memory_limit,
+                skip_proteins,
                 skip_protein_associations,
                 skip_taxonomies,
                 threads,
@@ -419,30 +427,77 @@ async fn build_db(
     batch_size_limit: NonZeroUsize,
     concurrent_batch_size: NonZeroUsize,
     proteins_memory_limit: f64,
+    skip_proteins: bool,
     skip_protein_associations: bool,
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
     print_config: Option<PathBuf>,
     tui: Option<&TuiHandle>,
 ) {
-    // 1. set insert proteins
-    if let Some(tui) = &tui {
-        tui.add_metric(MetricConfig::rate(
-            macpepdb::protein_table::INSERTED_PROTEINS_METRIC,
-            "Inserted proteins",
-        ));
-    }
-    let (protein_ctr, protein_access) = build_db_proteins(
-        client.clone(),
-        protein_file_paths,
-        concurrent_batch_size,
-        num_threads,
-        proteins_memory_limit,
-    )
-    .await;
-    if let Some(tui) = &tui {
-        tui.remove_metric(macpepdb::protein_table::INSERTED_PROTEINS_METRIC);
-    }
+    // 1. set insert proteins or get access to them
+    let (protein_ctr, protein_access) = if !skip_proteins {
+        if let Some(tui) = &tui {
+            tui.add_metric(MetricConfig::rate(
+                macpepdb::protein_table::INSERTED_PROTEINS_METRIC,
+                "Inserted proteins",
+            ));
+        }
+
+        let (protein_ctr, proteins_size) = build_db_proteins(
+            client.clone(),
+            protein_file_paths,
+            concurrent_batch_size,
+            num_threads,
+        )
+        .await;
+        if let Some(tui) = &tui {
+            tui.remove_metric(macpepdb::protein_table::INSERTED_PROTEINS_METRIC);
+        }
+
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let allowed_usable_memory =
+            (sys.available_memory() as f64 * proteins_memory_limit) as usize;
+        // needed memory is proteins size + an Arc per protein for cheap cloning
+        let needed_memory = proteins_size
+            + (std::mem::size_of::<Arc<Protein>>() + std::mem::size_of::<i32>()) * protein_ctr;
+
+        let protein_access: Box<dyn IsProteinAccess> = if needed_memory <= allowed_usable_memory {
+            tracing::info!(
+                "Keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
+                needed_memory / (1024 * 1024),
+                allowed_usable_memory / (1024 * 1024)
+            );
+            Box::new(InMemoryProteinAccess::new(client.clone()).await.unwrap())
+        } else {
+            tracing::info!(
+                "Not keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
+                needed_memory / (1024 * 1024),
+                allowed_usable_memory / (1024 * 1024)
+            );
+            Box::new(DatabaseProteinAccess::new(client.clone()))
+        };
+
+        (protein_ctr, protein_access)
+    } else {
+        if let Some(tui) = &tui {
+            tui.add_metric(MetricConfig::rate(
+                macpepdb::database_build::APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC,
+                "Processed proteins",
+            ));
+        }
+
+        let (proteins_ctr, protein_access) =
+            get_appropriate_protein_access(client.clone(), proteins_memory_limit)
+                .await
+                .unwrap();
+
+        if let Some(tui) = &tui {
+            tui.remove_metric(macpepdb::database_build::APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC);
+        }
+
+        (proteins_ctr, protein_access)
+    };
 
     let protein_access = Arc::new(protein_access);
 
@@ -513,8 +568,7 @@ async fn build_db_proteins(
     protein_file_paths: &[PathBuf],
     concurrent_batch_size: NonZeroUsize,
     num_insertion_threads: NonZeroUsize,
-    proteins_memory_limit: f64,
-) -> (usize, Box<dyn IsProteinAccess>) {
+) -> (usize, usize) {
     let now = std::time::Instant::now();
     let (protein_ctr, proteins_size) = ProteinTable::new(client.clone())
         .build(
@@ -529,29 +583,7 @@ async fn build_db_proteins(
         now.elapsed().as_secs_f64(),
     );
 
-    let mut sys = System::new_all();
-    sys.refresh_all();
-    let allowed_usable_memory = (sys.available_memory() as f64 * proteins_memory_limit) as usize;
-    // needed memory is proteins size + an Arc per protein for cheap cloning
-    let needed_memory = proteins_size + std::mem::size_of::<Arc<Protein>>() * protein_ctr;
-
-    let protein_access: Box<dyn IsProteinAccess> = if needed_memory <= allowed_usable_memory {
-        tracing::info!(
-            "Keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
-            needed_memory / (1024 * 1024),
-            allowed_usable_memory / (1024 * 1024)
-        );
-        Box::new(InMemoryProteinAccess::new(client).await.unwrap())
-    } else {
-        tracing::info!(
-            "Not keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
-            needed_memory / (1024 * 1024),
-            allowed_usable_memory / (1024 * 1024)
-        );
-        Box::new(DatabaseProteinAccess::new(client))
-    };
-
-    (protein_ctr, protein_access)
+    (protein_ctr, proteins_size)
 }
 
 async fn build_db_mass_index(
