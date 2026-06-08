@@ -136,13 +136,13 @@ impl Peptide {
     }
 
     pub fn cql_size(&self) -> usize {
-        // partition + mass + protein_ids + taxonomyies + sequence
-        std::mem::size_of::<i64>()
+        const ROW_OVERHEAD: usize = 32;
+        // per-row overhead + partition + mass + sequence (clustering blob) + list cells (i32)
+        ROW_OVERHEAD
             + std::mem::size_of::<i64>()
-            + self.protein_ids.len() * std::mem::size_of::<i32>()
-            + std::mem::size_of::<i32>()
-                * (self.unique_taxonomy_ids.len() + self.non_unique_taxonomy_ids.len())
+            + std::mem::size_of::<i64>()
             + self.sequence.cql_size()
+            + (self.protein_ids.len() + self.unique_taxonomy_ids.len() + self.non_unique_taxonomy_ids.len()) * (16 + 8 + std::mem::size_of::<i32>())
     }
 }
 
@@ -331,11 +331,11 @@ mod tests {
             vec![1, 2],
             vec![1, 2, 3],
         );
-        //   8 = partition (i64)
-        // + 8 = mass (i64)
-        // + 4 = 1x protein_ids
-        // + 20 = 5x taxonomy_ids
-        // + sequence.cql_size() (32)
-        assert_eq!(peptide.cql_size(), 72);
+        //   32 = ROW_OVERHEAD
+        // +  8 = partition (i64)
+        // +  8 = mass (i64)
+        // + 32 = sequence.cql_size()
+        // + 168 = 6 list cells (1 protein + 2 + 3 taxonomy) x LIST_CELL_SIZE (28)
+        assert_eq!(peptide.cql_size(), 248);
     }
 }
