@@ -27,3 +27,9 @@ CREATE TABLE IF NOT EXISTS macpepdb.peptides (
     non_unique_taxonomy_ids list<int>,
     PRIMARY KEY (partition, mass, sequence)
 );
+
+DROP TABLE IF EXISTS macpepdb.stats;
+CREATE TABLE IF NOT EXISTS macpepdb.stats (
+    key ascii PRIMARY KEY,
+    value bigint,
+);

@@ -3,14 +3,16 @@ use std::{
     iter::Peekable,
     num::NonZeroUsize,
     ops::AddAssign,
-    sync::{Arc, LazyLock, atomic::AtomicI64},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicI64, AtomicUsize},
+    },
     time::Duration,
 };
 
 use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
-use metrics::Counter;
 use scylla::{
     client::pager::TypedRowStream,
     serialize::batch::BatchValuesFromIterator,
@@ -25,6 +27,7 @@ use crate::{
     peptide::Peptide,
     protease::Protease,
     sequence::{CompactSequence, PeptideSequence},
+    stats::StatsTable,
 };
 
 pub const TABLE_NAME: &str = "peptides";
@@ -45,6 +48,11 @@ pub static QUEUE_METRIC: &str = "peptides_table::queue";
 pub enum Error {
     #[error("Client error in peptide table: {0}")]
     Client(#[from] crate::client::Error),
+    #[error(
+        "Peptide count not found. It should be stored in the `{}` table. Are you sure the database was build correctly?",
+        StatsTable::table_name()
+    )]
+    CountNotFound,
     #[error("CQL execution error in peptide table: {0}")]
     CqlExecution(Box<scylla::errors::ExecutionError>),
     #[error("CQL paged execution error in peptide table: {0}")]
@@ -73,6 +81,8 @@ pub enum Error {
     Sequence(#[from] crate::sequence::Error),
     // #[error("Protein reader thread error: {0}")]
     // ProteinReaderThread(String),
+    #[error("Stats table error in peptide table: {0}")]
+    StatsTable(Box<crate::stats::Error>),
     #[error("UnipotReader error in peptide table: {0}")]
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
@@ -85,6 +95,7 @@ into_thiserror_boxed!(
 );
 into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::database_build::Error, Error, ProteinAccess);
+into_thiserror_boxed!(crate::stats::Error, Error, StatsTable);
 
 type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, HashSet<i32>)>>>;
 
@@ -128,12 +139,12 @@ impl PeptideTable {
         &self,
         peptides: Peekable<impl Iterator<Item = Peptide>>,
         batch_size_limit: NonZeroUsize,
-        inserted_peptides_metric: Arc<Counter>,
-    ) -> Result<(), Error> {
+    ) -> Result<usize, Error> {
         let mut peptide_buffer_cql_size = 0;
         let mut peptide_buffer: Vec<Peptide> = Vec::new();
 
         let mut peptides = peptides.into_iter().peekable();
+        let mut inserted_peptides = 0;
 
         while let Some(peptide) = peptides.next() {
             peptide_buffer_cql_size += peptide.cql_size();
@@ -165,10 +176,10 @@ impl PeptideTable {
 
             peptide_buffer_cql_size = 0;
             peptide_buffer.clear();
-            inserted_peptides_metric.increment(peptide_buffer_len as u64);
+            inserted_peptides += peptide_buffer_len
         }
 
-        Ok(())
+        Ok(inserted_peptides)
     }
 
     pub async fn select(
@@ -187,6 +198,14 @@ impl PeptideTable {
             .rows_stream::<Peptide>()?)
     }
 
+    pub async fn count(&self) -> Result<usize, Error> {
+        StatsTable::new(self.client.clone())
+            .select_peptide_count()
+            .await
+            .map_err(Error::from)?
+            .ok_or(Error::CountNotFound)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub async fn build_concurrently(
         &self,
@@ -197,12 +216,13 @@ impl PeptideTable {
         batch_size_limit: NonZeroUsize,
         num_threads: NonZeroUsize,
         mass_index: MassIndex,
-    ) -> Result<HashMap<i64, Vec<i64>>, Error> {
+    ) -> Result<(usize, HashMap<i64, Vec<i64>>), Error> {
         let queue: ConcurrentlyBuildQueue = Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let progress_metric = Arc::new(metrics::gauge!(PROGRESS_METRIC));
         let inserted_peptides_metric = Arc::new(metrics::counter!(INSERTED_PEPTIDES_METRIC));
         let queue_metric = metrics::gauge!(QUEUE_METRIC);
         let next_partition_guard = Arc::new(NextPartitionGuard::new());
+        let peptide_ctr = Arc::new(AtomicUsize::new(0));
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -213,6 +233,7 @@ impl PeptideTable {
                 let progress_metric = progress_metric.clone();
                 let inserted_peptides_metric = inserted_peptides_metric.clone();
                 let next_partition_guard = next_partition_guard.clone();
+                let peptide_ctr = peptide_ctr.clone();
 
                 tokio::spawn(async move {
                     let peptide_table = PeptideTable::new(client.clone());
@@ -239,13 +260,14 @@ impl PeptideTable {
                                         partition_cql_size as f32 / 1000.0 / 1000.0,
                                         crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
                                     );
-                                    peptide_table
+                                    let inserted_peptides = peptide_table
                                         .insert_batch(
                                             peptide_buffer.drain(..).peekable(),
                                             batch_size_limit,
-                                            inserted_peptides_metric.clone(),
                                         )
                                         .await?;
+                                    peptide_ctr.fetch_add(inserted_peptides, std::sync::atomic::Ordering::SeqCst);
+                                    inserted_peptides_metric.increment(inserted_peptides as u64);
                                 }
                                 break;
                             }
@@ -266,13 +288,14 @@ impl PeptideTable {
                                 partition_cql_size as f32 / 1000.0 / 1000.0,
                                 crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
                             );
-                            peptide_table
+                            let inserted_peptides = peptide_table
                                 .insert_batch(
                                     peptide_buffer.drain(..).peekable(),
                                     batch_size_limit,
-                                    inserted_peptides_metric.clone(),
                                 )
                                 .await?;
+                            peptide_ctr.fetch_add(inserted_peptides, std::sync::atomic::Ordering::SeqCst);
+                            inserted_peptides_metric.increment(inserted_peptides as u64);
                             batch_cql_size = 0;
                             buffer_masses.clear();
                         }
@@ -347,13 +370,14 @@ impl PeptideTable {
                                     partition_cql_size as f32 / 1000.0 / 1000.0,
                                     crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
                                 );
-                                peptide_table
+                                let inserted_peptides = peptide_table
                                     .insert_batch(
                                         peptide_buffer.drain(..).peekable(),
                                         batch_size_limit,
-                                        inserted_peptides_metric.clone(),
                                     )
                                     .await?;
+                                peptide_ctr.fetch_add(inserted_peptides, std::sync::atomic::Ordering::SeqCst);
+                                inserted_peptides_metric.increment(inserted_peptides as u64);
                                 batch_cql_size = 0;
                                 partition_cql_size = 0;
                                 buffer_masses.clear();
@@ -417,7 +441,10 @@ impl PeptideTable {
             }
         }
 
-        Ok(final_mass_to_partitions_map)
+        Ok((
+            peptide_ctr.load(std::sync::atomic::Ordering::SeqCst),
+            final_mass_to_partitions_map,
+        ))
     }
 
     #[allow(clippy::type_complexity)]

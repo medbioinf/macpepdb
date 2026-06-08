@@ -37,6 +37,7 @@ reqwest = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 scylla = { workspace = true }
+static_assertions = { workspace = true }
 sysinfo = { workspace = true }
 tcmalloc2 = { workspace = true, optional = true }
 thiserror = { workspace = true }

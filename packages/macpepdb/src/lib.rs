@@ -1,3 +1,5 @@
+extern crate static_assertions;
+
 pub mod amino_acid;
 pub mod configuration;
 #[macro_use]
@@ -19,4 +21,9 @@ pub mod protease;
 pub mod protein;
 pub mod protein_table;
 pub mod sequence;
+pub mod stats;
+pub mod tools;
 pub mod web;
+
+// Assert usize is u64. This is should prevent compiling on 32-bit platforms, which are not supported.
+static_assertions::assert_eq_size!(usize, u64);

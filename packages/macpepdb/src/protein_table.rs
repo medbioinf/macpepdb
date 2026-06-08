@@ -11,11 +11,13 @@ use std::{
 
 use async_compression::tokio::bufread::GzipDecoder;
 use crossbeam::queue::ArrayQueue;
-use futures::{StreamExt, TryStreamExt, future::join_all};
+use futures::{StreamExt, future::join_all};
 use scylla::{client::pager::TypedRowStream, errors::ExecutionError, serialize::row::SerializeRow};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, BufReader};
 use uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
+
+use crate::{client::Client, protein::Protein, stats::StatsTable};
 
 static TABLE_NAME: &str = "proteins";
 
@@ -31,12 +33,17 @@ pub static INSERTED_PROTEINS_METRIC: &str = "protein_table::build::inserted_prot
 pub enum Error {
     #[error("Client error in protein: {0}")]
     Client(#[from] crate::client::Error),
+    #[error(
+        "Protein count not found. It should be stored in the `{}` table. Are you sure the database was build correctly?",
+        StatsTable::table_name()
+    )]
+    CountNotFound,
     #[error("CQL execution error in protein: {0}")]
-    CqlExecution(#[from] scylla::errors::ExecutionError),
+    CqlExecution(Box<scylla::errors::ExecutionError>),
     #[error("CQL unable to fetch next row: {0}")]
     CqlNextRow(#[from] scylla::errors::NextRowError),
     #[error("CQL paged execution error in protein: {0}")]
-    CqlPagedExecution(#[from] scylla::errors::PagerExecutionError),
+    CqlPagedExecution(Box<scylla::errors::PagerExecutionError>),
     #[error("CQL type check failed in protein: {0}")]
     CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
     #[error("Unable to open proteins file: {0}")]
@@ -45,10 +52,19 @@ pub enum Error {
     Protein(Box<crate::protein::Error>),
     #[error("Protein reader error in protein table on file {0}: {1}")]
     ProteinReader(PathBuf, uniprot_reader::reader::Error),
+    #[error("Stats table error in protein table: {0}")]
+    StatsTable(Box<crate::stats::Error>),
     #[error("Unable to join insertion task: {0}")]
     Join(String),
 }
-use crate::{client::Client, protein::Protein};
+
+into_thiserror_boxed!(scylla::errors::ExecutionError, Error, CqlExecution);
+into_thiserror_boxed!(
+    scylla::errors::PagerExecutionError,
+    Error,
+    CqlPagedExecution
+);
+into_thiserror_boxed!(crate::stats::Error, Error, StatsTable);
 
 type ProteinBuildQueue = Arc<ArrayQueue<Option<Vec<Protein>>>>;
 type ProteinFilePathBuildQueue = Arc<ArrayQueue<Option<PathBuf>>>;
@@ -105,14 +121,12 @@ impl ProteinTable {
             .rows_stream::<Protein>()?)
     }
 
-    pub(crate) async fn count(&self) -> Result<usize, Error> {
-        self.client
-            .execute_iter(format!("SELECT (TINYINT) 1 FROM {TABLE_NAME}"), ())
-            .await?
-            .rows_stream::<(i8,)>()?
-            .try_fold(0usize, |acc, _row| async move { Ok(acc + 1) })
+    pub async fn count(&self) -> Result<usize, Error> {
+        StatsTable::new(self.client.clone())
+            .select_protein_count()
             .await
-            .map_err(Error::from)
+            .map_err(Error::from)?
+            .ok_or(Error::CountNotFound)
     }
 
     pub async fn build(

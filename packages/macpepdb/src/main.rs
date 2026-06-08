@@ -29,6 +29,7 @@ use macpepdb::{
     protein::Protein,
     protein_table::ProteinTable,
     sequence::{IsBitSequence, PeptideSequence},
+    stats::StatsTable,
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
 use sysinfo::System;
@@ -583,6 +584,10 @@ async fn build_db_proteins(
         "db proteins: time = {:.2?} s; #proteins = {protein_ctr}",
         now.elapsed().as_secs_f64(),
     );
+    StatsTable::new(client.clone())
+        .upsert_protein_count(protein_ctr)
+        .await
+        .unwrap();
 
     (protein_ctr, proteins_size)
 }
@@ -617,7 +622,7 @@ async fn build_db_peptides(
     num_threads: NonZeroUsize,
 ) -> HashMap<i64, Vec<i64>> {
     let now = std::time::Instant::now();
-    let mass_to_partitions_map = PeptideTable::new(client)
+    let (peptide_ctr, mass_to_partitions_map) = PeptideTable::new(client.clone())
         .build_concurrently(
             protein_access,
             skip_protein_associations,
@@ -630,6 +635,10 @@ async fn build_db_peptides(
         .await
         .unwrap();
     tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f64(),);
+    StatsTable::new(client.clone())
+        .upsert_peptide_count(peptide_ctr)
+        .await
+        .unwrap();
 
     mass_to_partitions_map
 }

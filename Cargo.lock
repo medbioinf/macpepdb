@@ -2231,6 +2231,7 @@ dependencies = [
  "scylla",
  "serde",
  "serde_json",
+ "static_assertions",
  "sysinfo",
  "tcmalloc2",
  "thiserror",
