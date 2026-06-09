@@ -11,7 +11,7 @@ use std::{
 
 use async_compression::tokio::bufread::GzipDecoder;
 use crossbeam::queue::ArrayQueue;
-use futures::{StreamExt, future::join_all};
+use futures::{Stream, StreamExt, future::join_all};
 use scylla::{client::pager::TypedRowStream, errors::ExecutionError, serialize::row::SerializeRow};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, BufReader};
@@ -26,6 +26,9 @@ static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
 });
 
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
+
+static SELECT_ID_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT id FROM {TABLE_NAME}"));
 
 pub static INSERTED_PROTEINS_METRIC: &str = "protein_table::build::inserted_proteins";
 
@@ -127,6 +130,18 @@ impl ProteinTable {
             .await
             .map_err(Error::from)?
             .ok_or(Error::CountNotFound)
+    }
+
+    pub async fn select_ids(
+        &self,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<i32, Error>> + Send>>, Error> {
+        Ok(self
+            .client
+            .execute_iter(SELECT_ID_STATEMENT.as_str(), ())
+            .await?
+            .rows_stream::<(i32,)>()?
+            .map(|row| row.map(|(id,)| id).map_err(Error::from))
+            .boxed())
     }
 
     pub async fn build(

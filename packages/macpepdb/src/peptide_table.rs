@@ -97,7 +97,7 @@ into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::database_build::Error, Error, ProteinAccess);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
 
-type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, HashSet<i32>)>>>;
+type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, Vec<i32>)>>>;
 
 struct NextPartitionGuard {
     next_partition: AtomicI64,
@@ -399,8 +399,9 @@ impl PeptideTable {
             })
             .collect::<Vec<_>>();
 
-        for mass_index_entry in mass_index.into_iter() {
-            let mut mass_index_entry = Some(mass_index_entry);
+        for mass in mass_index.masses() {
+            let mut mass_index_entry =
+                Some((*mass, Vec::from_iter(mass_index[*mass].iter().cloned())));
             loop {
                 mass_index_entry = match queue.push(mass_index_entry) {
                     Ok(()) => break,

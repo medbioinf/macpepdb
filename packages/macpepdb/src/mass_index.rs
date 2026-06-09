@@ -1,24 +1,15 @@
-use std::{
-    collections::{HashMap, HashSet, hash_map::IntoIter},
-    fmt::Debug,
-    num::NonZeroUsize,
-    ops::Deref,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, num::NonZeroUsize, ops::Index, sync::Arc, time::Duration};
 
 use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use thiserror::Error;
 
-use crate::{
-    database_build::IsProteinAccess, peptide::IsPeptide, protease::Protease, protein::Protein,
-};
+use crate::{database_build::IsProteinAccess, protease::Protease, protein::Protein};
 
 pub static PROGRESS_METRIC: &str = "mass_index::progress";
 
-pub static LOCAL_INDEX_MAX_KEYS: usize = 1000;
+static LOCAL_MASS_LIMIT: usize = 10_000;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -26,10 +17,22 @@ pub enum Error {
     CqlNextRow(#[from] scylla::errors::NextRowError),
     // #[error("Indexing stopped unexpectedly before finishing the protein processing ")]
     // EarlyIndexThreadStop,
+    #[error(
+        "Unable to unwrap masses from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
+    )]
+    FinalMassesUnwrap,
     #[error("IO error in mass index: {0}")]
     Io(#[from] std::io::Error),
+    #[error(
+        "Unable to unwrap index ptr from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
+    )]
+    IndexPtrUnwrap,
     #[error("Unable to join insertion task: {0}")]
     Join(String),
+    #[error(
+        "Unable to unwrap masses from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
+    )]
+    MassesUnwrap,
     #[error("Protein ID missing")]
     MissingProteinId,
     #[error("No errored thread found in mass index, but one finished early.")]
@@ -38,54 +41,52 @@ pub enum Error {
     Protease(#[from] crate::protease::Error),
     #[error("Protein access error in mass index: {0}")]
     ProteinAccess(#[from] crate::database_build::Error),
-    #[error("Unable to unwrap index from Arc")]
-    IndexUnwrap,
+    #[error(
+        "Unable to unwrap protein IDs from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
+    )]
+    ProteinIdsUnwrap,
     // #[error("Protein reader thread error: {0}")]
     // ProteinReaderThread(String),
+    #[error("StatsTable error in mass index: {0}")]
+    StatsTale(#[from] crate::stats_table::Error),
     #[error("UnipotReader error in mass index: {0}")]
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-pub struct MassIndex(HashMap<i64, HashSet<i32>>);
+pub struct MassIndex {
+    masses: Vec<i64>,
+    indptr: Vec<u32>,
+    protein_ids: Vec<i32>,
+}
 
 impl MassIndex {
-    pub async fn build_concurrently(
+    pub fn is_empty(&self) -> bool {
+        self.masses.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.masses.len()
+    }
+
+    pub fn masses(&self) -> &[i64] {
+        &self.masses
+    }
+
+    pub async fn build(
         protein_access: Arc<Box<dyn IsProteinAccess>>,
-        protease: &Protease,
+        protease: Arc<Protease>,
         num_threads: NonZeroUsize,
     ) -> Result<Self, Error> {
+        // Intermediate: unsorted flat (mass_idx, protein_id) pairs from all threads.
+        // Sorted + deduped after threads finish, then converted to CSR in one pass.
+        let pairs: Arc<parking_lot::Mutex<Vec<(i64, i32)>>> = Arc::new(parking_lot::Mutex::new(
+            Vec::with_capacity(protein_access.count().await? * 10),
+        ));
+
         let queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
-        let protease = Arc::new(protease.clone());
         let progress_metric = Arc::new(metrics::counter!(PROGRESS_METRIC));
-
-        let protein_count = protein_access.count().await?;
-        let protein_amount_for_estimation = std::cmp::max(protein_count / 100 * 10, 1);
-
-        let mut masses = HashSet::<i64>::with_capacity(protein_amount_for_estimation * 10);
-        let mut proteins = protein_access
-            .all()
-            .await?
-            .take(protein_amount_for_estimation)
-            .map(|res| res.map_err(Error::from));
-
-        while let Some(protein) = proteins.next().await {
-            let protein = protein?;
-            let peptides = protease
-                .cleave(protein.sequence().as_ref(), None)
-                .collect::<Vec<_>>()
-                .map_err(Error::Protease)?;
-            masses.extend(peptides.into_iter().map(|peptide| peptide.mass()));
-        }
-
-        let masses_estimation = masses.len() * 10;
-        tracing::info!("Estimate ~{masses_estimation} masses");
-
-        drop(masses);
-
-        let index = Arc::new(parking_lot::Mutex::new(
-            HashMap::<i64, HashSet<i32>>::with_capacity(masses_estimation),
-        ));
+        progress_metric.absolute(0);
 
         let mut proteins = protein_access.all().await?;
 
@@ -94,9 +95,11 @@ impl MassIndex {
                 let protease = protease.clone();
                 let queue = queue.clone();
                 let progress_metric = progress_metric.clone();
-                let index = index.clone();
+                let pairs = pairs.clone();
 
                 tokio::spawn(async move {
+                    let mut local_pairs: HashSet<(i64, i32)> =
+                        HashSet::with_capacity(LOCAL_MASS_LIMIT);
                     loop {
                         let protein = match queue.pop() {
                             Some(Some(protein)) => protein,
@@ -106,22 +109,26 @@ impl MassIndex {
                                 continue;
                             }
                         };
+
                         let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
 
                         #[allow(clippy::mutable_key_type)]
-                        let masses = protease
+                        protease
                             .cleave_masses_only(protein.sequence().as_ref())
-                            .collect::<HashSet<_>>()?;
+                            .for_each(|mass| {
+                                local_pairs.insert((mass, protein_id));
+                                Ok(())
+                            })?;
 
-                        let mut index_lock = index.lock();
-                        for mass in masses {
-                            index_lock
-                                .entry(mass)
-                                .or_insert_with(|| HashSet::with_capacity(10))
-                                .insert(protein_id);
+                        if local_pairs.len() >= LOCAL_MASS_LIMIT {
+                            pairs.lock().extend(local_pairs.drain());
                         }
 
                         progress_metric.increment(1);
+                    }
+
+                    if !local_pairs.is_empty() {
+                        pairs.lock().extend(local_pairs);
                     }
 
                     Ok::<_, Error>(())
@@ -165,11 +172,34 @@ impl MassIndex {
             thread.await.map_err(|err| Error::Join(err.to_string()))??;
         }
 
-        let index = Arc::try_unwrap(index)
-            .map_err(|_| Error::IndexUnwrap)?
+        let mut pairs = Arc::try_unwrap(pairs)
+            .map_err(|_| Error::ProteinIdsUnwrap)?
             .into_inner();
 
-        Ok(MassIndex(index))
+        // Sort by (mass_idx, protein_id) and deduplicate so each pair is unique.
+        pairs.sort_unstable();
+        pairs.dedup();
+
+        // Build CSR from sorted pairs in one pass.
+        // indptr[i+1] counts entries for row i; prefix-summed into offsets after.
+        let mut masses = Vec::new();
+        let mut indptr = vec![0u32];
+        let mut protein_ids = Vec::with_capacity(pairs.len());
+
+        for (mass, protein_id) in &pairs {
+            if masses.last() != Some(mass) {
+                masses.push(*mass);
+                indptr.push(*indptr.last().unwrap());
+            }
+            *indptr.last_mut().unwrap() += 1;
+            protein_ids.push(*protein_id);
+        }
+
+        Ok(Self {
+            masses,
+            indptr,
+            protein_ids,
+        })
     }
 
     async fn find_errored_thread(
@@ -188,39 +218,23 @@ impl MassIndex {
         Error::NoErroredThread
     }
 
-    async fn inner_size(index: &HashMap<i64, HashSet<i32>>) -> usize {
-        std::mem::size_of::<HashMap<i64, HashSet<i32>>>()
-            + index.capacity() * (std::mem::size_of::<i64>() + std::mem::size_of::<HashSet<i32>>())
-            + index.iter().fold(0_usize, |acc, entry| {
-                acc + entry.1.capacity() * std::mem::size_of::<i32>()
-            })
-    }
-
-    pub async fn size(&self) -> usize {
-        Self::inner_size(&self.0).await + std::mem::size_of::<Self>()
+    pub fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.masses.capacity() * std::mem::size_of::<i64>()
+            + self.indptr.capacity() * std::mem::size_of::<u32>()
+            + self.protein_ids.capacity() * std::mem::size_of::<i32>()
     }
 }
 
-impl Deref for MassIndex {
-    type Target = HashMap<i64, HashSet<i32>>;
+impl Index<i64> for MassIndex {
+    type Output = [i32];
 
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl From<MassIndex> for HashMap<i64, HashSet<i32>> {
-    fn from(index: MassIndex) -> Self {
-        index.0
-    }
-}
-
-impl IntoIterator for MassIndex {
-    type Item = (i64, HashSet<i32>);
-    type IntoIter = IntoIter<i64, HashSet<i32>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter()
+    fn index(&self, mass: i64) -> &Self::Output {
+        if let Ok(idx) = self.masses.binary_search(&mass) {
+            &self.protein_ids[self.indptr[idx] as usize..self.indptr[idx + 1] as usize]
+        } else {
+            &[]
+        }
     }
 }
 

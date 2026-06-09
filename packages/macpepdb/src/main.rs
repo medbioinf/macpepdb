@@ -623,7 +623,7 @@ async fn build_db_mass_index(
     num_threads: NonZeroUsize,
 ) -> MassIndex {
     let now = std::time::Instant::now();
-    let index = MassIndex::build_concurrently(protein_access, protease, num_threads)
+    let index = MassIndex::build(protein_access, Arc::new(protease.clone()), num_threads)
         .await
         .unwrap();
     tracing::info!(

@@ -12,6 +12,8 @@ pub static APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC: &str =
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("Default, should not occure anywhere")]
+    Default,
     #[error("Missing protein ID for `{0}`, means it does not come from the database")]
     MissingProteinId(String),
     #[error("Unable not load next protein from stream: {0}")]
@@ -30,6 +32,7 @@ pub trait IsProteinAccess: Send + Sync {
     fn by_ids<'a>(&'a self, ids: &'a [i32]) -> BoxedPeptideStreamFuture<'a>;
     fn all<'a>(&'a self) -> BoxedPeptideStreamFuture<'a>;
     fn count<'a>(&'a self) -> BoxFuture<'a, Result<usize, Error>>;
+    fn ids<'a>(&'a self) -> BoxFuture<'a, Result<Vec<i32>, Error>>;
 }
 
 pub struct DatabaseProteinAccess {
@@ -71,6 +74,18 @@ impl IsProteinAccess for DatabaseProteinAccess {
 
     fn count<'a>(&'a self) -> BoxFuture<'a, Result<usize, Error>> {
         async move { self.protein_table.count().await.map_err(Error::from) }.boxed()
+    }
+
+    fn ids<'a>(&'a self) -> BoxFuture<'a, Result<Vec<i32>, Error>> {
+        async move {
+            self.protein_table
+                .select_ids()
+                .await?
+                .try_collect::<Vec<i32>>()
+                .await
+                .map_err(Error::from)
+        }
+        .boxed()
     }
 }
 
@@ -119,6 +134,10 @@ impl IsProteinAccess for InMemoryProteinAccess {
 
     fn count(&self) -> BoxFuture<'_, Result<usize, Error>> {
         async move { Ok(self.proteins.len()) }.boxed()
+    }
+
+    fn ids<'a>(&'a self) -> BoxFuture<'a, Result<Vec<i32>, Error>> {
+        async move { Ok(self.proteins.keys().cloned().collect::<Vec<i32>>()) }.boxed()
     }
 }
 
