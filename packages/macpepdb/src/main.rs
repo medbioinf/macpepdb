@@ -70,12 +70,16 @@ enum Error {
     GlobPattern(#[from] glob::PatternError),
     #[error("Glob error: {0}")]
     Glob(#[from] glob::GlobError),
+    #[error("Missing mass count in stats table. Are you sure the database was build correctly?")]
+    MissingMassCount,
     #[error("Peptide table error: {0}")]
     PeptideTable(#[from] macpepdb::peptide_table::Error),
     #[error("proteins_memory_limit should be between 0.0 and 1.0")]
     ProteinsMemoryLimit,
     #[error("Protein table error: {0}")]
     ProteinTable(#[from] macpepdb::protein_table::Error),
+    #[error("Stats table error: {0}")]
+    StatsTable(Box<macpepdb::stats_table::Error>),
 }
 
 #[derive(Subcommand)]
@@ -428,12 +432,19 @@ async fn main() -> Result<(), Error> {
             let client = Arc::new(Client::new(&cli.database_url).await?);
             let protein_count = ProteinTable::new(client.clone()).count().await?;
             let peptide_count = PeptideTable::new(client.clone()).count().await?;
+            let mass_count = StatsTable::new(client.clone())
+                .select_mass_count()
+                .await
+                .map_err(|e| Error::StatsTable(Box::new(e)))?
+                .ok_or(Error::MissingMassCount)?;
             if cli.terminal || cli.tui {
                 tracing::info!("protein count: {protein_count}");
                 tracing::info!("peptide count: {peptide_count}");
+                tracing::info!("mass count: {mass_count}");
             } else {
                 println!("protein count: {protein_count}");
                 println!("peptide count: {peptide_count}");
+                println!("mass count: {mass_count}");
             }
 
             if let Some(mut tui) = tui {
@@ -536,7 +547,13 @@ async fn build_db(
             protein_ctr as f64,
         ));
     }
-    let mass_index = build_db_mass_index(protein_access.clone(), &protease, num_threads).await;
+    let mass_index = build_db_mass_index(
+        client.clone(),
+        protein_access.clone(),
+        &protease,
+        num_threads,
+    )
+    .await;
     if let Some(tui) = &tui {
         tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
     }
@@ -618,14 +635,20 @@ async fn build_db_proteins(
 }
 
 async fn build_db_mass_index(
+    client: Arc<Client>,
     protein_access: Arc<Box<dyn IsProteinAccess>>,
     protease: &Protease,
     num_threads: NonZeroUsize,
 ) -> MassIndex {
     let now = std::time::Instant::now();
-    let index = MassIndex::build(protein_access, Arc::new(protease.clone()), num_threads)
-        .await
-        .unwrap();
+    let index = MassIndex::build(
+        client,
+        protein_access,
+        Arc::new(protease.clone()),
+        num_threads,
+    )
+    .await
+    .unwrap();
     tracing::info!(
         "db mass index: time = {:.2?} s; #masses = {}",
         now.elapsed().as_secs_f64(),

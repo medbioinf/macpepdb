@@ -5,7 +5,10 @@ use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 use thiserror::Error;
 
-use crate::{database_build::IsProteinAccess, protease::Protease, protein::Protein};
+use crate::{
+    client::Client, database_build::IsProteinAccess, protease::Protease, protein::Protein,
+    stats_table::StatsTable,
+};
 
 pub static PROGRESS_METRIC: &str = "mass_index::progress";
 
@@ -73,6 +76,7 @@ impl MassIndex {
     }
 
     pub async fn build(
+        client: Arc<Client>,
         protein_access: Arc<Box<dyn IsProteinAccess>>,
         protease: Arc<Protease>,
         num_threads: NonZeroUsize,
@@ -194,6 +198,10 @@ impl MassIndex {
             *indptr.last_mut().unwrap() += 1;
             protein_ids.push(*protein_id);
         }
+
+        StatsTable::new(client.clone())
+            .upsert_mass_count(masses.len())
+            .await?;
 
         Ok(Self {
             masses,
