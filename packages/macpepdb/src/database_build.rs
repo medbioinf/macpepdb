@@ -108,6 +108,15 @@ impl InMemoryProteinAccess {
 
         Ok(Self { proteins })
     }
+
+    #[cfg(test)]
+    pub(crate) fn with_proteins(proteins: impl Iterator<Item = Protein>) -> Self {
+        Self {
+            proteins: proteins
+                .map(|protein| (protein.id().unwrap(), Arc::new(protein)))
+                .collect(),
+        }
+    }
 }
 
 impl IsProteinAccess for InMemoryProteinAccess {

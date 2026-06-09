@@ -81,6 +81,20 @@ impl MassIndex {
         protease: Arc<Protease>,
         num_threads: NonZeroUsize,
     ) -> Result<Self, Error> {
+        let mass_index = Self::inner_build(protein_access, protease, num_threads).await?;
+
+        StatsTable::new(client.clone())
+            .upsert_mass_count(mass_index.len())
+            .await?;
+
+        Ok(mass_index)
+    }
+
+    async fn inner_build(
+        protein_access: Arc<Box<dyn IsProteinAccess>>,
+        protease: Arc<Protease>,
+        num_threads: NonZeroUsize,
+    ) -> Result<Self, Error> {
         // Intermediate: unsorted flat (mass_idx, protein_id) pairs from all threads.
         // Sorted + deduped after threads finish, then converted to CSR in one pass.
         let pairs: Arc<parking_lot::Mutex<Vec<(i64, i32)>>> = Arc::new(parking_lot::Mutex::new(
@@ -199,10 +213,6 @@ impl MassIndex {
             protein_ids.push(*protein_id);
         }
 
-        StatsTable::new(client.clone())
-            .upsert_mass_count(masses.len())
-            .await?;
-
         Ok(Self {
             masses,
             indptr,
@@ -247,4 +257,99 @@ impl Index<i64> for MassIndex {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use std::{
+        collections::{HashMap, HashSet},
+        num::NonZeroUsize,
+        sync::Arc,
+    };
+
+    use fallible_iterator::FallibleIterator;
+    use futures::StreamExt;
+    use uniprot_reader::asynchronous::reader::AsyncReader;
+
+    use crate::{
+        database_build::{InMemoryProteinAccess, IsProteinAccess},
+        mass_index::MassIndex,
+        protease::Protease,
+        protein::Protein,
+    };
+
+    #[tokio::test]
+    async fn test_mass_index() {
+        let proteins_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("some_human_proteins.uniprot.txt");
+
+        let protease = Protease::by_name(
+            "trypsin",
+            Some(NonZeroUsize::new(6).unwrap()),
+            Some(NonZeroUsize::new(50).unwrap()),
+            Some(2),
+            false,
+        )
+        .unwrap();
+
+        let mut buf_reader =
+            tokio::io::BufReader::new(tokio::fs::File::open(proteins_file).await.unwrap());
+        let reader = AsyncReader::new(&mut buf_reader);
+
+        let proteins = reader
+            .enumerate()
+            .map(|(protein_id, entry)| {
+                Protein::try_from((protein_id as i32, entry.unwrap().entry())).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        let mut manual_index: HashMap<i64, HashSet<i32>> = HashMap::new();
+        proteins.iter().for_each(|protein| {
+            let protein_id = protein.id().unwrap();
+            protease
+                .cleave_masses_only(protein.sequence().as_ref())
+                .for_each(|mass| {
+                    manual_index.entry(mass).or_default().insert(protein_id);
+
+                    Ok(())
+                })
+                .unwrap();
+        });
+
+        let protein_access: Arc<Box<dyn IsProteinAccess>> = Arc::new(Box::new(
+            InMemoryProteinAccess::with_proteins(proteins.into_iter()),
+        ));
+
+        let mass_index = MassIndex::inner_build(
+            protein_access,
+            Arc::new(protease),
+            NonZeroUsize::new(4).unwrap(),
+        )
+        .await
+        .unwrap();
+
+        for mass in mass_index.masses() {
+            let expected_protein_ids = manual_index.get(mass).unwrap();
+            let actual_protein_ids = &mass_index[*mass];
+            assert_eq!(
+                expected_protein_ids.len(),
+                actual_protein_ids.len(),
+                "Mass {}: expected {} protein IDs, got {}",
+                mass,
+                expected_protein_ids.len(),
+                actual_protein_ids.len()
+            );
+            for protein_id in actual_protein_ids {
+                assert!(
+                    expected_protein_ids.contains(protein_id),
+                    "Mass {}: unexpected protein ID {}",
+                    mass,
+                    protein_id
+                );
+            }
+        }
+    }
+}
