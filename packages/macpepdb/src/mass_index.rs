@@ -244,6 +244,44 @@ impl MassIndex {
     }
 }
 
+pub struct IntoIter {
+    masses: Vec<i64>,
+    indptr: Vec<u32>,
+    protein_ids: Vec<i32>,
+}
+
+impl Iterator for IntoIter {
+    type Item = (i64, Vec<i32>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mass = self.masses.pop()?;
+        self.indptr.pop(); // drop the trailing end pointer for this row
+        let start = *self.indptr.last().unwrap() as usize;
+        // start..protein_ids.len() is always the tail when going back-to-front
+        let ids = self.protein_ids.split_off(start);
+        Some((mass, ids))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.masses.len(), Some(self.masses.len()))
+    }
+}
+
+impl ExactSizeIterator for IntoIter {}
+
+impl IntoIterator for MassIndex {
+    type Item = (i64, Vec<i32>);
+    type IntoIter = IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter {
+            masses: self.masses,
+            indptr: self.indptr,
+            protein_ids: self.protein_ids,
+        }
+    }
+}
+
 impl Index<i64> for MassIndex {
     type Output = [i32];
 
@@ -331,20 +369,19 @@ mod tests {
         .await
         .unwrap();
 
-        for mass in mass_index.masses() {
-            let expected_protein_ids = manual_index.get(mass).unwrap();
-            let actual_protein_ids = &mass_index[*mass];
+        for (mass, protein_ids) in mass_index.into_iter() {
+            let expected_protein_ids = manual_index.get(&mass).unwrap();
             assert_eq!(
                 expected_protein_ids.len(),
-                actual_protein_ids.len(),
+                protein_ids.len(),
                 "Mass {}: expected {} protein IDs, got {}",
                 mass,
                 expected_protein_ids.len(),
-                actual_protein_ids.len()
+                protein_ids.len()
             );
-            for protein_id in actual_protein_ids {
+            for protein_id in protein_ids {
                 assert!(
-                    expected_protein_ids.contains(protein_id),
+                    expected_protein_ids.contains(&protein_id),
                     "Mass {}: unexpected protein ID {}",
                     mass,
                     protein_id

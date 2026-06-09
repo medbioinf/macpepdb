@@ -399,9 +399,8 @@ impl PeptideTable {
             })
             .collect::<Vec<_>>();
 
-        for mass in mass_index.masses() {
-            let mut mass_index_entry =
-                Some((*mass, Vec::from_iter(mass_index[*mass].iter().cloned())));
+        for mass_entry in mass_index.into_iter() {
+            let mut mass_index_entry = Some(mass_entry);
             loop {
                 mass_index_entry = match queue.push(mass_index_entry) {
                     Ok(()) => break,
