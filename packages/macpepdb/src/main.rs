@@ -13,12 +13,8 @@ use macpepdb::{
     blob_table::BlobTable,
     client::Client,
     configuration::RuntimeConfiguration,
-    database_build::{
-        DatabaseProteinAccess, InMemoryProteinAccess, IsProteinAccess,
-        get_appropriate_protein_access,
-    },
+    database_build::DatabaseBuild,
     mass::to_float as mass_to_float,
-    mass_index::MassIndex,
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide::Peptidoform,
@@ -26,13 +22,11 @@ use macpepdb::{
     peptide_table::PeptideTable,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
     protease::{Protease, Trypsin},
-    protein::Protein,
     protein_table::ProteinTable,
     sequence::{IsBitSequence, PeptideSequence},
     stats_table::StatsTable,
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
-use sysinfo::System;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use url::Url;
@@ -66,6 +60,8 @@ static GLOBAL: TcMalloc = TcMalloc;
 enum Error {
     #[error("Client error: {0}")]
     Client(#[from] macpepdb::client::Error),
+    #[error("Database build error: {0}")]
+    DatabaseBuild(Box<macpepdb::database_build::Error>),
     #[error("Glob pattern error: {0}")]
     GlobPattern(#[from] glob::PatternError),
     #[error("Glob error: {0}")]
@@ -356,7 +352,7 @@ async fn main() -> Result<(), Error> {
             )
             .unwrap();
 
-            build_db(
+            let configuration = DatabaseBuild::new(
                 client,
                 &protein_file_paths,
                 protease,
@@ -367,14 +363,24 @@ async fn main() -> Result<(), Error> {
                 skip_protein_associations,
                 skip_taxonomies,
                 threads,
-                print_config,
                 tui.as_ref(),
             )
-            .await;
+            .start()
+            .await
+            .map_err(|err| Error::DatabaseBuild(Box::new(err)))?;
 
             if let Some(mut tui) = tui {
                 tracing::info!("Done. Press Ctrl+C or q to exit.");
                 tui.wait().await;
+            }
+
+            if let Some(print_config_path) = print_config.as_ref() {
+                tokio::fs::write(
+                    print_config_path,
+                    serde_json::to_string_pretty(&configuration).unwrap(),
+                )
+                .await
+                .unwrap();
             }
         }
         Command::Config { command } => match command {
@@ -455,241 +461,6 @@ async fn main() -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn build_db(
-    client: Arc<Client>,
-    protein_file_paths: &[PathBuf],
-    protease: Protease,
-    batch_size_limit: NonZeroUsize,
-    concurrent_batch_size: NonZeroUsize,
-    proteins_memory_limit: f64,
-    skip_proteins: bool,
-    skip_protein_associations: bool,
-    skip_taxonomies: bool,
-    num_threads: NonZeroUsize,
-    print_config: Option<PathBuf>,
-    tui: Option<&TuiHandle>,
-) {
-    // 1. set insert proteins or get access to them
-    let (protein_ctr, protein_access) = if !skip_proteins {
-        if let Some(tui) = &tui {
-            tui.add_metric(MetricConfig::rate(
-                macpepdb::protein_table::INSERTED_PROTEINS_METRIC,
-                "Inserted proteins",
-            ));
-        }
-
-        let (protein_ctr, proteins_size) = build_db_proteins(
-            client.clone(),
-            protein_file_paths,
-            concurrent_batch_size,
-            num_threads,
-        )
-        .await;
-        if let Some(tui) = &tui {
-            tui.remove_metric(macpepdb::protein_table::INSERTED_PROTEINS_METRIC);
-        }
-
-        let mut sys = System::new_all();
-        sys.refresh_all();
-        let allowed_usable_memory =
-            (sys.available_memory() as f64 * proteins_memory_limit) as usize;
-        // needed memory is proteins size + an Arc per protein for cheap cloning
-        let needed_memory = proteins_size
-            + (std::mem::size_of::<Arc<Protein>>() + std::mem::size_of::<i32>()) * protein_ctr;
-
-        let protein_access: Box<dyn IsProteinAccess> = if needed_memory <= allowed_usable_memory {
-            tracing::info!(
-                "Keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
-                needed_memory / (1024 * 1024),
-                allowed_usable_memory / (1024 * 1024)
-            );
-            Box::new(InMemoryProteinAccess::new(client.clone()).await.unwrap())
-        } else {
-            tracing::info!(
-                "Not keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
-                needed_memory / (1024 * 1024),
-                allowed_usable_memory / (1024 * 1024)
-            );
-            Box::new(DatabaseProteinAccess::new(client.clone()))
-        };
-
-        (protein_ctr, protein_access)
-    } else {
-        if let Some(tui) = &tui {
-            tui.add_metric(MetricConfig::rate(
-                macpepdb::database_build::APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC,
-                "Processed proteins",
-            ));
-        }
-
-        let (proteins_ctr, protein_access) =
-            get_appropriate_protein_access(client.clone(), proteins_memory_limit)
-                .await
-                .unwrap();
-
-        if let Some(tui) = &tui {
-            tui.remove_metric(macpepdb::database_build::APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC);
-        }
-
-        (proteins_ctr, protein_access)
-    };
-
-    let protein_access = Arc::new(protein_access);
-
-    // 2. step create mass to protein index
-    if let Some(tui) = &tui {
-        tui.add_metric(MetricConfig::progress(
-            macpepdb::mass_index::PROGRESS_METRIC,
-            macpepdb::mass_index::PROGRESS_METRIC,
-            protein_ctr as f64,
-        ));
-    }
-    let mass_index = build_db_mass_index(
-        client.clone(),
-        protein_access.clone(),
-        &protease,
-        num_threads,
-    )
-    .await;
-    if let Some(tui) = &tui {
-        tui.remove_metric(macpepdb::mass_index::PROGRESS_METRIC);
-    }
-
-    // 5. go through masses and digest the proteins collect distinct peptides and upsert them with proteins
-    if let Some(tui) = &tui {
-        tui.add_metric(MetricConfig::progress(
-            macpepdb::peptide_table::PROGRESS_METRIC,
-            macpepdb::peptide_table::PROGRESS_METRIC,
-            mass_index.len() as f64,
-        ));
-        tui.add_metric(MetricConfig::counter(
-            macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
-            macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC,
-        ));
-        tui.add_metric(MetricConfig::gauge(
-            macpepdb::peptide_table::QUEUE_METRIC,
-            macpepdb::peptide_table::QUEUE_METRIC,
-        ));
-    }
-
-    let mass_to_partitions_map = build_db_peptides(
-        client.clone(),
-        protein_access,
-        skip_protein_associations,
-        skip_taxonomies,
-        Arc::new(protease.clone()),
-        batch_size_limit,
-        mass_index,
-        num_threads,
-    )
-    .await;
-    if let Some(tui) = &tui {
-        tui.remove_metric(macpepdb::peptide_table::PROGRESS_METRIC);
-        tui.remove_metric(macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC);
-        tui.remove_metric(macpepdb::peptide_table::QUEUE_METRIC);
-    }
-    let configuration = RuntimeConfiguration::new(mass_to_partitions_map, protease);
-
-    if let Some(print_config_path) = print_config {
-        tokio::fs::write(
-            print_config_path,
-            serde_json::to_string_pretty(&configuration).unwrap(),
-        )
-        .await
-        .unwrap();
-    }
-
-    BlobTable::insert(client.as_ref(), &configuration, concurrent_batch_size)
-        .await
-        .unwrap();
-}
-
-async fn build_db_proteins(
-    client: Arc<Client>,
-    protein_file_paths: &[PathBuf],
-    concurrent_batch_size: NonZeroUsize,
-    num_insertion_threads: NonZeroUsize,
-) -> (usize, usize) {
-    let now = std::time::Instant::now();
-    let (protein_ctr, proteins_size) = ProteinTable::new(client.clone())
-        .build(
-            protein_file_paths.iter(),
-            concurrent_batch_size,
-            num_insertion_threads,
-        )
-        .await
-        .unwrap();
-    tracing::info!(
-        "db proteins: time = {:.2?} s; #proteins = {protein_ctr}",
-        now.elapsed().as_secs_f64(),
-    );
-    StatsTable::new(client.clone())
-        .upsert_protein_count(protein_ctr)
-        .await
-        .unwrap();
-
-    (protein_ctr, proteins_size)
-}
-
-async fn build_db_mass_index(
-    client: Arc<Client>,
-    protein_access: Arc<Box<dyn IsProteinAccess>>,
-    protease: &Protease,
-    num_threads: NonZeroUsize,
-) -> MassIndex {
-    let now = std::time::Instant::now();
-    let index = MassIndex::build(
-        client,
-        protein_access,
-        Arc::new(protease.clone()),
-        num_threads,
-    )
-    .await
-    .unwrap();
-    tracing::info!(
-        "db mass index: time = {:.2?} s; #masses = {}; size: {:.2?} MB",
-        now.elapsed().as_secs_f64(),
-        index.len(),
-        index.size() / (1024 * 1024)
-    );
-
-    index
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn build_db_peptides(
-    client: Arc<Client>,
-    protein_access: Arc<Box<dyn IsProteinAccess>>,
-    skip_protein_associations: bool,
-    skip_taxonomies: bool,
-    protease: Arc<Protease>,
-    batch_size_limit: NonZeroUsize,
-    mass_index: MassIndex,
-    num_threads: NonZeroUsize,
-) -> HashMap<i64, Vec<i64>> {
-    let now = std::time::Instant::now();
-    let (peptide_ctr, mass_to_partitions_map) = PeptideTable::new(client.clone())
-        .build_concurrently(
-            protein_access,
-            skip_protein_associations,
-            skip_taxonomies,
-            protease,
-            batch_size_limit,
-            num_threads,
-            mass_index,
-        )
-        .await
-        .unwrap();
-    tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f64(),);
-    StatsTable::new(client.clone())
-        .upsert_peptide_count(peptide_ctr)
-        .await
-        .unwrap();
-
-    mass_to_partitions_map
 }
 
 /// Axum shutdown signal handler for ctrl-c and terminate signals
