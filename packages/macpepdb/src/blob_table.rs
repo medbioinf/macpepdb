@@ -103,9 +103,9 @@ impl BlobPart {
     }
 }
 
-pub struct Blob;
+pub struct BlobTable;
 
-impl Blob {
+impl BlobTable {
     pub async fn insert<T: IsBlob>(
         client: &Client,
         blob: &T,

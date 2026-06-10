@@ -4,7 +4,7 @@ pub mod amino_acid;
 pub mod configuration;
 #[macro_use]
 pub mod mass;
-pub mod blob;
+pub mod blob_table;
 pub mod client;
 pub mod cql;
 #[macro_use]

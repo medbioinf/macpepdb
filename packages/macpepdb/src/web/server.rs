@@ -10,7 +10,7 @@ use http::Method;
 use thiserror::Error;
 use tower_http::cors::{Any, CorsLayer};
 
-use crate::blob::Blob;
+use crate::blob_table::BlobTable;
 use crate::client::Client;
 use crate::configuration::RuntimeConfiguration;
 use crate::web::configuration_controller::get_configuration;
@@ -26,7 +26,7 @@ use crate::web::server_state::{MatomoInfo, ServerState};
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Blob error in web server: {0}")]
-    Blob(Box<crate::blob::Error>),
+    Blob(Box<crate::blob_table::Error>),
     #[error("Client error in web server: {0}")]
     Client(Box<crate::client::Error>),
     #[error("Missing configuration, are you sure the database is build correctly and finished?")]
@@ -35,8 +35,8 @@ pub enum Error {
     TcpListener(std::io::Error),
 }
 
-impl From<crate::blob::Error> for Error {
-    fn from(value: crate::blob::Error) -> Self {
+impl From<crate::blob_table::Error> for Error {
+    fn from(value: crate::blob_table::Error) -> Self {
         Self::Blob(Box::new(value))
     }
 }
@@ -68,9 +68,10 @@ pub async fn start(
     tracing::info!("Start MaCPepDB web server");
     // Load configuration
     tracing::debug!("Loading configuration...");
-    let configuration: RuntimeConfiguration = Blob::select(&client, RuntimeConfiguration::BLOB_KEY)
-        .await?
-        .ok_or(Error::MissingConfiguration)?;
+    let configuration: RuntimeConfiguration =
+        BlobTable::select(&client, RuntimeConfiguration::BLOB_KEY)
+            .await?
+            .ok_or(Error::MissingConfiguration)?;
 
     let server_state = Arc::new(ServerState::new(
         client,

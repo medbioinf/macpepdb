@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{blob::IsBlob, protease::Protease};
+use crate::{blob_table::IsBlob, protease::Protease};
 
 /// Information necessary to make query the database
 ///

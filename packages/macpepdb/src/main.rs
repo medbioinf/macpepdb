@@ -10,7 +10,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use macpepdb::{
-    blob::Blob,
+    blob_table::BlobTable,
     client::Client,
     configuration::RuntimeConfiguration,
     database_build::{
@@ -381,7 +381,7 @@ async fn main() -> Result<(), Error> {
             ConfigCommand::Show => {
                 let client = Client::new(&cli.database_url).await.unwrap();
                 let configuration: RuntimeConfiguration =
-                    Blob::select(&client, RuntimeConfiguration::BLOB_KEY)
+                    BlobTable::select(&client, RuntimeConfiguration::BLOB_KEY)
                         .await
                         .unwrap()
                         .unwrap();
@@ -602,7 +602,7 @@ async fn build_db(
         .unwrap();
     }
 
-    Blob::insert(client.as_ref(), &configuration, concurrent_batch_size)
+    BlobTable::insert(client.as_ref(), &configuration, concurrent_batch_size)
         .await
         .unwrap();
 }
@@ -732,7 +732,7 @@ async fn peptide_search(
     tui: Option<&TuiHandle>,
 ) {
     let configuration: Arc<RuntimeConfiguration> = Arc::new(
-        Blob::select(client.as_ref(), RuntimeConfiguration::BLOB_KEY)
+        BlobTable::select(client.as_ref(), RuntimeConfiguration::BLOB_KEY)
             .await
             .unwrap()
             .unwrap(),
