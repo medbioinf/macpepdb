@@ -9,8 +9,7 @@ use scylla::{
 use thiserror::Error;
 
 // 10 MB is the recommended disk size per partition.
-// We use 8MB due to Cassandra overhead
-pub static MAX_PARTITION_SIZE: usize = 8_000_000; // 8MB
+pub static MAX_PARTITION_SIZE: usize = 10_000_000; // 8MB
 
 #[derive(Debug, Error)]
 pub enum Error {

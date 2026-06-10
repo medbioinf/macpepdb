@@ -15,18 +15,28 @@ CREATE TABLE IF NOT EXISTS macpepdb.blobs (
     part smallint,
     data blob,
     PRIMARY KEY (key, part)
-);
+) WITH COMPACTION = {
+  'class': 'UnifiedCompactionStrategy',
+  'scaling_parameters': 'T4',
+  'target_sstable_size': '1GiB',
+  'base_shard_count': '4'
+};
 
 DROP TABLE IF EXISTS macpepdb.peptides;
 CREATE TABLE IF NOT EXISTS macpepdb.peptides (
     partition bigint,
     mass bigint,
     sequence blob,
-    protein_ids list<int>,
+    protein_ids blob,
     unique_taxonomy_ids list<int>,
     non_unique_taxonomy_ids list<int>,
     PRIMARY KEY (partition, mass, sequence)
-);
+) WITH COMPACTION = {
+  'class': 'UnifiedCompactionStrategy',
+  'scaling_parameters': 'T8',
+  'target_sstable_size': '1GiB',
+  'base_shard_count': '4'
+};
 
 DROP TABLE IF EXISTS macpepdb.stats;
 CREATE TABLE IF NOT EXISTS macpepdb.stats (

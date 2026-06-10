@@ -650,9 +650,10 @@ async fn build_db_mass_index(
     .await
     .unwrap();
     tracing::info!(
-        "db mass index: time = {:.2?} s; #masses = {}",
+        "db mass index: time = {:.2?} s; #masses = {}; size: {:.2?} MB",
         now.elapsed().as_secs_f64(),
-        index.len()
+        index.len(),
+        index.size() / (1024 * 1024)
     );
 
     index

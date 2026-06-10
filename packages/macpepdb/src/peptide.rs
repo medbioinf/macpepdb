@@ -9,6 +9,7 @@ use zerocopy::IntoBytes;
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
     molecules::WATER_MONO_MASS,
+    protein_ids::ProteinIds,
     sequence::{
         CompactSequence, IsBitSequence, IsSimpleSequence, ModifiedSequence, ModifiedSequencePart,
         PeptideSequence as Sequence,
@@ -64,7 +65,7 @@ pub struct Peptide {
     partition: Option<i64>,
     mass: i64,
     sequence: Sequence,
-    protein_ids: Vec<i32>,
+    protein_ids: ProteinIds,
     unique_taxonomy_ids: Vec<i32>,
     non_unique_taxonomy_ids: Vec<i32>,
     #[scylla(skip)]
@@ -83,7 +84,7 @@ impl Peptide {
         Self {
             mass,
             sequence,
-            protein_ids,
+            protein_ids: protein_ids.into(),
             unique_taxonomy_ids,
             non_unique_taxonomy_ids,
             partition: None,
@@ -137,12 +138,19 @@ impl Peptide {
 
     pub fn cql_size(&self) -> usize {
         const ROW_OVERHEAD: usize = 32;
-        // per-row overhead + partition + mass + sequence (clustering blob) + list cells (i32)
+        // A non-frozen list<int> stores each element as its own cell.
+        const LIST_CELL_SIZE: usize = 16 + 8 + std::mem::size_of::<i32>();
+        // protein_ids is a single blob cell (delta + varint encoded).
+        const BLOB_CELL_OVERHEAD: usize = 16 + 8;
+        // per-row overhead + partition + mass + sequence (clustering blob)
+        // + protein_ids (one blob cell) + taxonomy list cells (i32)
         ROW_OVERHEAD
             + std::mem::size_of::<i64>()
             + std::mem::size_of::<i64>()
             + self.sequence.cql_size()
-            + (self.protein_ids.len() + self.unique_taxonomy_ids.len() + self.non_unique_taxonomy_ids.len()) * (16 + 8 + std::mem::size_of::<i32>())
+            + BLOB_CELL_OVERHEAD
+            + self.protein_ids.encoded_len()
+            + (self.unique_taxonomy_ids.len() + self.non_unique_taxonomy_ids.len()) * LIST_CELL_SIZE
     }
 }
 
@@ -335,7 +343,9 @@ mod tests {
         // +  8 = partition (i64)
         // +  8 = mass (i64)
         // + 32 = sequence.cql_size()
-        // + 168 = 6 list cells (1 protein + 2 + 3 taxonomy) x LIST_CELL_SIZE (28)
-        assert_eq!(peptide.cql_size(), 248);
+        // + 24 = BLOB_CELL_OVERHEAD for protein_ids
+        // +  1 = protein_ids.encoded_len() (single id [1] -> 1 varint byte)
+        // + 140 = 5 taxonomy list cells (2 unique + 3 non-unique) x LIST_CELL_SIZE (28)
+        assert_eq!(peptide.cql_size(), 245);
     }
 }

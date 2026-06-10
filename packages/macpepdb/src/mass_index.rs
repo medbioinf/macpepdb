@@ -58,7 +58,7 @@ pub enum Error {
 
 pub struct MassIndex {
     masses: Vec<i64>,
-    indptr: Vec<u32>,
+    indptr: Vec<u64>,
     protein_ids: Vec<i32>,
 }
 
@@ -201,7 +201,7 @@ impl MassIndex {
         // Build CSR from sorted pairs in one pass.
         // indptr[i+1] counts entries for row i; prefix-summed into offsets after.
         let mut masses = Vec::new();
-        let mut indptr = vec![0u32];
+        let mut indptr = vec![0u64];
         let mut protein_ids = Vec::with_capacity(pairs.len());
 
         for (mass, protein_id) in &pairs {
@@ -239,14 +239,14 @@ impl MassIndex {
     pub fn size(&self) -> usize {
         std::mem::size_of::<Self>()
             + self.masses.capacity() * std::mem::size_of::<i64>()
-            + self.indptr.capacity() * std::mem::size_of::<u32>()
+            + self.indptr.capacity() * std::mem::size_of::<u64>()
             + self.protein_ids.capacity() * std::mem::size_of::<i32>()
     }
 }
 
 pub struct IntoIter {
     masses: Vec<i64>,
-    indptr: Vec<u32>,
+    indptr: Vec<u64>,
     protein_ids: Vec<i32>,
 }
 
