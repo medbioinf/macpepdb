@@ -4,13 +4,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{blob::IsBlob, protease::Protease};
 
+/// Information necessary to make query the database
+///
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Configuration {
+pub struct RuntimeConfiguration {
     mass_partitioning: HashMap<i64, Vec<i64>>,
     protease: Protease,
 }
 
-impl Configuration {
+impl RuntimeConfiguration {
     pub const BLOB_KEY: &str = "configuration";
 
     pub fn new(mass_partitioning: HashMap<i64, Vec<i64>>, protease: Protease) -> Self {
@@ -29,7 +31,7 @@ impl Configuration {
     }
 }
 
-impl IsBlob for Configuration {
+impl IsBlob for RuntimeConfiguration {
     fn key(&self) -> &str {
         Self::BLOB_KEY
     }

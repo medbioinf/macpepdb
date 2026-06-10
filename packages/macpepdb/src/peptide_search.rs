@@ -15,7 +15,7 @@ use scylla::client::pager::TypedRowStream;
 use thiserror::Error;
 
 use crate::amino_acid::{AminoAcid, AminoAcidBitCode, GLYCINE};
-use crate::configuration::Configuration;
+use crate::configuration::RuntimeConfiguration;
 use crate::molecules::WATER_MONO_MASS;
 use crate::peptide::{IsPeptide, Peptidoform};
 use crate::peptide_table::PeptideTable;
@@ -623,7 +623,7 @@ pub trait Search {
     ///
     fn search(
         client: Arc<Client>,
-        configuration: Arc<Configuration>,
+        configuration: Arc<RuntimeConfiguration>,
         mass: i64,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
@@ -671,7 +671,7 @@ pub struct MultiTaskSearch;
 impl Search for MultiTaskSearch {
     async fn search(
         client: Arc<Client>,
-        configuration: Arc<Configuration>,
+        configuration: Arc<RuntimeConfiguration>,
         mass: i64,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,

@@ -12,7 +12,7 @@ use tower_http::cors::{Any, CorsLayer};
 
 use crate::blob::Blob;
 use crate::client::Client;
-use crate::configuration::Configuration;
+use crate::configuration::RuntimeConfiguration;
 use crate::web::configuration_controller::get_configuration;
 use crate::web::error_controller::page_not_found;
 use crate::web::headers::X_DO_NOT_TRACK;
@@ -68,7 +68,7 @@ pub async fn start(
     tracing::info!("Start MaCPepDB web server");
     // Load configuration
     tracing::debug!("Loading configuration...");
-    let configuration: Configuration = Blob::select(&client, Configuration::BLOB_KEY)
+    let configuration: RuntimeConfiguration = Blob::select(&client, RuntimeConfiguration::BLOB_KEY)
         .await?
         .ok_or(Error::MissingConfiguration)?;
 

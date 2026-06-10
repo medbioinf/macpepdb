@@ -2,7 +2,7 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 // internal imports
-use crate::{client::Client, configuration::Configuration};
+use crate::{client::Client, configuration::RuntimeConfiguration};
 
 pub struct MatomoInfo {
     url: String,
@@ -25,7 +25,7 @@ impl MatomoInfo {
 
 pub struct ServerState {
     db_client: Arc<Client>,
-    configuration: Arc<Configuration>,
+    configuration: Arc<RuntimeConfiguration>,
     matomo_info: Option<MatomoInfo>,
     concurrent_searches: NonZeroUsize,
 }
@@ -33,7 +33,7 @@ pub struct ServerState {
 impl ServerState {
     pub fn new(
         db_client: Client,
-        configuration: Configuration,
+        configuration: RuntimeConfiguration,
         matomo_info: Option<MatomoInfo>,
         concurrent_searches: NonZeroUsize,
     ) -> Self {
@@ -59,13 +59,13 @@ impl ServerState {
 
     /// Returns a new ARC of the configuration
     ///
-    pub fn configuration(&self) -> Arc<Configuration> {
+    pub fn configuration(&self) -> Arc<RuntimeConfiguration> {
         self.configuration.clone()
     }
 
     /// Returns a reference to the configuration
     ///
-    pub fn configuration_as_ref(&self) -> &Configuration {
+    pub fn configuration_as_ref(&self) -> &RuntimeConfiguration {
         self.configuration.as_ref()
     }
 

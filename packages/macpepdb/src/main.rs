@@ -12,7 +12,7 @@ use futures::StreamExt;
 use macpepdb::{
     blob::Blob,
     client::Client,
-    configuration::Configuration,
+    configuration::RuntimeConfiguration,
     database_build::{
         DatabaseProteinAccess, InMemoryProteinAccess, IsProteinAccess,
         get_appropriate_protein_access,
@@ -367,10 +367,11 @@ async fn main() -> Result<(), Error> {
         Command::Config { command } => match command {
             ConfigCommand::Show => {
                 let client = Client::new(&cli.database_url).await.unwrap();
-                let configuration: Configuration = Blob::select(&client, Configuration::BLOB_KEY)
-                    .await
-                    .unwrap()
-                    .unwrap();
+                let configuration: RuntimeConfiguration =
+                    Blob::select(&client, RuntimeConfiguration::BLOB_KEY)
+                        .await
+                        .unwrap()
+                        .unwrap();
                 println!("{}", serde_json::to_string_pretty(&configuration).unwrap());
             }
         },
@@ -547,7 +548,7 @@ async fn build_db(
         tui.remove_metric(macpepdb::peptide_table::INSERTED_PEPTIDES_METRIC);
         tui.remove_metric(macpepdb::peptide_table::QUEUE_METRIC);
     }
-    let configuration = Configuration::new(mass_to_partitions_map, protease);
+    let configuration = RuntimeConfiguration::new(mass_to_partitions_map, protease);
 
     if let Some(print_config_path) = print_config {
         tokio::fs::write(
@@ -672,8 +673,8 @@ async fn peptide_search(
     output_file_path: PathBuf,
     tui: Option<&TuiHandle>,
 ) {
-    let configuration: Arc<Configuration> = Arc::new(
-        Blob::select(client.as_ref(), Configuration::BLOB_KEY)
+    let configuration: Arc<RuntimeConfiguration> = Arc::new(
+        Blob::select(client.as_ref(), RuntimeConfiguration::BLOB_KEY)
             .await
             .unwrap()
             .unwrap(),

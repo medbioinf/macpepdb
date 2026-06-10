@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::extract::{Json, State};
 
 // internal imports
-use crate::configuration::Configuration;
+use crate::configuration::RuntimeConfiguration;
 use crate::web::server_state::ServerState;
 
 /// Returns the configuration with which MaCPepDB was created.
@@ -42,6 +42,6 @@ use crate::web::server_state::ServerState;
 ///
 pub async fn get_configuration(
     State(server_state): State<Arc<ServerState>>,
-) -> Json<Configuration> {
+) -> Json<RuntimeConfiguration> {
     Json(server_state.configuration_as_ref().clone())
 }
