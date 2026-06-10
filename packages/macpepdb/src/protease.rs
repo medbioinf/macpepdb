@@ -147,6 +147,140 @@ impl IsProtease for Unspecific {
     }
 }
 
+pub struct MissedCleavageIterator<
+    'a,
+    T: Sized,
+    F: Fn(&[&[AminoAcidBitCode]]) -> Result<Option<T>, Error>,
+> {
+    min_length: NonZeroUsize,
+    max_length: NonZeroUsize,
+    full_digest: Vec<&'a [AminoAcidBitCode]>,
+    max_window_size: usize,
+    mass_range: Option<RangeInclusive<i64>>,
+    prefix_len: Vec<usize>,
+    has_unknown: Vec<bool>,
+    start: usize,
+    window_size: usize,
+    conversion_fn: F,
+}
+
+impl<'a, T, F> MissedCleavageIterator<'a, T, F>
+where
+    T: Sized,
+    F: Fn(&[&[AminoAcidBitCode]]) -> Result<Option<T>, Error>,
+{
+    pub fn new(
+        min_length: NonZeroUsize,
+        max_length: NonZeroUsize,
+        max_missed_cleavages: usize,
+        keep_unknown: bool,
+        mass_range: Option<RangeInclusive<i64>>,
+        full_digest: Vec<&'a [AminoAcidBitCode]>,
+        conversion_fn: F,
+    ) -> Self {
+        let max_window_size = max_missed_cleavages + 1;
+        let mut prefix_len = Vec::with_capacity(full_digest.len());
+        let mut acc = 0usize;
+
+        for seq in &full_digest {
+            acc += seq.len();
+            prefix_len.push(acc);
+        }
+
+        let mut has_unknown = Vec::with_capacity(full_digest.len());
+
+        for seq in &full_digest {
+            has_unknown.push(
+                !keep_unknown
+                    && memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], seq.as_bytes()).is_some(),
+            );
+        }
+
+        Self {
+            min_length,
+            max_length,
+            mass_range,
+            full_digest,
+            max_window_size,
+            prefix_len,
+            has_unknown,
+            conversion_fn,
+            start: 0,
+            window_size: 1,
+        }
+    }
+
+    fn continue_window_size(&mut self) -> Result<Option<T>, Error> {
+        self.window_size += 1;
+        self.next()
+    }
+
+    fn break_window_size(&mut self) -> Result<Option<T>, Error> {
+        self.start += 1;
+        self.window_size = 1;
+        self.next()
+    }
+}
+
+impl<'a, T, F> FallibleIterator for MissedCleavageIterator<'a, T, F>
+where
+    T: Sized,
+    F: Fn(&[&[AminoAcidBitCode]]) -> Result<Option<T>, Error>,
+{
+    type Item = T;
+    type Error = Error;
+
+    fn next(&mut self) -> Result<Option<Self::Item>, Self::Error> {
+        if self.start >= self.full_digest.len() {
+            return Ok(None);
+        }
+
+        if self.window_size > self.max_window_size {
+            return self.break_window_size();
+        }
+
+        let end = (self.start + self.window_size).min(self.full_digest.len());
+
+        if self.start >= end {
+            return self.continue_window_size();
+        }
+
+        let total_len = if self.start == 0 {
+            self.prefix_len[end - 1]
+        } else {
+            self.prefix_len[end - 1] - self.prefix_len[self.start - 1]
+        };
+
+        if total_len > self.max_length.get() {
+            return self.break_window_size();
+        }
+
+        if total_len < self.min_length.get() {
+            return self.continue_window_size();
+        }
+
+        if self.has_unknown[self.start..end].iter().any(|&x| x) {
+            return self.continue_window_size();
+        }
+
+        if let Some(mass_range) = self.mass_range.as_ref() {
+            let mass = Peptide::peptide_mass_from_amino_acid_bits(
+                self.full_digest[self.start..end]
+                    .iter()
+                    .flat_map(|sequences| sequences.iter()),
+            );
+
+            if !mass_range.contains(&mass) {
+                return self.continue_window_size();
+            }
+        }
+
+        self.window_size += 1;
+
+        (self.conversion_fn)(&self.full_digest[self.start..end])
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct Protease {
     #[serde(with = "is_protease_serde")]
@@ -169,90 +303,24 @@ impl Protease {
         mass_range: Option<RangeInclusive<i64>>,
     ) -> impl FallibleIterator<Item = Peptide, Error = Error> + 'a {
         let full_digest = self.inner.full_digest(sequence);
-        let len = full_digest.len();
-        let max_window_size = self.max_missed_cleavages + 1;
-
-        let mut prefix_len = Vec::with_capacity(len);
-        let mut acc = 0usize;
-
-        for frag in &full_digest {
-            acc += frag.len();
-            prefix_len.push(acc);
-        }
-
-        let mut has_unknown = Vec::with_capacity(len);
-
-        for frag in &full_digest {
-            has_unknown.push(
-                !self.keep_unknown
-                    && memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], frag.as_bytes()).is_some(),
-            );
-        }
-
-        fallible_iterator::convert((0..len).flat_map(move |start| {
-            let full_digest = &full_digest;
-            let prefix_len = &prefix_len;
-            let has_unknown = &has_unknown;
-            let len = len;
-            let max_window_size = max_window_size;
-            let mass_range = mass_range.clone();
-
-            let mut out = Vec::with_capacity(max_window_size);
-
-            for window_size in 1..=max_window_size {
-                let end = (start + window_size).min(len);
-
-                if start >= end {
-                    continue;
-                }
-
-                let total_len = if start == 0 {
-                    prefix_len[end - 1]
-                } else {
-                    prefix_len[end - 1] - prefix_len[start - 1]
-                };
-
-                if total_len > self.max_length.get() {
-                    break;
-                }
-
-                if total_len < self.min_length.get() {
-                    continue;
-                }
-
-                if has_unknown[start..end].iter().any(|&x| x) {
-                    continue;
-                }
-
-                if let Some(mass_range) = mass_range.as_ref() {
-                    let mass = Peptide::peptide_mass_from_amino_acid_bits(
-                        full_digest[start..end]
-                            .iter()
-                            .flat_map(|sequences| sequences.iter()),
-                    );
-
-                    if !mass_range.contains(&mass) {
-                        continue;
-                    }
-                }
-
-                let slice = &full_digest[start..end];
-
-                out.push(Sequence::try_from(slice).map_err(Error::from));
-            }
-
-            out.into_iter()
-        }))
-        .map(move |seq| {
-            Ok(Peptide::new(
-                seq,
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                false,
-                false,
-            ))
-        })
+        MissedCleavageIterator::new(
+            self.min_length,
+            self.max_length,
+            self.max_missed_cleavages,
+            self.keep_unknown,
+            mass_range,
+            full_digest,
+            |raw_seq| {
+                Ok(Some(Peptide::new(
+                    Sequence::try_from(raw_seq)?,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    false,
+                    false,
+                )))
+            },
+        )
     }
 
     pub(crate) fn cleave_masses_only<'a>(
@@ -260,71 +328,19 @@ impl Protease {
         sequence: &'a [AminoAcidBitCode],
     ) -> impl FallibleIterator<Item = i64, Error = Error> + 'a {
         let full_digest = self.inner.full_digest(sequence);
-        let len = full_digest.len();
-        let max_window_size = self.max_missed_cleavages + 1;
-
-        let mut prefix_len = Vec::with_capacity(len);
-        let mut acc = 0usize;
-
-        for frag in &full_digest {
-            acc += frag.len();
-            prefix_len.push(acc);
-        }
-
-        let mut has_unknown = Vec::with_capacity(len);
-
-        for frag in &full_digest {
-            has_unknown.push(
-                !self.keep_unknown
-                    && memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], frag.as_bytes()).is_some(),
-            );
-        }
-
-        fallible_iterator::convert((0..len).flat_map(move |start| {
-            let full_digest = &full_digest;
-            let prefix_len = &prefix_len;
-            let has_unknown = &has_unknown;
-            let len = len;
-            let max_window_size = max_window_size;
-
-            let mut out = Vec::with_capacity(max_window_size);
-
-            for window_size in 1..=max_window_size {
-                let end = (start + window_size).min(len);
-
-                if start >= end {
-                    continue;
-                }
-
-                let total_len = if start == 0 {
-                    prefix_len[end - 1]
-                } else {
-                    prefix_len[end - 1] - prefix_len[start - 1]
-                };
-
-                if total_len > self.max_length.get() {
-                    break;
-                }
-
-                if total_len < self.min_length.get() {
-                    continue;
-                }
-
-                if has_unknown[start..end].iter().any(|&x| x) {
-                    continue;
-                }
-
-                let mass = Peptide::peptide_mass_from_amino_acid_bits(
-                    full_digest[start..end]
-                        .iter()
-                        .flat_map(|sequences| sequences.iter()),
-                );
-
-                out.push(Ok(mass));
-            }
-
-            out.into_iter()
-        }))
+        MissedCleavageIterator::new(
+            self.min_length,
+            self.max_length,
+            self.max_missed_cleavages,
+            self.keep_unknown,
+            None,
+            full_digest,
+            |raw_seq| {
+                Ok(Some(Peptide::peptide_mass_from_amino_acid_bits(
+                    raw_seq.iter().flat_map(|sequences| sequences.iter()),
+                )))
+            },
+        )
     }
 
     pub fn by_name(
