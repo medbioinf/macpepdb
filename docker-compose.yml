@@ -1,71 +1,44 @@
-# Local multi-node Citus cluster for MaCPepDB Lite (replaces the 2-node Cassandra setup).
-#
-#   docker compose up -d --scale worker=2     # coordinator + 2 workers
-#   psql -h 127.0.0.1 -U postgres -d macpepdb -f db.sql
-#
-# The membership-manager container watches Docker events and auto-registers each
-# `worker` replica on the coordinator via citus_add_node — so scaling `worker` is all
-# that's needed to add nodes. Coordinator is reachable on localhost:5432.
-#
-# Auth is `trust` for local dev, matching the default URL
-# `postgresql://postgres@127.0.0.1:5432/macpepdb` (no password). Do NOT use trust in prod.
-
-networks:
-  citus-net:
-    driver: bridge
-
 services:
-  coordinator:
-    image: "citusdata/citus:13.0"
-    container_name: "macpepdb-coordinator"
+  master:
+    container_name: "citus-master"
+    image: "citusdata/citus:14"
     ports:
       - "5432:5432"
     labels:
       - "com.citusdata.role=Master"
-    environment: &citus_env
-      POSTGRES_USER: postgres
-      POSTGRES_DB: macpepdb
-      POSTGRES_HOST_AUTH_METHOD: trust
-      PGUSER: postgres
-      PGDATABASE: macpepdb
-    networks:
-      - citus-net
-    volumes:
-      - coordinator-data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d macpepdb"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-  worker:
-    image: "citusdata/citus:13.0"
+    environment: &AUTH
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+      PGUSER: postgres"
+      PGPASSWORD: "postgres"
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+  worker1: &worker
+    image: "citusdata/citus:14"
     labels:
       - "com.citusdata.role=Worker"
-    environment: *citus_env
-    command: "/wait-for-manager.sh"
     depends_on:
       - manager
-    networks:
-      - citus-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d macpepdb"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
+    environment: *AUTH
+    command:
+      - "/citus-overrides/wait-for-manager.sh"
+      - "-c"
+      - "config_file=/citus-overrides/postgresql.conf"
+    volumes:
+      - healthcheck-volume:/healthcheck
+      - ./docker/compose/citus:/citus-overrides
+  worker2:
+    <<: *worker
   manager:
-    image: "citusdata/membership-manager:0.3.0"
-    container_name: "macpepdb-manager"
+    # seems to never been updated. Thanks to author of https://github.com/citusdata/membership-manager/pull/13
+    container_name: "citus-manager"
+    build:
+      context: ./docker/compose/citus-manager
+      tags:
+        - local/citus-membership-manager:latest
     volumes:
       - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
       - healthcheck-volume:/healthcheck
-    depends_on:
-      - coordinator
-    environment: *citus_env
-    networks:
-      - citus-net
-
+    depends_on: [master]
+    environment: *AUTH
 volumes:
-  coordinator-data:
   healthcheck-volume:
