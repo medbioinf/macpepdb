@@ -86,10 +86,12 @@ Three sequential stages, each concurrent internally:
   index keys use the integer form.
 - **Sequences are bit-packed.** `CompactSequence` (`sequence.rs`) stores amino acids as 5 bits each
   (bit code = `char - 'A'`) to save ~30% memory for in-memory maps/sets and DB blobs.
-- **PostgreSQL/Citus schema** (`db.sql`): `peptides` is a **columnar** table distributed by `partition`;
-  `proteins`, `blobs` (chunked key/part storage backing `Blob`/`Configuration`), and `stats` are row-store
-  Citus **reference tables**. Columnar `peptides` has no PK/index — selective reads rely on Citus shard
-  pruning on `partition` plus columnar stripe/chunk-group pruning.
+- **PostgreSQL/Citus schema** (`db.sql`): `peptides` is an **`UNLOGGED` columnar** table distributed by
+  `partition`; `proteins` (distributed by `id`), `blobs` (by `key`, chunked storage backing
+  `Blob`/`Configuration`), and `stats` (by `key`) are row-store distributed tables. Columnar `peptides`
+  has no PK/index — selective reads rely on Citus shard pruning on `partition` plus columnar
+  stripe/chunk-group pruning. `UNLOGGED` skips WAL during the build (rebuildable DB), but means a worker
+  crash truncates its shards → rebuild required.
 - **Peptides are partitioned by mass.** The `Configuration.mass_partitioning` map records which partitions
   hold which mass ranges; search and build both rely on it. The build COPYs exactly `STRIPE_ROW_LIMIT`
   (`cql.rs`, = `db.sql`'s `columnar.stripe_row_limit`) rows per partition so each partition is one full
