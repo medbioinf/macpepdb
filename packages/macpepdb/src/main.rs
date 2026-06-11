@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
     net::SocketAddr,
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -7,7 +8,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use futures::StreamExt;
 use macpepdb::{
     blob_table::BlobTable,
@@ -18,7 +19,7 @@ use macpepdb::{
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide::Peptidoform,
-    peptide_search::{MultiTaskSearch, Search},
+    peptide_search::{MultiTaskSearch, Search, UnionAllSearch},
     peptide_table::PeptideTable,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
     protease::{Protease, Trypsin},
@@ -76,6 +77,21 @@ enum Error {
     ProteinTable(#[from] macpepdb::protein_table::Error),
     #[error("Stats table error: {0}")]
     StatsTable(Box<macpepdb::stats_table::Error>),
+}
+
+#[derive(Clone, ValueEnum)]
+enum PeptideSearchType {
+    MultiTask,
+    UnionAll,
+}
+
+impl Display for PeptideSearchType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PeptideSearchType::MultiTask => write!(f, "multitask"),
+            PeptideSearchType::UnionAll => write!(f, "unionall"),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -181,10 +197,12 @@ enum Command {
         /// Concurrent searches of condition
         #[arg(long, default_value_t = NonZeroUsize::new(16).unwrap())]
         threads: NonZeroUsize,
+        /// Type of search to perform, multi-task search can be faster but also more memory intensive
+        #[arg(long, default_value_t = PeptideSearchType::UnionAll)]
+        r#type: PeptideSearchType,
         /// Upper mass tolerance in PPM
         #[arg(short, long, default_value_t = 10)]
         upper_mass_tolerance_ppm: i64,
-
         // Positional arguments
         /// Canonical mass to search for
         mass: f64,
@@ -404,6 +422,7 @@ async fn main() -> Result<(), Error> {
             proteome_ids,
             taxonomy_ids,
             threads,
+            r#type,
             upper_mass_tolerance_ppm,
             mass,
             output_file_path,
@@ -422,6 +441,7 @@ async fn main() -> Result<(), Error> {
                 proteome_ids,
                 taxonomy_ids,
                 threads,
+                r#type,
                 upper_mass_tolerance_ppm,
                 mass,
                 output_file_path,
@@ -497,6 +517,7 @@ async fn peptide_search(
     proteome_ids: Vec<String>,
     taxonomy_ids: Vec<i32>,
     threads: NonZeroUsize,
+    r#type: PeptideSearchType,
     upper_mass_tolerance_ppm: i64,
     mass: i64,
     output_file_path: PathBuf,
@@ -548,23 +569,42 @@ async fn peptide_search(
             .unwrap(),
     );
 
-    let mut peptide_stream = MultiTaskSearch::search(
-        client,
-        configuration,
-        mass,
-        lower_mass_tolerance_ppm,
-        upper_mass_tolerance_ppm,
-        max_variable_modifications,
-        !allow_duplicates,
-        taxonomy_ids,
-        proteome_ids,
-        is_reviewed,
-        ptm_collection,
-        !only_canonical,
-        threads,
-    )
-    .await
-    .unwrap();
+    let mut peptide_stream = match r#type {
+        PeptideSearchType::MultiTask => MultiTaskSearch::search(
+            client,
+            configuration,
+            mass,
+            lower_mass_tolerance_ppm,
+            upper_mass_tolerance_ppm,
+            max_variable_modifications,
+            !allow_duplicates,
+            taxonomy_ids,
+            proteome_ids,
+            is_reviewed,
+            ptm_collection,
+            !only_canonical,
+            threads,
+        )
+        .await
+        .unwrap(),
+        PeptideSearchType::UnionAll => UnionAllSearch::search(
+            client,
+            configuration,
+            mass,
+            lower_mass_tolerance_ppm,
+            upper_mass_tolerance_ppm,
+            max_variable_modifications,
+            !allow_duplicates,
+            taxonomy_ids,
+            proteome_ids,
+            is_reviewed,
+            ptm_collection,
+            !only_canonical,
+            threads,
+        )
+        .await
+        .unwrap(),
+    };
 
     if let Some(tui) = &tui {
         tui.add_metric(MetricConfig::counter(

@@ -2,6 +2,7 @@ use std::{hash::Hash, sync::OnceLock};
 
 use serde::Serialize;
 use thiserror::Error;
+use tokio_postgres::Row;
 use zerocopy::IntoBytes;
 
 use crate::{
@@ -131,21 +132,6 @@ impl Peptide {
 
     pub fn protein_ids(&self) -> &ProteinIds {
         &self.protein_ids
-    }
-
-    /// Builds a peptide from a queried row. Expects the columns
-    /// `partition, mass, sequence, protein_ids, unique_taxonomy_ids,
-    /// non_unique_taxonomy_ids` (the full `peptides` row).
-    pub fn from_row(row: &tokio_postgres::Row) -> Result<Self, Error> {
-        Ok(Self {
-            partition: Some(row.try_get("partition")?),
-            mass: row.try_get("mass")?,
-            sequence: row.try_get("sequence")?,
-            protein_ids: row.try_get("protein_ids")?,
-            unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
-            non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
-            amino_acid_counts: OnceLock::new(),
-        })
     }
 
     pub fn cql_size(&self) -> usize {
@@ -335,6 +321,22 @@ impl IsPeptide for Peptidoform {
                 })
                 .for_each(|bit_code| counts[bit_code.as_bytes()[0] as usize] += 1);
             counts
+        })
+    }
+}
+
+impl TryFrom<Row> for Peptide {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            partition: Some(row.try_get("partition")?),
+            mass: row.try_get("mass")?,
+            sequence: row.try_get("sequence")?,
+            protein_ids: row.try_get("protein_ids")?,
+            unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
+            non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
+            amino_acid_counts: OnceLock::new(),
         })
     }
 }

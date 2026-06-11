@@ -17,7 +17,7 @@ use urlencoding::decode as urldecode;
 
 use crate::mass::to_float as mass_to_float;
 use crate::peptide::{IsPeptide, Peptide};
-use crate::peptide_search::{MultiTaskSearch, Search};
+use crate::peptide_search::{Search, UnionAllSearch};
 use crate::peptide_table::PeptideTable;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::web::server_state::ServerState;
@@ -552,7 +552,7 @@ async fn search(
         }
     };
 
-    let peptide_stream = MultiTaskSearch::search(
+    let peptide_stream = UnionAllSearch::search(
         server_state.db_client(),
         server_state.configuration(),
         mass,

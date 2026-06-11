@@ -13,12 +13,14 @@ use itertools::Itertools;
 use metrics::{Counter, counter};
 use postgres_types::ToSql;
 use thiserror::Error;
+use tokio_postgres::Row;
 
 use crate::amino_acid::{AminoAcid, AminoAcidBitCode, GLYCINE};
+use crate::client::OwnedRowStream;
 use crate::configuration::RuntimeConfiguration;
 use crate::molecules::WATER_MONO_MASS;
 use crate::peptide::{IsPeptide, Peptidoform};
-use crate::peptide_table::PeptideTable;
+use crate::peptide_table::{COLUMNS, MASS_COL, PARTITION_COL, PeptideTable, TABLE_NAME};
 // use crate::entities::configuration::Configuration;
 // use crate::entities::peptide::MatchingPeptide;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
@@ -29,17 +31,31 @@ use super::client::Client;
 
 pub static MATCHING_PEPTIDE_METRIC: &str = "peptide_search:matching_peptides";
 
+const CONDITION_REF_COL: &str = "condition_ref";
+
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("Client error in peptide search: {0}")]
+    Client(Box<crate::client::Error>),
+    #[error("Missing condition for condition reference index {0} of {1}")]
+    MissingCondition(usize, usize),
+    #[error("Database error in peptide search: {0}")]
+    NextPeptide(Box<tokio_postgres::Error>),
+    #[error("Peptide error in peptide search: {0}")]
+    Peptide(Box<crate::peptide::Error>),
     #[error("Peptide table error in peptide search: {0}")]
     PeptideTable(Box<crate::peptide_table::Error>),
+    #[error("Query portal error in peptide search: {0}")]
+    QueryPortal(Box<tokio_postgres::Error>),
+    #[error("Transaction error in peptide search: {0}")]
+    Transaction(Box<tokio_postgres::Error>),
+    #[error("Row to peptide conversion error in peptide search: {0}")]
+    RowPeptideConversion(Box<tokio_postgres::Error>),
 }
 
-impl From<crate::peptide_table::Error> for Error {
-    fn from(err: crate::peptide_table::Error) -> Self {
-        Self::PeptideTable(Box::new(err))
-    }
-}
+into_thiserror_boxed!(crate::client::Error, Error, Client);
+into_thiserror_boxed!(crate::peptide::Error, Error, Peptide);
+into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
 
 /// Trait to check conditions on peptides
 ///
@@ -381,6 +397,12 @@ where
     }
 }
 
+pub trait IsFallibleMatchingPeptideStream:
+    Stream<Item = Result<Vec<Peptidoform>, Error>> + Send
+{
+    fn matching_peptide_metric(&self) -> &str;
+}
+
 type BoxedPeptideRowStream =
     Pin<Box<dyn Stream<Item = Result<Peptide, crate::peptide_table::Error>> + Send>>;
 
@@ -458,12 +480,6 @@ pub struct FallibleMatchingPeptideStream {
 }
 
 impl FallibleMatchingPeptideStream {
-    pub fn matching_peptide_metric(&self) -> &str {
-        &self.matching_peptide_metric
-    }
-}
-
-impl FallibleMatchingPeptideStream {
     pub async fn new(
         client: Arc<Client>,
         filter_pipeline: FilterPipeline<Peptidoform>,
@@ -511,6 +527,12 @@ impl FallibleMatchingPeptideStream {
             filter_pipeline: Box::pin(filter_pipeline),
             conditions: Box::pin(conditions),
         })
+    }
+}
+
+impl IsFallibleMatchingPeptideStream for FallibleMatchingPeptideStream {
+    fn matching_peptide_metric(&self) -> &str {
+        &self.matching_peptide_metric
     }
 }
 
@@ -602,6 +624,179 @@ impl Stream for FallibleMatchingPeptideStream {
     }
 }
 
+struct PeptideWithConditionRef {
+    condition_ref: usize,
+    inner_peptide: Peptide,
+}
+
+impl PeptideWithConditionRef {
+    pub fn condition_ref(&self) -> usize {
+        self.condition_ref
+    }
+
+    pub fn inner_peptide(&self) -> &Peptide {
+        &self.inner_peptide
+    }
+}
+
+impl TryFrom<Row> for PeptideWithConditionRef {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        let condition_ref =
+            row.try_get::<_, i64>(CONDITION_REF_COL)
+                .map_err(|err| Error::RowPeptideConversion(Box::new(err)))? as usize;
+        Ok(Self {
+            condition_ref,
+            inner_peptide: Peptide::try_from(row)?,
+        })
+    }
+}
+
+impl From<PeptideWithConditionRef> for Peptide {
+    fn from(value: PeptideWithConditionRef) -> Self {
+        value.inner_peptide
+    }
+}
+
+pub struct UnionAllFallibleMatchingPeptideStream {
+    filter_pipeline: Pin<Box<FilterPipeline<Peptidoform>>>,
+    conditions: Pin<Vec<PeptideCondition>>,
+    resolve_modifications: bool,
+    #[allow(clippy::box_collection)]
+    row_stream: Pin<Box<OwnedRowStream>>,
+    matching_peptide_metric: String,
+    matching_peptide_counter: Counter,
+}
+
+impl UnionAllFallibleMatchingPeptideStream {
+    pub async fn new(
+        client: Arc<Client>,
+        filter_pipeline: FilterPipeline<Peptidoform>,
+        conditions: Vec<PeptideCondition>,
+        resolve_modifications: bool,
+    ) -> Result<Self, Error> {
+        let params_len = conditions
+            .iter()
+            .fold(0, |acc, cond| acc + cond.partitions().len())
+            * 2;
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::with_capacity(params_len);
+        let mut placeholders: Vec<(usize, usize, usize)> = Vec::with_capacity(params_len);
+
+        for (condition_idx, condition) in conditions.iter().enumerate() {
+            for partition in condition.partitions() {
+                let params_offset = params.len();
+                params.push(Box::new(*partition));
+                params.push(Box::new(condition.mass()));
+                placeholders.push((condition_idx, params_offset + 1, params_offset + 2));
+            }
+        }
+
+        let statement = placeholders.into_iter().map(|(condition_idx, parititon_placeholder, mass_placeholder)| {
+            format!(
+                "SELECT {condition_idx} as {CONDITION_REF_COL}, {COLUMNS} FROM {TABLE_NAME} WHERE {PARTITION_COL} = ${} AND {MASS_COL} = ${}",
+                parititon_placeholder,
+                mass_placeholder,
+            )
+        })
+        .join(" UNION ALL ");
+
+        let matching_peptide_metric = format!(
+            "{}:{}",
+            MATCHING_PEPTIDE_METRIC,
+            // TODO: Think of a better way to generate the node ID
+            uuid::Uuid::now_v1(&[
+                resolve_modifications as u8,
+                conditions.len() as u8,
+                filter_pipeline.len() as u8,
+                resolve_modifications as u8,
+                conditions.len() as u8,
+                filter_pipeline.len() as u8,
+            ])
+        );
+        let matching_peptide_counter = counter!(matching_peptide_metric.clone());
+
+        let row_stream = client.query_stream(&statement, params).await?;
+
+        Ok(Self {
+            resolve_modifications,
+            matching_peptide_metric,
+            matching_peptide_counter,
+            filter_pipeline: Box::pin(filter_pipeline),
+            conditions: Pin::new(conditions),
+            row_stream: Box::pin(row_stream),
+        })
+    }
+}
+
+impl IsFallibleMatchingPeptideStream for UnionAllFallibleMatchingPeptideStream {
+    fn matching_peptide_metric(&self) -> &str {
+        &self.matching_peptide_metric
+    }
+}
+
+impl Stream for UnionAllFallibleMatchingPeptideStream {
+    type Item = Result<Vec<Peptidoform>, Error>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+
+        'polling_loop: loop {
+            return match Pin::new(&mut this.row_stream).poll_next(cx) {
+                Poll::Ready(Some(Ok(row))) => {
+                    let peptide = match PeptideWithConditionRef::try_from(row) {
+                        Ok(peptide) => peptide,
+                        Err(err) => return Poll::Ready(Some(Err(err))),
+                    };
+
+                    let condition = match this.conditions.get_mut(peptide.condition_ref()) {
+                        Some(condition) => condition,
+                        None => {
+                            return Poll::Ready(Some(Err(Error::MissingCondition(
+                                peptide.condition_ref(),
+                                this.conditions.len(),
+                            ))));
+                        }
+                    };
+
+                    if !condition.is_match(peptide.inner_peptide()) {
+                        continue 'polling_loop;
+                    }
+
+                    let peptidoforms = if this.resolve_modifications {
+                        condition.modify_peptide(peptide.inner_peptide())
+                    } else {
+                        vec![Peptidoform::from(Peptide::from(peptide))]
+                    };
+
+                    let matching_peptidoforms = peptidoforms
+                        .into_iter()
+                        .filter_map(|peptide| match this.filter_pipeline.is_match(&peptide) {
+                            Ok(true) => Some(Ok(peptide)),
+                            Ok(false) => None, // skip non-matching peptide
+                            Err(err) => Some(Err(err)),
+                        })
+                        .collect::<Result<Vec<_>, Error>>();
+
+                    return match matching_peptidoforms {
+                        Ok(peptidoforms) => {
+                            this.matching_peptide_counter
+                                .increment(peptidoforms.len() as u64);
+                            Poll::Ready(Some(Ok(peptidoforms)))
+                        }
+                        Err(err) => Poll::Ready(Some(Err(err))),
+                    };
+                }
+                Poll::Ready(Some(Err(err))) => {
+                    Poll::Ready(Some(Err(Error::NextPeptide(Box::new(err)))))
+                }
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            };
+        }
+    }
+}
+
 /// Defines the search for peptides in the database and provides some helper functions
 ///
 #[allow(clippy::too_many_arguments)]
@@ -637,7 +832,7 @@ pub trait Search {
         ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
         num_threads: NonZeroUsize,
-    ) -> impl Future<Output = Result<FallibleMatchingPeptideStream, Error>> + Send;
+    ) -> impl Future<Output = Result<Pin<Box<dyn IsFallibleMatchingPeptideStream>>, Error>> + Send;
 
     /// Splitup and sort peptide condition by partition and finalize them.
     ///
@@ -685,7 +880,7 @@ impl Search for MultiTaskSearch {
         ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
         num_threads: NonZeroUsize,
-    ) -> Result<FallibleMatchingPeptideStream, Error> {
+    ) -> Result<Pin<Box<dyn IsFallibleMatchingPeptideStream>>, Error> {
         let taxonomy_ids = taxonomy_ids.map(Arc::new);
         let proteome_ids = proteome_ids.map(Arc::new);
 
@@ -745,6 +940,7 @@ impl Search for MultiTaskSearch {
                 num_threads,
             )
             .await
+            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
         } else {
             let conditions = VecDeque::from(PeptideConditionBuilder::new(mass).finalize(
                 configuration.mass_partitioning(),
@@ -765,6 +961,110 @@ impl Search for MultiTaskSearch {
                 num_threads,
             )
             .await
+            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
+        }
+    }
+}
+
+/// Use of PostgreSQL's UNION ALL to concatenate all conditions
+///
+pub struct UnionAllSearch;
+
+impl Search for UnionAllSearch {
+    async fn search(
+        client: Arc<Client>,
+        configuration: Arc<RuntimeConfiguration>,
+        mass: i64,
+        lower_mass_tolerance_ppm: i64,
+        upper_mass_tolerance_ppm: i64,
+        max_variable_modifications: usize,
+        distinct: bool,
+        taxonomy_ids: Option<Vec<i32>>,
+        proteome_ids: Option<Vec<String>>,
+        is_reviewed: Option<bool>,
+        ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
+        resolve_modifications: bool,
+        _num_threads: NonZeroUsize,
+    ) -> Result<Pin<Box<dyn IsFallibleMatchingPeptideStream>>, Error> {
+        let taxonomy_ids = taxonomy_ids.map(Arc::new);
+        let proteome_ids = proteome_ids.map(Arc::new);
+
+        if !ptm_collection.is_empty() {
+            let min_mass = configuration.protease().min_length().get() as i64 * GLYCINE.mono_mass();
+
+            // Calulcate max mass as stated in PeptideCondition::from_ptm_collection() 2.3
+            let largest_negative_static_ptm = ptm_collection
+                .get_static_ptms()
+                .iter()
+                .filter(|ptm| ptm.mass_delta().is_negative())
+                .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
+                .abs();
+
+            let largest_negative_variable_ptm = ptm_collection
+                .get_variable_ptms()
+                .iter()
+                .filter(|ptm| ptm.mass_delta().is_negative())
+                .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
+                .abs();
+
+            // Possible peptide length plus 30% "play" to account for errors
+            let amino_acid_average = AminoAcid::canonical()
+                .iter()
+                .map(|aa| aa.mono_mass())
+                .sum::<i64>()
+                / AminoAcid::canonical().len() as i64;
+            let possible_peptide_length = ((mass / amino_acid_average) as f64 * 1.3) as i64;
+
+            let max_mass = mass
+                + (largest_negative_static_ptm * possible_peptide_length)
+                + (largest_negative_variable_ptm * possible_peptide_length);
+
+            let sorted_ptm_conditions = Self::split_and_sort_peptide_conditions(
+                PeptideConditionBuilder::from_ptm_collection(
+                    &ptm_collection,
+                    mass,
+                    min_mass,
+                    max_mass,
+                    max_variable_modifications,
+                ),
+                configuration.mass_partitioning(),
+                lower_mass_tolerance_ppm,
+                upper_mass_tolerance_ppm,
+            )?;
+
+            UnionAllFallibleMatchingPeptideStream::new(
+                client,
+                FilterPipeline::new_for_general_peptide_attributes(
+                    distinct,
+                    taxonomy_ids,
+                    proteome_ids,
+                    is_reviewed,
+                )?,
+                sorted_ptm_conditions,
+                resolve_modifications,
+            )
+            .await
+            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
+        } else {
+            let conditions = PeptideConditionBuilder::new(mass).finalize(
+                configuration.mass_partitioning(),
+                lower_mass_tolerance_ppm,
+                upper_mass_tolerance_ppm,
+            );
+
+            UnionAllFallibleMatchingPeptideStream::new(
+                client,
+                FilterPipeline::new_for_general_peptide_attributes(
+                    distinct,
+                    taxonomy_ids,
+                    proteome_ids,
+                    is_reviewed,
+                )?,
+                conditions,
+                resolve_modifications,
+            )
+            .await
+            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
         }
     }
 }

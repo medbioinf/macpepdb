@@ -37,7 +37,11 @@ pub const STRIPE_ROW_LIMIT: usize = 150_000;
 /// memory when peptides map to very large protein-id lists.
 const MAX_PARTITION_BYTES: usize = 256 * 1024 * 1024;
 
-const COLUMNS: &str =
+pub const PARTITION_COL: &str = "partition";
+
+pub const MASS_COL: &str = "mass";
+
+pub const COLUMNS: &str =
     "partition, mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids";
 
 static COPY_STATEMENT: LazyLock<String> =
@@ -98,14 +102,6 @@ pub enum Error {
 into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::database_build::Error, Error, ProteinAccess);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
-
-/// Maps a queried row into a `Peptide`, threading both row-decode and parse errors.
-fn row_to_peptide(
-    row_res: Result<tokio_postgres::Row, tokio_postgres::Error>,
-) -> Result<Peptide, Error> {
-    let row = row_res.map_err(Error::from)?;
-    Peptide::from_row(&row).map_err(Error::from)
-}
 
 type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, Vec<i32>)>>>;
 
@@ -184,7 +180,11 @@ impl PeptideTable {
     ) -> Result<impl Stream<Item = Result<Peptide, Error>> + Send + use<>, Error> {
         let statement = format!("{} {where_clause}", SELECT_STATEMENT.as_str());
         let stream = self.client.query_stream(&statement, params).await?;
-        Ok(stream.map(row_to_peptide))
+        Ok(stream.map(|row_res| {
+            row_res
+                .map_err(Error::Row)
+                .and_then(|row| Peptide::try_from(row).map_err(Error::from))
+        }))
     }
 
     pub async fn count(&self) -> Result<usize, Error> {
@@ -322,8 +322,7 @@ impl PeptideTable {
                             // memory guard for peptides in very many proteins).
                             if !peptide_buffer.is_empty()
                                 && (peptide_buffer.len() >= STRIPE_ROW_LIMIT
-                                    || partition_bytes + peptide.cql_size()
-                                        >= MAX_PARTITION_BYTES)
+                                    || partition_bytes + peptide.cql_size() >= MAX_PARTITION_BYTES)
                             {
                                 for &m in &buffer_masses {
                                     mass_partition_map.entry(m).or_default().push(partition);
