@@ -14,6 +14,7 @@ use rand::Rng;
 use scylla::{
     client::{PoolSize, caching_session::CachingSession, session_builder::SessionBuilder},
     errors::{DbError, ExecutionError, RequestAttemptError},
+    frame::Compression,
     statement::Consistency,
 };
 use thiserror::Error;
@@ -192,6 +193,7 @@ impl ClientSettings {
     pub async fn to_session(&self) -> Result<CachingSession, Error> {
         let mut builder = SessionBuilder::new()
             .known_nodes(self.hosts.clone())
+            .compression(Some(Compression::Lz4))
             .use_keyspace(self.keyspace.clone(), true);
 
         if let Some(user) = self.user.as_ref()
