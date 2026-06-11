@@ -1,22 +1,8 @@
-use scylla::{
-    cluster::metadata::{ColumnType, NativeType},
-    deserialize::{FrameSlice, value::DeserializeValue},
-    errors::SerializationError,
-    serialize::{
-        value::SerializeValue,
-        writers::{CellWriter, WrittenCellProof},
-    },
-};
+use postgres_types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use thiserror::Error;
-
-use crate::cql::ensure_not_null_slice;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Unexpected CQL value type for protein_ids: got {0:?}, expected Blob")]
-    UnexpectedCqlValueType(ColumnType<'static>),
-    #[error("protein_ids blob too large for a single CQL cell")]
-    CqlValueTooLarge,
     #[error("Truncated varint while decoding protein_ids")]
     TruncatedVarint,
     #[error("Varint overflow while decoding protein_ids")]
@@ -170,39 +156,33 @@ impl AsRef<[i32]> for ProteinIds {
     }
 }
 
-impl SerializeValue for ProteinIds {
-    fn serialize<'b>(
+// Stored as a BYTEA: delta + zigzag + LEB128 varint encoding of the sorted ids.
+impl ToSql for ProteinIds {
+    fn to_sql(
         &self,
-        typ: &ColumnType,
-        writer: CellWriter<'b>,
-    ) -> Result<WrittenCellProof<'b>, SerializationError> {
-        if !matches!(typ, ColumnType::Native(NativeType::Blob)) {
-            return Err(SerializationError::new(Error::UnexpectedCqlValueType(
-                typ.clone().into_owned(),
-            )));
-        }
-        writer
-            .set_value(self.encode().as_slice())
-            .map_err(|_| SerializationError::new(Error::CqlValueTooLarge))
+        ty: &Type,
+        out: &mut bytes::BytesMut,
+    ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+        self.encode().as_slice().to_sql(ty, out)
     }
+
+    fn accepts(ty: &Type) -> bool {
+        <&[u8] as ToSql>::accepts(ty)
+    }
+
+    to_sql_checked!();
 }
 
-impl<'frame, 'metadata> DeserializeValue<'frame, 'metadata> for ProteinIds {
-    fn type_check(typ: &ColumnType) -> Result<(), scylla::errors::TypeCheckError> {
-        if !matches!(typ, ColumnType::Native(NativeType::Blob)) {
-            return Err(scylla::errors::TypeCheckError::new(
-                Error::UnexpectedCqlValueType(typ.clone().into_owned()),
-            ));
-        }
-        Ok(())
+impl<'a> FromSql<'a> for ProteinIds {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        Ok(Self::decode(raw)?)
     }
 
-    fn deserialize(
-        typ: &'metadata ColumnType<'metadata>,
-        v: Option<FrameSlice<'frame>>,
-    ) -> Result<Self, scylla::errors::DeserializationError> {
-        let bytes = ensure_not_null_slice::<&[u8]>(typ, v)?;
-        Self::decode(bytes).map_err(scylla::errors::DeserializationError::new)
+    fn accepts(ty: &Type) -> bool {
+        <&[u8] as FromSql>::accepts(ty)
     }
 }
 

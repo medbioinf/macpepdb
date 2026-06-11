@@ -1,7 +1,5 @@
 use std::{hash::Hash, sync::OnceLock};
 
-use scylla::{DeserializeRow, SerializeRow};
-
 use serde::Serialize;
 use thiserror::Error;
 use zerocopy::IntoBytes;
@@ -22,12 +20,8 @@ pub const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A') as usize;
 pub enum Error {
     #[error("Client error in peptide: {0}")]
     Client(#[from] crate::client::Error),
-    #[error("CQL execution error in peptide: {0}")]
-    CqlExecution(#[from] Box<scylla::errors::ExecutionError>),
-    #[error("CQL paged execution error in peptide: {0}")]
-    CqlPagedExecution(#[from] Box<scylla::errors::PagerExecutionError>),
-    #[error("CQL type check failed in peptide: {0}")]
-    CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
+    #[error("Row decoding error in peptide: {0}")]
+    Row(#[from] tokio_postgres::Error),
     #[error("Partition not found peptide `{0}` with mass {1}")]
     NoPartition(String, i64),
     #[error("Sequence error in peptide: {0}")]
@@ -60,7 +54,7 @@ pub trait IsPeptide: Send + Sync {
     }
 }
 
-#[derive(DeserializeRow, Serialize, SerializeRow)]
+#[derive(Serialize)]
 pub struct Peptide {
     partition: Option<i64>,
     mass: i64,
@@ -68,7 +62,6 @@ pub struct Peptide {
     protein_ids: ProteinIds,
     unique_taxonomy_ids: Vec<i32>,
     non_unique_taxonomy_ids: Vec<i32>,
-    #[scylla(skip)]
     #[serde(skip)]
     amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
 }
@@ -134,6 +127,25 @@ impl Peptide {
 
     pub fn non_unique_taxonomy_ids(&self) -> &[i32] {
         &self.non_unique_taxonomy_ids
+    }
+
+    pub fn protein_ids(&self) -> &ProteinIds {
+        &self.protein_ids
+    }
+
+    /// Builds a peptide from a queried row. Expects the columns
+    /// `partition, mass, sequence, protein_ids, unique_taxonomy_ids,
+    /// non_unique_taxonomy_ids` (the full `peptides` row).
+    pub fn from_row(row: &tokio_postgres::Row) -> Result<Self, Error> {
+        Ok(Self {
+            partition: Some(row.try_get("partition")?),
+            mass: row.try_get("mass")?,
+            sequence: row.try_get("sequence")?,
+            protein_ids: row.try_get("protein_ids")?,
+            unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
+            non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
+            amino_acid_counts: OnceLock::new(),
+        })
     }
 
     pub fn cql_size(&self) -> usize {

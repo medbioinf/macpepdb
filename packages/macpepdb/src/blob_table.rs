@@ -1,13 +1,6 @@
 use std::{num::NonZeroUsize, sync::LazyLock};
 
-use futures::{TryStreamExt, future::join_all};
-
 use itertools::Itertools;
-use scylla::{
-    DeserializeRow, SerializeRow, client::pager::TypedRowStream, errors::ExecutionError,
-    serialize::row::SerializeRow,
-};
-
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -17,27 +10,27 @@ static MAX_BLOB_PART_SIZE: usize = 500_000; // 500 kB
 static MAX_BLOB_SIZE: usize = 2_usize.pow(16) * MAX_BLOB_PART_SIZE;
 static TABLE_NAME: &str = "blobs";
 
-static UPSERT_STATEMENT: LazyLock<String> =
-    LazyLock::new(|| format!("UPDATE {TABLE_NAME} SET data = ? WHERE key = ? AND part = ?"));
+static UPSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "INSERT INTO {TABLE_NAME} (key, part, data) VALUES ($1, $2, $3) ON CONFLICT (key, part) DO UPDATE SET data = EXCLUDED.data"
+    )
+});
 
-static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
+static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!("SELECT key, part, data FROM {TABLE_NAME} WHERE key = $1 ORDER BY part")
+});
 
-static DELETE_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("DELETE FROM {TABLE_NAME}"));
+static DELETE_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("DELETE FROM {TABLE_NAME} WHERE key = $1 AND part > $2"));
 
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("The given data exceeds the maximum blob size {MAX_BLOB_SIZE} with {0}")]
     BlobTooLarge(usize),
-    #[error("CQL execution error in blob: {0}")]
-    CqlExecution(#[from] scylla::errors::ExecutionError),
-    #[error("CQL next row error in blob: {0}")]
-    CqlNextRow(#[from] scylla::errors::NextRowError),
-    #[error("CQL paged execution error in blob: {0}")]
-    CqlPagedExecution(#[from] scylla::errors::PagerExecutionError),
-    #[error("Unable to prepare statement: `{0}`")]
-    CqlPrepare(#[from] scylla::errors::PrepareError),
-    #[error("CQL type check failed in blob: {0}")]
-    CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
+    #[error("Client error in blob: {0}")]
+    Client(#[from] crate::client::Error),
+    #[error("Row decoding error in blob: {0}")]
+    Row(#[from] tokio_postgres::Error),
     #[error("Deserialization error in blob")]
     Deserialize,
     #[error("Serialization error in blob")]
@@ -48,7 +41,7 @@ pub trait IsBlob: Send + Sync + Serialize + for<'a> Deserialize<'a> {
     fn key(&self) -> &str;
 }
 
-#[derive(Debug, Clone, DeserializeRow, SerializeRow)]
+#[derive(Debug, Clone)]
 struct BlobPart {
     key: String,
     part: i16,
@@ -56,49 +49,38 @@ struct BlobPart {
 }
 
 impl BlobPart {
-    pub async fn upsert_batch(
-        client: &Client,
-        values: impl Iterator<Item = Self>,
-    ) -> Result<(), Error> {
-        let values: Vec<Self> = values.collect();
-        let insertion_futures = values.iter().map(|value| {
-            client.run_congested(move || client.execute_unpaged(UPSERT_STATEMENT.as_str(), value))
-        });
+    fn from_row(row: &tokio_postgres::Row) -> Result<Self, Error> {
+        Ok(Self {
+            key: row.try_get("key")?,
+            part: row.try_get("part")?,
+            data: row.try_get("data")?,
+        })
+    }
 
-        join_all(insertion_futures)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, ExecutionError>>()?;
-
+    pub async fn upsert_batch(client: &Client, values: Vec<Self>) -> Result<(), Error> {
+        // Blobs are tiny (the config), so insert parts sequentially — the bound
+        // param array is a borrowed temporary that must live across each await.
+        for value in &values {
+            client
+                .execute(
+                    UPSERT_STATEMENT.as_str(),
+                    &[&value.key, &value.part, &value.data],
+                )
+                .await?;
+        }
         Ok(())
     }
 
-    pub async fn select(
-        client: &Client,
-        select_addition: Option<&str>,
-        values: impl SerializeRow,
-    ) -> Result<TypedRowStream<Self>, Error> {
-        let statement = select_addition
-            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
-            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
-
-        Ok(client
-            .execute_iter(statement.as_str(), values)
-            .await?
-            .rows_stream::<Self>()?)
+    pub async fn select_by_key(client: &Client, key: &str) -> Result<Vec<Self>, Error> {
+        let rows = client.query(SELECT_STATEMENT.as_str(), &[&key]).await?;
+        rows.iter().map(Self::from_row).collect()
     }
 
-    pub async fn delete(
-        client: &Client,
-        select_addition: Option<&str>,
-        values: impl SerializeRow,
-    ) -> Result<(), Error> {
-        let statement = select_addition
-            .map(|addition| format!("{} {}", DELETE_STATEMENT.as_str(), addition))
-            .unwrap_or_else(|| DELETE_STATEMENT.as_str().to_string());
-
-        client.execute_iter(statement, values).await?;
-
+    /// Deletes leftover parts above `part` (used to truncate a previously larger blob).
+    pub async fn delete_above(client: &Client, key: &str, part: i16) -> Result<(), Error> {
+        client
+            .execute(DELETE_STATEMENT.as_str(), &[&key, &part])
+            .await?;
         Ok(())
     }
 }
@@ -136,25 +118,17 @@ impl BlobTable {
             })
             .collect::<Vec<_>>();
 
-        BlobPart::delete(
-            client,
-            Some("WHERE key = ? AND part > ?"),
-            (blob.key(), part_ctr),
-        )
-        .await?;
+        BlobPart::delete_above(client, blob.key(), part_ctr).await?;
 
         for blob_part_batch in &blob_parts.into_iter().chunks(concurrent_batch_size.get()) {
-            BlobPart::upsert_batch(client, blob_part_batch).await?;
+            BlobPart::upsert_batch(client, blob_part_batch.collect()).await?;
         }
 
         Ok(())
     }
 
     pub async fn select<T: IsBlob>(client: &Client, key: &str) -> Result<Option<T>, Error> {
-        let mut blob_parts = BlobPart::select(client, Some("WHERE key = ?"), (key,))
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
+        let mut blob_parts = BlobPart::select_by_key(client, key).await?;
 
         if blob_parts.is_empty() {
             return Ok(None);

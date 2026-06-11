@@ -1,6 +1,5 @@
 use std::{
     collections::{HashMap, HashSet},
-    iter::Peekable,
     num::NonZeroUsize,
     ops::AddAssign,
     sync::{
@@ -12,19 +11,15 @@ use std::{
 
 use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
-use futures::StreamExt;
-use scylla::{
-    client::pager::TypedRowStream,
-    serialize::batch::BatchValuesFromIterator,
-    statement::batch::{Batch, BatchType},
-};
+use futures::{Stream, StreamExt};
+use postgres_types::{ToSql, Type};
 use thiserror::Error;
 
 use crate::{
     client::Client,
     database_build::IsProteinAccess,
     mass_index::MassIndex,
-    peptide::Peptide,
+    peptide::{IsPeptide, Peptide},
     protease::Protease,
     sequence::{CompactSequence, PeptideSequence},
     stats_table::StatsTable,
@@ -32,13 +27,36 @@ use crate::{
 
 pub const TABLE_NAME: &str = "peptides";
 
-static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!(
-        "INSERT INTO {TABLE_NAME} (partition, mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids) VALUES (?, ?, ?, ?, ?, ?)"
-    )
+/// Rows per columnar stripe. The build COPYs exactly this many rows per partition so
+/// each partition becomes one full columnar stripe — this MUST match
+/// `columnar.stripe_row_limit` in `db.sql`.
+pub const STRIPE_ROW_LIMIT: usize = 150_000;
+
+/// Memory guard: flush a partition early if its buffered rows exceed this many bytes
+/// (estimated via `Peptide::cql_size`), even before `STRIPE_ROW_LIMIT`. Bounds worker
+/// memory when peptides map to very large protein-id lists.
+const MAX_PARTITION_BYTES: usize = 256 * 1024 * 1024;
+
+const COLUMNS: &str =
+    "partition, mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids";
+
+static COPY_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("COPY {TABLE_NAME} ({COLUMNS}) FROM STDIN (FORMAT binary)"));
+
+/// Column types for the binary COPY into `peptides`, in column order.
+static COPY_TYPES: LazyLock<[Type; 6]> = LazyLock::new(|| {
+    [
+        Type::INT8,       // partition
+        Type::INT8,       // mass
+        Type::BYTEA,      // sequence (CompactSequence bytes)
+        Type::BYTEA,      // protein_ids (delta+varint bytes)
+        Type::INT4_ARRAY, // unique_taxonomy_ids
+        Type::INT4_ARRAY, // non_unique_taxonomy_ids
+    ]
 });
 
-static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
+static SELECT_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT {COLUMNS} FROM {TABLE_NAME}"));
 
 pub static PROGRESS_METRIC: &str = "peptides_table::build::progress";
 pub static INSERTED_PEPTIDES_METRIC: &str = "peptides_table::build::inserted_peptides";
@@ -53,16 +71,8 @@ pub enum Error {
         StatsTable::table_name()
     )]
     CountNotFound,
-    #[error("CQL execution error in peptide table: {0}")]
-    CqlExecution(Box<scylla::errors::ExecutionError>),
-    #[error("CQL paged execution error in peptide table: {0}")]
-    CqlPagedExecution(Box<scylla::errors::PagerExecutionError>),
-    #[error("CQL type check failed in peptide table: {0}")]
-    CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
-    #[error("CQL next row error in peptide table: {0}")]
-    CqlNextRow(#[from] scylla::errors::NextRowError),
-    // #[error("Indexing stopped unexpectedly before finishing the protein processing ")]
-    // EarlyIndexThreadStop,
+    #[error("Row decoding error in peptide table: {0}")]
+    Row(#[from] tokio_postgres::Error),
     #[error("IO error in peptide table: {0}")]
     Io(#[from] std::io::Error),
     #[error("Unable to join insertion task: {0}")]
@@ -79,23 +89,23 @@ pub enum Error {
     Peptide(#[from] crate::peptide::Error),
     #[error("Sequence error in peptide table: {0}")]
     Sequence(#[from] crate::sequence::Error),
-    // #[error("Protein reader thread error: {0}")]
-    // ProteinReaderThread(String),
     #[error("Stats table error in peptide table: {0}")]
     StatsTable(Box<crate::stats_table::Error>),
     #[error("UnipotReader error in peptide table: {0}")]
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-into_thiserror_boxed!(scylla::errors::ExecutionError, Error, CqlExecution);
-into_thiserror_boxed!(
-    scylla::errors::PagerExecutionError,
-    Error,
-    CqlPagedExecution
-);
 into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::database_build::Error, Error, ProteinAccess);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
+
+/// Maps a queried row into a `Peptide`, threading both row-decode and parse errors.
+fn row_to_peptide(
+    row_res: Result<tokio_postgres::Row, tokio_postgres::Error>,
+) -> Result<Peptide, Error> {
+    let row = row_res.map_err(Error::from)?;
+    Peptide::from_row(&row).map_err(Error::from)
+}
 
 type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, Vec<i32>)>>>;
 
@@ -125,77 +135,56 @@ impl PeptideTable {
         Self { client }
     }
 
-    pub async fn insert(&self, peptide: &Peptide) -> Result<(), Error> {
-        self.client
-            .run_congested(|| {
-                self.client
-                    .execute_unpaged(INSERT_STATEMENT.as_str(), peptide)
-            })
-            .await?;
-        Ok(())
-    }
-
-    async fn insert_batch(
-        &self,
-        peptides: Peekable<impl Iterator<Item = Peptide>>,
-        batch_size_limit: NonZeroUsize,
-    ) -> Result<usize, Error> {
-        let mut peptide_buffer_cql_size = 0;
-        let mut peptide_buffer: Vec<Peptide> = Vec::new();
-
-        let mut peptides = peptides.into_iter().peekable();
-        let mut inserted_peptides = 0;
-
-        while let Some(peptide) = peptides.next() {
-            peptide_buffer_cql_size += peptide.cql_size();
-            peptide_buffer.push(peptide);
-
-            if let Some(next_peptide) = peptides.peek()
-                && peptide_buffer.len() < 100
-                && peptide_buffer_cql_size + next_peptide.cql_size() < batch_size_limit.get() * 1000
-            {
-                continue;
-            }
-
-            let peptide_buffer_len = peptide_buffer.len();
-            let mut batch_statement = Batch::new(BatchType::Unlogged);
-            (0..peptide_buffer_len).for_each(|_| {
-                batch_statement.append_statement(INSERT_STATEMENT.as_str());
-            });
-            if let Some(consistency) = self.client.write_consistency_level() {
-                batch_statement.set_consistency(consistency);
-            }
-            self.client
-                .run_congested(|| {
-                    self.client.batch(
-                        &batch_statement,
-                        BatchValuesFromIterator::new(peptide_buffer.iter()),
-                    )
-                })
-                .await?;
-
-            peptide_buffer_cql_size = 0;
-            peptide_buffer.clear();
-            inserted_peptides += peptide_buffer_len
+    /// Bulk-loads a partition's peptides via one binary COPY transaction. Columnar
+    /// turns each transaction into a single stripe, so the whole partition buffer must
+    /// go in one COPY (see the migration plan). COPY is transactional, so the whole
+    /// thing is retried atomically on transient errors.
+    async fn insert_batch(&self, peptides: &[Peptide]) -> Result<usize, Error> {
+        if peptides.is_empty() {
+            return Ok(0);
         }
 
-        Ok(inserted_peptides)
+        self.client
+            .run_congested(|| async {
+                let mut copy = self
+                    .client
+                    .copy_in_binary(COPY_STATEMENT.as_str(), COPY_TYPES.as_slice())
+                    .await?;
+                for peptide in peptides {
+                    let partition = peptide
+                        .partition()
+                        .expect("peptide partition must be set before COPY");
+                    let mass = peptide.mass();
+                    let unique = peptide.unique_taxonomy_ids();
+                    let non_unique = peptide.non_unique_taxonomy_ids();
+                    copy.write(&[
+                        &partition,
+                        &mass,
+                        peptide.sequence(),
+                        peptide.protein_ids(),
+                        &unique,
+                        &non_unique,
+                    ])
+                    .await?;
+                }
+                copy.finish().await?;
+                Ok::<(), crate::client::Error>(())
+            })
+            .await?;
+
+        Ok(peptides.len())
     }
 
+    /// Streams peptides matching `where_clause` (e.g. `WHERE partition = ANY($1) AND
+    /// mass = $2`), binding `params` positionally.
     pub async fn select(
         &self,
-        select_addition: Option<&str>,
-        values: impl scylla::serialize::row::SerializeRow,
-    ) -> Result<TypedRowStream<Peptide>, Error> {
-        let statement = select_addition
-            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
-            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
-
-        Ok(self
-            .client
-            .execute_iter(statement, values)
-            .await?
-            .rows_stream::<Peptide>()?)
+        where_clause: &str,
+        params: Vec<Box<dyn ToSql + Sync + Send>>,
+    ) -> Result<impl Stream<Item = Result<Peptide, Error>> + Send + use<>, Error> {
+        let statement = format!("{} {where_clause}", SELECT_STATEMENT.as_str());
+        let stream = self.client.query_stream(&statement, params).await?;
+        Ok(stream.map(row_to_peptide))
     }
 
     pub async fn count(&self) -> Result<usize, Error> {
@@ -213,7 +202,7 @@ impl PeptideTable {
         skip_protein_associations: bool,
         skip_taxonomies: bool,
         protease: Arc<Protease>,
-        batch_size_limit: NonZeroUsize,
+        _batch_size_limit: NonZeroUsize,
         num_threads: NonZeroUsize,
         mass_index: MassIndex,
     ) -> Result<(usize, HashMap<i64, Vec<i64>>), Error> {
@@ -239,11 +228,10 @@ impl PeptideTable {
                     let peptide_table = PeptideTable::new(client.clone());
                     let mut mass_partition_map: HashMap<i64, Vec<i64>> = HashMap::new();
                     let mut peptide_buffer: Vec<Peptide> = Vec::new();
-                    let mut partition_cql_size: usize = 0;
-                    let mut batch_cql_size: usize = 0;
+                    let mut partition_bytes: usize = 0;
                     let mut partition = next_partition_guard.next_partition();
 
-                    // Track which masses have peptides in the current buffer
+                    // Track which masses have peptides in the current buffer.
                     let mut buffer_masses: HashSet<i64> = HashSet::new();
 
                     loop {
@@ -255,19 +243,15 @@ impl PeptideTable {
                                         mass_partition_map.entry(m).or_default().push(partition);
                                     }
                                     tracing::debug!(
-                                        "Inserting {} peptides into partition {partition}; partition size {}/{}",
+                                        "Flushing {} peptides into partition {partition} (final)",
                                         peptide_buffer.len(),
-                                        partition_cql_size as f32 / 1000.0 / 1000.0,
-                                        crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
                                     );
-                                    let inserted_peptides = peptide_table
-                                        .insert_batch(
-                                            peptide_buffer.drain(..).peekable(),
-                                            batch_size_limit,
-                                        )
-                                        .await?;
-                                    peptide_ctr.fetch_add(inserted_peptides, std::sync::atomic::Ordering::SeqCst);
-                                    inserted_peptides_metric.increment(inserted_peptides as u64);
+                                    let inserted =
+                                        peptide_table.insert_batch(&peptide_buffer).await?;
+                                    peptide_buffer.clear();
+                                    peptide_ctr
+                                        .fetch_add(inserted, std::sync::atomic::Ordering::SeqCst);
+                                    inserted_peptides_metric.increment(inserted as u64);
                                 }
                                 break;
                             }
@@ -276,29 +260,6 @@ impl PeptideTable {
                                 continue;
                             }
                         };
-
-                        // Flush buffer if it's large enough before processing new mass
-                        if batch_cql_size >= batch_size_limit.get() * 1000 {
-                            for &m in &buffer_masses {
-                                mass_partition_map.entry(m).or_default().push(partition);
-                            }
-                            tracing::debug!(
-                                "Inserting {} peptides into partition {partition}; partition size {}/{}",
-                                peptide_buffer.len(),
-                                partition_cql_size as f32 / 1000.0 / 1000.0,
-                                crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
-                            );
-                            let inserted_peptides = peptide_table
-                                .insert_batch(
-                                    peptide_buffer.drain(..).peekable(),
-                                    batch_size_limit,
-                                )
-                                .await?;
-                            peptide_ctr.fetch_add(inserted_peptides, std::sync::atomic::Ordering::SeqCst);
-                            inserted_peptides_metric.increment(inserted_peptides as u64);
-                            batch_cql_size = 0;
-                            buffer_masses.clear();
-                        }
 
                         let protein_ids = Vec::from_iter(protein_ids);
 
@@ -356,39 +317,35 @@ impl PeptideTable {
                             .collect::<Result<_, _>>()?;
 
                         for mut peptide in peptides {
-                            // If adding this peptide would exceed partition size, flush and start new partition
+                            // Flush when the partition has filled one columnar stripe
+                            // (row count is the primary trigger; the byte ceiling is a
+                            // memory guard for peptides in very many proteins).
                             if !peptide_buffer.is_empty()
-                                && partition_cql_size + peptide.cql_size()
-                                    >= crate::cql::MAX_PARTITION_SIZE
+                                && (peptide_buffer.len() >= STRIPE_ROW_LIMIT
+                                    || partition_bytes + peptide.cql_size()
+                                        >= MAX_PARTITION_BYTES)
                             {
                                 for &m in &buffer_masses {
                                     mass_partition_map.entry(m).or_default().push(partition);
                                 }
                                 tracing::debug!(
-                                    "Partition full: {} peptides into partition {partition}; cql size {}/{}",
+                                    "Partition {partition} full: flushing {} peptides ({} bytes)",
                                     peptide_buffer.len(),
-                                    partition_cql_size as f32 / 1000.0 / 1000.0,
-                                    crate::cql::MAX_PARTITION_SIZE as f32 / 1000.0 / 1000.0,
+                                    partition_bytes,
                                 );
-                                let inserted_peptides = peptide_table
-                                    .insert_batch(
-                                        peptide_buffer.drain(..).peekable(),
-                                        batch_size_limit,
-                                    )
-                                    .await?;
-                                peptide_ctr.fetch_add(inserted_peptides, std::sync::atomic::Ordering::SeqCst);
-                                inserted_peptides_metric.increment(inserted_peptides as u64);
-                                batch_cql_size = 0;
-                                partition_cql_size = 0;
+                                let inserted = peptide_table.insert_batch(&peptide_buffer).await?;
+                                peptide_buffer.clear();
+                                peptide_ctr
+                                    .fetch_add(inserted, std::sync::atomic::Ordering::SeqCst);
+                                inserted_peptides_metric.increment(inserted as u64);
+                                partition_bytes = 0;
                                 buffer_masses.clear();
                                 partition = next_partition_guard.next_partition();
                             }
 
-                            let cql_size = peptide.cql_size();
+                            partition_bytes += peptide.cql_size();
                             peptide.set_partition(partition);
                             peptide_buffer.push(peptide);
-                            partition_cql_size += cql_size;
-                            batch_cql_size += cql_size;
                             buffer_masses.insert(mass);
                         }
 

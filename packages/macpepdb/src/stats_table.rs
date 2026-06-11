@@ -1,30 +1,26 @@
 use std::sync::{Arc, LazyLock};
 
-use futures::StreamExt;
 use thiserror::Error;
 
 use crate::{client::Client, tools};
 
 pub static TABLE_NAME: &str = "stats";
 
-static UPSERT_STATEMENT: LazyLock<String> =
-    LazyLock::new(|| format!("UPDATE {TABLE_NAME} SET value = ? WHERE key = ?"));
+static UPSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "INSERT INTO {TABLE_NAME} (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+    )
+});
 
 static SELECT_STATEMENT: LazyLock<String> =
-    LazyLock::new(|| format!("SELECT value FROM {TABLE_NAME} WHERE key = ? LIMIT 1"));
+    LazyLock::new(|| format!("SELECT value FROM {TABLE_NAME} WHERE key = $1 LIMIT 1"));
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("CQL execution error in stats table: {0}")]
-    CqlExecution(#[from] scylla::errors::ExecutionError),
-    #[error("CQL next row error in stats table: {0}")]
-    CqlNextRow(#[from] scylla::errors::NextRowError),
-    #[error("CQL paged execution error in stats table: {0}")]
-    CqlPagedExecution(#[from] scylla::errors::PagerExecutionError),
-    #[error("Unable to prepare statement: `{0}`")]
-    CqlPrepare(#[from] scylla::errors::PrepareError),
-    #[error("CQL type check failed in stats table: {0}")]
-    CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
+    #[error("Client error in stats table: {0}")]
+    Client(#[from] crate::client::Error),
+    #[error("Row decoding error in stats table: {0}")]
+    Row(#[from] tokio_postgres::Error),
 }
 
 static PROTEIN_COUNT: &str = "protein_count";
@@ -46,22 +42,20 @@ impl StatsTable {
 
     async fn upsert(&self, key: &str, value: i64) -> Result<(), Error> {
         self.client
-            .as_ref()
-            .execute_unpaged(UPSERT_STATEMENT.as_str(), (value, key))
+            .execute(UPSERT_STATEMENT.as_str(), &[&key, &value])
             .await?;
-
         Ok(())
     }
 
     async fn select(&self, key: &str) -> Result<Option<i64>, Error> {
-        let mut stream = self
+        let rows = self
             .client
-            .as_ref()
-            .execute_iter(SELECT_STATEMENT.as_str(), (key,))
-            .await?
-            .rows_stream::<(i64,)>()?;
-
-        Ok(stream.next().await.transpose()?.map(|row| row.0))
+            .query(SELECT_STATEMENT.as_str(), &[&key])
+            .await?;
+        match rows.first() {
+            Some(row) => Ok(Some(row.try_get::<_, i64>(0)?)),
+            None => Ok(None),
+        }
     }
 
     pub async fn upsert_protein_count(&self, count: usize) -> Result<(), Error> {

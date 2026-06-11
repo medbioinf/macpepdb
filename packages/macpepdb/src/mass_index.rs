@@ -16,10 +16,6 @@ static LOCAL_MASS_LIMIT: usize = 10_000;
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("CQL next row error in mass index: {0}")]
-    CqlNextRow(#[from] scylla::errors::NextRowError),
-    // #[error("Indexing stopped unexpectedly before finishing the protein processing ")]
-    // EarlyIndexThreadStop,
     #[error(
         "Unable to unwrap masses from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
     )]

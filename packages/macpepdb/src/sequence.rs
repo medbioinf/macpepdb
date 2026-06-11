@@ -6,22 +6,13 @@ use std::{
 };
 
 use pastey::paste;
-use scylla::{
-    cluster::metadata::{ColumnType, NativeType},
-    deserialize::value::DeserializeValue,
-    errors::SerializationError,
-    serialize::{
-        value::SerializeValue,
-        writers::{CellWriter, WrittenCellProof},
-    },
-};
+use postgres_types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use serde::Serialize;
 use thiserror::Error;
 use zerocopy::IntoBytes;
 
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
-    cql::ensure_not_null_slice,
     mass::to_float as mass_to_float,
 };
 
@@ -29,21 +20,12 @@ use crate::{
 pub enum Error {
     #[error("Amino acid in sequence: {0}")]
     AminoAcid(#[from] crate::amino_acid::Error),
-    #[error("CQL value too large for blob")]
-    CqlValueTooLarge,
-    #[error("Internal CQL error in sequence: {0}")]
-    InternalCql(#[from] crate::cql::Error),
     #[error("Malformed byte: {0:?}")]
     MalformedBytes(CompactSequence),
     #[error("Sequence too large {length} exceeds max {max_length})")]
     TooLong { length: usize, max_length: usize },
     #[error("Sequence too short {length} exceeds min {min_length})")]
     TooShort { length: usize, min_length: usize },
-    #[error("Expected {0:?} got {1:?}")]
-    UnexpectedCqlValueType(
-        scylla::cluster::metadata::ColumnType<'static>,
-        scylla::cluster::metadata::ColumnType<'static>,
-    ),
 }
 
 /// A more compact version of sequence, which stores the amino acids as
@@ -80,8 +62,8 @@ pub trait IsBitSequence<T: num_traits::Unsigned>:
     Debug
     + TryFrom<CompactSequence>
     + for<'a> TryFrom<&'a str>
-    + for<'frame, 'metadata> DeserializeValue<'frame, 'metadata>
-    + SerializeValue
+    + for<'a> FromSql<'a>
+    + ToSql
     + IsSimpleSequence
 {
     const MIN_LENGTH: NonZeroUsize;
@@ -380,46 +362,34 @@ macro_rules! make_sequence {
                 }
             }
 
-            impl SerializeValue for [< $name:camel >] {
-                fn serialize<'b>(
+            // Stored as a BYTEA: the bit-packed `CompactSequence` bytes (5 bits/AA).
+            impl ToSql for [< $name:camel >] {
+                fn to_sql(
                     &self,
-                    typ: &ColumnType,
-                    writer: CellWriter<'b>,
-                ) -> Result<WrittenCellProof<'b>, SerializationError> {
-                    if !matches!(typ, ColumnType::Native(NativeType::Blob)) {
-                        return Err(SerializationError::new(Error::UnexpectedCqlValueType(
-                            typ.clone().into_owned(),
-                            ColumnType::Native(NativeType::Blob),
-                        )));
-                    }
-
-                    let byte_sequence = CompactSequence::try_from(self).map_err(|err| SerializationError::new(err))?;
-                    writer
-                        .set_value(byte_sequence.as_ref())
-                        .map_err(|_| SerializationError::new(Error::CqlValueTooLarge))
+                    ty: &Type,
+                    out: &mut bytes::BytesMut,
+                ) -> Result<IsNull, Box<dyn std::error::Error + Sync + Send>> {
+                    let byte_sequence = CompactSequence::try_from(self)?;
+                    byte_sequence.as_ref().to_sql(ty, out)
                 }
+
+                fn accepts(ty: &Type) -> bool {
+                    <&[u8] as ToSql>::accepts(ty)
+                }
+
+                to_sql_checked!();
             }
 
-            impl<'frame, 'metadata> DeserializeValue<'frame, 'metadata> for [< $name:camel >] {
-                fn type_check(typ: &ColumnType) -> Result<(), scylla::errors::TypeCheckError> {
-                    if !matches!(typ, ColumnType::Native(NativeType::Blob)) {
-                        return Err(scylla::errors::TypeCheckError::new(
-                            Error::UnexpectedCqlValueType(
-                                typ.clone().into_owned(),
-                                ColumnType::Native(NativeType::Blob),
-                            ),
-                        ));
-                    }
-                    Ok(())
+            impl<'a> FromSql<'a> for [< $name:camel >] {
+                fn from_sql(
+                    _ty: &Type,
+                    raw: &'a [u8],
+                ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+                    Ok(Self::try_from(CompactSequence(raw.to_vec()))?)
                 }
 
-                fn deserialize(
-                    typ: &'metadata scylla::cluster::metadata::ColumnType<'metadata>,
-                    v: Option<scylla::deserialize::FrameSlice<'frame>>,
-                ) -> Result<Self, scylla::errors::DeserializationError> {
-                    let val = ensure_not_null_slice::<&[u8]>(typ, v)?;
-                    let compact_sequence = CompactSequence(val.to_vec());
-                    Self::try_from(compact_sequence).map_err(|err| scylla::errors::DeserializationError::new(err))
+                fn accepts(ty: &Type) -> bool {
+                    <&[u8] as FromSql>::accepts(ty)
                 }
             }
         }

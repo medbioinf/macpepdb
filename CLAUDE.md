@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 MaCPepDB Lite builds and serves a mass-indexed peptide database. It digests UniProt protein
-files with a protease, stores the resulting peptides in ScyllaDB (Cassandra-compatible), and
+files with a protease, stores the resulting peptides in PostgreSQL with the Citus extension, and
 answers mass-based peptide searches (including variable post-translational modifications) over
 a CLI and an HTTP API.
 
@@ -34,15 +34,20 @@ database. Fixtures live in `test_data/` and are located via `CARGO_MANIFEST_DIR`
 
 ### Running against a database
 
-The default DB URL is `scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb`. Bring up a local
-two-node cluster and initialize the schema before building:
+The default DB URL is `postgresql://postgres@127.0.0.1:5432/macpepdb`. Bring up a local
+Citus cluster and initialize the schema before building:
 
 ```bash
-docker compose up -d                              # 2-node Cassandra on ports 9042/9043
-cqlsh -f db.cql                                   # creates keyspace + tables (NOTE: DROPs existing tables)
-cargo run -r -- build packages/.../proteins.txt   # digest + load (see subcommands below)
-cargo run -r -- api 127.0.0.1:8080                # serve the HTTP API
+docker compose up -d --scale worker=2             # Citus coordinator on 5432 + 2 workers
+psql -h 127.0.0.1 -U postgres -d macpepdb -f db.sql       # schema + build-mode tuning (NOTE: DROPs existing schema)
+cargo run -r -- build packages/.../proteins.txt           # digest + load (see subcommands below)
+psql -h 127.0.0.1 -U postgres -d macpepdb -f db_serve.sql # revert build tuning, ANALYZE, read tuning
+cargo run -r -- api 127.0.0.1:8080                        # serve the HTTP API
 ```
+
+`db.sql` applies aggressive build-mode settings (durability off, large WAL, autovacuum off) to the
+coordinator and every worker; `db_serve.sql` reverts them, sets read tuning, and refreshes statistics.
+The durability-off settings are safe only because the DB is rebuildable from the source files.
 
 System dependency: `openssl` or `libressl` must be present.
 
@@ -81,10 +86,14 @@ Three sequential stages, each concurrent internally:
   index keys use the integer form.
 - **Sequences are bit-packed.** `CompactSequence` (`sequence.rs`) stores amino acids as 5 bits each
   (bit code = `char - 'A'`) to save ~30% memory for in-memory maps/sets and DB blobs.
-- **ScyllaDB schema** (`db.cql`): `proteins`, `peptides` (partitioned by `partition` then `mass`, `sequence`),
-  and `blobs` (chunked key/part storage backing the `Blob` / `Configuration` types).
+- **PostgreSQL/Citus schema** (`db.sql`): `peptides` is a **columnar** table distributed by `partition`;
+  `proteins`, `blobs` (chunked key/part storage backing `Blob`/`Configuration`), and `stats` are row-store
+  Citus **reference tables**. Columnar `peptides` has no PK/index — selective reads rely on Citus shard
+  pruning on `partition` plus columnar stripe/chunk-group pruning.
 - **Peptides are partitioned by mass.** The `Configuration.mass_partitioning` map records which partitions
-  hold which mass ranges; search and build both rely on it.
+  hold which mass ranges; search and build both rely on it. The build COPYs exactly `STRIPE_ROW_LIMIT`
+  (`cql.rs`, = `db.sql`'s `columnar.stripe_row_limit`) rows per partition so each partition is one full
+  columnar stripe, loaded in `(partition, mass)` order for effective pruning.
 
 ### Compile-time codegen (`build.rs`)
 
@@ -101,16 +110,19 @@ status, and streams `Peptidoform` results (ProForma-compliant by default, or can
 
 ### Database client & congestion control (`client.rs`)
 
-`Client` wraps a Scylla `CachingSession` and parses a custom URL:
-`scylla://[user[:pass]@]host[:port][,host...]/keyspace[?attr=val&...]`. Query attributes:
-`connection_timeout`, `pool_size`, `pool_type` (`host`|`shard`), `read_consistency_level`,
-`write_consistency_level`, `cache_size`.
+`Client` wraps a `deadpool_postgres` connection pool (`tokio-postgres`, `NoTls`) and parses a
+`postgresql://[user[:pass]@]host[:port][,host...]/dbname[?param=val&...]` URL. Standard libqp params
+(`connect_timeout`, `sslmode`, ...) pass through to `tokio_postgres::Config`; the MaCPepDB-specific
+`pool_size` is stripped out and sizes the pool. Bulk loads use binary `COPY` (`copy_in_binary`); reads
+use `query`/`query_stream`. Custom blob columns (`Sequence`, `ProteinIds`) implement `ToSql`/`FromSql`
+over `BYTEA`.
 
-Inserts during a build go through `run_congested`, an AIMD congestion controller: a semaphore-gated window
-grows on sustained success and shrinks on Scylla overload signals. Errors are classified
-`Retryable` (transient: overload, timeout, unavailable, broken connection) vs `Fatal` (deterministic: syntax,
-auth). Writes are idempotent, so retryable errors are retried with jittered backoff indefinitely — important
-to keep in mind when a long build appears to stall.
+Writes during a build go through `run_congested`: a **fixed-size** concurrency semaphore (sized to the
+pool) plus jittered-backoff retry. Errors are classified `is_retryable` (transient: connection drops,
+SQLSTATE classes 08/40/53/57) vs fatal (deterministic: syntax, type, constraint, auth); writes are
+idempotent so transient errors retry indefinitely. (Unlike the old Cassandra AIMD controller there is no
+dynamic window — Postgres has no graded overload signal, and columnar has no background compaction to
+ride out.)
 
 ### Monitoring (`monitoring/`)
 

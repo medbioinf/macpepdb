@@ -6,7 +6,6 @@ pub mod configuration;
 pub mod mass;
 pub mod blob_table;
 pub mod client;
-pub mod cql;
 #[macro_use]
 pub mod error;
 pub mod database_build;

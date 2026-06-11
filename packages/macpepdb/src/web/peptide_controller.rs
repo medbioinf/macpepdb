@@ -9,8 +9,9 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD as Base64Standard};
 use dihardts_omicstools::mass_spectrometry::unit_conversions::mass_to_charge_to_dalton;
-use futures::TryStreamExt;
+use futures::StreamExt;
 use http::header;
+use postgres_types::ToSql;
 use thiserror::Error;
 use urlencoding::decode as urldecode;
 
@@ -34,8 +35,6 @@ static DEFAULT_ERROR_HEADER_MAP: LazyLock<HeaderMap> = LazyLock::new(|| {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("CQL error when getting peptide: {0}")]
-    CqlNextPeptideRow(scylla::errors::NextRowError),
     #[error("Peptide error: {0}")]
     Peptide(#[from] crate::peptide::Error),
     #[error("Peptide not found")]
@@ -155,24 +154,9 @@ pub async fn get_peptide(
 ) -> Result<Json<Peptide>, Error> {
     let peptide = Peptide::try_from(sequence)?;
 
-    let peptide_table = PeptideTable::new(server_state.db_client());
-
-    let peptide_opt = peptide_table
-        .select(
-            Some("WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1"),
-            (peptide.partition(), peptide.mass(), peptide.sequence()),
-        )
+    let peptide = select_one_peptide(&server_state, &peptide)
         .await?
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(Error::CqlNextPeptideRow)?
-        .pop();
-
-    if peptide_opt.is_none() {
-        return Err(Error::PeptideNotFound);
-    }
-
-    let peptide = peptide_opt.unwrap();
+        .ok_or(Error::PeptideNotFound)?;
 
     // let proteins: Vec<Protein> =
     //     ProteinTable::get_proteins_of_peptide(server_state.db_client_as_ref(), &peptide)
@@ -235,22 +219,44 @@ pub async fn get_peptide_existence(
 ) -> Result<Response, Error> {
     let peptide = Peptide::try_from(sequence)?;
 
-    let peptide_opt = PeptideTable::new(server_state.db_client())
-        .select(
-            Some("WHERE partition = ? AND mass = ? and sequence = ? LIMIT 1"),
-            (peptide.partition(), peptide.mass(), peptide.sequence()),
-        )
-        .await?
-        .try_collect::<Vec<_>>()
-        .await
-        .map_err(Error::CqlNextPeptideRow)?
-        .pop();
-
-    if peptide_opt.is_some() {
+    if select_one_peptide(&server_state, &peptide).await?.is_some() {
         Ok((StatusCode::OK, "").into_response())
     } else {
         Ok((StatusCode::NOT_FOUND, "").into_response())
     }
+}
+
+/// Looks up a single stored peptide by `(mass, sequence)`, resolving the candidate
+/// partitions for the mass from the configuration's mass partitioning. Returns `None`
+/// if the mass has no partitions or the sequence is not present.
+async fn select_one_peptide(
+    server_state: &ServerState,
+    peptide: &Peptide,
+) -> Result<Option<Peptide>, Error> {
+    let mass = peptide.mass();
+    let partitions = match server_state
+        .configuration_as_ref()
+        .mass_partitioning()
+        .get(&mass)
+    {
+        Some(partitions) if !partitions.is_empty() => partitions.clone(),
+        _ => return Ok(None),
+    };
+
+    let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+        Box::new(partitions),
+        Box::new(mass),
+        Box::new(peptide.sequence().clone()),
+    ];
+
+    let mut stream = PeptideTable::new(server_state.db_client())
+        .select(
+            "WHERE partition = ANY($1) AND mass = $2 AND sequence = $3 LIMIT 1",
+            params,
+        )
+        .await?;
+
+    Ok(stream.next().await.transpose()?)
 }
 
 /// Struct for mass as thompson & charge or dalton

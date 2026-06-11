@@ -27,7 +27,6 @@ static DEFAULT_FILTER: &[(&str, Level)] = &[
     ("hyper", Level::ERROR),
     ("mio", Level::ERROR),
     ("reqwest", Level::ERROR),
-    ("scylla", Level::ERROR),
     ("tokio_postgres", Level::ERROR),
 ];
 

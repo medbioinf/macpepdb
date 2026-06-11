@@ -1,4 +1,3 @@
-use scylla::{DeserializeRow, SerializeRow};
 use thiserror::Error;
 
 use crate::sequence::{IsBitSequence, ProteinSequence as Sequence};
@@ -15,9 +14,11 @@ pub enum Error {
     Sequence(#[from] crate::sequence::Error),
     #[error("Unable to parse taxonomy ID as intege: {0}")]
     TaxonomyIdParsing(std::num::ParseIntError),
+    #[error("Row decoding error in protein: {0}")]
+    Row(#[from] tokio_postgres::Error),
 }
 
-#[derive(Clone, Debug, DeserializeRow, SerializeRow)]
+#[derive(Clone, Debug)]
 pub struct Protein {
     accession: String,
     id: Option<i32>,
@@ -57,6 +58,17 @@ impl Protein {
             + self.accession.len()
             + self.sequence.size()
             + std::mem::size_of::<i32>() // 4 for id and taxonomy_id
+    }
+
+    /// Builds a protein from a queried row with columns
+    /// `id, accession, sequence, taxonomy_id`.
+    pub fn from_row(row: &tokio_postgres::Row) -> Result<Self, Error> {
+        Ok(Self {
+            id: Some(row.try_get("id")?),
+            accession: row.try_get("accession")?,
+            sequence: row.try_get("sequence")?,
+            taxonomy_id: row.try_get("taxonomy_id")?,
+        })
     }
 }
 

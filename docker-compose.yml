@@ -1,53 +1,71 @@
+# Local multi-node Citus cluster for MaCPepDB Lite (replaces the 2-node Cassandra setup).
+#
+#   docker compose up -d --scale worker=2     # coordinator + 2 workers
+#   psql -h 127.0.0.1 -U postgres -d macpepdb -f db.sql
+#
+# The membership-manager container watches Docker events and auto-registers each
+# `worker` replica on the coordinator via citus_add_node — so scaling `worker` is all
+# that's needed to add nodes. Coordinator is reachable on localhost:5432.
+#
+# Auth is `trust` for local dev, matching the default URL
+# `postgresql://postgres@127.0.0.1:5432/macpepdb` (no password). Do NOT use trust in prod.
+
 networks:
-  cassandra-net:
+  citus-net:
     driver: bridge
 
 services:
-
-  cassandra-1:
-    image: "cassandra:latest"  # cassandra:4.1.3
-    container_name: "cassandra1"
-    hostname: cassandra1
+  coordinator:
+    image: "citusdata/citus:13.0"
+    container_name: "macpepdb-coordinator"
     ports:
-      - 7000:7000
-      - 9042:9042
+      - "5432:5432"
+    labels:
+      - "com.citusdata.role=Master"
+    environment: &citus_env
+      POSTGRES_USER: postgres
+      POSTGRES_DB: macpepdb
+      POSTGRES_HOST_AUTH_METHOD: trust
+      PGUSER: postgres
+      PGDATABASE: macpepdb
     networks:
-      - cassandra-net
-    environment: &environment
-      CASSANDRA_CLUSTER_NAME: macpepdb-cluster
-      CASSANDRA_DC: macpepdb-dc
-      CASSANDRA_rack: macpepdb-rack
-      CASSANDRA_START_RPC: true
-      CASSANDRA_RPC_ADDRESS: 0.0.0.0
-      CASSANDRA_LISTEN_ADDRESS: auto
-      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
-      CASSANDRA_NUM_TOKENS: 4
-      CASSANDRA_SEEDS: cassandra1
+      - citus-net
     volumes:
-      - cassandra-node-1:/var/lib/cassandra:rw
-    healthcheck: &healthcheck
-      test: ["CMD-SHELL", "nodetool status"]
-      interval: 2m
-      start_period: 2m
-      timeout: 10s
+      - coordinator-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d macpepdb"]
+      interval: 10s
+      timeout: 5s
       retries: 5
 
-  cassandra-2:
-    image: "cassandra:latest"  # cassandra:4.1.3
-    container_name: "cassandra2"
-    hostname: cassandra2
-    ports:
-      - 9043:9042
-    networks:
-      - cassandra-net
-    environment: *environment
+  worker:
+    image: "citusdata/citus:13.0"
+    labels:
+      - "com.citusdata.role=Worker"
+    environment: *citus_env
+    command: "/wait-for-manager.sh"
     depends_on:
-      cassandra-1:
-        condition: service_healthy
+      - manager
+    networks:
+      - citus-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d macpepdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  manager:
+    image: "citusdata/membership-manager:0.3.0"
+    container_name: "macpepdb-manager"
     volumes:
-      - cassandra-node-2:/var/lib/cassandra:rw
-    healthcheck: *healthcheck
+      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
+      - healthcheck-volume:/healthcheck
+    depends_on:
+      - coordinator
+    environment: *citus_env
+    networks:
+      - citus-net
 
 volumes:
-  cassandra-node-1:
-  cassandra-node-2:
+  coordinator-data:
+  healthcheck-volume:

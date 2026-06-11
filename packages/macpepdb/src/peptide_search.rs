@@ -11,7 +11,7 @@ use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, SelectAll, Stream, StreamExt};
 use itertools::Itertools;
 use metrics::{Counter, counter};
-use scylla::client::pager::TypedRowStream;
+use postgres_types::ToSql;
 use thiserror::Error;
 
 use crate::amino_acid::{AminoAcid, AminoAcidBitCode, GLYCINE};
@@ -33,8 +33,6 @@ pub static MATCHING_PEPTIDE_METRIC: &str = "peptide_search:matching_peptides";
 pub enum Error {
     #[error("Peptide table error in peptide search: {0}")]
     PeptideTable(Box<crate::peptide_table::Error>),
-    #[error("Unable to get next peptide from stream: {0}")]
-    NextRow(#[from] scylla::errors::NextRowError),
 }
 
 impl From<crate::peptide_table::Error> for Error {
@@ -383,9 +381,12 @@ where
     }
 }
 
+type BoxedPeptideRowStream =
+    Pin<Box<dyn Stream<Item = Result<Peptide, crate::peptide_table::Error>> + Send>>;
+
 struct ConditionalPeptideStream {
     condition: Pin<Box<PeptideCondition>>,
-    inner: Pin<Box<TypedRowStream<Peptide>>>,
+    inner: BoxedPeptideRowStream,
     resolve_modification: bool,
 }
 
@@ -395,12 +396,13 @@ impl ConditionalPeptideStream {
         condition: PeptideCondition,
         resolve_modification: bool,
     ) -> Result<Self, Error> {
-        let inner = Box::pin(
+        let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+            Box::new(condition.partitions().clone()),
+            Box::new(condition.mass()),
+        ];
+        let inner: BoxedPeptideRowStream = Box::pin(
             PeptideTable::new(client)
-                .select(
-                    Some("WHERE partition IN ? AND mass = ?"),
-                    (condition.partitions(), condition.mass()),
-                )
+                .select("WHERE partition = ANY($1) AND mass = $2", params)
                 .await?,
         );
         Ok(Self {
@@ -417,7 +419,7 @@ impl Stream for ConditionalPeptideStream {
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         'polling_loop: loop {
-            return match Pin::new(&mut this.inner).poll_next(cx) {
+            return match this.inner.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(peptide))) => {
                     if this.condition.is_match(&peptide) {
                         let peptidoforms = if this.resolve_modification {

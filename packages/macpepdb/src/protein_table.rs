@@ -11,8 +11,8 @@ use std::{
 
 use async_compression::tokio::bufread::GzipDecoder;
 use crossbeam::queue::ArrayQueue;
-use futures::{Stream, StreamExt, future::join_all};
-use scylla::{client::pager::TypedRowStream, errors::ExecutionError, serialize::row::SerializeRow};
+use futures::{Stream, StreamExt};
+use postgres_types::{ToSql, Type};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, BufReader};
 use uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
@@ -22,10 +22,25 @@ use crate::{client::Client, protein::Protein, stats_table::StatsTable};
 static TABLE_NAME: &str = "proteins";
 
 static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!("INSERT INTO {TABLE_NAME} (accession, id, sequence, taxonomy_id) VALUES (?, ?, ?, ?)")
+    format!(
+        "INSERT INTO {TABLE_NAME} (id, accession, sequence, taxonomy_id) VALUES ($1, $2, $3, $4)"
+    )
 });
 
-static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| format!("SELECT * FROM {TABLE_NAME}"));
+static COPY_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!("COPY {TABLE_NAME} (id, accession, sequence, taxonomy_id) FROM STDIN (FORMAT binary)")
+});
+
+/// Column types for the binary COPY into `proteins`, in column order.
+static COPY_TYPES: LazyLock<[Type; 4]> =
+    LazyLock::new(|| [Type::INT4, Type::TEXT, Type::BYTEA, Type::INT4]);
+
+static SELECT_ALL_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT id, accession, sequence, taxonomy_id FROM {TABLE_NAME}"));
+
+static SELECT_BY_IDS_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!("SELECT id, accession, sequence, taxonomy_id FROM {TABLE_NAME} WHERE id = ANY($1)")
+});
 
 static SELECT_ID_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT id FROM {TABLE_NAME}"));
@@ -41,14 +56,8 @@ pub enum Error {
         StatsTable::table_name()
     )]
     CountNotFound,
-    #[error("CQL execution error in protein: {0}")]
-    CqlExecution(Box<scylla::errors::ExecutionError>),
-    #[error("CQL unable to fetch next row: {0}")]
-    CqlNextRow(#[from] scylla::errors::NextRowError),
-    #[error("CQL paged execution error in protein: {0}")]
-    CqlPagedExecution(Box<scylla::errors::PagerExecutionError>),
-    #[error("CQL type check failed in protein: {0}")]
-    CqlTypeCheck(#[from] scylla::errors::TypeCheckError),
+    #[error("Row decoding error in protein: {0}")]
+    Row(#[from] tokio_postgres::Error),
     #[error("Unable to open proteins file: {0}")]
     OpenFile(#[from] std::io::Error),
     #[error("Protein error in protein table: {0}")]
@@ -61,13 +70,15 @@ pub enum Error {
     Join(String),
 }
 
-into_thiserror_boxed!(scylla::errors::ExecutionError, Error, CqlExecution);
-into_thiserror_boxed!(
-    scylla::errors::PagerExecutionError,
-    Error,
-    CqlPagedExecution
-);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
+
+/// Maps a queried row into a `Protein`, threading both row-decode and parse errors.
+fn row_to_protein(
+    row_res: Result<tokio_postgres::Row, tokio_postgres::Error>,
+) -> Result<Protein, Error> {
+    let row = row_res.map_err(Error::from)?;
+    Protein::from_row(&row).map_err(|err| Error::Protein(Box::new(err)))
+}
 
 type ProteinBuildQueue = Arc<ArrayQueue<Option<Vec<Protein>>>>;
 type ProteinFilePathBuildQueue = Arc<ArrayQueue<Option<PathBuf>>>;
@@ -82,46 +93,68 @@ impl ProteinTable {
     }
 
     pub async fn insert(&self, protein: &Protein) -> Result<(), Error> {
+        let id = protein.id();
+        let accession = protein.accession();
+        let taxonomy_id = protein.taxonomy_id();
         self.client
-            .run_congested(|| {
-                self.client
-                    .execute_unpaged(INSERT_STATEMENT.as_str(), protein)
-            })
+            .execute(
+                INSERT_STATEMENT.as_str(),
+                &[&id, &accession, protein.sequence(), &taxonomy_id],
+            )
             .await?;
         Ok(())
     }
 
+    /// Bulk-loads a batch of proteins via a single binary COPY transaction.
     pub async fn insert_batch(&self, values: impl Iterator<Item = Protein>) -> Result<(), Error> {
         let values: Vec<Protein> = values.collect();
-        let insert_futures = values.iter().map(|value| {
-            self.client.run_congested(move || {
-                self.client
-                    .execute_unpaged(INSERT_STATEMENT.as_str(), value)
-            })
-        });
+        if values.is_empty() {
+            return Ok(());
+        }
 
-        join_all(insert_futures)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>, ExecutionError>>()?;
+        self.client
+            .run_congested(|| async {
+                let mut copy = self
+                    .client
+                    .copy_in_binary(COPY_STATEMENT.as_str(), COPY_TYPES.as_slice())
+                    .await?;
+                for protein in &values {
+                    let id = protein.id();
+                    let accession = protein.accession();
+                    let taxonomy_id = protein.taxonomy_id();
+                    copy.write(&[&id, &accession, protein.sequence(), &taxonomy_id])
+                        .await?;
+                }
+                copy.finish().await?;
+                Ok::<(), crate::client::Error>(())
+            })
+            .await?;
 
         Ok(())
     }
 
-    pub async fn select(
+    /// Streams every protein (`SELECT id, accession, sequence, taxonomy_id FROM proteins`).
+    pub async fn select_all(
         &self,
-        select_addition: Option<&str>,
-        values: impl SerializeRow,
-    ) -> Result<TypedRowStream<Protein>, Error> {
-        let statement = select_addition
-            .map(|addition| format!("{} {}", SELECT_STATEMENT.as_str(), addition))
-            .unwrap_or_else(|| SELECT_STATEMENT.as_str().to_string());
-
-        Ok(self
+    ) -> Result<impl Stream<Item = Result<Protein, Error>> + Send + use<>, Error> {
+        let stream = self
             .client
-            .execute_iter(statement, values)
-            .await?
-            .rows_stream::<Protein>()?)
+            .query_stream(SELECT_ALL_STATEMENT.as_str(), Vec::new())
+            .await?;
+        Ok(stream.map(row_to_protein))
+    }
+
+    /// Streams the proteins with the given ids (`WHERE id = ANY($1)`).
+    pub async fn select_by_ids(
+        &self,
+        ids: &[i32],
+    ) -> Result<impl Stream<Item = Result<Protein, Error>> + Send + use<>, Error> {
+        let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![Box::new(ids.to_vec())];
+        let stream = self
+            .client
+            .query_stream(SELECT_BY_IDS_STATEMENT.as_str(), params)
+            .await?;
+        Ok(stream.map(row_to_protein))
     }
 
     pub async fn count(&self) -> Result<usize, Error> {
@@ -135,12 +168,15 @@ impl ProteinTable {
     pub async fn select_ids(
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<i32, Error>> + Send>>, Error> {
-        Ok(self
+        let stream = self
             .client
-            .execute_iter(SELECT_ID_STATEMENT.as_str(), ())
-            .await?
-            .rows_stream::<(i32,)>()?
-            .map(|row| row.map(|(id,)| id).map_err(Error::from))
+            .query_stream(SELECT_ID_STATEMENT.as_str(), Vec::new())
+            .await?;
+        Ok(stream
+            .map(|row_res| {
+                let row = row_res.map_err(Error::from)?;
+                row.try_get::<_, i32>(0).map_err(Error::from)
+            })
             .boxed())
     }
 

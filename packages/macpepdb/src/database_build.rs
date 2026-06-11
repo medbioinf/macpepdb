@@ -25,8 +25,6 @@ pub enum Error {
     MassIndex(Box<crate::mass_index::Error>),
     #[error("Missing protein ID for `{0}`, means it does not come from the database")]
     MissingProteinId(String),
-    #[error("Unable not load next protein from stream: {0}")]
-    NextProtein(Box<scylla::errors::NextRowError>),
     #[error("Peptide table error in database build: {0}")]
     PeptideTable(Box<crate::peptide_table::Error>),
     #[error("Protein table error in database build: {0}")]
@@ -37,7 +35,6 @@ pub enum Error {
 
 into_thiserror_boxed!(crate::blob_table::Error, Error, BlobTable);
 into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
-into_thiserror_boxed!(scylla::errors::NextRowError, Error, NextProtein);
 into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
 into_thiserror_boxed!(crate::protein_table::Error, Error, ProteinTable);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
@@ -69,7 +66,7 @@ impl IsProteinAccess for DatabaseProteinAccess {
         async move {
             Ok(self
                 .protein_table
-                .select(Some("WHERE id IN ?"), (ids,))
+                .select_by_ids(ids)
                 .await?
                 .map(|protein_res| protein_res.map(Arc::new).map_err(Error::from))
                 .boxed())
@@ -81,7 +78,7 @@ impl IsProteinAccess for DatabaseProteinAccess {
         async move {
             Ok(self
                 .protein_table
-                .select(None, ())
+                .select_all()
                 .await?
                 .map(|protein_res| protein_res.map(Arc::new).map_err(Error::from))
                 .boxed())
@@ -113,7 +110,7 @@ pub struct InMemoryProteinAccess {
 impl InMemoryProteinAccess {
     pub async fn new(client: Arc<Client>) -> Result<Self, Error> {
         let proteins = ProteinTable::new(client)
-            .select(None, ())
+            .select_all()
             .await?
             .map(|protein_result| {
                 protein_result
@@ -413,7 +410,7 @@ impl<'a> DatabaseBuild<'a> {
 
         let processed_proteins_metrics = counter!(APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC);
 
-        let proteins_stream = protein_table.select(None, ()).await?.peekable();
+        let proteins_stream = protein_table.select_all().await?.peekable();
 
         pin_mut!(proteins_stream);
 

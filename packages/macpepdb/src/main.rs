@@ -204,8 +204,8 @@ struct Cli {
     /// Socket for tokio console API
     #[arg(long)]
     console_socket: Option<SocketAddr>,
-    /// Database URL, format `scylla://[<user:string>[:<url-safe-password:string>]@]<host[:<port>]>[,<host[:<port>]>...]/<keyspace>`
-    #[arg(short, long, default_value_t = String::from("scylla://127.0.0.1:9042,127.0.0.1:9043/macpepdb"))]
+    /// Database URL, format `postgresql://[<user>[:<url-safe-password>]@]<host[:<port>]>[,<host[:<port>]>...]/<dbname>[?pool_size=N&...]`
+    #[arg(short, long, default_value_t = String::from("postgresql://postgres@127.0.0.1:5432/macpepdb"))]
     database_url: String,
     /// Path to optional log file
     #[arg(long)]
