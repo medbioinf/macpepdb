@@ -392,7 +392,7 @@ impl PeptideTable {
                             buffer_masses.insert(mass);
                         }
 
-                        progress_metric.increment(1);
+                        progress_metric.increment(protein_ids_len as f64);
                     }
                     Ok::<_, Error>(mass_partition_map)
                 })

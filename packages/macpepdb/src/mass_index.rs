@@ -71,6 +71,10 @@ impl MassIndex {
         self.masses.len()
     }
 
+    pub fn num_protein_associations(&self) -> usize {
+        self.protein_ids.len()
+    }
+
     pub fn masses(&self) -> &[i64] {
         &self.masses
     }

@@ -291,7 +291,7 @@ impl<'a> DatabaseBuild<'a> {
             tui.add_metric(MetricConfig::progress(
                 crate::peptide_table::PROGRESS_METRIC,
                 crate::peptide_table::PROGRESS_METRIC,
-                mass_index.len() as f64,
+                mass_index.num_protein_associations() as f64,
             ));
             tui.add_metric(MetricConfig::counter(
                 crate::peptide_table::INSERTED_PEPTIDES_METRIC,
