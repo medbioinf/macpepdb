@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tokio_postgres::Row;
 
 use crate::sequence::{IsBitSequence, ProteinSequence as Sequence};
 
@@ -59,17 +60,6 @@ impl Protein {
             + self.sequence.size()
             + std::mem::size_of::<i32>() // 4 for id and taxonomy_id
     }
-
-    /// Builds a protein from a queried row with columns
-    /// `id, accession, sequence, taxonomy_id`.
-    pub fn from_row(row: &tokio_postgres::Row) -> Result<Self, Error> {
-        Ok(Self {
-            id: Some(row.try_get("id")?),
-            accession: row.try_get("accession")?,
-            sequence: row.try_get("sequence")?,
-            taxonomy_id: row.try_get("taxonomy_id")?,
-        })
-    }
 }
 
 impl TryFrom<&uniprot_reader::entry::Entry> for Protein {
@@ -100,6 +90,19 @@ impl TryFrom<(i32, &uniprot_reader::entry::Entry)> for Protein {
         let mut protein = Self::try_from(entry)?;
         protein.id = Some(id);
         Ok(protein)
+    }
+}
+
+impl TryFrom<Row> for Protein {
+    type Error = Error;
+
+    fn try_from(row: Row) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: Some(row.try_get("id")?),
+            accession: row.try_get("accession")?,
+            sequence: row.try_get("sequence")?,
+            taxonomy_id: row.try_get("taxonomy_id")?,
+        })
     }
 }
 

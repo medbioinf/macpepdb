@@ -71,14 +71,7 @@ pub enum Error {
 }
 
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
-
-/// Maps a queried row into a `Protein`, threading both row-decode and parse errors.
-fn row_to_protein(
-    row_res: Result<tokio_postgres::Row, tokio_postgres::Error>,
-) -> Result<Protein, Error> {
-    let row = row_res.map_err(Error::from)?;
-    Protein::from_row(&row).map_err(|err| Error::Protein(Box::new(err)))
-}
+into_thiserror_boxed!(crate::protein::Error, Error, Protein);
 
 type ProteinBuildQueue = Arc<ArrayQueue<Option<Vec<Protein>>>>;
 type ProteinFilePathBuildQueue = Arc<ArrayQueue<Option<PathBuf>>>;
@@ -141,7 +134,11 @@ impl ProteinTable {
             .client
             .query_stream(SELECT_ALL_STATEMENT.as_str(), Vec::new())
             .await?;
-        Ok(stream.map(row_to_protein))
+        Ok(stream.map(|row_res| {
+            row_res
+                .map_err(Error::Row)
+                .and_then(|row| Protein::try_from(row).map_err(Error::from))
+        }))
     }
 
     /// Streams the proteins with the given ids (`WHERE id = ANY($1)`).
@@ -154,7 +151,11 @@ impl ProteinTable {
             .client
             .query_stream(SELECT_BY_IDS_STATEMENT.as_str(), params)
             .await?;
-        Ok(stream.map(row_to_protein))
+        Ok(stream.map(|row_res| {
+            row_res
+                .map_err(Error::Row)
+                .and_then(|row| Protein::try_from(row).map_err(Error::from))
+        }))
     }
 
     pub async fn count(&self) -> Result<usize, Error> {
