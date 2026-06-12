@@ -694,7 +694,7 @@ impl UnionAllFallibleMatchingPeptideStream {
 
         let statement = placeholders.into_iter().map(|(condition_idx, parititon_placeholder, mass_placeholder)| {
             format!(
-                "SELECT {condition_idx} as {CONDITION_REF_COL}, {COLUMNS} FROM {TABLE_NAME} WHERE {PARTITION_COL} = ${} AND {MASS_COL} = ${}",
+                "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {COLUMNS} FROM {TABLE_NAME} WHERE {PARTITION_COL} = ${} AND {MASS_COL} = ${}",
                 parititon_placeholder,
                 mass_placeholder,
             )
