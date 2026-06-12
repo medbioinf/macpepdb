@@ -40,6 +40,8 @@ pub trait IsPeptide: Send + Sync {
 
     fn sequence(&self) -> &Self::Sequence;
     fn mass(&self) -> i64;
+    fn is_swiss_prot(&self) -> bool;
+    fn is_trembl(&self) -> bool;
 
     fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE];
 
@@ -109,14 +111,6 @@ impl Peptide {
 
     pub(crate) fn set_partition(&mut self, partition: i64) {
         self.partition = Some(partition);
-    }
-
-    pub fn is_swiss_prot(&self) -> bool {
-        (self.flags & (1 << IS_SWISS_PROT_BIT)) != 0
-    }
-
-    pub fn is_trembl(&self) -> bool {
-        (self.flags & (1 << IS_TREMBL_BIT)) != 0
     }
 
     pub fn flags(&self) -> i8 {
@@ -257,6 +251,14 @@ impl IsPeptide for Peptide {
         self.mass
     }
 
+    fn is_swiss_prot(&self) -> bool {
+        (self.flags & (1 << IS_SWISS_PROT_BIT)) != 0
+    }
+
+    fn is_trembl(&self) -> bool {
+        (self.flags & (1 << IS_TREMBL_BIT)) != 0
+    }
+
     fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE] {
         self.amino_acid_counts.get_or_init(|| {
             let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
@@ -313,15 +315,31 @@ impl TryFrom<CompactSequence> for Peptide {
 pub struct Peptidoform {
     sequence: ModifiedSequence,
     mass: i64,
+    /// Like peptides
+    flags: i8,
     #[serde(skip)]
     amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
 }
 
 impl Peptidoform {
-    pub fn new(sequence: ModifiedSequence, mass: i64) -> Self {
+    pub fn new(
+        sequence: ModifiedSequence,
+        mass: i64,
+        is_swiss_prot: bool,
+        is_trembl: bool,
+    ) -> Self {
+        let mut flags: i8 = 0b0000_0000;
+        if is_swiss_prot {
+            flags |= 1 << IS_SWISS_PROT_BIT;
+        }
+        if is_trembl {
+            flags |= 1 << IS_TREMBL_BIT;
+        }
+
         Self {
             sequence,
             mass,
+            flags,
             amino_acid_counts: OnceLock::new(),
         }
     }
@@ -364,6 +382,7 @@ impl From<Peptide> for Peptidoform {
     fn from(peptide: Peptide) -> Self {
         Self {
             mass: peptide.mass(),
+            flags: peptide.flags(),
             sequence: peptide.into_sequence().into(),
             amino_acid_counts: OnceLock::new(),
         }
@@ -394,6 +413,14 @@ impl IsPeptide for Peptidoform {
 
     fn mass(&self) -> i64 {
         self.mass
+    }
+
+    fn is_swiss_prot(&self) -> bool {
+        (self.flags & (1 << IS_SWISS_PROT_BIT)) != 0
+    }
+
+    fn is_trembl(&self) -> bool {
+        (self.flags & (1 << IS_TREMBL_BIT)) != 0
     }
 
     fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE] {

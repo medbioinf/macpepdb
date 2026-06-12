@@ -68,37 +68,43 @@ pub trait FilterFunction<T: IsPeptide>: Send + Sync + Display {
     fn is_match(&self, peptide: &T) -> Result<bool, Error>;
 }
 
-// /// Filters peptides which not are in SwissProt
-// ///
-// struct IsSwissProtFilterFunction;
+/// Filters peptides which not are in SwissProt
+///
+struct IsSwissProtFilterFunction;
 
-// impl FilterFunction for IsSwissProtFilterFunction {
-//     fn is_match(&self, peptide: &Peptide) -> Result<bool, Error> {
-//         Ok(peptide.is_swiss_prot())
-//     }
-// }
+impl<T> FilterFunction<T> for IsSwissProtFilterFunction
+where
+    T: IsPeptide,
+{
+    fn is_match(&self, peptide: &T) -> Result<bool, Error> {
+        Ok(peptide.is_swiss_prot())
+    }
+}
 
-// impl Display for IsSwissProtFilterFunction {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "is SwissProt")
-//     }
-// }
+impl Display for IsSwissProtFilterFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "is SwissProt")
+    }
+}
 
-// /// Filter peptides which are not in TrEMBL
-// ///
-// struct IsTrEMBLFilterFunction;
+/// Filter peptides which are not in TrEMBL
+///
+struct IsTrEMBLFilterFunction;
 
-// impl FilterFunction for IsTrEMBLFilterFunction {
-//     fn is_match(&self, peptide: &Peptide) -> Result<bool, Error> {
-//         Ok(peptide.is_trembl())
-//     }
-// }
+impl<T> FilterFunction<T> for IsTrEMBLFilterFunction
+where
+    T: IsPeptide,
+{
+    fn is_match(&self, peptide: &T) -> Result<bool, Error> {
+        Ok(peptide.is_trembl())
+    }
+}
 
-// impl Display for IsTrEMBLFilterFunction {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "is TrEMBL")
-//     }
-// }
+impl Display for IsTrEMBLFilterFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "is TrEMBL")
+    }
+}
 
 /// Makes sure that no peptide is returned twice
 ///
@@ -324,7 +330,7 @@ where
         distinct: bool,
         _taxonomy_ids: Option<Arc<Vec<i32>>>,
         _proteome_ids: Option<Arc<Vec<String>>>,
-        _is_reviewed: Option<bool>,
+        is_reviewed: Option<bool>,
     ) -> Result<Self, Error> {
         let mut filter_function: Vec<Box<dyn FilterFunction<T>>> = Vec::new();
         if distinct {
@@ -338,13 +344,13 @@ where
         // if let Some(proteome_ids) = proteome_ids {
         //     filter_function.push(Box::new(ProteomeFilterFunction { proteome_ids }));
         // }
-        // if let Some(is_reviewed) = is_reviewed {
-        //     if is_reviewed {
-        //         filter_function.push(Box::new(IsSwissProtFilterFunction {}));
-        //     } else {
-        //         filter_function.push(Box::new(IsTrEMBLFilterFunction {}));
-        //     }
-        // }
+        if let Some(is_reviewed) = is_reviewed {
+            if is_reviewed {
+                filter_function.push(Box::new(IsSwissProtFilterFunction {}));
+            } else {
+                filter_function.push(Box::new(IsTrEMBLFilterFunction {}));
+            }
+        }
         Ok(Self::new(filter_function))
     }
 
@@ -1277,7 +1283,13 @@ impl PeptideConditionBuilder {
         peptidoforms: &mut HashSet<Peptidoform>,
     ) {
         if position >= peptide.len() {
-            self.end_modify_peptide(modified_sequence, mass, applied_vmods, peptidoforms);
+            self.end_modify_peptide(
+                peptide,
+                modified_sequence,
+                mass,
+                applied_vmods,
+                peptidoforms,
+            );
             return;
         }
 
@@ -1374,6 +1386,7 @@ impl PeptideConditionBuilder {
     #[allow(clippy::mutable_key_type)]
     fn end_modify_peptide(
         &self,
+        peptide: &Peptide,
         mut modified_sequence: ModifiedSequence,
         mut mass: i64,
         applied_vmods: usize,
@@ -1388,7 +1401,12 @@ impl PeptideConditionBuilder {
         // If the number of applied variable modifications not equals the number of variable PTMs,
         // this condition is not fully applied
         if applied_vmods == self.variable_ptms.len() {
-            peptidoforms.insert(Peptidoform::new(modified_sequence, mass));
+            peptidoforms.insert(Peptidoform::new(
+                modified_sequence,
+                mass,
+                peptide.is_swiss_prot(),
+                peptide.is_trembl(),
+            ));
         }
     }
 
