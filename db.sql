@@ -14,6 +14,7 @@
 -- because the build loads each partition as one sorted (partition, mass) stripe.
 
 CREATE EXTENSION IF NOT EXISTS citus;
+CREATE EXTENSION IF NOT EXISTS citus_columnar;
 
 -- --------------------------------------------------------------------------
 -- Row-store tables (distributed): proteins by `id`, blobs/stats by `key`.
@@ -42,7 +43,7 @@ CREATE TABLE stats (
 -- Peptides: columnar, distributed by `partition`.
 -- --------------------------------------------------------------------------
 
-CREATE UNLOGGED TABLE peptides (
+CREATE TABLE peptides (
     partition               BIGINT,
     mass                    BIGINT,
     sequence                BYTEA,
