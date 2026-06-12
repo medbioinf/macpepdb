@@ -25,7 +25,7 @@ services:
       - "config_file=/citus-overrides/postgresql.conf"
     volumes:
       - healthcheck-volume:/healthcheck
-      - ./docker/compose/citus:/citus-overrides
+      - ./docker/compose/citus/overrides:/citus-overrides
   worker2:
     <<: *worker
   manager:
