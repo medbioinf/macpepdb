@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     num::NonZeroUsize,
-    ops::AddAssign,
+    ops::{AddAssign, RangeInclusive},
     sync::{
         Arc, LazyLock,
         atomic::{AtomicI64, AtomicUsize},
@@ -21,6 +21,7 @@ use crate::{
     mass_index::MassIndex,
     peptide::{IsPeptide, Peptide},
     protease::Protease,
+    protein::Protein,
     sequence::{CompactSequence, PeptideSequence},
     stats_table::StatsTable,
 };
@@ -286,45 +287,21 @@ impl PeptideTable {
                             is_swiss_prot |= protein.is_reviewed();
                             is_trembl |= !protein.is_reviewed();
 
-                            #[allow(clippy::mutable_key_type)]
-                            protease
-                                .cleave(protein.sequence().as_ref(), Some(mass..=mass))
-                                .for_each(|peptide| {
-                                    peptide_sequences
-                                        .entry(CompactSequence::try_from(peptide.into_sequence())?)
-                                        .or_default()
-                                        .entry(protein.taxonomy_id())
-                                        .or_insert(0)
-                                        .add_assign(1);
-                                    Ok(())
-                                })?;
+                            Self::digest_protein(
+                                protease.as_ref(),
+                                protein.as_ref(),
+                                mass..=mass,
+                                &mut peptide_sequences,
+                            )?;
                         }
 
-                        let peptides: Vec<Peptide> = peptide_sequences
-                            .into_iter()
-                            .map(|(seq, taxonomies)| {
-                                let unique_taxonomy_ids = taxonomies
-                                    .iter()
-                                    .filter(|(_, count)| **count == 1 && !skip_taxonomies)
-                                    .map(|(taxonomy_id, _)| *taxonomy_id)
-                                    .collect::<Vec<_>>();
-
-                                let non_unique_taxonomy_ids = taxonomies
-                                    .into_iter()
-                                    .filter(|(_, count)| *count > 1 && !skip_taxonomies)
-                                    .map(|(taxonomy_id, _)| taxonomy_id)
-                                    .collect::<Vec<_>>();
-
-                                Ok::<_, Error>(Peptide::new(
-                                    PeptideSequence::try_from(seq).map_err(Error::Sequence)?,
-                                    protein_ids.clone(),
-                                    unique_taxonomy_ids,
-                                    non_unique_taxonomy_ids,
-                                    is_swiss_prot,
-                                    is_trembl,
-                                ))
-                            })
-                            .collect::<Result<_, _>>()?;
+                        let peptides: Vec<Peptide> = Self::finalize_peptides(
+                            peptide_sequences,
+                            protein_ids,
+                            is_swiss_prot,
+                            is_trembl,
+                            skip_taxonomies,
+                        )?;
 
                         for mut peptide in peptides {
                             // Flush when the partition has filled one columnar stripe
@@ -428,5 +405,153 @@ impl PeptideTable {
         }
 
         Error::NoErroredThread
+    }
+
+    fn digest_protein(
+        protease: &Protease,
+        protein: &Protein,
+        mass_range: RangeInclusive<i64>,
+        peptide_sequences: &mut HashMap<CompactSequence, HashMap<i32, usize>>,
+    ) -> Result<(), Error> {
+        #[allow(clippy::mutable_key_type)]
+        protease
+            .cleave(protein.sequence().as_ref(), Some(mass_range))
+            .for_each(|peptide| {
+                peptide_sequences
+                    .entry(CompactSequence::try_from(peptide.into_sequence())?)
+                    .or_default()
+                    .entry(protein.taxonomy_id())
+                    .or_insert(0)
+                    .add_assign(1);
+                Ok(())
+            })?;
+
+        Ok(())
+    }
+
+    fn finalize_peptides(
+        peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>>,
+        protein_ids: Vec<i32>,
+        is_swiss_prot: bool,
+        is_trembl: bool,
+        skip_taxonomies: bool,
+    ) -> Result<Vec<Peptide>, Error> {
+        peptide_sequences
+            .into_iter()
+            .map(|(seq, taxonomies)| {
+                let unique_taxonomy_ids = taxonomies
+                    .iter()
+                    .filter(|(_, count)| **count == 1 && !skip_taxonomies)
+                    .map(|(taxonomy_id, _)| *taxonomy_id)
+                    .collect::<Vec<_>>();
+
+                let non_unique_taxonomy_ids = taxonomies
+                    .into_iter()
+                    .filter(|(_, count)| *count > 1 && !skip_taxonomies)
+                    .map(|(taxonomy_id, _)| taxonomy_id)
+                    .collect::<Vec<_>>();
+
+                Ok::<_, Error>(Peptide::new(
+                    PeptideSequence::try_from(seq).map_err(Error::Sequence)?,
+                    protein_ids.clone(),
+                    unique_taxonomy_ids,
+                    non_unique_taxonomy_ids,
+                    is_swiss_prot,
+                    is_trembl,
+                ))
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, num::NonZeroUsize};
+
+    use crate::{
+        peptide::IsPeptide,
+        peptide_table::PeptideTable,
+        protease::Protease,
+        protein::Protein,
+        sequence::{CompactSequence, PeptideSequence, ProteinSequence},
+    };
+
+    #[test]
+    fn test_taxonomy_assignment() {
+        let leptin0 = Protein::new(
+            "Q257X2".to_string(),
+            Some(0),
+            ProteinSequence::try_from(
+                "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
+            ).unwrap(),
+            0,
+            true
+        );
+        let leptin1 = Protein::new(
+            "O42164".to_string(),
+            Some(1),
+            ProteinSequence::try_from(
+                "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
+            ).unwrap(),
+            0,
+            true
+        );
+        // missing M at the beginning makes first peptide unique among this three proteins
+        let leptin2 = Protein::new(
+            "custom".to_string(),
+            Some(2),
+            ProteinSequence::try_from(
+                "HWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
+            ).unwrap(),
+            0,
+            false
+        );
+
+        let trypsin = Protease::by_name(
+            "trypsin",
+            Some(NonZeroUsize::new(6).unwrap()),
+            Some(NonZeroUsize::new(50).unwrap()),
+            Some(0),
+            false,
+        )
+        .unwrap();
+
+        let mut peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>> = HashMap::new();
+        PeptideTable::digest_protein(
+            &trypsin,
+            &leptin0,
+            i64::MIN..=i64::MAX,
+            &mut peptide_sequences,
+        )
+        .unwrap();
+        PeptideTable::digest_protein(
+            &trypsin,
+            &leptin1,
+            i64::MIN..=i64::MAX,
+            &mut peptide_sequences,
+        )
+        .unwrap();
+        PeptideTable::digest_protein(
+            &trypsin,
+            &leptin2,
+            i64::MIN..=i64::MAX,
+            &mut peptide_sequences,
+        )
+        .unwrap();
+
+        let peptides =
+            PeptideTable::finalize_peptides(peptide_sequences, vec![0, 1, 2], true, true, false)
+                .unwrap();
+
+        let only_in2 = PeptideSequence::try_from("HWGTLCGFLWLWPYLFYVQAVPIQK").unwrap();
+        for pep in peptides {
+            if pep.sequence() == &only_in2 {
+                assert_eq!(pep.unique_taxonomy_ids(), vec![0]);
+                assert!(pep.non_unique_taxonomy_ids().is_empty());
+            } else {
+                assert!(pep.unique_taxonomy_ids().is_empty());
+                assert_eq!(pep.non_unique_taxonomy_ids(), vec![0]);
+            }
+        }
     }
 }
