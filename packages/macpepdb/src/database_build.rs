@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Instant};
 
 use futures::{FutureExt, StreamExt, TryStreamExt, future::BoxFuture, pin_mut, stream::BoxStream};
 use macpepdb_tui::{MetricConfig, TuiHandle};
@@ -31,6 +31,8 @@ pub enum Error {
     ProteinTable(Box<crate::protein_table::Error>),
     #[error("Stats table error in database build: {0}")]
     StatsTable(Box<crate::stats_table::Error>),
+    #[error("Unable to join protein-loading task: {0}")]
+    Join(String),
 }
 
 into_thiserror_boxed!(crate::blob_table::Error, Error, BlobTable);
@@ -109,16 +111,43 @@ pub struct InMemoryProteinAccess {
 
 impl InMemoryProteinAccess {
     pub async fn new(client: Arc<Client>) -> Result<Self, Error> {
-        let proteins = ProteinTable::new(client)
-            .select_all()
-            .await?
-            .map(|protein_result| {
-                protein_result
-                    .map(|protein| (protein.id().unwrap(), Arc::new(protein)))
-                    .map_err(Error::from)
+        let now = Instant::now();
+        let count = ProteinTable::new(client.clone()).count().await?;
+        let parallelism = client.congestion().window().min(count).max(1);
+        let id_lo = i32::MIN as i64;
+        let span = count as i64;
+
+        let handles = (0..parallelism)
+            .map(|chunk| {
+                let client = client.clone();
+                let start = (id_lo + span * chunk as i64 / parallelism as i64) as i32;
+                let end = (id_lo + span * (chunk as i64 + 1) / parallelism as i64) as i32;
+                tokio::spawn(async move {
+                    let mut stream = ProteinTable::new(client)
+                        .select_by_id_range(start, end)
+                        .await?;
+                    let mut local: Vec<(i32, Arc<Protein>)> = Vec::new();
+                    while let Some(protein) = stream.next().await {
+                        let protein = protein?;
+                        local.push((protein.id().unwrap(), Arc::new(protein)));
+                    }
+                    Ok::<Vec<(i32, Arc<Protein>)>, Error>(local)
+                })
             })
-            .try_collect::<HashMap<i32, Arc<Protein>>>()
-            .await?;
+            .collect::<Vec<_>>();
+
+        let mut proteins: HashMap<i32, Arc<Protein>> = HashMap::with_capacity(count);
+        for handle in handles {
+            let chunk = handle.await.map_err(|e| Error::Join(e.to_string()))??;
+            proteins.extend(chunk);
+        }
+
+        let size: usize = proteins.values().map(|protein| protein.size()).sum();
+        tracing::info!(
+            "load proteins in memory: time = {:.1} s; size = {} MB",
+            now.elapsed().as_secs_f64(),
+            size / (1024 * 1024)
+        );
 
         Ok(Self { proteins })
     }

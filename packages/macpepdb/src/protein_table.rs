@@ -42,6 +42,12 @@ static SELECT_BY_IDS_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!("SELECT id, accession, sequence, taxonomy_id FROM {TABLE_NAME} WHERE id = ANY($1)")
 });
 
+static SELECT_BY_ID_RANGE_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "SELECT id, accession, sequence, taxonomy_id FROM {TABLE_NAME} WHERE id >= $1 AND id < $2"
+    )
+});
+
 static SELECT_ID_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT id FROM {TABLE_NAME}"));
 
@@ -150,6 +156,23 @@ impl ProteinTable {
         let stream = self
             .client
             .query_stream(SELECT_BY_IDS_STATEMENT.as_str(), params)
+            .await?;
+        Ok(stream.map(|row_res| {
+            row_res
+                .map_err(Error::Row)
+                .and_then(|row| Protein::try_from(row).map_err(Error::from))
+        }))
+    }
+
+    pub async fn select_by_id_range(
+        &self,
+        start: i32,
+        end: i32,
+    ) -> Result<impl Stream<Item = Result<Protein, Error>> + Send + use<>, Error> {
+        let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![Box::new(start), Box::new(end)];
+        let stream = self
+            .client
+            .query_stream(SELECT_BY_ID_RANGE_STATEMENT.as_str(), params)
             .await?;
         Ok(stream.map(|row_res| {
             row_res

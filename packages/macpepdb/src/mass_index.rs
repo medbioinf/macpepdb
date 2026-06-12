@@ -3,6 +3,8 @@ use std::{collections::HashSet, num::NonZeroUsize, ops::Index, sync::Arc, time::
 use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
+
+use rayon::prelude::ParallelSliceMut;
 use thiserror::Error;
 
 use crate::{
@@ -195,7 +197,7 @@ impl MassIndex {
             .into_inner();
 
         // Sort by (mass_idx, protein_id) and deduplicate so each pair is unique.
-        pairs.sort_unstable();
+        pairs.par_sort_unstable();
         pairs.dedup();
 
         // Build CSR from sorted pairs in one pass.

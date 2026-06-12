@@ -57,6 +57,7 @@ urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v7"] }
 zerocopy = { workspace = true, features = ["derive"] }
 xxhash-rust = { workspace = true, features = ["xxh3"] }
+rayon = "1.12.0"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = { workspace = true, optional = true }
