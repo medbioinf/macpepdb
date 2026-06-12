@@ -1,5 +1,6 @@
-use std::{hash::Hash, sync::OnceLock};
+use std::{fmt::Display, hash::Hash, sync::OnceLock};
 
+use itertools::Itertools;
 use serde::Serialize;
 use thiserror::Error;
 use tokio_postgres::Row;
@@ -188,6 +189,45 @@ impl Peptide {
 impl AsRef<Peptide> for Peptide {
     fn as_ref(&self) -> &Peptide {
         self
+    }
+}
+
+impl Display for Peptide {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "sequence:    {}", self.sequence())?;
+        writeln!(f, "mass:        {} Da", crate::mass::to_float(self.mass))?;
+        writeln!(
+            f,
+            "partititon:  {}",
+            self.partition()
+                .map(|partition| format!("{partition}"))
+                .unwrap_or(String::from("not persisted"))
+        )?;
+        writeln!(
+            f,
+            "SwissProt?:  {}",
+            if self.is_swiss_prot() { "yes" } else { "no" }
+        )?;
+        writeln!(
+            f,
+            "TrEMBL?:     {}",
+            if self.is_trembl() { "yes" } else { "no" }
+        )?;
+        writeln!(
+            f,
+            "proteins:    {}",
+            self.unique_taxonomy_ids().iter().join(", ")
+        )?;
+        writeln!(
+            f,
+            "unique tax.: {}",
+            self.unique_taxonomy_ids().iter().join(", ")
+        )?;
+        writeln!(
+            f,
+            "tax.:        {}",
+            self.non_unique_taxonomy_ids().iter().join(", ")
+        )
     }
 }
 

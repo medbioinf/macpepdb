@@ -18,16 +18,17 @@ use macpepdb::{
     mass::to_float as mass_to_float,
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
-    peptide::Peptidoform,
+    peptide::{Peptide, Peptidoform},
     peptide_search::{MultiTaskSearch, Search, UnionAllSearch},
     peptide_table::PeptideTable,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
     protease::{Protease, Trypsin},
     protein_table::ProteinTable,
-    sequence::{IsBitSequence, PeptideSequence},
+    sequence::{IsBitSequence, IsSimpleSequence, PeptideSequence},
     stats_table::StatsTable,
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
+use postgres_types::ToSql;
 use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use url::Url;
@@ -59,6 +60,8 @@ static GLOBAL: TcMalloc = TcMalloc;
 
 #[derive(Debug, Error)]
 enum Error {
+    #[error("Blob table error: {0}")]
+    BlobTable(Box<macpepdb::blob_table::Error>),
     #[error("Client error: {0}")]
     Client(#[from] macpepdb::client::Error),
     #[error("Database build error: {0}")]
@@ -67,8 +70,18 @@ enum Error {
     GlobPattern(#[from] glob::PatternError),
     #[error("Glob error: {0}")]
     Glob(#[from] glob::GlobError),
+    #[error("Missing mass in partitioning, this indicates he peptide is not in the database.")]
+    MissingMass,
     #[error("Missing mass count in stats table. Are you sure the database was build correctly?")]
     MissingMassCount,
+    #[error(
+        "Missing runtime configuration in blob table. Are you sure the database was build correctly?"
+    )]
+    MissingRuntimeConfiguration,
+    #[error("Sequence error: {0}")]
+    Sequence(Box<macpepdb::sequence::Error>),
+    #[error("Peptide not found")]
+    PeptideNotFound,
     #[error("Peptide table error: {0}")]
     PeptideTable(#[from] macpepdb::peptide_table::Error),
     #[error("proteins_memory_limit should be between 0.0 and 1.0")]
@@ -97,6 +110,14 @@ impl Display for PeptideSearchType {
 #[derive(Subcommand)]
 enum ConfigCommand {
     Show,
+}
+
+#[derive(Subcommand)]
+enum PeptideCommand {
+    Show {
+        /// Sequence to select
+        sequence: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -208,6 +229,10 @@ enum Command {
         mass: f64,
         /// Path to output file
         output_file_path: PathBuf,
+    },
+    Peptide {
+        #[command(subcommand)]
+        command: PeptideCommand,
     },
     /// Prints stats
     Stats {},
@@ -454,6 +479,44 @@ async fn main() -> Result<(), Error> {
                 tui.wait().await;
             }
         }
+        Command::Peptide { command } => match command {
+            PeptideCommand::Show { sequence } => {
+                let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
+                let config: RuntimeConfiguration =
+                    BlobTable::select(client.as_ref(), RuntimeConfiguration::BLOB_KEY)
+                        .await
+                        .map_err(|err| Error::BlobTable(Box::new(err)))?
+                        .ok_or(Error::MissingRuntimeConfiguration)?;
+
+                let sequence = PeptideSequence::try_from(sequence.as_str())
+                    .map_err(|err| Error::Sequence(Box::new(err)))?;
+
+                let mass =
+                    Peptide::peptide_mass_from_amino_acid_bits(sequence.amino_acid_bit_codes());
+
+                let partitions = config
+                    .mass_partitioning()
+                    .get(&mass)
+                    .ok_or(Error::MissingMass)?
+                    .clone();
+
+                let params: Vec<Box<dyn ToSql + Sync + Send>> =
+                    vec![Box::new(partitions), Box::new(mass)];
+
+                let peptide = PeptideTable::new(client)
+                    .select("WHERE partition = ANY($1) AND mass = $2 LIMIT 1", params)
+                    .await?
+                    .next()
+                    .await
+                    .ok_or(Error::PeptideNotFound)??;
+
+                if cli.terminal || cli.tui {
+                    tracing::info!("{peptide}");
+                } else {
+                    println!("{peptide}");
+                }
+            }
+        },
         Command::Stats {} => {
             let client = Arc::new(Client::new(&cli.database_url).await?);
             let protein_count = ProteinTable::new(client.clone()).count().await?;
