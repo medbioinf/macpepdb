@@ -223,7 +223,7 @@ struct Cli {
     #[arg(long)]
     console_socket: Option<SocketAddr>,
     /// Database URL, format `postgresql://[<user>[:<url-safe-password>]@]<host[:<port>]>[,<host[:<port>]>...]/<dbname>[?pool_size=N&...]`
-    #[arg(short, long, default_value_t = String::from("postgresql://postgres@127.0.0.1:5432/macpepdb"))]
+    #[arg(short, long, default_value_t = String::from("postgresql://postgres@127.0.0.1:5432/postgres"))]
     database_url: String,
     /// Path to optional log file
     #[arg(long)]
