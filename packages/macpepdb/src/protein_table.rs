@@ -352,7 +352,7 @@ impl ProteinTable {
                             return Err(Self::find_errored_task(read_tasks).await);
                         }
                         if insertion_tasks.iter().any(|t| t.is_finished()) {
-                            return Err(Self::find_errored_task(read_tasks).await);
+                            return Err(Self::find_errored_task(insertion_tasks).await);
                         }
                         tokio::time::sleep(Duration::from_millis(50)).await;
                     }
