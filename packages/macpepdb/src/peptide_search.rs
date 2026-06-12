@@ -1932,6 +1932,8 @@ mod tests {
             Vec::new(),
             Vec::new(),
             Vec::new(),
+            false,
+            false,
         );
 
         let carbamidomethylation_c = Arc::new(PostTranslationalModification::new(

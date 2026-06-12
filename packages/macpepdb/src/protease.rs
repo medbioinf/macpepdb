@@ -243,7 +243,16 @@ impl Protease {
 
             out.into_iter()
         }))
-        .map(move |seq| Ok(Peptide::new(seq, Vec::new(), Vec::new(), Vec::new())))
+        .map(move |seq| {
+            Ok(Peptide::new(
+                seq,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+                false,
+            ))
+        })
     }
 
     pub(crate) fn cleave_masses_only<'a>(

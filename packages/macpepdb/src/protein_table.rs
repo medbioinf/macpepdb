@@ -23,28 +23,33 @@ static TABLE_NAME: &str = "proteins";
 
 static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "INSERT INTO {TABLE_NAME} (id, accession, sequence, taxonomy_id) VALUES ($1, $2, $3, $4)"
+        "INSERT INTO {TABLE_NAME} (id, accession, sequence, taxonomy_id, flags) VALUES ($1, $2, $3, $4, $5)"
     )
 });
 
 static COPY_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!("COPY {TABLE_NAME} (id, accession, sequence, taxonomy_id) FROM STDIN (FORMAT binary)")
+    format!(
+        "COPY {TABLE_NAME} (id, accession, sequence, taxonomy_id, flags) FROM STDIN (FORMAT binary)"
+    )
 });
 
 /// Column types for the binary COPY into `proteins`, in column order.
-static COPY_TYPES: LazyLock<[Type; 4]> =
-    LazyLock::new(|| [Type::INT4, Type::TEXT, Type::BYTEA, Type::INT4]);
+static COPY_TYPES: LazyLock<[Type; 5]> =
+    LazyLock::new(|| [Type::INT4, Type::TEXT, Type::BYTEA, Type::INT4, Type::CHAR]);
 
-static SELECT_ALL_STATEMENT: LazyLock<String> =
-    LazyLock::new(|| format!("SELECT id, accession, sequence, taxonomy_id FROM {TABLE_NAME}"));
+static SELECT_ALL_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!("SELECT id, accession, sequence, taxonomy_id, flags FROM {TABLE_NAME}")
+});
 
 static SELECT_BY_IDS_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!("SELECT id, accession, sequence, taxonomy_id FROM {TABLE_NAME} WHERE id = ANY($1)")
+    format!(
+        "SELECT id, accession, sequence, taxonomy_id, flags FROM {TABLE_NAME} WHERE id = ANY($1)"
+    )
 });
 
 static SELECT_BY_ID_RANGE_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "SELECT id, accession, sequence, taxonomy_id FROM {TABLE_NAME} WHERE id >= $1 AND id < $2"
+        "SELECT id, accession, sequence, taxonomy_id, flags FROM {TABLE_NAME} WHERE id >= $1 AND id < $2"
     )
 });
 
@@ -98,7 +103,13 @@ impl ProteinTable {
         self.client
             .execute(
                 INSERT_STATEMENT.as_str(),
-                &[&id, &accession, protein.sequence(), &taxonomy_id],
+                &[
+                    &id,
+                    &accession,
+                    protein.sequence(),
+                    &taxonomy_id,
+                    protein.flags_as_ref(),
+                ],
             )
             .await?;
         Ok(())
@@ -121,8 +132,14 @@ impl ProteinTable {
                     let id = protein.id();
                     let accession = protein.accession();
                     let taxonomy_id = protein.taxonomy_id();
-                    copy.write(&[&id, &accession, protein.sequence(), &taxonomy_id])
-                        .await?;
+                    copy.write(&[
+                        &id,
+                        &accession,
+                        protein.sequence(),
+                        &taxonomy_id,
+                        protein.flags_as_ref(),
+                    ])
+                    .await?;
                 }
                 copy.finish().await?;
                 Ok::<(), crate::client::Error>(())

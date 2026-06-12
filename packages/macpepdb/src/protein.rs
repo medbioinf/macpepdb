@@ -5,6 +5,8 @@ use crate::sequence::{IsBitSequence, ProteinSequence as Sequence};
 
 static NCBI_TAXONOMY_ID_ATTRIBUTE_NAME: &str = "NCBI_TaxID=";
 
+const IS_REVIEWED_BIT: usize = 0;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Taxonomy ID capture `{0}` does not contain ID group")]
@@ -25,15 +27,29 @@ pub struct Protein {
     id: Option<i32>,
     sequence: Sequence,
     taxonomy_id: i32,
+    /// Bit flags for e.g. review status, see constants to see what is stored in which bit
+    flags: i8,
 }
 
 impl Protein {
-    pub fn new(accession: String, id: Option<i32>, sequence: Sequence, taxonomy_id: i32) -> Self {
+    pub fn new(
+        accession: String,
+        id: Option<i32>,
+        sequence: Sequence,
+        taxonomy_id: i32,
+        is_reviewed: bool,
+    ) -> Self {
+        let mut flags = 0b0000_0000;
+        if is_reviewed {
+            flags |= 1 << IS_REVIEWED_BIT;
+        }
+
         Self {
             accession,
             id,
             sequence,
             taxonomy_id,
+            flags,
         }
     }
 
@@ -45,12 +61,24 @@ impl Protein {
         &self.sequence
     }
 
+    pub fn is_reviewed(&self) -> bool {
+        (self.flags & (1 << IS_REVIEWED_BIT)) != 0
+    }
+
     pub fn id(&self) -> Option<i32> {
         self.id
     }
 
     pub fn taxonomy_id(&self) -> i32 {
         self.taxonomy_id
+    }
+
+    pub fn flags(&self) -> i8 {
+        self.flags
+    }
+
+    pub fn flags_as_ref(&self) -> &i8 {
+        &self.flags
     }
 
     pub fn size(&self) -> usize {
@@ -72,14 +100,19 @@ impl TryFrom<&uniprot_reader::entry::Entry> for Protein {
             .map(|pos| entry.accession()[..pos].trim().to_string())
             .unwrap_or(entry.accession().to_string());
 
-        Ok(Self {
+        let is_reviewed = memchr::memmem::find(entry.identification().as_bytes(), b"Reviewed")
+            .map(|_| true)
+            .unwrap_or(false);
+
+        Ok(Self::new(
             accession,
-            id: None,
-            sequence: Sequence::try_from(entry.sequence())?,
-            taxonomy_id: taxonomy_id_from_organism_taxonomy_cross_reference(
+            None,
+            Sequence::try_from(entry.sequence())?,
+            taxonomy_id_from_organism_taxonomy_cross_reference(
                 entry.organism_taxonomy_cross_reference(),
             )?,
-        })
+            is_reviewed,
+        ))
     }
 }
 
@@ -102,6 +135,7 @@ impl TryFrom<Row> for Protein {
             accession: row.try_get("accession")?,
             sequence: row.try_get("sequence")?,
             taxonomy_id: row.try_get("taxonomy_id")?,
+            flags: row.try_get("flags")?,
         })
     }
 }

@@ -24,7 +24,8 @@ CREATE TABLE proteins (
     id          INTEGER PRIMARY KEY,
     accession   TEXT,
     sequence    BYTEA,
-    taxonomy_id INTEGER
+    taxonomy_id INTEGER,
+    flags       "char" -- `"char"` is different from CHAR"
 );
 
 CREATE TABLE blobs (
@@ -49,7 +50,8 @@ CREATE TABLE peptides (
     sequence                BYTEA,
     protein_ids             BYTEA,
     unique_taxonomy_ids     INTEGER[],
-    non_unique_taxonomy_ids INTEGER[]
+    non_unique_taxonomy_ids INTEGER[],
+    flags                   "char" -- `"char"` is different from CHAR"
 ) USING columnar;
 
 -- Columnar tuning. stripe_row_limit MUST match the build's STRIPE_ROW_LIMIT constant

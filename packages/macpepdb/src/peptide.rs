@@ -17,6 +17,9 @@ use crate::{
 
 pub const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A') as usize;
 
+pub const IS_SWISS_PROT_BIT: usize = 0;
+pub const IS_TREMBL_BIT: usize = 1;
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Client error in peptide: {0}")]
@@ -63,6 +66,8 @@ pub struct Peptide {
     protein_ids: ProteinIds,
     unique_taxonomy_ids: Vec<i32>,
     non_unique_taxonomy_ids: Vec<i32>,
+    /// Bit flags for e.g. review status, see constants to see what is stored in which bit
+    flags: i8,
     #[serde(skip)]
     amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
 }
@@ -73,8 +78,18 @@ impl Peptide {
         protein_ids: Vec<i32>,
         unique_taxonomy_ids: Vec<i32>,
         non_unique_taxonomy_ids: Vec<i32>,
+        is_swiss_prot: bool,
+        is_trembl: bool,
     ) -> Self {
         let mass = Self::to_peptide_mass(&sequence);
+        let mut flags: i8 = 0b0100_0000;
+        if is_swiss_prot {
+            flags |= 1 << IS_SWISS_PROT_BIT;
+        }
+        if is_trembl {
+            flags |= 1 << IS_TREMBL_BIT;
+        }
+
         Self {
             mass,
             sequence,
@@ -82,6 +97,7 @@ impl Peptide {
             unique_taxonomy_ids,
             non_unique_taxonomy_ids,
             partition: None,
+            flags,
             amino_acid_counts: OnceLock::new(),
         }
     }
@@ -92,6 +108,22 @@ impl Peptide {
 
     pub(crate) fn set_partition(&mut self, partition: i64) {
         self.partition = Some(partition);
+    }
+
+    pub fn is_swiss_prot(&self) -> bool {
+        (self.flags & (1 << IS_SWISS_PROT_BIT)) != 0
+    }
+
+    pub fn is_trembl(&self) -> bool {
+        (self.flags & (1 << IS_TREMBL_BIT)) != 0
+    }
+
+    pub fn flags(&self) -> i8 {
+        self.flags
+    }
+
+    pub fn flags_as_ref(&self) -> &i8 {
+        &self.flags
     }
 
     pub fn len(&self) -> usize {
@@ -149,6 +181,7 @@ impl Peptide {
             + BLOB_CELL_OVERHEAD
             + self.protein_ids.encoded_len()
             + (self.unique_taxonomy_ids.len() + self.non_unique_taxonomy_ids.len()) * LIST_CELL_SIZE
+            + std::mem::size_of::<i64>()
     }
 }
 
@@ -201,7 +234,14 @@ impl TryFrom<&str> for Peptide {
 
     fn try_from(sequence: &str) -> Result<Self, Self::Error> {
         let sequence = Sequence::try_from(sequence)?;
-        Ok(Self::new(sequence, Vec::new(), Vec::new(), Vec::new()))
+        Ok(Self::new(
+            sequence,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+        ))
     }
 }
 
@@ -218,7 +258,14 @@ impl TryFrom<CompactSequence> for Peptide {
 
     fn try_from(sequence: CompactSequence) -> Result<Self, Self::Error> {
         let sequence = Sequence::try_from(sequence)?;
-        Ok(Self::new(sequence, Vec::new(), Vec::new(), Vec::new()))
+        Ok(Self::new(
+            sequence,
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+        ))
     }
 }
 
@@ -336,6 +383,7 @@ impl TryFrom<Row> for Peptide {
             protein_ids: row.try_get("protein_ids")?,
             unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
             non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
+            flags: row.try_get("flags")?,
             amino_acid_counts: OnceLock::new(),
         })
     }
@@ -352,6 +400,8 @@ mod tests {
             vec![1],
             vec![1, 2],
             vec![1, 2, 3],
+            false,
+            false,
         );
         //   32 = ROW_OVERHEAD
         // +  8 = partition (i64)
@@ -360,6 +410,7 @@ mod tests {
         // + 24 = BLOB_CELL_OVERHEAD for protein_ids
         // +  1 = protein_ids.encoded_len() (single id [1] -> 1 varint byte)
         // + 140 = 5 taxonomy list cells (2 unique + 3 non-unique) x LIST_CELL_SIZE (28)
-        assert_eq!(peptide.cql_size(), 245);
+        // + 8 = flags
+        assert_eq!(peptide.cql_size(), 253);
     }
 }

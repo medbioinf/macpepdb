@@ -42,13 +42,13 @@ pub const PARTITION_COL: &str = "partition";
 pub const MASS_COL: &str = "mass";
 
 pub const COLUMNS: &str =
-    "partition, mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids";
+    "partition, mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
 
 static COPY_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("COPY {TABLE_NAME} ({COLUMNS}) FROM STDIN (FORMAT binary)"));
 
 /// Column types for the binary COPY into `peptides`, in column order.
-static COPY_TYPES: LazyLock<[Type; 6]> = LazyLock::new(|| {
+static COPY_TYPES: LazyLock<[Type; 7]> = LazyLock::new(|| {
     [
         Type::INT8,       // partition
         Type::INT8,       // mass
@@ -56,6 +56,7 @@ static COPY_TYPES: LazyLock<[Type; 6]> = LazyLock::new(|| {
         Type::BYTEA,      // protein_ids (delta+varint bytes)
         Type::INT4_ARRAY, // unique_taxonomy_ids
         Type::INT4_ARRAY, // non_unique_taxonomy_ids
+        Type::CHAR,       // flags
     ]
 });
 
@@ -160,6 +161,7 @@ impl PeptideTable {
                         peptide.protein_ids(),
                         &unique,
                         &non_unique,
+                        peptide.flags_as_ref(),
                     ])
                     .await?;
                 }
@@ -277,7 +279,13 @@ impl PeptideTable {
                         let mut peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>> =
                             HashMap::with_capacity(2 * protein_ids_len);
 
+                        let mut is_swiss_prot = false;
+                        let mut is_trembl: bool = false;
+
                         while let Some(protein) = proteins.next().await.transpose()? {
+                            is_swiss_prot |= protein.is_reviewed();
+                            is_trembl |= !protein.is_reviewed();
+
                             #[allow(clippy::mutable_key_type)]
                             protease
                                 .cleave(protein.sequence().as_ref(), Some(mass..=mass))
@@ -312,6 +320,8 @@ impl PeptideTable {
                                     protein_ids.clone(),
                                     unique_taxonomy_ids,
                                     non_unique_taxonomy_ids,
+                                    is_swiss_prot,
+                                    is_trembl,
                                 ))
                             })
                             .collect::<Result<_, _>>()?;
