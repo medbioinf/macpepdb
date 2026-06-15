@@ -10,6 +10,7 @@ use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
 
+use metrics::counter;
 use rayon::prelude::ParallelSliceMut;
 use thiserror::Error;
 
@@ -17,13 +18,15 @@ use crate::{
     amino_acid::TRYPTOPHAN,
     client::Client,
     database_build::IsProteinAccess,
+    mass::to_float as mass_to_float,
     protease::Protease,
     protein::Protein,
     sequence::{IsBitSequence, PeptideSequence},
     stats_table::StatsTable,
 };
 
-pub static PROGRESS_METRIC: &str = "mass_index::progress";
+pub static PARTIAL_PROGRESS_METRIC: &str = "mass_index::partial_progress::processed_proteins";
+pub static TOTAL_PROGRESS_METRIC: &str = "mass_index::total_progress::processed_proteins";
 
 static LOCAL_MASS_LIMIT: usize = 10_000;
 
@@ -166,6 +169,14 @@ impl MassIndex {
         self.parts.iter().flat_map(|part| part.masses.as_slice())
     }
 
+    pub fn number_of_intervals(mass_interval_width: Option<NonZeroI64>) -> usize {
+        if let Some(width) = mass_interval_width {
+            (*THEORETICAL_MAX_MASS / width.get()) as usize
+        } else {
+            1
+        }
+    }
+
     pub async fn build(
         client: Arc<Client>,
         protein_access: Arc<Box<dyn IsProteinAccess>>,
@@ -173,11 +184,11 @@ impl MassIndex {
         num_threads: NonZeroUsize,
         mass_interval_width: Option<NonZeroI64>,
     ) -> Result<Self, Error> {
-        let intervals = if let Some(interval) = mass_interval_width {
-            (0..=*THEORETICAL_MAX_MASS / interval.get())
+        let intervals = if let Some(width) = mass_interval_width {
+            (0..=*THEORETICAL_MAX_MASS / width.get())
                 .map(|i| {
-                    let start = i * interval.get();
-                    let end = (i + 1) * interval.get();
+                    let start = i * width.get();
+                    let end = (i + 1) * width.get();
                     (start, end)
                 })
                 .collect()
@@ -185,9 +196,20 @@ impl MassIndex {
             vec![(0, *THEORETICAL_MAX_MASS)]
         };
 
+        tracing::info!(
+            "Mass index will be built with {} intervals",
+            intervals.len()
+        );
+        let progress_metric = counter!(TOTAL_PROGRESS_METRIC);
+
         let mut mass_index = Self::with_capacity(intervals.len());
 
         for interval in intervals.into_iter() {
+            tracing::info!(
+                "Building mass index for interval [{}, {})",
+                mass_to_float(interval.0),
+                mass_to_float(interval.1)
+            );
             let partial_mass_index = Self::partial_build(
                 protein_access.clone(),
                 protease.clone(),
@@ -196,6 +218,7 @@ impl MassIndex {
             )
             .await?;
             mass_index.push(partial_mass_index);
+            progress_metric.increment(1);
         }
 
         StatsTable::new(client.clone())
@@ -213,6 +236,8 @@ impl MassIndex {
     ) -> Result<PartialMassIndex, Error> {
         let interval = Arc::new(mass_interval);
 
+        let now = std::time::Instant::now();
+
         // Intermediate: unsorted flat (mass_idx, protein_id) pairs from all threads.
         // Sorted + deduped after threads finish, then converted to CSR in one pass.
         let pairs: Arc<parking_lot::Mutex<Vec<(i64, i32)>>> = Arc::new(parking_lot::Mutex::new(
@@ -221,8 +246,8 @@ impl MassIndex {
 
         let queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
-        let progress_metric = Arc::new(metrics::counter!(PROGRESS_METRIC));
-        progress_metric.absolute(0);
+        let partial_progress_metric = Arc::new(metrics::counter!(PARTIAL_PROGRESS_METRIC));
+        partial_progress_metric.absolute(0);
 
         let mut proteins = protein_access.all().await?;
 
@@ -230,7 +255,7 @@ impl MassIndex {
             .map(|_| {
                 let protease = protease.clone();
                 let queue = queue.clone();
-                let progress_metric = progress_metric.clone();
+                let partial_progress_metric = partial_progress_metric.clone();
                 let mass_interval = interval.clone();
                 let pairs = pairs.clone();
 
@@ -262,7 +287,7 @@ impl MassIndex {
                             pairs.lock().extend(local_pairs.drain());
                         }
 
-                        progress_metric.increment(1);
+                        partial_progress_metric.increment(1);
                     }
 
                     if !local_pairs.is_empty() {
@@ -314,9 +339,25 @@ impl MassIndex {
             .map_err(|_| Error::ProteinIdsUnwrap)?
             .into_inner();
 
+        tracing::info!(
+            "Build for interval [{}, {}) produced {} pairs in {:}s",
+            mass_to_float(mass_interval.0),
+            mass_to_float(mass_interval.1),
+            pairs.len(),
+            now.elapsed().as_secs_f32()
+        );
+
         // Sort by (mass_idx, protein_id) and deduplicate so each pair is unique.
+        let now = std::time::Instant::now();
         pairs.par_sort_unstable();
         pairs.dedup();
+        tracing::info!(
+            "Sorting and deduplication for interval [{}, {}) produced {} unique pairs in {:}s",
+            mass_to_float(mass_interval.0),
+            mass_to_float(mass_interval.1),
+            pairs.len(),
+            now.elapsed().as_secs_f32()
+        );
 
         // Build CSR from sorted pairs in one pass.
         // indptr[i+1] counts entries for row i; prefix-summed into offsets after.
