@@ -302,7 +302,11 @@ impl Protease {
                     prefix_len[end - 1] - prefix_len[start - 1]
                 };
 
-                if total_len < self.min_length.get() || total_len > self.max_length.get() {
+                if total_len > self.max_length.get() {
+                    break;
+                }
+
+                if total_len < self.min_length.get() {
                     continue;
                 }
 
