@@ -13,6 +13,7 @@ pub mod mass_index;
 pub mod molecules;
 pub mod monitoring;
 pub mod peptide;
+pub mod peptide_metadata_table;
 pub mod peptide_search;
 pub mod peptide_table;
 pub mod post_translational_modification;

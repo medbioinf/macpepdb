@@ -4,24 +4,28 @@ use std::{
     ops::{AddAssign, RangeInclusive},
     sync::{
         Arc, LazyLock,
-        atomic::{AtomicI64, AtomicUsize},
+        atomic::{AtomicI64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use crossbeam::queue::ArrayQueue;
+use dashmap::{DashMap, mapref::entry::Entry};
 use fallible_iterator::FallibleIterator;
 use futures::{Stream, StreamExt};
 use postgres_types::{ToSql, Type};
 use thiserror::Error;
+use xxhash_rust::xxh3::xxh3_128;
 
 use crate::{
     client::Client,
     database_build::IsProteinAccess,
     mass_index::MassIndex,
     peptide::{IsPeptide, Peptide},
+    peptide_metadata_table::PeptideMetadataTable,
     protease::Protease,
     protein::Protein,
+    protein_ids::ProteinIds,
     sequence::{CompactSequence, PeptideSequence},
     stats_table::StatsTable,
 };
@@ -38,12 +42,14 @@ pub const STRIPE_ROW_LIMIT: usize = 150_000;
 /// memory when peptides map to very large protein-id lists.
 const MAX_PARTITION_BYTES: usize = 256 * 1024 * 1024;
 
+/// Newly-interned `peptide_metadata` rows are COPYed in batches of this size per worker.
+const METADATA_FLUSH_ROWS: usize = 8192;
+
 pub const PARTITION_COL: &str = "partition";
 
 pub const MASS_COL: &str = "mass";
 
-pub const COLUMNS: &str =
-    "partition, mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
+pub const COLUMNS: &str = "partition, mass, sequence, metadata_id, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
 
 static COPY_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("COPY {TABLE_NAME} ({COLUMNS}) FROM STDIN (FORMAT binary)"));
@@ -54,7 +60,7 @@ static COPY_TYPES: LazyLock<[Type; 7]> = LazyLock::new(|| {
         Type::INT8,       // partition
         Type::INT8,       // mass
         Type::BYTEA,      // sequence (CompactSequence bytes)
-        Type::BYTEA,      // protein_ids (delta+varint bytes)
+        Type::INT8,       // metadata_id (reference into peptide_metadata)
         Type::INT4_ARRAY, // unique_taxonomy_ids
         Type::INT4_ARRAY, // non_unique_taxonomy_ids
         Type::CHAR,       // flags
@@ -93,6 +99,8 @@ pub enum Error {
     ProteinAccess(Box<crate::database_build::Error>),
     #[error("Peptide error in peptide table: {0}")]
     Peptide(#[from] crate::peptide::Error),
+    #[error("Peptide metadata table error in peptide table: {0}")]
+    PeptideMetadata(Box<crate::peptide_metadata_table::Error>),
     #[error("Sequence error in peptide table: {0}")]
     Sequence(#[from] crate::sequence::Error),
     #[error("Stats table error in peptide table: {0}")]
@@ -104,6 +112,7 @@ pub enum Error {
 into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::database_build::Error, Error, ProteinAccess);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
+into_thiserror_boxed!(crate::peptide_metadata_table::Error, Error, PeptideMetadata);
 
 type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, Vec<i32>)>>>;
 
@@ -153,13 +162,16 @@ impl PeptideTable {
                         .partition()
                         .expect("peptide partition must be set before COPY");
                     let mass = peptide.mass();
+                    let metadata_id = peptide
+                        .metadata_id()
+                        .expect("peptide metadata_id must be set before COPY");
                     let unique = peptide.unique_taxonomy_ids();
                     let non_unique = peptide.non_unique_taxonomy_ids();
                     copy.write(&[
                         &partition,
                         &mass,
                         peptide.sequence(),
-                        peptide.protein_ids(),
+                        &metadata_id,
                         &unique,
                         &non_unique,
                         peptide.flags_as_ref(),
@@ -216,6 +228,12 @@ impl PeptideTable {
         let next_partition_guard = Arc::new(NextPartitionGuard::new());
         let peptide_ctr = Arc::new(AtomicUsize::new(0));
 
+        // Shared interner: xxh3_128(canonical protein_ids blob) -> metadata_id. Deduplicates
+        // protein-id sets across all threads/partitions. ~16-byte key + i64 value per distinct
+        // set (~55M expected => ~3 GB) — budget this against the in-memory proteins.
+        let metadata_interner: Arc<DashMap<u128, i64>> = Arc::new(DashMap::new());
+        let metadata_id_counter = Arc::new(AtomicI64::new(0));
+
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
                 let protein_access = protein_access.clone();
@@ -226,9 +244,13 @@ impl PeptideTable {
                 let inserted_peptides_metric = inserted_peptides_metric.clone();
                 let next_partition_guard = next_partition_guard.clone();
                 let peptide_ctr = peptide_ctr.clone();
+                let metadata_interner = metadata_interner.clone();
+                let metadata_id_counter = metadata_id_counter.clone();
 
                 tokio::spawn(async move {
                     let peptide_table = PeptideTable::new(client.clone());
+                    let metadata_table = PeptideMetadataTable::new(client.clone());
+                    let mut metadata_buffer: Vec<(i64, ProteinIds)> = Vec::new();
                     let mut mass_partition_map: HashMap<i64, Vec<i64>> = HashMap::new();
                     let mut peptide_buffer: Vec<Peptide> = Vec::new();
                     let mut partition_bytes: usize = 0;
@@ -256,6 +278,10 @@ impl PeptideTable {
                                         .fetch_add(inserted, std::sync::atomic::Ordering::SeqCst);
                                     inserted_peptides_metric.increment(inserted as u64);
                                 }
+                                if !metadata_buffer.is_empty() {
+                                    metadata_table.insert_batch(&metadata_buffer).await?;
+                                    metadata_buffer.clear();
+                                }
                                 break;
                             }
                             None => {
@@ -275,6 +301,25 @@ impl PeptideTable {
                         } else {
                             protein_ids.clone()
                         };
+
+                        let metadata = ProteinIds::from(protein_ids);
+                        let hash = xxh3_128(&metadata.encode());
+                        let (metadata_id, is_new_metadata) = match metadata_interner.entry(hash) {
+                            Entry::Occupied(existing) => (*existing.get(), false),
+                            Entry::Vacant(slot) => {
+                                let id = metadata_id_counter.fetch_add(1, Ordering::SeqCst);
+                                slot.insert(id);
+                                (id, true)
+                            }
+                        };
+
+                        if is_new_metadata {
+                            metadata_buffer.push((metadata_id, metadata));
+                            if metadata_buffer.len() >= METADATA_FLUSH_ROWS {
+                                metadata_table.insert_batch(&metadata_buffer).await?;
+                                metadata_buffer.clear();
+                            }
+                        }
 
                         // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
                         let mut peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>> =
@@ -297,7 +342,7 @@ impl PeptideTable {
 
                         let peptides: Vec<Peptide> = Self::finalize_peptides(
                             peptide_sequences,
-                            protein_ids,
+                            metadata_id,
                             is_swiss_prot,
                             is_trembl,
                             skip_taxonomies,
@@ -431,7 +476,7 @@ impl PeptideTable {
 
     fn finalize_peptides(
         peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>>,
-        protein_ids: Vec<i32>,
+        metadata_id: i64,
         is_swiss_prot: bool,
         is_trembl: bool,
         skip_taxonomies: bool,
@@ -451,9 +496,9 @@ impl PeptideTable {
                     .map(|(taxonomy_id, _)| taxonomy_id)
                     .collect::<Vec<_>>();
 
-                Ok::<_, Error>(Peptide::new(
+                Ok::<_, Error>(Peptide::new_with_metadata(
                     PeptideSequence::try_from(seq).map_err(Error::Sequence)?,
-                    protein_ids.clone(),
+                    metadata_id,
                     unique_taxonomy_ids,
                     non_unique_taxonomy_ids,
                     is_swiss_prot,
@@ -540,7 +585,7 @@ mod tests {
         .unwrap();
 
         let peptides =
-            PeptideTable::finalize_peptides(peptide_sequences, vec![0, 1, 2], true, true, false)
+            PeptideTable::finalize_peptides(peptide_sequences, 0, true, true, false)
                 .unwrap();
 
         let only_in2 = PeptideSequence::try_from("HWGTLCGFLWLWPYLFYVQAVPIQK").unwrap();

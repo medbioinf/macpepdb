@@ -48,6 +48,7 @@ SELECT run_command_on_workers($$ SELECT pg_reload_conf() $$);
 -- propagated to the shards by Citus.
 -- --------------------------------------------------------------------------
 ANALYZE peptides;
+ANALYZE peptide_metadata;
 ANALYZE proteins;
 ANALYZE blobs;
 ANALYZE stats;

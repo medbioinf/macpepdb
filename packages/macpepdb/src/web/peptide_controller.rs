@@ -17,6 +17,7 @@ use urlencoding::decode as urldecode;
 
 use crate::mass::to_float as mass_to_float;
 use crate::peptide::{IsPeptide, Peptide};
+use crate::peptide_metadata_table::PeptideMetadataTable;
 use crate::peptide_search::{Search, UnionAllSearch};
 use crate::peptide_table::PeptideTable;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
@@ -43,6 +44,8 @@ pub enum Error {
     PeptideSearch(#[from] crate::peptide_search::Error),
     #[error("Peptide error: {0}")]
     PeptideTable(#[from] crate::peptide_table::Error),
+    #[error("Peptide metadata error: {0}")]
+    PeptideMetadata(#[from] crate::peptide_metadata_table::Error),
 }
 
 impl IntoResponse for Error {
@@ -154,9 +157,20 @@ pub async fn get_peptide(
 ) -> Result<Json<Peptide>, Error> {
     let peptide = Peptide::try_from(sequence)?;
 
-    let peptide = select_one_peptide(&server_state, &peptide)
+    let mut peptide = select_one_peptide(&server_state, &peptide)
         .await?
         .ok_or(Error::PeptideNotFound)?;
+
+    // Peptides store only a `metadata_id`; resolve it to the deduplicated protein-id set
+    // so the response is byte-identical to the pre-dedup shape.
+    if let Some(metadata_id) = peptide.metadata_id() {
+        let mut groups = PeptideMetadataTable::new(server_state.db_client())
+            .select_by_ids(&[metadata_id])
+            .await?;
+        if let Some(protein_ids) = groups.remove(&metadata_id) {
+            peptide.set_protein_ids(protein_ids);
+        }
+    }
 
     // let proteins: Vec<Protein> =
     //     ProteinTable::get_proteins_of_peptide(server_state.db_client_as_ref(), &peptide)

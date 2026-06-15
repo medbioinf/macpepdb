@@ -85,7 +85,9 @@ impl ProteinIds {
 
     /// Sort + dedup, then delta-encode into a varint blob. The first value is
     /// stored zigzag-encoded; subsequent values are stored as non-negative gaps.
-    fn encode(&self) -> Vec<u8> {
+    /// This is the canonical byte form of the set — stable across input order — so it
+    /// doubles as the interning key (hashed) for `peptide_metadata`.
+    pub fn encode(&self) -> Vec<u8> {
         let mut sorted = self.0.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -245,6 +247,15 @@ mod tests {
         for v in [i64::MIN, -1, 0, 1, 42, i32::MIN as i64, i64::MAX] {
             assert_eq!(unzigzag(zigzag(v)), v);
         }
+    }
+
+    #[test]
+    fn test_encode_is_order_and_dup_independent() {
+        // Same set, different input order + duplicates -> identical canonical blob.
+        // This is what makes the encoding a stable interning key for peptide_metadata.
+        let a = ProteinIds::from(vec![5, 1, 9, 2000, 1]);
+        let b = ProteinIds::from(vec![2000, 9, 5, 1]);
+        assert_eq!(a.encode(), b.encode());
     }
 
     #[test]
