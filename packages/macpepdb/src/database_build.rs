@@ -1,4 +1,10 @@
-use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    num::{NonZeroI64, NonZeroUsize},
+    path::PathBuf,
+    sync::Arc,
+    time::Instant,
+};
 
 use futures::{FutureExt, StreamExt, TryStreamExt, future::BoxFuture, pin_mut, stream::BoxStream};
 use macpepdb_tui::{MetricConfig, TuiHandle};
@@ -204,6 +210,7 @@ pub struct DatabaseBuild<'a> {
     skip_protein_associations: bool,
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
+    mass_interval_with: Option<NonZeroI64>,
     tui: Option<&'a TuiHandle>,
 }
 
@@ -220,6 +227,7 @@ impl<'a> DatabaseBuild<'a> {
         skip_protein_associations: bool,
         skip_taxonomies: bool,
         num_threads: NonZeroUsize,
+        mass_interval_with: Option<NonZeroI64>,
         tui: Option<&'a TuiHandle>,
     ) -> Self {
         Self {
@@ -233,6 +241,7 @@ impl<'a> DatabaseBuild<'a> {
             skip_taxonomies,
             num_threads,
             tui,
+            mass_interval_with,
             protease: Arc::new(protease),
         }
     }
@@ -307,7 +316,9 @@ impl<'a> DatabaseBuild<'a> {
                 protein_ctr as f64,
             ));
         }
-        let mass_index = self.build_db_mass_index(protein_access.clone()).await?;
+        let mass_index = self
+            .build_db_mass_index(protein_access.clone(), self.mass_interval_with)
+            .await?;
         if let Some(tui) = &self.tui {
             tui.remove_metric(crate::mass_index::PROGRESS_METRIC);
         }
@@ -371,6 +382,7 @@ impl<'a> DatabaseBuild<'a> {
     async fn build_db_mass_index(
         &self,
         protein_access: Arc<Box<dyn IsProteinAccess>>,
+        mass_interval_with: Option<NonZeroI64>,
     ) -> Result<MassIndex, Error> {
         let now = std::time::Instant::now();
         let index = MassIndex::build(
@@ -378,6 +390,7 @@ impl<'a> DatabaseBuild<'a> {
             protein_access,
             self.protease.clone(),
             self.num_threads,
+            mass_interval_with,
         )
         .await?;
         tracing::info!(

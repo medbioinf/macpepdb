@@ -49,7 +49,8 @@ pub const PARTITION_COL: &str = "partition";
 
 pub const MASS_COL: &str = "mass";
 
-pub const COLUMNS: &str = "partition, mass, sequence, metadata_id, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
+pub const COLUMNS: &str =
+    "partition, mass, sequence, metadata_id, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
 
 static COPY_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("COPY {TABLE_NAME} ({COLUMNS}) FROM STDIN (FORMAT binary)"));
@@ -387,27 +388,30 @@ impl PeptideTable {
             })
             .collect::<Vec<_>>();
 
-        for mass_entry in mass_index.into_iter() {
-            let mut mass_index_entry = Some(mass_entry);
-            loop {
-                mass_index_entry = match queue.push(mass_index_entry) {
-                    Ok(()) => break,
-                    Err(entry) => {
-                        // check if all threads still running
-                        if digest_and_insertion_threads
-                            .iter()
-                            .any(|thread| thread.is_finished())
-                        {
-                            // find errored_thread and return error
-                            return Err(
-                                Self::find_errored_thread(digest_and_insertion_threads).await
-                            );
+        for partial_mass_index in mass_index.into_iter() {
+            for mass_entry in partial_mass_index.into_iter() {
+                let mut mass_index_entry = Some(mass_entry);
+                loop {
+                    mass_index_entry = match queue.push(mass_index_entry) {
+                        Ok(()) => break,
+                        Err(entry) => {
+                            // check if all threads still running
+                            if digest_and_insertion_threads
+                                .iter()
+                                .any(|thread| thread.is_finished())
+                            {
+                                // find errored_thread and return error
+                                return Err(Self::find_errored_thread(
+                                    digest_and_insertion_threads,
+                                )
+                                .await);
+                            }
+                            entry
                         }
-                        entry
-                    }
-                };
+                    };
+                }
+                queue_metric.set(queue.len() as f64);
             }
-            queue_metric.set(queue.len() as f64);
         }
 
         // Send none to signal stop
@@ -585,8 +589,7 @@ mod tests {
         .unwrap();
 
         let peptides =
-            PeptideTable::finalize_peptides(peptide_sequences, 0, true, true, false)
-                .unwrap();
+            PeptideTable::finalize_peptides(peptide_sequences, 0, true, true, false).unwrap();
 
         let only_in2 = PeptideSequence::try_from("HWGTLCGFLWLWPYLFYVQAVPIQK").unwrap();
         for pep in peptides {

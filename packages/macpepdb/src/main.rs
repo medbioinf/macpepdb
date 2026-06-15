@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     fmt::Display,
     net::SocketAddr,
-    num::NonZeroUsize,
+    num::{NonZeroI64, NonZeroUsize},
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -70,6 +70,8 @@ enum Error {
     GlobPattern(#[from] glob::PatternError),
     #[error("Glob error: {0}")]
     Glob(#[from] glob::GlobError),
+    #[error("Mass interval width should be greater than 0.0, or not set at all.")]
+    MassIntervalWidth,
     #[error("Missing mass in partitioning, this indicates he peptide is not in the database.")]
     MissingMass,
     #[error("Missing mass count in stats table. Are you sure the database was build correctly?")]
@@ -143,6 +145,10 @@ enum Command {
         /// If set, peptides with unknown amino acid (X) are kept. Be aware that X has no mass.
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         keep_unknown: bool,
+        /// Mass interval width for chunking mass index. Smaller value will result in less intermediate memory usage
+        /// but will extend the runtime.
+        #[arg(short = 'i', long)]
+        mass_interval_width: Option<f64>,
         /// Max peptide length
         #[arg(long, default_value_t = PeptideSequence::MAX_LENGTH)]
         max_length: NonZeroUsize,
@@ -357,6 +363,7 @@ async fn main() -> Result<(), Error> {
             concurrent_batch_size,
             batch_size_limit,
             keep_unknown,
+            mass_interval_width,
             max_length,
             min_length,
             max_missed_cleavages,
@@ -372,6 +379,12 @@ async fn main() -> Result<(), Error> {
             if !(0.0..=1.0).contains(&proteins_memory_limit) {
                 return Err(Error::ProteinsMemoryLimit);
             }
+
+            let mass_interval_width = if let Some(width) = mass_interval_width {
+                Some(NonZeroI64::new(mass_to_int!(width)).ok_or(Error::MassIntervalWidth)?)
+            } else {
+                None
+            };
 
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
             let protein_file_paths =
@@ -406,6 +419,7 @@ async fn main() -> Result<(), Error> {
                 skip_protein_associations,
                 skip_taxonomies,
                 threads,
+                mass_interval_width,
                 tui.as_ref(),
             )
             .start()

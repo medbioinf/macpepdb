@@ -1,4 +1,10 @@
-use std::{collections::HashSet, num::NonZeroUsize, ops::Index, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    num::{NonZeroI64, NonZeroUsize},
+    ops::Index,
+    sync::{Arc, LazyLock},
+    time::Duration,
+};
 
 use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
@@ -8,13 +14,21 @@ use rayon::prelude::ParallelSliceMut;
 use thiserror::Error;
 
 use crate::{
-    client::Client, database_build::IsProteinAccess, protease::Protease, protein::Protein,
+    amino_acid::TRYPTOPHAN,
+    client::Client,
+    database_build::IsProteinAccess,
+    protease::Protease,
+    protein::Protein,
+    sequence::{IsBitSequence, PeptideSequence},
     stats_table::StatsTable,
 };
 
 pub static PROGRESS_METRIC: &str = "mass_index::progress";
 
 static LOCAL_MASS_LIMIT: usize = 10_000;
+
+static THEORETICAL_MAX_MASS: LazyLock<i64> =
+    LazyLock::new(|| TRYPTOPHAN.mono_mass() * PeptideSequence::MAX_LENGTH.get() as i64);
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -54,27 +68,102 @@ pub enum Error {
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-pub struct MassIndex {
+pub struct PartialMassIndex {
+    mass_interval: (i64, i64),
     masses: Vec<i64>,
     indptr: Vec<u64>,
     protein_ids: Vec<i32>,
 }
 
+impl PartialMassIndex {
+    pub fn size(&self) -> usize {
+        std::mem::size_of::<(i64, i64)>()
+            + std::mem::size_of::<Self>()
+            + self.masses.capacity() * std::mem::size_of::<i64>()
+            + self.indptr.capacity() * std::mem::size_of::<u64>()
+            + self.protein_ids.capacity() * std::mem::size_of::<i32>()
+    }
+}
+
+pub struct IntoIter {
+    masses: Vec<i64>,
+    indptr: Vec<u64>,
+    protein_ids: Vec<i32>,
+}
+
+impl Iterator for IntoIter {
+    type Item = (i64, Vec<i32>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let mass = self.masses.pop()?;
+        self.indptr.pop(); // drop the trailing end pointer for this row
+        let start = *self.indptr.last().unwrap() as usize;
+        // start..protein_ids.len() is always the tail when going back-to-front
+        let ids = self.protein_ids.split_off(start);
+        Some((mass, ids))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.masses.len(), Some(self.masses.len()))
+    }
+}
+
+impl ExactSizeIterator for IntoIter {}
+
+impl IntoIterator for PartialMassIndex {
+    type Item = (i64, Vec<i32>);
+    type IntoIter = IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter {
+            masses: self.masses,
+            indptr: self.indptr,
+            protein_ids: self.protein_ids,
+        }
+    }
+}
+
+impl Index<i64> for PartialMassIndex {
+    type Output = [i32];
+
+    fn index(&self, mass: i64) -> &Self::Output {
+        if let Ok(idx) = self.masses.binary_search(&mass) {
+            &self.protein_ids[self.indptr[idx] as usize..self.indptr[idx + 1] as usize]
+        } else {
+            &[]
+        }
+    }
+}
+
+pub struct MassIndex {
+    parts: Vec<PartialMassIndex>,
+}
+
 impl MassIndex {
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            parts: Vec::with_capacity(capacity),
+        }
+    }
+
+    fn push(&mut self, part: PartialMassIndex) {
+        self.parts.push(part);
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.masses.is_empty()
+        self.parts.is_empty()
     }
 
     pub fn len(&self) -> usize {
-        self.masses.len()
+        self.parts.iter().map(|part| part.masses.len()).sum()
     }
 
     pub fn num_protein_associations(&self) -> usize {
-        self.protein_ids.len()
+        self.parts.iter().map(|part| part.protein_ids.len()).sum()
     }
 
-    pub fn masses(&self) -> &[i64] {
-        &self.masses
+    pub fn masses(&self) -> impl Iterator<Item = &i64> {
+        self.parts.iter().flat_map(|part| part.masses.as_slice())
     }
 
     pub async fn build(
@@ -82,8 +171,32 @@ impl MassIndex {
         protein_access: Arc<Box<dyn IsProteinAccess>>,
         protease: Arc<Protease>,
         num_threads: NonZeroUsize,
+        mass_interval_width: Option<NonZeroI64>,
     ) -> Result<Self, Error> {
-        let mass_index = Self::inner_build(protein_access, protease, num_threads).await?;
+        let intervals = if let Some(interval) = mass_interval_width {
+            (0..=*THEORETICAL_MAX_MASS / interval.get())
+                .map(|i| {
+                    let start = i * interval.get();
+                    let end = (i + 1) * interval.get();
+                    (start, end)
+                })
+                .collect()
+        } else {
+            vec![(0, *THEORETICAL_MAX_MASS)]
+        };
+
+        let mut mass_index = Self::with_capacity(intervals.len());
+
+        for interval in intervals.into_iter() {
+            let partial_mass_index = Self::partial_build(
+                protein_access.clone(),
+                protease.clone(),
+                num_threads,
+                interval,
+            )
+            .await?;
+            mass_index.push(partial_mass_index);
+        }
 
         StatsTable::new(client.clone())
             .upsert_mass_count(mass_index.len())
@@ -92,11 +205,14 @@ impl MassIndex {
         Ok(mass_index)
     }
 
-    async fn inner_build(
+    async fn partial_build(
         protein_access: Arc<Box<dyn IsProteinAccess>>,
         protease: Arc<Protease>,
         num_threads: NonZeroUsize,
-    ) -> Result<Self, Error> {
+        mass_interval: (i64, i64),
+    ) -> Result<PartialMassIndex, Error> {
+        let interval = Arc::new(mass_interval);
+
         // Intermediate: unsorted flat (mass_idx, protein_id) pairs from all threads.
         // Sorted + deduped after threads finish, then converted to CSR in one pass.
         let pairs: Arc<parking_lot::Mutex<Vec<(i64, i32)>>> = Arc::new(parking_lot::Mutex::new(
@@ -115,6 +231,7 @@ impl MassIndex {
                 let protease = protease.clone();
                 let queue = queue.clone();
                 let progress_metric = progress_metric.clone();
+                let mass_interval = interval.clone();
                 let pairs = pairs.clone();
 
                 tokio::spawn(async move {
@@ -135,6 +252,7 @@ impl MassIndex {
                         #[allow(clippy::mutable_key_type)]
                         protease
                             .cleave_masses_only(protein.sequence().as_ref())
+                            .filter(|mass| Ok(mass_interval.0 <= *mass && *mass < mass_interval.1))
                             .for_each(|mass| {
                                 local_pairs.insert((mass, protein_id));
                                 Ok(())
@@ -215,7 +333,8 @@ impl MassIndex {
             protein_ids.push(*protein_id);
         }
 
-        Ok(Self {
+        Ok(PartialMassIndex {
+            mass_interval,
             masses,
             indptr,
             protein_ids,
@@ -239,48 +358,7 @@ impl MassIndex {
     }
 
     pub fn size(&self) -> usize {
-        std::mem::size_of::<Self>()
-            + self.masses.capacity() * std::mem::size_of::<i64>()
-            + self.indptr.capacity() * std::mem::size_of::<u64>()
-            + self.protein_ids.capacity() * std::mem::size_of::<i32>()
-    }
-}
-
-pub struct IntoIter {
-    masses: Vec<i64>,
-    indptr: Vec<u64>,
-    protein_ids: Vec<i32>,
-}
-
-impl Iterator for IntoIter {
-    type Item = (i64, Vec<i32>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mass = self.masses.pop()?;
-        self.indptr.pop(); // drop the trailing end pointer for this row
-        let start = *self.indptr.last().unwrap() as usize;
-        // start..protein_ids.len() is always the tail when going back-to-front
-        let ids = self.protein_ids.split_off(start);
-        Some((mass, ids))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.masses.len(), Some(self.masses.len()))
-    }
-}
-
-impl ExactSizeIterator for IntoIter {}
-
-impl IntoIterator for MassIndex {
-    type Item = (i64, Vec<i32>);
-    type IntoIter = IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter {
-            masses: self.masses,
-            indptr: self.indptr,
-            protein_ids: self.protein_ids,
-        }
+        std::mem::size_of::<Self>() + self.parts.iter().map(|part| part.size()).sum::<usize>()
     }
 }
 
@@ -288,11 +366,21 @@ impl Index<i64> for MassIndex {
     type Output = [i32];
 
     fn index(&self, mass: i64) -> &Self::Output {
-        if let Ok(idx) = self.masses.binary_search(&mass) {
-            &self.protein_ids[self.indptr[idx] as usize..self.indptr[idx + 1] as usize]
-        } else {
-            &[]
+        for part in &self.parts {
+            if part.mass_interval.0 <= mass && mass < part.mass_interval.1 {
+                return &part[mass];
+            }
         }
+        &[]
+    }
+}
+
+impl IntoIterator for MassIndex {
+    type Item = PartialMassIndex;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.parts.into_iter()
     }
 }
 
@@ -310,10 +398,11 @@ mod tests {
 
     use crate::{
         database_build::{InMemoryProteinAccess, IsProteinAccess},
-        mass_index::MassIndex,
         protease::Protease,
         protein::Protein,
     };
+
+    use super::*;
 
     #[tokio::test]
     async fn test_mass_index() {
@@ -363,10 +452,11 @@ mod tests {
             InMemoryProteinAccess::with_proteins(proteins.into_iter()),
         ));
 
-        let mass_index = MassIndex::inner_build(
+        let mass_index = MassIndex::partial_build(
             protein_access,
             Arc::new(protease),
             NonZeroUsize::new(4).unwrap(),
+            (0, *THEORETICAL_MAX_MASS),
         )
         .await
         .unwrap();
