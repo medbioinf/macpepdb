@@ -1,5 +1,6 @@
 use std::{
     collections::HashSet,
+    hash::Hash,
     num::{NonZeroI64, NonZeroUsize},
     ops::Index,
     sync::{Arc, LazyLock},
@@ -29,10 +30,67 @@ pub static PARTIAL_PROGRESS_METRIC: &str = "mass_index::partial_progress::proces
 pub static TOTAL_PROGRESS_METRIC: &str = "mass_index::total_progress::processed_proteins";
 
 static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
-static PAIRS_DRAIN_BATCH_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
 
 static THEORETICAL_MAX_MASS: LazyLock<i64> =
     LazyLock::new(|| TRYPTOPHAN.mono_mass() * PeptideSequence::MAX_LENGTH.get() as i64);
+
+/// A `(mass, protein_id)` pair packed into 12 bytes (no alignment padding).
+///
+/// A plain `(i64, i32)` is 16 bytes — the `i64` forces 8-byte alignment, wasting 4 bytes
+/// per pair. With billions of pairs that 33% is real memory. The mass is split into two
+/// `u32` halves so every field is `i32`-sized and the struct keeps a 4-byte alignment.
+/// That alignment matters: the CSR build reinterprets the pair buffer in place as a
+/// `Vec<i32>` (see `partial_build`), which is only sound when the allocation's layout
+/// matches `[i32]`. The const asserts below pin that invariant.
+#[derive(Clone, Copy)]
+#[repr(C)]
+struct MassPidPair {
+    mass_lo: u32,
+    mass_hi: u32,
+    pid: i32,
+}
+
+const _: () = {
+    assert!(std::mem::size_of::<MassPidPair>() == 3 * std::mem::size_of::<i32>());
+    assert!(std::mem::align_of::<MassPidPair>() == std::mem::align_of::<i32>());
+};
+
+impl MassPidPair {
+    #[inline]
+    fn new(mass: i64, pid: i32) -> Self {
+        let mass = mass as u64;
+        Self {
+            mass_lo: mass as u32,
+            mass_hi: (mass >> 32) as u32,
+            pid,
+        }
+    }
+
+    #[inline]
+    fn mass(&self) -> i64 {
+        (((self.mass_hi as u64) << 32) | self.mass_lo as u64) as i64
+    }
+
+    #[inline]
+    fn pid(&self) -> i32 {
+        self.pid
+    }
+}
+
+impl Eq for MassPidPair {}
+
+impl Hash for MassPidPair {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.mass().hash(state);
+        self.pid().hash(state);
+    }
+}
+
+impl PartialEq for MassPidPair {
+    fn eq(&self, other: &Self) -> bool {
+        self.mass() == other.mass() && self.pid() == other.pid()
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -72,7 +130,7 @@ pub enum Error {
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-type PairQueue = Arc<ArrayQueue<Option<HashSet<(i64, i32)>>>>;
+type PairQueue = Arc<ArrayQueue<Option<HashSet<MassPidPair>>>>;
 
 pub struct PartialMassIndex {
     mass_interval: (i64, i64),
@@ -251,7 +309,10 @@ impl MassIndex {
         let collector_task = {
             let pair_queue = pair_queue.clone();
             tokio::spawn(async move {
-                let mut pairs: Vec<(i64, i32)> = Vec::with_capacity(protein_count);
+                // Intermediate: unsorted flat (mass, protein_id) pairs from all threads, packed
+                // into 12 bytes each. Sorted + deduped after threads finish, then converted to CSR
+                // in one pass that reuses this buffer's allocation for `protein_ids`.
+                let mut pairs: Vec<MassPidPair> = Vec::with_capacity(protein_count);
 
                 loop {
                     let batch = match pair_queue.pop() {
@@ -281,7 +342,7 @@ impl MassIndex {
                 let pair_queue = pair_queue.clone();
 
                 tokio::spawn(async move {
-                    let mut local_pairs: HashSet<(i64, i32)> =
+                    let mut local_pairs: HashSet<MassPidPair> =
                         HashSet::with_capacity(LOCAL_MASS_LIMIT);
 
                     loop {
@@ -301,7 +362,7 @@ impl MassIndex {
                             .cleave_masses_only(protein.sequence().as_ref())
                             .filter(|mass| Ok(mass_interval.0 <= *mass && *mass < mass_interval.1))
                             .for_each(|mass| {
-                                local_pairs.insert((mass, protein_id));
+                                local_pairs.insert(MassPidPair::new(mass, protein_id));
                                 Ok(())
                             })?;
 
@@ -401,8 +462,10 @@ impl MassIndex {
 
         // Sort by (mass_idx, protein_id) and deduplicate so each pair is unique.
         let now = std::time::Instant::now();
-        pairs.par_sort_unstable();
-        pairs.dedup();
+        pairs.par_sort_unstable_by(|a, b| {
+            a.mass().cmp(&b.mass()).then_with(|| a.pid().cmp(&b.pid()))
+        });
+        pairs.dedup_by(|a, b| a.mass() == b.mass() && a.pid() == b.pid());
         tracing::info!(
             "Sorting and deduplication for interval [{}, {}) produced {} unique pairs in {:}s",
             mass_to_float(mass_interval.0),
@@ -411,23 +474,43 @@ impl MassIndex {
             now.elapsed().as_secs_f32()
         );
 
-        // Build CSR from sorted pairs in one pass.
-        // indptr[i+1] counts entries for row i; prefix-summed into offsets after.
-        let mut masses = Vec::new();
-        let mut indptr = vec![0u64];
-        let mut protein_ids = Vec::with_capacity(pairs.len());
+        // Build CSR from the sorted pairs in a single pass, reusing the pair buffer's own
+        // allocation for `protein_ids` so we never hold both buffers at once.
+        //
+        // Each `MassPidPair` is exactly three `i32` slots and the id we keep is one `i32`.
+        // Reading pair `i` touches slots `3*i..3*i+3` and writes its id to slot `i`. Since
+        // `i <= 3*i`, the write cursor always trails the read cursor and never clobbers a
+        // pair that has not been read yet.
+        let len = pairs.len();
+        let capacity = pairs.capacity();
+        let mut masses: Vec<i64> = Vec::new();
+        let mut indptr: Vec<u64> = vec![0u64];
 
-        while !pairs.is_empty() {
-            let batch = pairs.drain(..PAIRS_DRAIN_BATCH_LIMIT.min(pairs.len()));
-            for (mass, protein_id) in batch {
-                if masses.last() != Some(&mass) {
-                    masses.push(mass);
-                    indptr.push(*indptr.last().unwrap());
-                }
-                *indptr.last_mut().unwrap() += 1;
-                protein_ids.push(protein_id);
+        // All access goes through this single raw pointer (no reborrow of `pairs`) so the
+        // aliasing between the reads and the in-place writes stays well-defined.
+        let slots = pairs.as_mut_ptr() as *mut i32;
+        for i in 0..len {
+            // SAFETY: `3*i + 2 < 3*len <= 3*capacity` i32 slots, all in bounds and 4-byte aligned.
+            let (mass, pid) = unsafe {
+                let lo = slots.add(3 * i).read() as u32;
+                let hi = slots.add(3 * i + 1).read() as u32;
+                let pid = slots.add(3 * i + 2).read();
+                ((((hi as u64) << 32) | lo as u64) as i64, pid)
+            };
+            if masses.last() != Some(&mass) {
+                masses.push(mass);
+                indptr.push(*indptr.last().unwrap());
             }
+            *indptr.last_mut().unwrap() += 1;
+            // SAFETY: `i <= 3*i`, so slot `i` was already read on this (or an earlier) pass.
+            unsafe { slots.add(i).write(pid) };
         }
+
+        // Hand the (now id-only) allocation to a `Vec<i32>`. The buffer holds `3*capacity`
+        // i32 slots; the const asserts on `MassPidPair` guarantee it has the same size and
+        // alignment as `[i32; 3]`, so this matches the layout `Vec<i32>` will free.
+        std::mem::forget(pairs);
+        let protein_ids = unsafe { Vec::from_raw_parts(slots, len, capacity * 3) };
 
         Ok(PartialMassIndex {
             mass_interval,
