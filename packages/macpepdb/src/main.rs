@@ -391,12 +391,8 @@ async fn main() -> Result<(), Error> {
                 convert_str_paths_and_resolve_globs(protein_file_paths).unwrap();
 
             tracing::info!(
-                "Resolved protein files:\n\t, {}",
-                protein_file_paths
-                    .iter()
-                    .map(|path| format!("{}", path.display()))
-                    .collect::<Vec<String>>()
-                    .join("\n\t")
+                "Resolved {} protein files",
+                protein_file_paths.len()
             );
 
             let protease = Protease::by_name(
