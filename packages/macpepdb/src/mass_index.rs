@@ -72,6 +72,8 @@ pub enum Error {
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
+type PairQueue = Arc<ArrayQueue<Option<HashSet<(i64, i32)>>>>;
+
 pub struct PartialMassIndex {
     mass_interval: (i64, i64),
     masses: Vec<i64>,
@@ -236,36 +238,54 @@ impl MassIndex {
         mass_interval: (i64, i64),
     ) -> Result<PartialMassIndex, Error> {
         let interval = Arc::new(mass_interval);
+        let protein_count = protein_access.count().await?;
 
         let now = std::time::Instant::now();
 
-        // Intermediate: unsorted flat (mass_idx, protein_id) pairs from all threads.
-        // Sorted + deduped after threads finish, then converted to CSR in one pass.
-        let pairs: Arc<parking_lot::Mutex<Vec<(i64, i32)>>> = Arc::new(parking_lot::Mutex::new(
-            Vec::with_capacity(protein_access.count().await?),
-        ));
-
-        let queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
+        let protein_queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
             Arc::new(ArrayQueue::new(num_threads.get() * 3));
+        let pair_queue: PairQueue = Arc::new(ArrayQueue::new(num_threads.get()));
         let partial_progress_metric = Arc::new(metrics::counter!(PARTIAL_PROGRESS_METRIC));
         partial_progress_metric.absolute(0);
+
+        let collector_task = {
+            let pair_queue = pair_queue.clone();
+            tokio::spawn(async move {
+                let mut pairs: Vec<(i64, i32)> = Vec::with_capacity(protein_count);
+
+                loop {
+                    let batch = match pair_queue.pop() {
+                        Some(Some(batch)) => batch,
+                        Some(None) => break,
+                        None => {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                            continue;
+                        }
+                    };
+
+                    pairs.extend(batch);
+                }
+
+                Ok::<_, Error>(pairs)
+            })
+        };
 
         let mut proteins = protein_access.all().await?;
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
                 let protease = protease.clone();
-                let queue = queue.clone();
+                let protein_queue = protein_queue.clone();
                 let partial_progress_metric = partial_progress_metric.clone();
                 let mass_interval = interval.clone();
-                let pairs = pairs.clone();
+                let pair_queue = pair_queue.clone();
 
                 tokio::spawn(async move {
                     let mut local_pairs: HashSet<(i64, i32)> =
                         HashSet::with_capacity(LOCAL_MASS_LIMIT);
 
                     loop {
-                        let protein = match queue.pop() {
+                        let protein = match protein_queue.pop() {
                             Some(Some(protein)) => protein,
                             Some(None) => break,
                             None => {
@@ -286,14 +306,34 @@ impl MassIndex {
                             })?;
 
                         if local_pairs.len() >= LOCAL_MASS_LIMIT {
-                            pairs.lock().extend(local_pairs.drain());
+                            let mut batch = Some(std::mem::replace(
+                                &mut local_pairs,
+                                HashSet::with_capacity(LOCAL_MASS_LIMIT),
+                            ));
+
+                            loop {
+                                batch = match pair_queue.push(batch) {
+                                    Ok(()) => break,
+                                    Err(errored_batched) => {
+                                        tokio::time::sleep(Duration::from_millis(50)).await;
+                                        errored_batched
+                                    }
+                                };
+                            }
                         }
 
                         partial_progress_metric.increment(1);
                     }
 
-                    if !local_pairs.is_empty() {
-                        pairs.lock().extend(local_pairs);
+                    let mut batch = Some(local_pairs);
+                    loop {
+                        batch = match pair_queue.push(batch) {
+                            Ok(()) => break,
+                            Err(errored_batched) => {
+                                tokio::time::sleep(Duration::from_millis(50)).await;
+                                errored_batched
+                            }
+                        };
                     }
 
                     Ok::<_, Error>(())
@@ -304,7 +344,7 @@ impl MassIndex {
         while let Some(protein) = proteins.next().await.transpose()? {
             let mut protein = Some(protein);
             loop {
-                protein = match queue.push(protein) {
+                protein = match protein_queue.push(protein) {
                     Ok(()) => break,
                     Err(entry) => {
                         // check if all threads still running
@@ -326,7 +366,7 @@ impl MassIndex {
         // Send none to signal stop
         for _ in 0..num_threads.get() {
             loop {
-                if queue.push(None).is_ok() {
+                if protein_queue.push(None).is_ok() {
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -337,9 +377,19 @@ impl MassIndex {
             thread.await.map_err(|err| Error::Join(err.to_string()))??;
         }
 
-        let mut pairs = Arc::try_unwrap(pairs)
-            .map_err(|_| Error::ProteinIdsUnwrap)?
-            .into_inner();
+        loop {
+            match pair_queue.push(None) {
+                Ok(()) => break,
+                Err(_) => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+            }
+        }
+
+        let mut pairs = collector_task
+            .await
+            .map_err(|err| Error::Join(err.to_string()))??;
 
         tracing::info!(
             "Build for interval [{}, {}) produced {} pairs in {:}s",
