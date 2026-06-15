@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use futures::{FutureExt, StreamExt, TryStreamExt, future::BoxFuture, pin_mut, stream::BoxStream};
+use futures::{FutureExt, StreamExt, TryStreamExt, future::BoxFuture, stream::BoxStream};
 use macpepdb_tui::{MetricConfig, TuiHandle};
 use metrics::counter;
 use sysinfo::System;
@@ -18,8 +18,8 @@ use crate::{
     protein_table::ProteinTable, stats_table::StatsTable,
 };
 
-pub static APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC: &str =
-    "protein_table::build::appropriate_protein_access";
+pub static IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS: &str =
+    "database::build::load_proteins_into_memory";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -31,6 +31,14 @@ pub enum Error {
     MassIndex(Box<crate::mass_index::Error>),
     #[error("Missing protein ID for `{0}`, means it does not come from the database")]
     MissingProteinId(String),
+    #[error(
+        "Missing protein count in stats table, cannot decide whether to keep proteins in memory or not"
+    )]
+    MissingProteinCount,
+    #[error(
+        "Missing proteins size in stats table, cannot decide whether to keep proteins in memory or not"
+    )]
+    MissingProteinsSize,
     #[error("Peptide table error in database build: {0}")]
     PeptideTable(Box<crate::peptide_table::Error>),
     #[error("Protein table error in database build: {0}")]
@@ -117,6 +125,10 @@ pub struct InMemoryProteinAccess {
 
 impl InMemoryProteinAccess {
     pub async fn new(client: Arc<Client>) -> Result<Self, Error> {
+        let progress_counter_metric = Arc::new(counter!(IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS));
+        let protein_count = ProteinTable::new(client.clone()).count().await?;
+        tracing::info!("Load all {protein_count} proteins in memory...");
+
         let now = Instant::now();
         let count = ProteinTable::new(client.clone()).count().await?;
         let parallelism = client.congestion().window().min(count).max(1);
@@ -126,6 +138,7 @@ impl InMemoryProteinAccess {
         let handles = (0..parallelism)
             .map(|chunk| {
                 let client = client.clone();
+                let progress_counter_metric = progress_counter_metric.clone();
                 let start = (id_lo + span * chunk as i64 / parallelism as i64) as i32;
                 let end = (id_lo + span * (chunk as i64 + 1) / parallelism as i64) as i32;
                 tokio::spawn(async move {
@@ -136,6 +149,7 @@ impl InMemoryProteinAccess {
                     while let Some(protein) = stream.next().await {
                         let protein = protein?;
                         local.push((protein.id().unwrap(), Arc::new(protein)));
+                        progress_counter_metric.increment(1);
                     }
                     Ok::<Vec<(i32, Arc<Protein>)>, Error>(local)
                 })
@@ -148,11 +162,9 @@ impl InMemoryProteinAccess {
             proteins.extend(chunk);
         }
 
-        let size: usize = proteins.values().map(|protein| protein.size()).sum();
         tracing::info!(
-            "load proteins in memory: time = {:.1} s; size = {} MB",
+            "load proteins in memory: time = {:.1} s",
             now.elapsed().as_secs_f64(),
-            size / (1024 * 1024)
         );
 
         Ok(Self { proteins })
@@ -248,7 +260,7 @@ impl<'a> DatabaseBuild<'a> {
 
     pub async fn start(&self) -> Result<RuntimeConfiguration, Error> {
         // 1. set insert proteins or get access to them
-        let (protein_ctr, protein_access) = if !self.skip_proteins {
+        let (protein_ctr, proteins_size) = if !self.skip_proteins {
             if let Some(tui) = &self.tui {
                 tui.add_metric(MetricConfig::rate(
                     crate::protein_table::INSERTED_PROTEINS_METRIC,
@@ -261,52 +273,56 @@ impl<'a> DatabaseBuild<'a> {
                 tui.remove_metric(crate::protein_table::INSERTED_PROTEINS_METRIC);
             }
 
-            let mut sys = System::new_all();
-            sys.refresh_all();
-            let allowed_usable_memory =
-                (sys.available_memory() as f64 * self.proteins_memory_limit) as usize;
-            // needed memory is proteins size + an Arc per protein for cheap cloning
-            let needed_memory = proteins_size
-                + (std::mem::size_of::<Arc<Protein>>() + std::mem::size_of::<i32>()) * protein_ctr;
-
-            let protein_access: Box<dyn IsProteinAccess> = if needed_memory <= allowed_usable_memory
-            {
-                tracing::info!(
-                    "Keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
-                    needed_memory / (1024 * 1024),
-                    allowed_usable_memory / (1024 * 1024)
-                );
-                Box::new(InMemoryProteinAccess::new(self.client.clone()).await?)
-            } else {
-                tracing::info!(
-                    "Not keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
-                    needed_memory / (1024 * 1024),
-                    allowed_usable_memory / (1024 * 1024)
-                );
-                Box::new(DatabaseProteinAccess::new(self.client.clone()))
-            };
-
-            (protein_ctr, protein_access)
+            (protein_ctr, proteins_size)
         } else {
+            let stats_table = StatsTable::new(self.client.clone());
+            (
+                stats_table
+                    .select_protein_count()
+                    .await?
+                    .ok_or(Error::MissingProteinCount)?,
+                stats_table
+                    .select_proteins_size()
+                    .await?
+                    .ok_or(Error::MissingProteinsSize)?,
+            )
+        };
+
+        let allowed_usable_memory = self.allowed_usable_memory();
+        // needed memory is proteins size + an Arc per protein for cheap cloning
+        let needed_memory = proteins_size
+            + (std::mem::size_of::<Arc<Protein>>() + std::mem::size_of::<i32>()) * protein_ctr;
+
+        let protein_access: Arc<Box<dyn IsProteinAccess>> = if needed_memory
+            <= allowed_usable_memory
+        {
+            tracing::info!(
+                "Keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
+                needed_memory / (1024 * 1024),
+                allowed_usable_memory / (1024 * 1024)
+            );
             if let Some(tui) = &self.tui {
                 tui.add_metric(MetricConfig::rate(
-                    crate::database_build::APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC,
-                    "Processed proteins",
+                    IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS,
+                    "Loaded proteins /s",
                 ));
             }
 
-            let (proteins_ctr, protein_access) = self.get_appropriate_protein_access().await?;
+            let in_memory_access = InMemoryProteinAccess::new(self.client.clone()).await?;
 
             if let Some(tui) = &self.tui {
-                tui.remove_metric(
-                    crate::database_build::APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC,
-                );
+                tui.remove_metric(IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS);
             }
 
-            (proteins_ctr, protein_access)
+            Arc::new(Box::new(in_memory_access))
+        } else {
+            tracing::info!(
+                "Not keeping proteins in memory. Needed memory: {} MB, allowed free memory limit: {} MB",
+                needed_memory / (1024 * 1024),
+                allowed_usable_memory / (1024 * 1024)
+            );
+            Arc::new(Box::new(DatabaseProteinAccess::new(self.client.clone())))
         };
-
-        let protein_access = Arc::new(protein_access);
 
         // 2. step create mass to protein index
         if let Some(tui) = &self.tui {
@@ -372,9 +388,10 @@ impl<'a> DatabaseBuild<'a> {
             "db proteins: time = {:.2?} s; #proteins = {protein_ctr}",
             now.elapsed().as_secs_f64(),
         );
-        StatsTable::new(self.client.clone())
-            .upsert_protein_count(protein_ctr)
-            .await?;
+        let stats_table = StatsTable::new(self.client.clone());
+
+        stats_table.upsert_protein_count(protein_ctr).await?;
+        stats_table.upsert_proteins_size(proteins_size).await?;
 
         Ok((protein_ctr, proteins_size))
     }
@@ -432,59 +449,5 @@ impl<'a> DatabaseBuild<'a> {
         let mut sys = System::new_all();
         sys.refresh_all();
         (sys.available_memory() as f64 * self.proteins_memory_limit) as usize
-    }
-
-    pub async fn get_appropriate_protein_access(
-        &self,
-    ) -> Result<(usize, Box<dyn IsProteinAccess>), Error> {
-        let protein_table = ProteinTable::new(self.client.clone());
-        tracing::info!("Counting proteins in the database...");
-        let proteins_count = protein_table.count().await?;
-        tracing::info!("Proteins count: {}", proteins_count);
-        let mut proteins: HashMap<i32, Arc<Protein>> = HashMap::with_capacity(proteins_count);
-
-        let allowed_usable_memory = self.allowed_usable_memory();
-
-        tracing::info!(
-            "Allowed usable memory for proteins: {} MB",
-            allowed_usable_memory as f64 / 1000.0 / 1000.0,
-        );
-
-        let processed_proteins_metrics = counter!(APPROPRIATE_PROTEIN_ACCESS_PROGRESS_METRIC);
-
-        let proteins_stream = protein_table.select_all().await?.peekable();
-
-        pin_mut!(proteins_stream);
-
-        let mut proteins_size = 0_usize;
-        while let Some(protein_result) = proteins_stream.as_mut().next().await {
-            let protein = protein_result?;
-            proteins_size += protein.size() + std::mem::size_of::<i32>();
-            proteins.insert(protein.id().unwrap(), Arc::new(protein));
-            processed_proteins_metrics.increment(1);
-
-            if let Some(Ok(protein)) = proteins_stream.as_mut().peek().await
-                && proteins_size
-                    + protein.size()
-                    + std::mem::size_of::<i32>()
-                    + std::mem::size_of::<Arc<Protein>>()
-                    > allowed_usable_memory
-            {
-                tracing::warn!(
-                    "Allowed usable memory exceeded, falling back to database based protein access.",
-                );
-                return Ok((
-                    proteins_count,
-                    Box::new(DatabaseProteinAccess::new(self.client.clone()))
-                        as Box<dyn IsProteinAccess>,
-                ));
-            }
-        }
-
-        tracing::info!("All proteins loaded into memory.",);
-        Ok((
-            proteins_count,
-            Box::new(InMemoryProteinAccess { proteins }) as Box<dyn IsProteinAccess>,
-        ))
     }
 }

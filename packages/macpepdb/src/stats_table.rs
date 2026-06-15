@@ -26,6 +26,7 @@ pub enum Error {
 static PROTEIN_COUNT: &str = "protein_count";
 static PEPTIDE_COUNT: &str = "peptide_count";
 static MASS_COUNT: &str = "mass_count";
+static PROTEINS_SIZE: &str = "proteins_size";
 
 pub struct StatsTable {
     client: Arc<Client>,
@@ -80,5 +81,13 @@ impl StatsTable {
 
     pub async fn select_mass_count(&self) -> Result<Option<usize>, Error> {
         Ok(self.select(MASS_COUNT).await?.map(tools::i64_to_usize))
+    }
+
+    pub async fn upsert_proteins_size(&self, count: usize) -> Result<(), Error> {
+        self.upsert(PROTEINS_SIZE, tools::usize_to_i64(count)).await
+    }
+
+    pub async fn select_proteins_size(&self) -> Result<Option<usize>, Error> {
+        Ok(self.select(PROTEINS_SIZE).await?.map(tools::i64_to_usize))
     }
 }
