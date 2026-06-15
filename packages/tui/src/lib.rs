@@ -61,6 +61,7 @@ mod state;
 pub use config::{MetricConfig, MetricKind, TuiConfig};
 pub use layer::TuiLayer;
 pub use recorder::TuiRecorder;
+pub use state::MetricRowId;
 
 use std::sync::Arc;
 
@@ -130,14 +131,18 @@ impl TuiHandle {
 
     // ── Live metrics panel management ────────────────────────────────────────
 
-    /// Append a new metric display row to the running TUI.
+    /// Append a new metric display row to the running TUI and return its
+    /// unique [`MetricRowId`].
     ///
-    /// The same key can appear multiple times with different
-    /// [`MetricKind`]s (e.g. a counter *and* a rate row).
+    /// The same key can appear multiple times with different [`MetricKind`]s
+    /// (e.g. a counter *and* a rate row for the same underlying metric).
+    /// Each call receives a distinct `MetricRowId` that can be passed to
+    /// [`TuiHandle::remove_metric_row`] to remove exactly that row without
+    /// touching others that share the same key.
     /// If no live value exists yet for the key a zero-valued entry is
     /// created automatically.
-    pub fn add_metric(&self, metric: MetricConfig) {
-        self.state.write().add_metric(metric);
+    pub fn add_metric(&self, metric: MetricConfig) -> MetricRowId {
+        self.state.write().add_metric(metric)
     }
 
     /// Remove **all** display rows whose key equals `key`.
@@ -145,17 +150,31 @@ impl TuiHandle {
     /// The underlying value and history are kept so that re-adding the
     /// metric later resumes from where it left off.  Pass the key to
     /// [`TuiHandle::clear_metric_data`] as well if you need a clean slate.
+    ///
+    /// To remove a single row without affecting others that share the same
+    /// key, use [`TuiHandle::remove_metric_row`] with the [`MetricRowId`]
+    /// returned by [`TuiHandle::add_metric`].
     pub fn remove_metric(&self, key: &str) {
         self.state.write().remove_metric(key);
     }
 
-    /// Replace the **entire** display list atomically.
+    /// Remove the single display row identified by `id`.
+    ///
+    /// Other rows that happen to share the same underlying metric key are left
+    /// untouched, making it possible to show the same metric in multiple
+    /// display styles (e.g. counter + rate) and remove each independently.
+    pub fn remove_metric_row(&self, id: MetricRowId) {
+        self.state.write().remove_metric_row(id);
+    }
+
+    /// Replace the **entire** display list atomically and return the
+    /// [`MetricRowId`] assigned to each row in the same order as the input.
     ///
     /// Prefer this over multiple individual [`TuiHandle::add_metric`] /
     /// [`TuiHandle::remove_metric`] calls when you want to swap out many
     /// rows at once, since it only acquires the lock once.
-    pub fn set_metrics(&self, metrics: impl IntoIterator<Item = MetricConfig>) {
-        self.state.write().set_metrics(metrics);
+    pub fn set_metrics(&self, metrics: impl IntoIterator<Item = MetricConfig>) -> Vec<MetricRowId> {
+        self.state.write().set_metrics(metrics)
     }
 
     /// Erase the stored value and history for `key` without touching the

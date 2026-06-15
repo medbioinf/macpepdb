@@ -18,7 +18,7 @@ use ratatui::{
 
 use crate::{
     config::{MetricConfig, MetricKind, TuiConfig},
-    state::{LogEntry, SharedState, TuiState},
+    state::{LogEntry, MetricRowId, SharedState, TuiState},
 };
 
 // ── Terminal cleanup guard ────────────────────────────────────────────────────
@@ -209,13 +209,13 @@ fn render_frame(f: &mut Frame, config: &TuiConfig, state: &SharedState) {
 // ── Metrics panel ─────────────────────────────────────────────────────────────
 
 /// How many terminal rows the metrics panel needs (including its border).
-fn metrics_panel_height(metrics: &[MetricConfig]) -> u16 {
+fn metrics_panel_height(metrics: &[(MetricRowId, MetricConfig)]) -> u16 {
     if metrics.is_empty() {
         return 0;
     }
     let content: u16 = metrics
         .iter()
-        .map(|m| match &m.kind {
+        .map(|(_, m)| match &m.kind {
             MetricKind::Progress { .. } => 2,
             _ => 1,
         })
@@ -240,7 +240,7 @@ fn render_metrics(f: &mut Frame, state: &TuiState, area: Rect) {
     // One sub-row per metric
     let constraints: Vec<Constraint> = metrics
         .iter()
-        .map(|m| match &m.kind {
+        .map(|(_, m)| match &m.kind {
             MetricKind::Progress { .. } => Constraint::Length(2),
             _ => Constraint::Length(1),
         })
@@ -251,7 +251,7 @@ fn render_metrics(f: &mut Frame, state: &TuiState, area: Rect) {
         .constraints(constraints)
         .split(inner);
 
-    for (i, metric) in metrics.iter().enumerate() {
+    for (i, (_, metric)) in metrics.iter().enumerate() {
         if i >= rows.len() {
             break;
         }

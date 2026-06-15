@@ -302,6 +302,11 @@ impl<'a> DatabaseBuild<'a> {
                 allowed_usable_memory / (1024 * 1024)
             );
             if let Some(tui) = &self.tui {
+                tui.add_metric(MetricConfig::progress(
+                    IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS,
+                    "Load proteins into memory",
+                    protein_ctr as f64,
+                ));
                 tui.add_metric(MetricConfig::rate(
                     IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS,
                     "Loaded proteins /s",

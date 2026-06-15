@@ -8,6 +8,14 @@ use parking_lot::RwLock;
 
 use crate::config::MetricConfig;
 
+/// Opaque identifier for a single display row in the Metrics panel.
+///
+/// Returned by [`TuiState::add_metric`] and [`TuiHandle::add_metric`].
+/// Pass it to [`TuiState::remove_metric_row`] to remove exactly that row
+/// without affecting other rows that share the same underlying metric key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MetricRowId(u64);
+
 /// A single captured tracing event shown in the log panel.
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -39,12 +47,15 @@ pub struct TuiState {
     pub metrics: HashMap<String, MetricEntry>,
     /// Ordered list of metric display rows shown in the Metrics panel.
     ///
-    /// Unlike [`metrics`] (which is keyed by name and holds live values),
-    /// this list controls *what is rendered* and in *what order*.  The same
-    /// key may appear more than once (e.g. once as a counter, once as a
-    /// rate).  Mutate it at runtime with [`TuiState::add_metric`],
-    /// [`TuiState::remove_metric`], or [`TuiState::set_metrics`].
-    pub metrics_config: Vec<MetricConfig>,
+    /// Each entry pairs a stable [`MetricRowId`] with its [`MetricConfig`].
+    /// The same underlying metric key may appear more than once (e.g. once as
+    /// a counter, once as a rate) because rows are identified by their
+    /// `MetricRowId`, not by the metric key.  Mutate it at runtime with
+    /// [`TuiState::add_metric`], [`TuiState::remove_metric`],
+    /// [`TuiState::remove_metric_row`], or [`TuiState::set_metrics`].
+    pub metrics_config: Vec<(MetricRowId, MetricConfig)>,
+    /// Monotonically increasing counter used to mint fresh [`MetricRowId`]s.
+    next_row_id: u64,
     /// Index of the first *visible* log line when the user has scrolled up.
     pub log_scroll: usize,
     /// When `true` the log panel always shows the most-recent entries.
@@ -74,11 +85,17 @@ impl TuiState {
                     history: VecDeque::new(),
                 });
         }
+        let metrics_config = metric_configs
+            .iter()
+            .enumerate()
+            .map(|(i, cfg)| (MetricRowId(i as u64), cfg.clone()))
+            .collect();
         Self {
             log_messages: VecDeque::new(),
             max_log_messages,
             metrics,
-            metrics_config: metric_configs.to_vec(),
+            metrics_config,
+            next_row_id: metric_configs.len() as u64,
             log_scroll: 0,
             auto_scroll: true,
         }
@@ -86,20 +103,26 @@ impl TuiState {
 
     // ── Metrics-config helpers ────────────────────────────────────────────────
 
-    /// Append a new metric display row to the Metrics panel.
+    /// Append a new metric display row to the Metrics panel and return its
+    /// unique [`MetricRowId`].
     ///
     /// The same key can be added multiple times with different [`MetricKind`]s
     /// (e.g. a counter row **and** a rate row for the same underlying key).
+    /// Each call gets a distinct `MetricRowId` so the rows can be removed
+    /// independently via [`TuiState::remove_metric_row`].
     /// If no live value exists yet for the key a zero-valued entry is created
     /// so the row shows up immediately.
-    pub fn add_metric(&mut self, config: MetricConfig) {
+    pub fn add_metric(&mut self, config: MetricConfig) -> MetricRowId {
         self.metrics
             .entry(config.key.clone())
             .or_insert_with(|| MetricEntry {
                 current_value: 0.0,
                 history: VecDeque::new(),
             });
-        self.metrics_config.push(config);
+        let id = MetricRowId(self.next_row_id);
+        self.next_row_id += 1;
+        self.metrics_config.push((id, config));
+        id
     }
 
     /// Remove **all** display rows whose key equals `key`.
@@ -108,8 +131,22 @@ impl TuiState {
     /// kept so that re-adding the metric later continues from where it left
     /// off.  Call [`TuiState::clear_metric_data`] if you want to wipe the
     /// data too.
+    ///
+    /// To remove a single row without affecting others that share the same
+    /// key, use [`TuiState::remove_metric_row`] with the [`MetricRowId`]
+    /// returned by [`TuiState::add_metric`].
     pub fn remove_metric(&mut self, key: &str) {
-        self.metrics_config.retain(|c| c.key != key);
+        self.metrics_config.retain(|(_, c)| c.key != key);
+    }
+
+    /// Remove the single display row identified by `id`.
+    ///
+    /// Other rows that happen to share the same underlying metric key are left
+    /// untouched.  This is the companion to [`TuiState::add_metric`]'s return
+    /// value and allows showing the same metric in multiple display styles
+    /// simultaneously while still being able to remove each row independently.
+    pub fn remove_metric_row(&mut self, id: MetricRowId) {
+        self.metrics_config.retain(|(row_id, _)| *row_id != id);
     }
 
     /// Replace the entire display list in one atomic write.
@@ -117,7 +154,10 @@ impl TuiState {
     /// Useful when you want to swap out many rows at once without holding
     /// the lock across multiple individual calls.  Any key that does not yet
     /// have a live entry gets a zero-valued one.
-    pub fn set_metrics(&mut self, configs: impl IntoIterator<Item = MetricConfig>) {
+    ///
+    /// Returns the [`MetricRowId`] assigned to each row in the same order as
+    /// the provided configs.
+    pub fn set_metrics(&mut self, configs: impl IntoIterator<Item = MetricConfig>) -> Vec<MetricRowId> {
         let configs: Vec<MetricConfig> = configs.into_iter().collect();
         for cfg in &configs {
             self.metrics
@@ -127,7 +167,12 @@ impl TuiState {
                     history: VecDeque::new(),
                 });
         }
-        self.metrics_config = configs;
+        let ids: Vec<MetricRowId> = (self.next_row_id..self.next_row_id + configs.len() as u64)
+            .map(MetricRowId)
+            .collect();
+        self.next_row_id += configs.len() as u64;
+        self.metrics_config = ids.iter().copied().zip(configs).collect();
+        ids
     }
 
     /// Erase the stored value and history for `key`.
