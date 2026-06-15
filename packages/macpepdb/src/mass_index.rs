@@ -216,7 +216,7 @@ impl MassIndex {
         // Intermediate: unsorted flat (mass_idx, protein_id) pairs from all threads.
         // Sorted + deduped after threads finish, then converted to CSR in one pass.
         let pairs: Arc<parking_lot::Mutex<Vec<(i64, i32)>>> = Arc::new(parking_lot::Mutex::new(
-            Vec::with_capacity(protein_access.count().await? * 10),
+            Vec::with_capacity(protein_access.count().await?),
         ));
 
         let queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
