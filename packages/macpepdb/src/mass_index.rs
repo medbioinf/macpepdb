@@ -28,7 +28,8 @@ use crate::{
 pub static PARTIAL_PROGRESS_METRIC: &str = "mass_index::partial_progress::processed_proteins";
 pub static TOTAL_PROGRESS_METRIC: &str = "mass_index::total_progress::processed_proteins";
 
-static LOCAL_MASS_LIMIT: usize = 10_000;
+static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
+static PAIRS_DRAIN_BATCH_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
 
 static THEORETICAL_MAX_MASS: LazyLock<i64> =
     LazyLock::new(|| TRYPTOPHAN.mono_mass() * PeptideSequence::MAX_LENGTH.get() as i64);
@@ -262,6 +263,7 @@ impl MassIndex {
                 tokio::spawn(async move {
                     let mut local_pairs: HashSet<(i64, i32)> =
                         HashSet::with_capacity(LOCAL_MASS_LIMIT);
+
                     loop {
                         let protein = match queue.pop() {
                             Some(Some(protein)) => protein,
@@ -365,13 +367,16 @@ impl MassIndex {
         let mut indptr = vec![0u64];
         let mut protein_ids = Vec::with_capacity(pairs.len());
 
-        for (mass, protein_id) in &pairs {
-            if masses.last() != Some(mass) {
-                masses.push(*mass);
-                indptr.push(*indptr.last().unwrap());
+        while !pairs.is_empty() {
+            let batch = pairs.drain(..PAIRS_DRAIN_BATCH_LIMIT.min(pairs.len()));
+            for (mass, protein_id) in batch {
+                if masses.last() != Some(&mass) {
+                    masses.push(mass);
+                    indptr.push(*indptr.last().unwrap());
+                }
+                *indptr.last_mut().unwrap() += 1;
+                protein_ids.push(protein_id);
             }
-            *indptr.last_mut().unwrap() += 1;
-            protein_ids.push(*protein_id);
         }
 
         Ok(PartialMassIndex {
