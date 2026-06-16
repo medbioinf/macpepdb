@@ -56,6 +56,8 @@ const _: () = {
 };
 
 impl MassPidPair {
+    pub const SIZE: usize = 96;
+
     #[inline]
     fn new(mass: i64, pid: i32) -> Self {
         let mass = mass as u64;
@@ -327,6 +329,7 @@ impl MassIndex {
                     pairs.extend(batch);
                 }
 
+                pairs.shrink_to_fit();
                 Ok::<_, Error>(pairs)
             })
         };
@@ -453,10 +456,11 @@ impl MassIndex {
             .map_err(|err| Error::Join(err.to_string()))??;
 
         tracing::info!(
-            "Build for interval [{}, {}) produced {} pairs in {:}s",
+            "Build for interval [{}, {}) produced {} pairs ({}, MB) in {:}s",
             mass_to_float(mass_interval.0),
             mass_to_float(mass_interval.1),
             pairs.len(),
+            pairs.len() * MassPidPair::SIZE / 1024 / 1024,
             now.elapsed().as_secs_f32()
         );
 
@@ -510,7 +514,9 @@ impl MassIndex {
         // i32 slots; the const asserts on `MassPidPair` guarantee it has the same size and
         // alignment as `[i32; 3]`, so this matches the layout `Vec<i32>` will free.
         std::mem::forget(pairs);
-        let protein_ids = unsafe { Vec::from_raw_parts(slots, len, capacity * 3) };
+        let mut protein_ids = unsafe { Vec::from_raw_parts(slots, len, capacity * 3) };
+        // And shrink to size
+        protein_ids.shrink_to_fit();
 
         Ok(PartialMassIndex {
             mass_interval,
