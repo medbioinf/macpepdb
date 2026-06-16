@@ -25,8 +25,8 @@ CREATE EXTENSION IF NOT EXISTS citus_columnar;
 -- --------------------------------------------------------------------------
 -- Row-store tables (distributed): proteins by `id`, blobs/stats by `key`.
 -- --------------------------------------------------------------------------
-DROP TABLE IF EXISTS proteins;
-CREATE TABLE proteins (
+
+CREATE TABLE IF NOT EXISTS proteins (
     id          INTEGER PRIMARY KEY,
     accession   TEXT,
     sequence    BYTEA,
@@ -40,8 +40,7 @@ CREATE TABLE blobs (
     data BYTEA,
     PRIMARY KEY (key, part)
 );
-DROP TABLE IF EXISTS stats;
-CREATE TABLE stats (
+CREATE TABLE IF NOT EXISTS stats (
     key   TEXT PRIMARY KEY,
     value BIGINT
 );
