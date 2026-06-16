@@ -1,9 +1,8 @@
 use std::{
-    collections::HashSet,
     hash::Hash,
     num::{NonZeroI64, NonZeroUsize},
     ops::Index,
-    sync::{Arc, LazyLock},
+    sync::Arc,
     time::Duration,
 };
 
@@ -16,14 +15,9 @@ use rayon::prelude::ParallelSliceMut;
 use thiserror::Error;
 
 use crate::{
-    amino_acid::TRYPTOPHAN,
-    client::Client,
-    database_build::IsProteinAccess,
-    mass::to_float as mass_to_float,
-    protease::Protease,
-    protein::Protein,
-    sequence::{IsBitSequence, PeptideSequence},
-    stats_table::StatsTable,
+    amino_acid::TRYPTOPHAN, client::Client, database_build::IsProteinAccess,
+    mass::to_float as mass_to_float, molecules::WATER_MONO_MASS, protease::Protease,
+    protein::Protein, stats_table::StatsTable,
 };
 
 pub static PARTIAL_PROGRESS_METRIC: &str = "mass_index::partial_progress::processed_proteins";
@@ -31,8 +25,9 @@ pub static TOTAL_PROGRESS_METRIC: &str = "mass_index::total_progress::processed_
 
 static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
 
-static THEORETICAL_MAX_MASS: LazyLock<i64> =
-    LazyLock::new(|| TRYPTOPHAN.mono_mass() * PeptideSequence::MAX_LENGTH.get() as i64);
+fn max_peptide_mass(max_length: NonZeroUsize) -> i64 {
+    WATER_MONO_MASS + TRYPTOPHAN.mono_mass() * max_length.get() as i64
+}
 
 /// A `(mass, protein_id)` pair packed into 12 bytes (no alignment padding).
 ///
@@ -114,6 +109,8 @@ pub enum Error {
     MassesUnwrap,
     #[error("Protein ID missing")]
     MissingProteinId,
+    #[error("Unable to build rayon thread pool for sorting: {0}")]
+    SortThreadPool(rayon::ThreadPoolBuildError),
     #[error("No errored thread found in mass index, but one finished early.")]
     NoErroredThread,
     #[error("Protease error in mass index: {0}")]
@@ -132,7 +129,7 @@ pub enum Error {
     UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-type PairQueue = Arc<ArrayQueue<Option<HashSet<MassPidPair>>>>;
+type PairQueue = Arc<ArrayQueue<Option<Vec<MassPidPair>>>>;
 
 pub struct PartialMassIndex {
     mass_interval: (i64, i64),
@@ -232,9 +229,12 @@ impl MassIndex {
         self.parts.iter().flat_map(|part| part.masses.as_slice())
     }
 
-    pub fn number_of_intervals(mass_interval_width: Option<NonZeroI64>) -> usize {
+    pub fn number_of_intervals(
+        mass_interval_width: Option<NonZeroI64>,
+        max_length: NonZeroUsize,
+    ) -> usize {
         if let Some(width) = mass_interval_width {
-            (*THEORETICAL_MAX_MASS / width.get()) as usize
+            (max_peptide_mass(max_length) / width.get()) as usize
         } else {
             1
         }
@@ -247,8 +247,9 @@ impl MassIndex {
         num_threads: NonZeroUsize,
         mass_interval_width: Option<NonZeroI64>,
     ) -> Result<Self, Error> {
+        let max_mass = max_peptide_mass(protease.max_length());
         let intervals = if let Some(width) = mass_interval_width {
-            (0..=*THEORETICAL_MAX_MASS / width.get())
+            (0..=max_mass / width.get())
                 .map(|i| {
                     let start = i * width.get();
                     let end = (i + 1) * width.get();
@@ -256,7 +257,7 @@ impl MassIndex {
                 })
                 .collect()
         } else {
-            vec![(0, *THEORETICAL_MAX_MASS)]
+            vec![(0, max_mass)]
         };
 
         tracing::info!(
@@ -345,8 +346,7 @@ impl MassIndex {
                 let pair_queue = pair_queue.clone();
 
                 tokio::spawn(async move {
-                    let mut local_pairs: HashSet<MassPidPair> =
-                        HashSet::with_capacity(LOCAL_MASS_LIMIT);
+                    let mut local_pairs: Vec<MassPidPair> = Vec::with_capacity(LOCAL_MASS_LIMIT);
 
                     loop {
                         let protein = match protein_queue.pop() {
@@ -360,19 +360,18 @@ impl MassIndex {
 
                         let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
 
-                        #[allow(clippy::mutable_key_type)]
                         protease
                             .cleave_masses_only(protein.sequence().as_ref())
                             .filter(|mass| Ok(mass_interval.0 <= *mass && *mass < mass_interval.1))
                             .for_each(|mass| {
-                                local_pairs.insert(MassPidPair::new(mass, protein_id));
+                                local_pairs.push(MassPidPair::new(mass, protein_id));
                                 Ok(())
                             })?;
 
                         if local_pairs.len() >= LOCAL_MASS_LIMIT {
                             let mut batch = Some(std::mem::replace(
                                 &mut local_pairs,
-                                HashSet::with_capacity(LOCAL_MASS_LIMIT),
+                                Vec::with_capacity(LOCAL_MASS_LIMIT),
                             ));
 
                             loop {
@@ -464,12 +463,17 @@ impl MassIndex {
             now.elapsed().as_secs_f32()
         );
 
-        // Sort by (mass_idx, protein_id) and deduplicate so each pair is unique.
         let now = std::time::Instant::now();
-        pairs.par_sort_unstable_by(|a, b| {
-            a.mass().cmp(&b.mass()).then_with(|| a.pid().cmp(&b.pid()))
+        let sort_pool = rayon::ThreadPoolBuilder::new()
+            .stack_size(512 << 20) // 512 MB per worker
+            .build()
+            .map_err(Error::SortThreadPool)?;
+        sort_pool.install(|| {
+            pairs.par_sort_unstable_by(|a, b| {
+                a.mass().cmp(&b.mass()).then_with(|| a.pid().cmp(&b.pid()))
+            })
         });
-        pairs.dedup_by(|a, b| a.mass() == b.mass() && a.pid() == b.pid());
+        pairs.dedup();
         tracing::info!(
             "Sorting and deduplication for interval [{}, {}) produced {} unique pairs in {:}s",
             mass_to_float(mass_interval.0),
@@ -637,11 +641,12 @@ mod tests {
             InMemoryProteinAccess::with_proteins(proteins.into_iter()),
         ));
 
+        let max_mass = max_peptide_mass(protease.max_length());
         let mass_index = MassIndex::partial_build(
             protein_access,
             Arc::new(protease),
             NonZeroUsize::new(4).unwrap(),
-            (0, *THEORETICAL_MAX_MASS),
+            (0, max_mass),
         )
         .await
         .unwrap();

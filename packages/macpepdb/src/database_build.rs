@@ -334,7 +334,8 @@ impl<'a> DatabaseBuild<'a> {
             tui.add_metric(MetricConfig::progress(
                 crate::mass_index::TOTAL_PROGRESS_METRIC,
                 crate::mass_index::TOTAL_PROGRESS_METRIC,
-                MassIndex::number_of_intervals(self.mass_interval_with) as f64,
+                MassIndex::number_of_intervals(self.mass_interval_with, self.protease.max_length())
+                    as f64,
             ));
             tui.add_metric(MetricConfig::progress(
                 crate::mass_index::PARTIAL_PROGRESS_METRIC,
