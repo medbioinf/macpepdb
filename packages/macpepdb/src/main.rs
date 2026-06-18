@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fmt::Display,
     net::SocketAddr,
     num::{NonZeroI64, NonZeroUsize},
     path::{Path, PathBuf},
@@ -8,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use macpepdb::{
     blob_table::BlobTable,
@@ -19,7 +18,7 @@ use macpepdb::{
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide::{Peptide, Peptidoform},
-    peptide_search::{MultiTaskSearch, Search, UnionAllSearch},
+    peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch},
     peptide_table::PeptideTable,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
     protease::{Protease, Trypsin},
@@ -94,21 +93,6 @@ enum Error {
     StatsTable(Box<macpepdb::stats_table::Error>),
 }
 
-#[derive(Clone, ValueEnum)]
-enum PeptideSearchType {
-    MultiTask,
-    UnionAll,
-}
-
-impl Display for PeptideSearchType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PeptideSearchType::MultiTask => write!(f, "multi-task"),
-            PeptideSearchType::UnionAll => write!(f, "union-all"),
-        }
-    }
-}
-
 #[derive(Subcommand)]
 enum ConfigCommand {
     Show,
@@ -130,7 +114,10 @@ enum Command {
         // Optional and default arguments
         #[arg(long, default_value_t = NonZeroUsize::new(16).unwrap())]
         concurrent_searches: NonZeroUsize,
-
+        /// Type of search to perform, multi-task search can be faster but also more memory intensive
+        #[arg(long, default_value_t = PeptideSearchType::MultiTask)]
+        search_type: PeptideSearchType,
+        // Positional default arguments
         #[arg(default_value_t = SocketAddr::from_str("127.0.0.1:8080").unwrap())]
         socket: SocketAddr,
     },
@@ -345,6 +332,7 @@ async fn main() -> Result<(), Error> {
     match cli.command {
         Command::Api {
             concurrent_searches,
+            search_type,
             socket,
         } => {
             let client = Client::new(&cli.database_url).await.unwrap();
@@ -354,6 +342,7 @@ async fn main() -> Result<(), Error> {
                 socket,
                 false,
                 concurrent_searches,
+                search_type,
                 None,
                 Box::pin(shutdown_signal()),
             )

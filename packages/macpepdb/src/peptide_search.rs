@@ -6,6 +6,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
+use clap::ValueEnum;
 use dashmap::DashSet;
 use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, SelectAll, Stream, StreamExt};
@@ -57,6 +58,21 @@ pub enum Error {
 into_thiserror_boxed!(crate::client::Error, Error, Client);
 into_thiserror_boxed!(crate::peptide::Error, Error, Peptide);
 into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum PeptideSearchType {
+    MultiTask,
+    UnionAll,
+}
+
+impl Display for PeptideSearchType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PeptideSearchType::MultiTask => write!(f, "multi-task"),
+            PeptideSearchType::UnionAll => write!(f, "union-all"),
+        }
+    }
+}
 
 /// Trait to check conditions on peptides
 ///

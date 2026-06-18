@@ -13,6 +13,7 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::blob_table::BlobTable;
 use crate::client::Client;
 use crate::configuration::RuntimeConfiguration;
+use crate::peptide_search::PeptideSearchType;
 use crate::web::configuration_controller::get_configuration;
 use crate::web::error_controller::page_not_found;
 use crate::web::headers::X_DO_NOT_TRACK;
@@ -62,6 +63,7 @@ pub async fn start(
     socket: SocketAddr,
     _with_taxonomy_search: bool,
     concurrent_searches: NonZeroUsize,
+    search_type: PeptideSearchType,
     matomo_info: Option<MatomoInfo>,
     shutdown_signal: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
 ) -> Result<(), Error> {
@@ -78,6 +80,7 @@ pub async fn start(
         configuration,
         matomo_info,
         concurrent_searches,
+        search_type,
     ));
 
     // Add CORS layer

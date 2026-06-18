@@ -2,7 +2,9 @@
 use std::{num::NonZeroUsize, sync::Arc};
 
 // internal imports
-use crate::{client::Client, configuration::RuntimeConfiguration};
+use crate::{
+    client::Client, configuration::RuntimeConfiguration, peptide_search::PeptideSearchType,
+};
 
 pub struct MatomoInfo {
     url: String,
@@ -28,6 +30,7 @@ pub struct ServerState {
     configuration: Arc<RuntimeConfiguration>,
     matomo_info: Option<MatomoInfo>,
     concurrent_searches: NonZeroUsize,
+    search_type: PeptideSearchType,
 }
 
 impl ServerState {
@@ -36,9 +39,11 @@ impl ServerState {
         configuration: RuntimeConfiguration,
         matomo_info: Option<MatomoInfo>,
         concurrent_searches: NonZeroUsize,
+        search_type: PeptideSearchType,
     ) -> Self {
         Self {
             concurrent_searches,
+            search_type,
             matomo_info,
             db_client: Arc::new(db_client),
             configuration: Arc::new(configuration),
@@ -79,5 +84,9 @@ impl ServerState {
     ///
     pub fn matomo_info(&self) -> Option<&MatomoInfo> {
         self.matomo_info.as_ref()
+    }
+
+    pub fn search_type(&self) -> PeptideSearchType {
+        self.search_type
     }
 }
