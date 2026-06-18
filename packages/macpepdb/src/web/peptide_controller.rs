@@ -248,14 +248,16 @@ async fn select_one_peptide(
     peptide: &Peptide,
 ) -> Result<Option<Peptide>, Error> {
     let mass = peptide.mass();
-    let partitions = match server_state
+    let partitions: Vec<i64> = server_state
         .configuration_as_ref()
         .mass_partitioning()
-        .get(&mass)
-    {
-        Some(partitions) if !partitions.is_empty() => partitions.clone(),
-        _ => return Ok(None),
-    };
+        .partition_by_mass(mass)
+        .map(|(_, partition)| partition)
+        .collect();
+
+    if partitions.is_empty() {
+        return Ok(None);
+    }
 
     let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
         Box::new(partitions),

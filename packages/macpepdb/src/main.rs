@@ -112,6 +112,7 @@ impl Display for PeptideSearchType {
 #[derive(Subcommand)]
 enum ConfigCommand {
     Show,
+    Fix,
 }
 
 #[derive(Subcommand)]
@@ -390,10 +391,7 @@ async fn main() -> Result<(), Error> {
             let protein_file_paths =
                 convert_str_paths_and_resolve_globs(protein_file_paths).unwrap();
 
-            tracing::info!(
-                "Resolved {} protein files",
-                protein_file_paths.len()
-            );
+            tracing::info!("Resolved {} protein files", protein_file_paths.len());
 
             let protease = Protease::by_name(
                 &protease,
@@ -445,6 +443,9 @@ async fn main() -> Result<(), Error> {
                         .unwrap()
                         .unwrap();
                 println!("{}", serde_json::to_string_pretty(&configuration).unwrap());
+            }
+            ConfigCommand::Fix => {
+                macpepdb::temp::convert_old_runtime_config_to_new(&cli.database_url).await
             }
         },
         Command::Search {
@@ -504,11 +505,15 @@ async fn main() -> Result<(), Error> {
                 let mass =
                     Peptide::peptide_mass_from_amino_acid_bits(sequence.amino_acid_bit_codes());
 
-                let partitions = config
+                let partitions: Vec<i64> = config
                     .mass_partitioning()
-                    .get(&mass)
-                    .ok_or(Error::MissingMass)?
-                    .clone();
+                    .partition_by_mass(mass)
+                    .map(|(_, partition)| partition)
+                    .collect();
+
+                if partitions.is_empty() {
+                    return Err(Error::MissingMass);
+                }
 
                 let params: Vec<Box<dyn ToSql + Sync + Send>> =
                     vec![Box::new(partitions), Box::new(mass)];

@@ -23,6 +23,7 @@ pub mod protein_ids;
 pub mod protein_table;
 pub mod sequence;
 pub mod stats_table;
+pub mod temp;
 pub mod tools;
 pub mod web;
 

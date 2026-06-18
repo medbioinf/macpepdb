@@ -18,6 +18,7 @@ use tokio_postgres::Row;
 use crate::amino_acid::{AminoAcid, AminoAcidBitCode, GLYCINE};
 use crate::client::OwnedRowStream;
 use crate::configuration::RuntimeConfiguration;
+use crate::database_build::MassPartitionMap;
 use crate::molecules::WATER_MONO_MASS;
 use crate::peptide::{IsPeptide, Peptidoform};
 use crate::peptide_table::{COLUMNS, MASS_COL, PARTITION_COL, PeptideTable, TABLE_NAME};
@@ -850,7 +851,7 @@ pub trait Search {
     ///
     fn split_and_sort_peptide_conditions(
         peptide_conditions: Vec<PeptideConditionBuilder>,
-        mass_partitioning: &HashMap<i64, Vec<i64>>,
+        mass_partitioning: &MassPartitionMap,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
     ) -> Result<Vec<PeptideCondition>, Error> {
@@ -1694,7 +1695,7 @@ impl PeptideConditionBuilder {
 
     pub fn finalize(
         &self,
-        partitioning: &HashMap<i64, Vec<i64>>,
+        partitioning: &MassPartitionMap,
         lower_tolerance_ppm: i64,
         upper_tolerance_ppm: i64,
     ) -> Vec<PeptideCondition> {
@@ -1702,18 +1703,12 @@ impl PeptideConditionBuilder {
         let upper_mass = self.query_mass + (self.query_mass / 1_000_000 * upper_tolerance_ppm);
 
         partitioning
-            .keys()
-            .filter_map(|mass| {
-                if lower_mass <= *mass && *mass <= upper_mass {
-                    Some(PeptideCondition {
-                        partitions: partitioning.get(mass).unwrap().clone(), // TODO catch error, pass ref
-                        mass: *mass,
-                        inner: self.clone(),
-                        filter_pipeline: Self::filter_pipeline(self),
-                    })
-                } else {
-                    None
-                }
+            .partitions_by_mass_range(lower_mass, upper_mass)
+            .map(|(mass, partition)| PeptideCondition {
+                partitions: vec![partition],
+                mass,
+                inner: self.clone(),
+                filter_pipeline: Self::filter_pipeline(self),
             })
             .collect()
     }
@@ -1903,9 +1898,9 @@ mod tests {
             .into_iter()
             .map(|condition| {
                 // Partititoning needs to include exact queried masses
-                let partitioning = HashMap::<i64, Vec<i64>>::from_iter(
+                let partitioning = MassPartitionMap::from(HashMap::<i64, Vec<i64>>::from_iter(
                     vec![(condition.query_mass, vec![1_i64])].into_iter(),
-                );
+                ));
                 format!(
                     "{}",
                     condition.finalize(&partitioning, 0, 0).first().unwrap()
@@ -2008,7 +2003,10 @@ mod tests {
         condition.add_variable_ptm(oxidation_m.clone());
 
         // Partititoning needs to include exact queried masses
-        let partitioning = HashMap::from_iter(vec![(condition.query_mass, vec![1_i64])]);
+        let partitioning = MassPartitionMap::from(HashMap::from_iter(vec![(
+            condition.query_mass,
+            vec![1_i64],
+        )]));
         let mut finalized_condition = condition.finalize(&partitioning, 0, 0).pop().unwrap();
 
         assert!(finalized_condition.is_match(&peptide));
@@ -2029,7 +2027,10 @@ mod tests {
 
         condition.set_n_terminal_ptm(something_terminal_m.clone());
         // Partititoning needs to include exact queried masses
-        let partitioning = HashMap::from_iter(vec![(condition.query_mass, vec![1_i64])]);
+        let partitioning = MassPartitionMap::from(HashMap::from_iter(vec![(
+            condition.query_mass,
+            vec![1_i64],
+        )]));
         finalized_condition = condition
             .clone()
             .finalize(&partitioning, 0, 0)
@@ -2050,7 +2051,10 @@ mod tests {
 
         condition.set_c_terminal_ptm(something_terminal_r.clone());
         // Partititoning needs to include exact queried masses
-        let partitioning = HashMap::from_iter(vec![(condition.query_mass, vec![1_i64])]);
+        let partitioning = MassPartitionMap::from(HashMap::from_iter(vec![(
+            condition.query_mass,
+            vec![1_i64],
+        )]));
         finalized_condition = condition
             .clone()
             .finalize(&partitioning, 0, 0)
@@ -2071,7 +2075,10 @@ mod tests {
 
         condition.set_n_bond_ptm(something_bond_n.clone());
         // Partititoning needs to include exact queried masses
-        let partitioning = HashMap::from_iter(vec![(condition.query_mass, vec![1_i64])]);
+        let partitioning = MassPartitionMap::from(HashMap::from_iter(vec![(
+            condition.query_mass,
+            vec![1_i64],
+        )]));
         finalized_condition = condition
             .clone()
             .finalize(&partitioning, 0, 0)
@@ -2092,7 +2099,10 @@ mod tests {
 
         condition.set_c_bond_ptm(something_bond_c.clone());
         // Partititoning needs to include exact queried masses
-        let partitioning = HashMap::from_iter(vec![(condition.query_mass, vec![1_i64])]);
+        let partitioning = MassPartitionMap::from(HashMap::from_iter(vec![(
+            condition.query_mass,
+            vec![1_i64],
+        )]));
         finalized_condition = condition
             .clone()
             .finalize(&partitioning, 0, 0)

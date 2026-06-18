@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     num::{NonZeroI64, NonZeroUsize},
     path::PathBuf,
     sync::Arc,
@@ -9,6 +9,7 @@ use std::{
 use futures::{FutureExt, StreamExt, TryStreamExt, future::BoxFuture, stream::BoxStream};
 use macpepdb_tui::{MetricConfig, TuiHandle};
 use metrics::counter;
+use serde::{Deserialize, Serialize};
 use sysinfo::System;
 use thiserror::Error;
 
@@ -54,6 +55,71 @@ into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
 into_thiserror_boxed!(crate::protein_table::Error, Error, ProteinTable);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct MassPartitionMap {
+    /// Masses partition array
+    single: Vec<(i64, i64)>,
+    /// Remaining
+    overflow: BTreeMap<i64, Vec<i64>>,
+}
+
+impl MassPartitionMap {
+    pub fn partitions_by_mass_range(
+        &self,
+        lower_mass: i64,
+        upper_mass: i64,
+    ) -> impl Iterator<Item = (i64, i64)> {
+        let start = self.single.partition_point(|(m, _)| *m < lower_mass);
+        let end = self.single.partition_point(|(m, _)| *m <= upper_mass);
+
+        self.single[start..end].iter().cloned().chain(
+            self.overflow
+                .range(lower_mass..=upper_mass)
+                .flat_map(|(&mass, partitions)| {
+                    partitions.iter().map(move |partition| (mass, *partition))
+                }),
+        )
+    }
+
+    pub fn partition_by_mass(&self, mass: i64) -> impl Iterator<Item = (i64, i64)> {
+        let start = self.single.partition_point(|(m, _)| *m < mass);
+        let end = self.single.partition_point(|(m, _)| *m <= mass);
+
+        self.single[start..end].iter().cloned().chain(
+            self.overflow
+                .get(&mass)
+                .map(|partitions| partitions.iter().map(move |partition| (mass, *partition)))
+                .into_iter()
+                .flatten(),
+        )
+    }
+}
+
+impl From<HashMap<i64, Vec<i64>>> for MassPartitionMap {
+    fn from(map: HashMap<i64, Vec<i64>>) -> Self {
+        let capacity = map
+            .iter()
+            .filter(|(_, partitions)| partitions.len() == 1)
+            .count();
+
+        let mut single = Vec::with_capacity(capacity);
+        let mut overflow = BTreeMap::new();
+
+        for (mass, mut partitions_vec) in map {
+            if partitions_vec.len() == 1 {
+                single.push((mass, partitions_vec[0]));
+            } else {
+                partitions_vec.shrink_to_fit();
+                overflow.insert(mass, partitions_vec);
+            }
+        }
+
+        single.sort_unstable_by_key(|(m, _)| *m);
+
+        Self { single, overflow }
+    }
+}
 
 type BoxedPeptideStreamFuture<'a> =
     BoxFuture<'a, Result<BoxStream<'a, Result<Arc<Protein>, Error>>, Error>>;
@@ -436,7 +502,7 @@ impl<'a> DatabaseBuild<'a> {
         &self,
         protein_access: Arc<Box<dyn IsProteinAccess>>,
         mass_index: MassIndex,
-    ) -> Result<HashMap<i64, Vec<i64>>, Error> {
+    ) -> Result<MassPartitionMap, Error> {
         let now = std::time::Instant::now();
         let (peptide_ctr, mass_to_partitions_map) = PeptideTable::new(self.client.clone())
             .build_concurrently(
@@ -454,7 +520,7 @@ impl<'a> DatabaseBuild<'a> {
             .upsert_peptide_count(peptide_ctr)
             .await?;
 
-        Ok(mass_to_partitions_map)
+        Ok(MassPartitionMap::from(mass_to_partitions_map))
     }
 
     fn allowed_usable_memory(&self) -> usize {
