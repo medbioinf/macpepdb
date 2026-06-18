@@ -8,14 +8,13 @@ use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::{Engine as _, engine::general_purpose::STANDARD as Base64Standard};
-use dihardts_omicstools::mass_spectrometry::unit_conversions::mass_to_charge_to_dalton;
 use futures::StreamExt;
 use http::header;
 use postgres_types::ToSql;
 use thiserror::Error;
 use urlencoding::decode as urldecode;
 
-use crate::mass::to_float as mass_to_float;
+use crate::mass::{mass_to_charge_to_dalton, to_float as mass_to_float};
 use crate::peptide::{IsPeptide, Peptide};
 use crate::peptide_metadata_table::PeptideMetadataTable;
 use crate::peptide_search::{Search, UnionAllSearch};
