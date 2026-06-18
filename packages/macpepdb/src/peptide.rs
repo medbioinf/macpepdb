@@ -16,7 +16,7 @@ use crate::{
     },
 };
 
-pub const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A') as usize;
+pub const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A' + 1) as usize;
 
 pub const IS_SWISS_PROT_BIT: usize = 0;
 pub const IS_TREMBL_BIT: usize = 1;
