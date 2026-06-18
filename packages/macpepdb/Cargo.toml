@@ -45,6 +45,7 @@ static_assertions = { workspace = true }
 sysinfo = { workspace = true }
 tcmalloc2 = { workspace = true, optional = true }
 thiserror = { workspace = true }
+tinyvec = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }

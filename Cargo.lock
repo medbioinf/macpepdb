@@ -2327,6 +2327,7 @@ dependencies = [
  "tcmalloc2",
  "thiserror",
  "tikv-jemallocator",
+ "tinyvec",
  "tokio",
  "tokio-postgres",
  "tower-http",

@@ -9,6 +9,7 @@ use pastey::paste;
 use postgres_types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use serde::Serialize;
 use thiserror::Error;
+use tinyvec::TinyVec;
 use zerocopy::IntoBytes;
 
 use crate::{
@@ -27,6 +28,7 @@ pub enum Error {
     #[error("Sequence too short {length} exceeds min {min_length})")]
     TooShort { length: usize, min_length: usize },
 }
+const COMPACT_INLINE_BYTES: usize = 32;
 
 /// A more compact version of sequence, which stores the amino acids as
 /// as 5 bits + x bits for the length, rounded to the next byte.
@@ -34,11 +36,11 @@ pub enum Error {
 /// This version is meant to be compact, not feature rich (because non byte logic is slow), so more of it can be stored in
 /// maps, sets, databases etc.
 #[derive(Debug, Eq, Hash, PartialEq)]
-pub struct CompactSequence(Vec<u8>);
+pub struct CompactSequence(TinyVec<[u8; COMPACT_INLINE_BYTES]>);
 
 impl From<CompactSequence> for Vec<u8> {
     fn from(compact_sequence: CompactSequence) -> Self {
-        compact_sequence.0
+        compact_sequence.0.to_vec()
     }
 }
 
@@ -268,7 +270,7 @@ macro_rules! make_sequence {
                     let total_bits = [< $name:camel >]::LENGTH_BITS as usize + n * 5;
                     #[allow(clippy::manual_div_ceil)]
                     let num_bytes = (total_bits + 7) / 8;
-                    let mut out = Vec::with_capacity(num_bytes);
+                    let mut out: TinyVec<[u8; COMPACT_INLINE_BYTES]> = TinyVec::with_capacity(num_bytes);
 
                     // Seed the window with the length value occupying the LENGTH_BITS
                     // most-significant bits.
@@ -385,7 +387,7 @@ macro_rules! make_sequence {
                     _ty: &Type,
                     raw: &'a [u8],
                 ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
-                    Ok(Self::try_from(CompactSequence(raw.to_vec()))?)
+                    Ok(Self::try_from(CompactSequence(TinyVec::from(raw)))?)
                 }
 
                 fn accepts(ty: &Type) -> bool {
@@ -625,5 +627,24 @@ mod tests {
 
         // (5 (amino acid bit code) * length + count bits).div_ceil(8)
         assert_eq!(peptide.cql_size(), 32);
+    }
+    #[test]
+    fn test_compact_sequence_stays_inline() {
+        let max_peptide =
+            PeptideSequence::try_from("VTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLR").unwrap();
+        let compact = CompactSequence::try_from(&max_peptide).unwrap();
+        assert_eq!(compact.0.len(), COMPACT_INLINE_BYTES);
+        assert!(
+            matches!(compact.0, TinyVec::Inline(_)),
+            "max-length peptide must remain inline (no heap allocation)"
+        );
+
+        let long_seq = "A".repeat(64);
+        let protein = ProteinSequence::try_from(long_seq.as_str()).unwrap();
+        let compact_protein = CompactSequence::try_from(&protein).unwrap();
+        assert!(
+            matches!(compact_protein.0, TinyVec::Heap(_)),
+            "oversized sequence must spill to the heap"
+        );
     }
 }

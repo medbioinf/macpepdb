@@ -52,6 +52,7 @@ sysinfo = "0.39.2"
 tcmalloc2 = "0.3.2"
 thiserror = "~2.0.18"
 tikv-jemallocator = "0.6"
+tinyvec = { version = "1.11", features = ["alloc"] }
 tokio = "1.51"
 tower-http = "0.6.8"
 tracing = "0.1"
