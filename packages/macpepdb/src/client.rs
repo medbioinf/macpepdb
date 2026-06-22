@@ -332,15 +332,82 @@ impl Client {
         sql: &str,
         params: Vec<Box<dyn ToSql + Sync + Send>>,
     ) -> Result<OwnedRowStream, Error> {
+        // Timing split: `acquire` = time blocked on the congestion permit (pool
+        // saturation signal); `setup` = connection checkout + prepare + query_raw,
+        // which on Citus includes distributed query planning/dispatch. The actual
+        // columnar scan happens later as the returned stream is polled.
+        let t0 = std::time::Instant::now();
         let permit = self.congestion.acquire().await;
+        let acquire_us = t0.elapsed().as_micros();
+        // Split setup into its three sub-phases to attribute the cost:
+        //   get      = pool checkout; a COLD slot establishes a fresh TCP+auth
+        //              connection to the coordinator here (the warm-pool suspect).
+        //   prepare  = prepare_cached; Citus may do distributed planning here.
+        //   exec     = query_raw; dispatch/execute (planning may also land here).
+        let tg = std::time::Instant::now();
         let conn = self.get().await?;
+        let get_us = tg.elapsed().as_micros();
+        let is_recycled = Object::metrics(&conn).recycle_count > 0;
+        let tp = std::time::Instant::now();
         let stmt = conn.prepare_cached(sql).await?;
+        let prepare_us = tp.elapsed().as_micros();
+        let te = std::time::Instant::now();
         let stream = conn
             .query_raw(
                 &stmt,
                 params.iter().map(|p| p.as_ref() as &(dyn ToSql + Sync)),
             )
             .await?;
+        let exec_us = te.elapsed().as_micros();
+        tracing::debug!(
+            target: "search_timing",
+            acquire_us,
+            get_us,
+            prepare_us,
+            exec_us,
+            is_recycled,
+            in_flight = self.congestion.in_flight(),
+            window = self.congestion.window(),
+            "query_stream opened"
+        );
+        Ok(OwnedRowStream {
+            _permit: permit,
+            _conn: conn,
+            stream: Box::pin(stream),
+        })
+    }
+
+    /// Like [`Client::query_stream`] but for SQL that already has all its values
+    /// inlined as literals (no bind parameters). The statement is NOT prepared/cached:
+    /// it is passed straight to `query_raw` as an unnamed statement. This matters for
+    /// Citus — a parameterized distributed query cannot use a cached generic plan
+    /// (Citus errors on it) and re-plans on every execute (~11 ms planning), whereas an
+    /// inlined-literal query plans in ~0.2 ms because the coordinator can prune shards
+    /// and columnar chunk groups at plan time. Since the SQL is unique per call, caching
+    /// it would also grow the per-connection statement cache without bound.
+    pub async fn query_stream_inline(&self, sql: &str) -> Result<OwnedRowStream, Error> {
+        let t0 = std::time::Instant::now();
+        let permit = self.congestion.acquire().await;
+        let acquire_us = t0.elapsed().as_micros();
+        let tg = std::time::Instant::now();
+        let conn = self.get().await?;
+        let get_us = tg.elapsed().as_micros();
+        let is_recycled = Object::metrics(&conn).recycle_count > 0;
+        let te = std::time::Instant::now();
+        let stream = conn
+            .query_raw(sql, std::iter::empty::<&(dyn ToSql + Sync)>())
+            .await?;
+        let exec_us = te.elapsed().as_micros();
+        tracing::debug!(
+            target: "search_timing",
+            acquire_us,
+            get_us,
+            exec_us,
+            is_recycled,
+            in_flight = self.congestion.in_flight(),
+            window = self.congestion.window(),
+            "query_stream_inline opened"
+        );
         Ok(OwnedRowStream {
             _permit: permit,
             _conn: conn,

@@ -4,7 +4,51 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
+
+/// Lock-free accumulator for per-condition timings within a single search, so the
+/// search emits one compact summary line instead of ~2 lines per condition. The
+/// per-event detail is still logged at `debug` (target `search_timing`).
+#[derive(Default)]
+struct SearchTimingAgg {
+    /// Sum/max of stream-open time (pool checkout + prepare + dispatch).
+    setup_us_sum: AtomicU64,
+    setup_us_max: AtomicU64,
+    /// Sum/max of scan time (open -> stream exhausted), excluding setup.
+    scan_us_sum: AtomicU64,
+    scan_us_max: AtomicU64,
+    rows: AtomicU64,
+    conditions: AtomicU64,
+    /// Max number of partitions in a single condition's `partition = ANY(...)` list,
+    /// i.e. the worst-case shard fan-out per range query.
+    partitions_max: AtomicU64,
+}
+
+impl SearchTimingAgg {
+    fn record_setup(&self, us: u64, partitions: u64) {
+        self.setup_us_sum.fetch_add(us, Ordering::Relaxed);
+        fetch_max(&self.setup_us_max, us);
+        fetch_max(&self.partitions_max, partitions);
+    }
+
+    fn record_scan(&self, us: u64, rows: u64) {
+        self.scan_us_sum.fetch_add(us, Ordering::Relaxed);
+        fetch_max(&self.scan_us_max, us);
+        self.rows.fetch_add(rows, Ordering::Relaxed);
+        self.conditions.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+fn fetch_max(slot: &AtomicU64, v: u64) {
+    let mut cur = slot.load(Ordering::Relaxed);
+    while v > cur {
+        match slot.compare_exchange_weak(cur, v, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+}
 
 use clap::ValueEnum;
 use dashmap::DashSet;
@@ -12,7 +56,6 @@ use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, SelectAll, Stream, StreamExt};
 use itertools::Itertools;
 use metrics::{Counter, counter};
-use postgres_types::ToSql;
 use thiserror::Error;
 use tokio_postgres::Row;
 
@@ -433,6 +476,10 @@ struct ConditionalPeptideStream {
     condition: Pin<Box<PeptideCondition>>,
     inner: BoxedPeptideRowStream,
     resolve_modification: bool,
+    // ── timing diagnostics ──
+    agg: Arc<SearchTimingAgg>,
+    opened_at: std::time::Instant,
+    rows: u64,
 }
 
 impl ConditionalPeptideStream {
@@ -440,20 +487,29 @@ impl ConditionalPeptideStream {
         client: Arc<Client>,
         condition: PeptideCondition,
         resolve_modification: bool,
+        agg: Arc<SearchTimingAgg>,
     ) -> Result<Self, Error> {
-        let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
-            Box::new(condition.partitions().clone()),
-            Box::new(condition.mass()),
-        ];
-        let inner: BoxedPeptideRowStream = Box::pin(
-            PeptideTable::new(client)
-                .select("WHERE partition = ANY($1) AND mass = $2", params)
-                .await?,
+        // Inline literals (no bind params): Citus prunes shards + columnar chunk groups
+        // at plan time only for an inlined query — a parameterized distributed query
+        // re-plans every execute (~11 ms) and cannot use a cached generic plan.
+        let num_partitions = condition.partitions().len() as u64;
+        let where_clause = format!(
+            "WHERE partition = ANY(ARRAY[{}]::bigint[]) AND mass >= {} AND mass <= {}",
+            condition.partitions().iter().join(","),
+            condition.lower_mass(),
+            condition.upper_mass(),
         );
+        let setup_start = std::time::Instant::now();
+        let inner: BoxedPeptideRowStream =
+            Box::pin(PeptideTable::new(client).select_inline(&where_clause).await?);
+        agg.record_setup(setup_start.elapsed().as_micros() as u64, num_partitions);
         Ok(Self {
             resolve_modification,
             inner,
             condition: Box::pin(condition),
+            agg,
+            opened_at: std::time::Instant::now(),
+            rows: 0,
         })
     }
 }
@@ -466,6 +522,7 @@ impl Stream for ConditionalPeptideStream {
         'polling_loop: loop {
             return match this.inner.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(peptide))) => {
+                    this.rows += 1;
                     if this.condition.is_match(&peptide) {
                         let peptidoforms = if this.resolve_modification {
                             this.condition.modify_peptide(&peptide)
@@ -479,7 +536,13 @@ impl Stream for ConditionalPeptideStream {
                     }
                 }
                 Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err.into()))),
-                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Ready(None) => {
+                    // Condition exhausted: fold its scan time + row count into the
+                    // per-search aggregate (the search logs one summary at the end).
+                    this.agg
+                        .record_scan(this.opened_at.elapsed().as_micros() as u64, this.rows);
+                    Poll::Ready(None)
+                }
                 Poll::Pending => Poll::Pending,
             };
         }
@@ -500,6 +563,11 @@ pub struct FallibleMatchingPeptideStream {
     pending: FuturesUnordered<BoxFuture<'static, Result<ConditionalPeptideStream, Error>>>,
     matching_peptide_metric: String,
     matching_peptide_counter: Counter,
+    // ── timing diagnostics ──
+    started_at: std::time::Instant,
+    total_conditions: usize,
+    done_logged: bool,
+    agg: Arc<SearchTimingAgg>,
 }
 
 impl FallibleMatchingPeptideStream {
@@ -510,17 +578,27 @@ impl FallibleMatchingPeptideStream {
         resolve_modifications: bool,
         concurrent_selects: NonZeroUsize,
     ) -> Result<Self, Error> {
+        let total_conditions = conditions.len();
         let concurrent_selects = concurrent_selects.get();
+        tracing::info!(
+            target: "search_timing",
+            total_conditions,
+            concurrent_selects,
+            "search started (MultiTask)"
+        );
         let streams = SelectAll::<ConditionalPeptideStream>::new();
         let pending: FuturesUnordered<BoxFuture<'static, Result<ConditionalPeptideStream, Error>>> =
             FuturesUnordered::new();
+        let agg = Arc::new(SearchTimingAgg::default());
 
         // Kick off the initial batch of stream-creation futures without blocking.
         let initial = concurrent_selects.min(conditions.len());
         for condition in conditions.drain(..initial) {
             let client_clone = client.clone();
+            let agg_clone = agg.clone();
             pending.push(Box::pin(async move {
-                ConditionalPeptideStream::new(client_clone, condition, resolve_modifications).await
+                ConditionalPeptideStream::new(client_clone, condition, resolve_modifications, agg_clone)
+                    .await
             }));
         }
 
@@ -549,6 +627,10 @@ impl FallibleMatchingPeptideStream {
             matching_peptide_counter,
             filter_pipeline: Box::pin(filter_pipeline),
             conditions: Box::pin(conditions),
+            started_at: std::time::Instant::now(),
+            total_conditions,
+            done_logged: false,
+            agg,
         })
     }
 }
@@ -590,8 +672,9 @@ impl Stream for FallibleMatchingPeptideStream {
                 let condition = this.conditions.pop_front().unwrap();
                 let client = this.client.clone();
                 let resolve = this.resolve_modifications;
+                let agg = this.agg.clone();
                 this.pending.push(Box::pin(async move {
-                    ConditionalPeptideStream::new(client, condition, resolve).await
+                    ConditionalPeptideStream::new(client, condition, resolve, agg).await
                 }));
                 added = true;
             }
@@ -606,6 +689,22 @@ impl Stream for FallibleMatchingPeptideStream {
             // ── Step 3 ────────────────────────────────────────────────────────────
             // All conditions consumed and everything drained — we are done.
             if this.streams.is_empty() && this.pending.is_empty() && this.conditions.is_empty() {
+                if !this.done_logged {
+                    this.done_logged = true;
+                    let conds = this.agg.conditions.load(Ordering::Relaxed).max(1);
+                    tracing::info!(
+                        target: "search_timing",
+                        total_us = this.started_at.elapsed().as_micros(),
+                        total_conditions = this.total_conditions,
+                        setup_us_mean = this.agg.setup_us_sum.load(Ordering::Relaxed) / conds,
+                        setup_us_max = this.agg.setup_us_max.load(Ordering::Relaxed),
+                        scan_us_mean = this.agg.scan_us_sum.load(Ordering::Relaxed) / conds,
+                        scan_us_max = this.agg.scan_us_max.load(Ordering::Relaxed),
+                        partitions_max = this.agg.partitions_max.load(Ordering::Relaxed),
+                        rows = this.agg.rows.load(Ordering::Relaxed),
+                        "search finished (MultiTask)"
+                    );
+                }
                 return Poll::Ready(None);
             }
 
@@ -643,6 +742,29 @@ impl Stream for FallibleMatchingPeptideStream {
                 Poll::Ready(None) => continue,
                 Poll::Pending => return Poll::Pending,
             }
+        }
+    }
+}
+
+impl Drop for FallibleMatchingPeptideStream {
+    fn drop(&mut self) {
+        // If the stream is dropped before reaching completion (Step 3), the search was
+        // abandoned — almost always the HTTP client disconnecting / timing out. These
+        // never hit the "search finished" log, which would otherwise bias measurements
+        // toward only the searches fast enough to complete. Log them as abandoned.
+        if !self.done_logged {
+            let conds = self.agg.conditions.load(Ordering::Relaxed).max(1);
+            tracing::warn!(
+                target: "search_timing",
+                total_us = self.started_at.elapsed().as_micros(),
+                total_conditions = self.total_conditions,
+                completed_conditions = self.agg.conditions.load(Ordering::Relaxed),
+                setup_us_mean = self.agg.setup_us_sum.load(Ordering::Relaxed) / conds,
+                setup_us_max = self.agg.setup_us_max.load(Ordering::Relaxed),
+                partitions_max = self.agg.partitions_max.load(Ordering::Relaxed),
+                rows = self.agg.rows.load(Ordering::Relaxed),
+                "search abandoned before completion (client disconnect/timeout?)"
+            );
         }
     }
 }
@@ -699,30 +821,24 @@ impl UnionAllFallibleMatchingPeptideStream {
         conditions: Vec<PeptideCondition>,
         resolve_modifications: bool,
     ) -> Result<Self, Error> {
-        let params_len = conditions
+        // One UNION ALL branch per condition (a mass range over its partition set), with
+        // all values inlined as literals — no bind params. Inlining lets Citus prune
+        // shards + columnar chunk groups at plan time; a parameterized distributed query
+        // cannot (Citus errors on a generic plan and re-plans every execute).
+        let statement = conditions
             .iter()
-            .fold(0, |acc, cond| acc + cond.partitions().len())
-            * 2;
-        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::with_capacity(params_len);
-        let mut placeholders: Vec<(usize, usize, usize)> = Vec::with_capacity(params_len);
-
-        for (condition_idx, condition) in conditions.iter().enumerate() {
-            for partition in condition.partitions() {
-                let params_offset = params.len();
-                params.push(Box::new(*partition));
-                params.push(Box::new(condition.mass()));
-                placeholders.push((condition_idx, params_offset + 1, params_offset + 2));
-            }
-        }
-
-        let statement = placeholders.into_iter().map(|(condition_idx, parititon_placeholder, mass_placeholder)| {
-            format!(
-                "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {COLUMNS} FROM {TABLE_NAME} WHERE {PARTITION_COL} = ${} AND {MASS_COL} = ${}",
-                parititon_placeholder,
-                mass_placeholder,
-            )
-        })
-        .join(" UNION ALL ");
+            .enumerate()
+            .map(|(condition_idx, condition)| {
+                format!(
+                    "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {COLUMNS} FROM {TABLE_NAME} \
+                     WHERE {PARTITION_COL} = ANY(ARRAY[{}]::bigint[]) \
+                     AND {MASS_COL} >= {} AND {MASS_COL} <= {}",
+                    condition.partitions().iter().join(","),
+                    condition.lower_mass(),
+                    condition.upper_mass(),
+                )
+            })
+            .join(" UNION ALL ");
 
         let matching_peptide_metric = format!(
             "{}:{}",
@@ -739,7 +855,7 @@ impl UnionAllFallibleMatchingPeptideStream {
         );
         let matching_peptide_counter = counter!(matching_peptide_metric.clone());
 
-        let row_stream = client.query_stream(&statement, params).await?;
+        let row_stream = client.query_stream_inline(&statement).await?;
 
         Ok(Self {
             resolve_modifications,
@@ -1718,11 +1834,32 @@ impl PeptideConditionBuilder {
         let lower_mass = self.query_mass - (self.query_mass / 1_000_000 * lower_tolerance_ppm);
         let upper_mass = self.query_mass + (self.query_mass / 1_000_000 * upper_tolerance_ppm);
 
-        partitioning
+        // Emit ONE range condition per distinct partition overlapping the window.
+        //
+        // History: the original code emitted one condition (one DB query) per distinct
+        // stored *mass* in the window — for a relative ppm tolerance that count grows with
+        // mass and blew up into 100k+ point-queries. Collapsing the whole window into a
+        // single `partition = ANY([all partitions])` query fixed the count but fanned each
+        // query out to up to ~86 shards, exhausting worker connections under load.
+        //
+        // One query per partition keeps the query as the validated, single-shard
+        // `partition = $p AND mass BETWEEN lo AND hi` shape (Task Count 1, columnar
+        // chunk-group pruned) while still collapsing the per-mass fan-out: the count is
+        // the number of distinct partitions in the window, not distinct masses.
+        let mut partitions: Vec<i64> = partitioning
             .partitions_by_mass_range(lower_mass, upper_mass)
-            .map(|(mass, partition)| PeptideCondition {
+            .map(|(_mass, partition)| partition)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        partitions.sort_unstable();
+
+        partitions
+            .into_iter()
+            .map(|partition| PeptideCondition {
                 partitions: vec![partition],
-                mass,
+                lower_mass,
+                upper_mass,
                 inner: self.clone(),
                 filter_pipeline: Self::filter_pipeline(self),
             })
@@ -1800,8 +1937,13 @@ impl Drop for PeptideConditionBuilder {
 }
 
 pub struct PeptideCondition {
+    /// All distinct partitions overlapping `[lower_mass, upper_mass]`.
     partitions: Vec<i64>,
-    mass: i64,
+    /// Inclusive lower/upper mass bounds of the ppm window for this PTM combination.
+    /// The DB filter is a single range scan (`mass >= lower AND mass <= upper`) over
+    /// `partitions`, replacing the previous one-equality-query-per-distinct-mass fan-out.
+    lower_mass: i64,
+    upper_mass: i64,
     inner: PeptideConditionBuilder,
     /// Filter functions the peptide has to pass before it is returned
     filter_pipeline: FilterPipeline<Peptide>,
@@ -1816,8 +1958,12 @@ impl PeptideCondition {
         &self.partitions
     }
 
-    pub fn mass(&self) -> i64 {
-        self.mass
+    pub fn lower_mass(&self) -> i64 {
+        self.lower_mass
+    }
+
+    pub fn upper_mass(&self) -> i64 {
+        self.upper_mass
     }
 }
 

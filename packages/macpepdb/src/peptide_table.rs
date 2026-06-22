@@ -203,6 +203,22 @@ impl PeptideTable {
         }))
     }
 
+    /// Like [`PeptideTable::select`] but for a `where_clause` with all values inlined as
+    /// literals (no bind parameters). Uses the non-caching inlined path so Citus can
+    /// prune shards/chunk groups at plan time. See [`Client::query_stream_inline`].
+    pub async fn select_inline(
+        &self,
+        where_clause: &str,
+    ) -> Result<impl Stream<Item = Result<Peptide, Error>> + Send + use<>, Error> {
+        let statement = format!("{} {where_clause}", SELECT_STATEMENT.as_str());
+        let stream = self.client.query_stream_inline(&statement).await?;
+        Ok(stream.map(|row_res| {
+            row_res
+                .map_err(Error::Row)
+                .and_then(|row| Peptide::try_from(row).map_err(Error::from))
+        }))
+    }
+
     pub async fn count(&self) -> Result<usize, Error> {
         StatsTable::new(self.client.clone())
             .select_peptide_count()
