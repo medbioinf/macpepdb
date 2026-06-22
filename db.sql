@@ -63,6 +63,7 @@ CREATE TABLE peptides (
     partition               BIGINT,
     mass                    BIGINT,
     sequence                BYTEA,
+    amino_acid_counts       BYTEA,
     metadata_id             BIGINT,
     unique_taxonomy_ids     INTEGER[],
     non_unique_taxonomy_ids INTEGER[],

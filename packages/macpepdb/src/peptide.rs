@@ -209,7 +209,9 @@ impl Peptide {
     pub fn cql_size(&self) -> usize {
         const ROW_OVERHEAD: usize = 32;
         // A non-frozen list<int> stores each element as its own cell.
-        const LIST_CELL_SIZE: usize = 16 + 8 + std::mem::size_of::<i32>();
+        const TAX_LIST_CELL_SIZE: usize = 16 + 8 + std::mem::size_of::<i32>();
+        // A non-frozen list<tinyint> stores each element as its own cell.
+        const COUNTS_BLOB_OVERHEAD: usize = 12;
         // per-row overhead + partition + mass + sequence (clustering blob)
         // + metadata_id reference (i64) + taxonomy list cells (i32)
         ROW_OVERHEAD
@@ -217,8 +219,11 @@ impl Peptide {
             + std::mem::size_of::<i64>()
             + self.sequence.cql_size()
             + std::mem::size_of::<i64>()
-            + (self.unique_taxonomy_ids.len() + self.non_unique_taxonomy_ids.len()) * LIST_CELL_SIZE
+            + (self.unique_taxonomy_ids.len() + self.non_unique_taxonomy_ids.len())
+                * TAX_LIST_CELL_SIZE
             + std::mem::size_of::<i64>()
+            + MAX_AMINO_ACID_BIT_CODE * std::mem::size_of::<i8>()
+            + COUNTS_BLOB_OVERHEAD
     }
 }
 
@@ -489,13 +494,24 @@ impl TryFrom<Row> for Peptide {
             partition: Some(row.try_get("partition")?),
             mass: row.try_get("mass")?,
             sequence: row.try_get("sequence")?,
+            amino_acid_counts: row.try_get::<_, Vec<u8>>("amino_acid_counts").map(|vec| {
+                let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
+                vec.into_iter()
+                    .take(MAX_AMINO_ACID_BIT_CODE)
+                    .enumerate()
+                    .for_each(|(idx, count)| {
+                        counts[idx] = count;
+                    });
+                let once_lock = OnceLock::new();
+                once_lock.set(counts).unwrap();
+                once_lock
+            })?,
             // Resolved on demand (GET endpoint) from peptide_metadata; empty when read directly.
             protein_ids: ProteinIds::default(),
             unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
             non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
             flags: row.try_get("flags")?,
             metadata_id: Some(row.try_get("metadata_id")?),
-            amino_acid_counts: OnceLock::new(),
         })
     }
 }
@@ -538,6 +554,7 @@ mod tests {
         // +  8 = metadata_id reference (i64)
         // + 140 = 5 taxonomy list cells (2 unique + 3 non-unique) x LIST_CELL_SIZE (28)
         // + 8 = flags
-        assert_eq!(peptide.cql_size(), 236);
+        // + 26 * 8 + 12 = amino_acid_counts blob (26 amino acids x 8 bits + 12 bytes overhead)
+        assert_eq!(peptide.cql_size(), 274);
     }
 }

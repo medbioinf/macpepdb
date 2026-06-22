@@ -50,18 +50,18 @@ pub const PARTITION_COL: &str = "partition";
 
 pub const MASS_COL: &str = "mass";
 
-pub const COLUMNS: &str =
-    "partition, mass, sequence, metadata_id, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
+pub const COLUMNS: &str = "partition, mass, sequence, amino_acid_counts, metadata_id, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
 
 static COPY_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("COPY {TABLE_NAME} ({COLUMNS}) FROM STDIN (FORMAT binary)"));
 
 /// Column types for the binary COPY into `peptides`, in column order.
-static COPY_TYPES: LazyLock<[Type; 7]> = LazyLock::new(|| {
+static COPY_TYPES: LazyLock<[Type; 8]> = LazyLock::new(|| {
     [
-        Type::INT8,       // partition
-        Type::INT8,       // mass
-        Type::BYTEA,      // sequence (CompactSequence bytes)
+        Type::INT8,  // partition
+        Type::INT8,  // mass
+        Type::BYTEA, // sequence (CompactSequence bytes)
+        Type::BYTEA,
         Type::INT8,       // metadata_id (reference into peptide_metadata)
         Type::INT4_ARRAY, // unique_taxonomy_ids
         Type::INT4_ARRAY, // non_unique_taxonomy_ids
@@ -173,6 +173,7 @@ impl PeptideTable {
                         &partition,
                         &mass,
                         peptide.sequence(),
+                        peptide.amino_acid_counts(),
                         &metadata_id,
                         &unique,
                         &non_unique,
