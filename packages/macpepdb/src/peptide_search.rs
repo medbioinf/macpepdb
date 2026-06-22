@@ -4,6 +4,7 @@ use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 
@@ -65,7 +66,7 @@ use crate::configuration::RuntimeConfiguration;
 use crate::database_build::MassPartitionMap;
 use crate::molecules::WATER_MONO_MASS;
 use crate::peptide::{IsPeptide, Peptidoform};
-use crate::peptide_table::{COLUMNS, MASS_COL, PARTITION_COL, PeptideTable, TABLE_NAME};
+use crate::peptide_table::{MASS_COL, PARTITION_COL, PeptideTable, TABLE_NAME};
 // use crate::entities::configuration::Configuration;
 // use crate::entities::peptide::MatchingPeptide;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
@@ -77,6 +78,13 @@ use super::client::Client;
 pub static MATCHING_PEPTIDE_METRIC: &str = "peptide_search:matching_peptides";
 
 const CONDITION_REF_COL: &str = "condition_ref";
+
+const SEARCH_COLUMNS: &str = "mass, sequence, flags";
+
+/// Inlined-literal `SELECT` of `SEARCH_COLUMNS` used by the mass-search read path
+/// ([`PeptideTable::select_inline`]); a `where_clause` is appended per query.
+pub static SEARCH_SELECT_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT {SEARCH_COLUMNS} FROM {TABLE_NAME}"));
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -793,7 +801,7 @@ impl TryFrom<Row> for PeptideWithConditionRef {
                 .map_err(|err| Error::RowPeptideConversion(Box::new(err)))? as usize;
         Ok(Self {
             condition_ref,
-            inner_peptide: Peptide::try_from(row)?,
+            inner_peptide: Peptide::try_from_search_row(&row)?,
         })
     }
 }
@@ -830,7 +838,7 @@ impl UnionAllFallibleMatchingPeptideStream {
             .enumerate()
             .map(|(condition_idx, condition)| {
                 format!(
-                    "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {COLUMNS} FROM {TABLE_NAME} \
+                    "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {SEARCH_COLUMNS} FROM {TABLE_NAME} \
                      WHERE {PARTITION_COL} = ANY(ARRAY[{}]::bigint[]) \
                      AND {MASS_COL} >= {} AND {MASS_COL} <= {}",
                     condition.partitions().iter().join(","),

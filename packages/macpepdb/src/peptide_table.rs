@@ -23,6 +23,7 @@ use crate::{
     mass_index::MassIndex,
     peptide::{IsPeptide, Peptide},
     peptide_metadata_table::PeptideMetadataTable,
+    peptide_search::SEARCH_SELECT_STATEMENT,
     protease::Protease,
     protein::Protein,
     protein_ids::ProteinIds,
@@ -210,12 +211,12 @@ impl PeptideTable {
         &self,
         where_clause: &str,
     ) -> Result<impl Stream<Item = Result<Peptide, Error>> + Send + use<>, Error> {
-        let statement = format!("{} {where_clause}", SELECT_STATEMENT.as_str());
+        let statement = format!("{} {where_clause}", SEARCH_SELECT_STATEMENT.as_str());
         let stream = self.client.query_stream_inline(&statement).await?;
         Ok(stream.map(|row_res| {
             row_res
                 .map_err(Error::Row)
-                .and_then(|row| Peptide::try_from(row).map_err(Error::from))
+                .and_then(|row| Peptide::try_from_search_row(&row).map_err(Error::from))
         }))
     }
 

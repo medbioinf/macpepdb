@@ -500,6 +500,23 @@ impl TryFrom<Row> for Peptide {
     }
 }
 
+impl Peptide {
+
+    pub fn try_from_search_row(row: &Row) -> Result<Self, Error> {
+        Ok(Self {
+            partition: None,
+            mass: row.try_get("mass")?,
+            sequence: row.try_get("sequence")?,
+            protein_ids: ProteinIds::default(),
+            unique_taxonomy_ids: Vec::new(),
+            non_unique_taxonomy_ids: Vec::new(),
+            flags: row.try_get("flags")?,
+            metadata_id: None,
+            amino_acid_counts: OnceLock::new(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
