@@ -6,10 +6,8 @@ use std::{
         Arc, LazyLock,
         atomic::{AtomicI64, AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
-use crossbeam::queue::ArrayQueue;
 use dashmap::{DashMap, mapref::entry::Entry};
 use fallible_iterator::FallibleIterator;
 use futures::{Stream, StreamExt};
@@ -46,6 +44,11 @@ const MAX_PARTITION_BYTES: usize = 256 * 1024 * 1024;
 /// Newly-interned `peptide_metadata` rows are COPYed in batches of this size per worker.
 const METADATA_FLUSH_ROWS: usize = 8192;
 
+/// Target number of mass chunks each build worker claims from the shared cursor. Smaller
+/// chunks balance load better but inflate the partition count via per-chunk underfilled
+/// tails; this value keeps that inflation to a few percent while staying well-balanced.
+const CHUNKS_PER_THREAD: usize = 24;
+
 pub const PARTITION_COL: &str = "partition";
 
 pub const MASS_COL: &str = "mass";
@@ -76,7 +79,6 @@ static SELECT_STATEMENT: LazyLock<String> =
 
 pub static PROGRESS_METRIC: &str = "peptides_table::build::progress";
 pub static INSERTED_PEPTIDES_METRIC: &str = "peptides_table::build::inserted_peptides";
-pub static QUEUE_METRIC: &str = "peptides_table::queue";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -95,8 +97,6 @@ pub enum Error {
     Join(String),
     #[error("Mass index error in peptide table: {0}")]
     MassIndex(Box<crate::mass_index::Error>),
-    #[error("No errored thread found in peptide table, but one finished early.")]
-    NoErroredThread,
     #[error("Protease error in peptide table: {0}")]
     Protease(#[from] crate::protease::Error),
     #[error("Protein access error in peptide table: {0}")]
@@ -117,8 +117,6 @@ into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::database_build::Error, Error, ProteinAccess);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
 into_thiserror_boxed!(crate::peptide_metadata_table::Error, Error, PeptideMetadata);
-
-type ConcurrentlyBuildQueue = Arc<ArrayQueue<Option<(i64, Vec<i32>)>>>;
 
 struct NextPartitionGuard {
     next_partition: AtomicI64,
@@ -240,12 +238,10 @@ impl PeptideTable {
         protease: Arc<Protease>,
         _batch_size_limit: NonZeroUsize,
         num_threads: NonZeroUsize,
-        mass_index: MassIndex,
+        mass_index: Arc<MassIndex>,
     ) -> Result<(usize, HashMap<i64, Vec<i64>>), Error> {
-        let queue: ConcurrentlyBuildQueue = Arc::new(ArrayQueue::new(num_threads.get() * 3));
         let progress_metric = Arc::new(metrics::gauge!(PROGRESS_METRIC));
         let inserted_peptides_metric = Arc::new(metrics::counter!(INSERTED_PEPTIDES_METRIC));
-        let queue_metric = metrics::gauge!(QUEUE_METRIC);
         let next_partition_guard = Arc::new(NextPartitionGuard::new());
         let peptide_ctr = Arc::new(AtomicUsize::new(0));
 
@@ -255,11 +251,22 @@ impl PeptideTable {
         let metadata_interner: Arc<DashMap<u128, i64>> = Arc::new(DashMap::new());
         let metadata_id_counter = Arc::new(AtomicI64::new(0));
 
+        // Workers claim disjoint contiguous chunks of the globally mass-sorted index via a
+        // shared cursor (instead of interleaving a shared per-mass queue). Each chunk is
+        // digested ascending into one or more partitions and the buffer is flushed at the
+        // chunk boundary, so every partition covers a disjoint contiguous mass range — which
+        // collapses search-time partition fan-out. `claim_size` targets ~CHUNKS_PER_THREAD
+        // chunks per worker: small enough for dynamic load balancing, large enough that the
+        // per-chunk underfilled tail inflates the partition count by only a few percent.
+        let total_masses = mass_index.len();
+        let part_offsets = Arc::new(mass_index.part_offsets());
+        let cursor = Arc::new(AtomicUsize::new(0));
+        let claim_size = (total_masses / (CHUNKS_PER_THREAD * num_threads.get())).max(1);
+
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
                 let protein_access = protein_access.clone();
                 let protease = protease.clone();
-                let queue = queue.clone();
                 let client = self.client.clone();
                 let progress_metric = progress_metric.clone();
                 let inserted_peptides_metric = inserted_peptides_metric.clone();
@@ -267,6 +274,9 @@ impl PeptideTable {
                 let peptide_ctr = peptide_ctr.clone();
                 let metadata_interner = metadata_interner.clone();
                 let metadata_id_counter = metadata_id_counter.clone();
+                let mass_index = mass_index.clone();
+                let part_offsets = part_offsets.clone();
+                let cursor = cursor.clone();
 
                 tokio::spawn(async move {
                     let peptide_table = PeptideTable::new(client.clone());
@@ -275,174 +285,148 @@ impl PeptideTable {
                     let mut mass_partition_map: HashMap<i64, Vec<i64>> = HashMap::new();
                     let mut peptide_buffer: Vec<Peptide> = Vec::new();
                     let mut partition_bytes: usize = 0;
-                    let mut partition = next_partition_guard.next_partition();
-
+                    // Acquired lazily on the first push into an empty buffer so workers that
+                    // draw short/empty claims never burn (and never reuse) a partition id.
+                    let mut partition: Option<i64> = None;
                     // Track which masses have peptides in the current buffer.
                     let mut buffer_masses: HashSet<i64> = HashSet::new();
 
                     loop {
-                        let (mass, protein_ids) = match queue.pop() {
-                            Some(Some(entry)) => entry,
-                            Some(None) => {
-                                if !peptide_buffer.is_empty() {
-                                    for &m in &buffer_masses {
-                                        mass_partition_map.entry(m).or_default().push(partition);
-                                    }
-                                    tracing::debug!(
-                                        "Flushing {} peptides into partition {partition} (final)",
-                                        peptide_buffer.len(),
-                                    );
-                                    let inserted =
-                                        peptide_table.insert_batch(&peptide_buffer).await?;
-                                    peptide_buffer.clear();
-                                    peptide_ctr
-                                        .fetch_add(inserted, std::sync::atomic::Ordering::SeqCst);
-                                    inserted_peptides_metric.increment(inserted as u64);
+                        let start = cursor.fetch_add(claim_size, Ordering::Relaxed);
+                        if start >= total_masses {
+                            break;
+                        }
+                        let end = (start + claim_size).min(total_masses);
+
+                        // Digest the claimed mass range in ascending order so each stripe is
+                        // mass-sorted (tight columnar chunk-group pruning at search time).
+                        for g in start..end {
+                            let (mass, protein_ids_slice) =
+                                mass_index.resolve_global(&part_offsets, g);
+                            let protein_ids = protein_ids_slice.to_vec();
+                            let protein_ids_len = protein_ids.len();
+
+                            let mut proteins = protein_access.by_ids(&protein_ids).await?;
+
+                            let protein_ids = if skip_protein_associations {
+                                Vec::new()
+                            } else {
+                                protein_ids.clone()
+                            };
+
+                            let metadata = ProteinIds::from(protein_ids);
+                            let hash = xxh3_128(&metadata.encode());
+                            let (metadata_id, is_new_metadata) = match metadata_interner.entry(hash)
+                            {
+                                Entry::Occupied(existing) => (*existing.get(), false),
+                                Entry::Vacant(slot) => {
+                                    let id = metadata_id_counter.fetch_add(1, Ordering::SeqCst);
+                                    slot.insert(id);
+                                    (id, true)
                                 }
-                                if !metadata_buffer.is_empty() {
+                            };
+
+                            if is_new_metadata {
+                                metadata_buffer.push((metadata_id, metadata));
+                                if metadata_buffer.len() >= METADATA_FLUSH_ROWS {
                                     metadata_table.insert_batch(&metadata_buffer).await?;
                                     metadata_buffer.clear();
                                 }
-                                break;
                             }
-                            None => {
-                                tokio::time::sleep(Duration::from_millis(50)).await;
-                                continue;
+
+                            // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
+                            let mut peptide_sequences: HashMap<
+                                CompactSequence,
+                                HashMap<i32, usize>,
+                            > = HashMap::with_capacity(2 * protein_ids_len);
+
+                            let mut is_swiss_prot = false;
+                            let mut is_trembl: bool = false;
+
+                            while let Some(protein) = proteins.next().await.transpose()? {
+                                is_swiss_prot |= protein.is_reviewed();
+                                is_trembl |= !protein.is_reviewed();
+
+                                Self::digest_protein(
+                                    protease.as_ref(),
+                                    protein.as_ref(),
+                                    mass..=mass,
+                                    &mut peptide_sequences,
+                                )?;
                             }
-                        };
 
-                        let protein_ids = Vec::from_iter(protein_ids);
-
-                        let protein_ids_len = protein_ids.len();
-
-                        let mut proteins = protein_access.by_ids(&protein_ids).await?;
-
-                        let protein_ids = if skip_protein_associations {
-                            Vec::new()
-                        } else {
-                            protein_ids.clone()
-                        };
-
-                        let metadata = ProteinIds::from(protein_ids);
-                        let hash = xxh3_128(&metadata.encode());
-                        let (metadata_id, is_new_metadata) = match metadata_interner.entry(hash) {
-                            Entry::Occupied(existing) => (*existing.get(), false),
-                            Entry::Vacant(slot) => {
-                                let id = metadata_id_counter.fetch_add(1, Ordering::SeqCst);
-                                slot.insert(id);
-                                (id, true)
-                            }
-                        };
-
-                        if is_new_metadata {
-                            metadata_buffer.push((metadata_id, metadata));
-                            if metadata_buffer.len() >= METADATA_FLUSH_ROWS {
-                                metadata_table.insert_batch(&metadata_buffer).await?;
-                                metadata_buffer.clear();
-                            }
-                        }
-
-                        // Using the more compact form of the sequence to keep the peptide in memory as small as possible, mass is not important now.
-                        let mut peptide_sequences: HashMap<CompactSequence, HashMap<i32, usize>> =
-                            HashMap::with_capacity(2 * protein_ids_len);
-
-                        let mut is_swiss_prot = false;
-                        let mut is_trembl: bool = false;
-
-                        while let Some(protein) = proteins.next().await.transpose()? {
-                            is_swiss_prot |= protein.is_reviewed();
-                            is_trembl |= !protein.is_reviewed();
-
-                            Self::digest_protein(
-                                protease.as_ref(),
-                                protein.as_ref(),
-                                mass..=mass,
-                                &mut peptide_sequences,
+                            let peptides: Vec<Peptide> = Self::finalize_peptides(
+                                peptide_sequences,
+                                metadata_id,
+                                is_swiss_prot,
+                                is_trembl,
+                                skip_taxonomies,
                             )?;
-                        }
 
-                        let peptides: Vec<Peptide> = Self::finalize_peptides(
-                            peptide_sequences,
-                            metadata_id,
-                            is_swiss_prot,
-                            is_trembl,
-                            skip_taxonomies,
-                        )?;
-
-                        for mut peptide in peptides {
-                            // Flush when the partition has filled one columnar stripe
-                            // (row count is the primary trigger; the byte ceiling is a
-                            // memory guard for peptides in very many proteins).
-                            if !peptide_buffer.is_empty()
-                                && (peptide_buffer.len() >= STRIPE_ROW_LIMIT
-                                    || partition_bytes + peptide.cql_size() >= MAX_PARTITION_BYTES)
-                            {
-                                for &m in &buffer_masses {
-                                    mass_partition_map.entry(m).or_default().push(partition);
+                            for mut peptide in peptides {
+                                // Flush when the partition has filled one columnar stripe
+                                // (row count is the primary trigger; the byte ceiling is a
+                                // memory guard for peptides in very many proteins).
+                                if !peptide_buffer.is_empty()
+                                    && (peptide_buffer.len() >= STRIPE_ROW_LIMIT
+                                        || partition_bytes + peptide.cql_size()
+                                            >= MAX_PARTITION_BYTES)
+                                {
+                                    let p =
+                                        partition.expect("partition id set with non-empty buffer");
+                                    for &m in &buffer_masses {
+                                        mass_partition_map.entry(m).or_default().push(p);
+                                    }
+                                    let inserted =
+                                        peptide_table.insert_batch(&peptide_buffer).await?;
+                                    peptide_buffer.clear();
+                                    peptide_ctr.fetch_add(inserted, Ordering::SeqCst);
+                                    inserted_peptides_metric.increment(inserted as u64);
+                                    partition_bytes = 0;
+                                    buffer_masses.clear();
+                                    partition = None;
                                 }
-                                tracing::debug!(
-                                    "Partition {partition} full: flushing {} peptides ({} bytes)",
-                                    peptide_buffer.len(),
-                                    partition_bytes,
-                                );
-                                let inserted = peptide_table.insert_batch(&peptide_buffer).await?;
-                                peptide_buffer.clear();
-                                peptide_ctr
-                                    .fetch_add(inserted, std::sync::atomic::Ordering::SeqCst);
-                                inserted_peptides_metric.increment(inserted as u64);
-                                partition_bytes = 0;
-                                buffer_masses.clear();
-                                partition = next_partition_guard.next_partition();
+
+                                let p = *partition
+                                    .get_or_insert_with(|| next_partition_guard.next_partition());
+                                partition_bytes += peptide.cql_size();
+                                peptide.set_partition(p);
+                                peptide_buffer.push(peptide);
+                                buffer_masses.insert(mass);
                             }
 
-                            partition_bytes += peptide.cql_size();
-                            peptide.set_partition(partition);
-                            peptide_buffer.push(peptide);
-                            buffer_masses.insert(mass);
+                            progress_metric.increment(protein_ids_len as f64);
                         }
 
-                        progress_metric.increment(protein_ids_len as f64);
+                        // Boundary flush: never carry a partial buffer across claims. The next
+                        // claim is a non-adjacent mass range (another worker took the chunk in
+                        // between), so carrying over would merge non-contiguous masses into one
+                        // partition and reintroduce overlap. Mirrors the mid-loop flush above
+                        // (resets bytes/masses/partition), unlike the old final-exit flush.
+                        if !peptide_buffer.is_empty() {
+                            let p = partition.expect("partition id set with non-empty buffer");
+                            for &m in &buffer_masses {
+                                mass_partition_map.entry(m).or_default().push(p);
+                            }
+                            let inserted = peptide_table.insert_batch(&peptide_buffer).await?;
+                            peptide_buffer.clear();
+                            peptide_ctr.fetch_add(inserted, Ordering::SeqCst);
+                            inserted_peptides_metric.increment(inserted as u64);
+                            partition_bytes = 0;
+                            buffer_masses.clear();
+                            partition = None;
+                        }
                     }
+
+                    if !metadata_buffer.is_empty() {
+                        metadata_table.insert_batch(&metadata_buffer).await?;
+                        metadata_buffer.clear();
+                    }
+
                     Ok::<_, Error>(mass_partition_map)
                 })
             })
             .collect::<Vec<_>>();
-
-        for partial_mass_index in mass_index.into_iter() {
-            for mass_entry in partial_mass_index.into_iter() {
-                let mut mass_index_entry = Some(mass_entry);
-                loop {
-                    mass_index_entry = match queue.push(mass_index_entry) {
-                        Ok(()) => break,
-                        Err(entry) => {
-                            // check if all threads still running
-                            if digest_and_insertion_threads
-                                .iter()
-                                .any(|thread| thread.is_finished())
-                            {
-                                // find errored_thread and return error
-                                return Err(Self::find_errored_thread(
-                                    digest_and_insertion_threads,
-                                )
-                                .await);
-                            }
-                            entry
-                        }
-                    };
-                }
-                queue_metric.set(queue.len() as f64);
-            }
-        }
-
-        // Send none to signal stop
-        for _ in 0..num_threads.get() {
-            loop {
-                if queue.push(None).is_ok() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
 
         let mut final_mass_to_partitions_map: HashMap<i64, Vec<i64>> = HashMap::new();
 
@@ -457,23 +441,6 @@ impl PeptideTable {
             peptide_ctr.load(std::sync::atomic::Ordering::SeqCst),
             final_mass_to_partitions_map,
         ))
-    }
-
-    #[allow(clippy::type_complexity)]
-    async fn find_errored_thread(
-        threads: Vec<tokio::task::JoinHandle<Result<HashMap<i64, Vec<i64>>, Error>>>,
-    ) -> Error {
-        for thread in threads {
-            if thread.is_finished() {
-                match thread.await {
-                    Ok(Ok(_)) => continue,
-                    Ok(Err(err)) => return err,
-                    Err(_err) => continue,
-                }
-            }
-        }
-
-        Error::NoErroredThread
     }
 
     fn digest_protein(

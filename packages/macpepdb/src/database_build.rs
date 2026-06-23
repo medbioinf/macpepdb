@@ -428,17 +428,12 @@ impl<'a> DatabaseBuild<'a> {
                 crate::peptide_table::INSERTED_PEPTIDES_METRIC,
                 crate::peptide_table::INSERTED_PEPTIDES_METRIC,
             ));
-            tui.add_metric(MetricConfig::gauge(
-                crate::peptide_table::QUEUE_METRIC,
-                crate::peptide_table::QUEUE_METRIC,
-            ));
         }
 
         let mass_to_partitions_map = self.build_db_peptides(protein_access, mass_index).await?;
         if let Some(tui) = &self.tui {
             tui.remove_metric(crate::peptide_table::PROGRESS_METRIC);
             tui.remove_metric(crate::peptide_table::INSERTED_PEPTIDES_METRIC);
-            tui.remove_metric(crate::peptide_table::QUEUE_METRIC);
         }
         let configuration =
             RuntimeConfiguration::new(mass_to_partitions_map, self.protease.as_ref().clone());
@@ -512,7 +507,7 @@ impl<'a> DatabaseBuild<'a> {
                 self.protease.clone(),
                 self.batch_size_limit,
                 self.num_threads,
-                mass_index,
+                Arc::new(mass_index),
             )
             .await?;
         tracing::info!("db peptides = {:.2?} s;", now.elapsed().as_secs_f64(),);

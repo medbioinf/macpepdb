@@ -146,6 +146,26 @@ impl PartialMassIndex {
             + self.indptr.capacity() * std::mem::size_of::<u64>()
             + self.protein_ids.capacity() * std::mem::size_of::<i32>()
     }
+
+    /// Number of distinct masses in this part.
+    pub fn len(&self) -> usize {
+        self.masses.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.masses.is_empty()
+    }
+
+    /// Mass at local index `i` (masses are sorted ascending within a part).
+    pub fn mass_at(&self, i: usize) -> i64 {
+        self.masses[i]
+    }
+
+    /// Protein ids associated with the mass at local index `i`, sliced from the CSR
+    /// buffer (non-copying).
+    pub fn protein_ids_at(&self, i: usize) -> &[i32] {
+        &self.protein_ids[self.indptr[i] as usize..self.indptr[i + 1] as usize]
+    }
 }
 
 pub struct IntoIter {
@@ -210,7 +230,42 @@ impl MassIndex {
     }
 
     fn push(&mut self, part: PartialMassIndex) {
+        // Parts must be pushed in ascending, non-overlapping mass-interval order so that
+        // concatenating their (internally ascending) masses yields a globally ascending
+        // sequence — the concurrent build relies on this for disjoint contiguous partitions.
+        debug_assert!(
+            self.parts
+                .last()
+                .is_none_or(|prev| prev.mass_interval.1 <= part.mass_interval.0),
+            "mass index parts must be pushed in ascending, non-overlapping interval order"
+        );
         self.parts.push(part);
+    }
+
+    pub fn parts(&self) -> &[PartialMassIndex] {
+        &self.parts
+    }
+
+    /// Cumulative mass counts per part (length `num_parts + 1`, last element == [`Self::len`]).
+    /// Used to map a global mass index into `(part, local)` via [`Self::resolve_global`].
+    pub fn part_offsets(&self) -> Vec<usize> {
+        let mut offsets = Vec::with_capacity(self.parts.len() + 1);
+        offsets.push(0);
+        let mut acc = 0;
+        for part in &self.parts {
+            acc += part.len();
+            offsets.push(acc);
+        }
+        offsets
+    }
+
+    /// Resolve a global mass index `g` (`0..self.len()`) to its `(mass, protein_ids)` using
+    /// precomputed `offsets` from [`Self::part_offsets`]. Non-copying.
+    pub fn resolve_global(&self, offsets: &[usize], g: usize) -> (i64, &[i32]) {
+        let part_idx = offsets.partition_point(|&o| o <= g) - 1;
+        let local = g - offsets[part_idx];
+        let part = &self.parts[part_idx];
+        (part.mass_at(local), part.protein_ids_at(local))
     }
 
     pub fn is_empty(&self) -> bool {
@@ -669,6 +724,85 @@ mod tests {
                     protein_id
                 );
             }
+        }
+    }
+
+    /// The concurrent build claims contiguous global mass-index ranges and relies on
+    /// `part_offsets` + `resolve_global` to map a global position to its `(mass, ids)`.
+    /// Verify that across multiple parts the global ordering is strictly ascending
+    /// (so claimed chunks are disjoint contiguous mass ranges) and that `resolve_global`
+    /// returns the same protein-id set as the per-mass `Index` lookup.
+    #[tokio::test]
+    async fn test_resolve_global_over_parts() {
+        let proteins_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("some_human_proteins.uniprot.txt");
+
+        let protease = Arc::new(
+            Protease::by_name(
+                "trypsin",
+                Some(NonZeroUsize::new(6).unwrap()),
+                Some(NonZeroUsize::new(50).unwrap()),
+                Some(2),
+                false,
+            )
+            .unwrap(),
+        );
+
+        let mut buf_reader =
+            tokio::io::BufReader::new(tokio::fs::File::open(proteins_file).await.unwrap());
+        let reader = AsyncReader::new(&mut buf_reader);
+        let proteins = reader
+            .enumerate()
+            .map(|(protein_id, entry)| {
+                Protein::try_from((protein_id as i32, entry.unwrap().entry())).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .await;
+
+        let protein_access: Arc<Box<dyn IsProteinAccess>> = Arc::new(Box::new(
+            InMemoryProteinAccess::with_proteins(proteins.into_iter()),
+        ));
+
+        // Split the mass domain into two adjacent, disjoint intervals -> two parts.
+        let max_mass = max_peptide_mass(protease.max_length());
+        let mid = max_mass / 2;
+        let mut mass_index = MassIndex::with_capacity(2);
+        for interval in [(0, mid), (mid, max_mass)] {
+            mass_index.push(
+                MassIndex::partial_build(
+                    protein_access.clone(),
+                    protease.clone(),
+                    NonZeroUsize::new(4).unwrap(),
+                    interval,
+                )
+                .await
+                .unwrap(),
+            );
+        }
+
+        let total = mass_index.len();
+        assert!(total > 0, "expected a non-empty index for the fixture");
+
+        // part_offsets: cumulative mass counts, last == total.
+        let offsets = mass_index.part_offsets();
+        assert_eq!(offsets.first(), Some(&0));
+        assert_eq!(offsets.last(), Some(&total));
+
+        // Walking global positions 0..total yields strictly ascending masses, and each
+        // resolved id set matches the per-mass Index lookup.
+        let mut prev: Option<i64> = None;
+        for g in 0..total {
+            let (mass, ids) = mass_index.resolve_global(&offsets, g);
+            if let Some(p) = prev {
+                assert!(mass > p, "masses must be strictly ascending across parts");
+            }
+            prev = Some(mass);
+            assert_eq!(ids, &mass_index[mass], "ids mismatch at global index {g}");
         }
     }
 }

@@ -516,7 +516,6 @@ impl TryFrom<Row> for Peptide {
 }
 
 impl Peptide {
-
     pub fn try_from_search_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
             partition: None,
