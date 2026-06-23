@@ -41,6 +41,12 @@ impl AminoAcid {
     pub fn is_canonical(&self) -> bool {
         self.is_canonical
     }
+
+    /// Returns the index in the counts array of a peptide.
+    ///
+    pub fn counts_idx(&self) -> usize {
+        (self.code as u8 - b'A') as usize
+    }
 }
 
 macro_rules! create_const_amino_acids {

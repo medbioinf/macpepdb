@@ -46,8 +46,7 @@ pub trait IsPeptide: Send + Sync {
     fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE];
 
     fn amino_acid_count(&self, amino_acid: &'static AminoAcid) -> u8 {
-        let idx = (amino_acid.code() as u8 - b'A') as usize;
-        self.amino_acid_counts()[idx]
+        self.amino_acid_counts()[amino_acid.counts_idx()]
     }
 
     fn amino_acid_count_by_code(&self, code: char) -> Result<u8, Error> {

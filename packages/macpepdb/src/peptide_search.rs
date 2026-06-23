@@ -57,6 +57,7 @@ use futures::future::BoxFuture;
 use futures::stream::{FuturesUnordered, SelectAll, Stream, StreamExt};
 use itertools::Itertools;
 use metrics::{Counter, counter};
+use postgres_types::ToSql;
 use thiserror::Error;
 use tokio_postgres::Row;
 
@@ -65,8 +66,8 @@ use crate::client::OwnedRowStream;
 use crate::configuration::RuntimeConfiguration;
 use crate::database_build::MassPartitionMap;
 use crate::molecules::WATER_MONO_MASS;
-use crate::peptide::{IsPeptide, Peptidoform};
-use crate::peptide_table::{MASS_COL, PARTITION_COL, PeptideTable, TABLE_NAME};
+use crate::peptide::{IS_SWISS_PROT_BIT, IS_TREMBL_BIT, IsPeptide, Peptidoform};
+use crate::peptide_table::{FLAGS_COLUMN, MASS_COL, PARTITION_COL, PeptideTable, TABLE_NAME};
 // use crate::entities::configuration::Configuration;
 // use crate::entities::peptide::MatchingPeptide;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
@@ -134,6 +135,12 @@ pub trait FilterFunction<T: IsPeptide>: Send + Sync + Display {
     /// * `peptide` - The peptide to check
     ///
     fn is_match(&self, peptide: &T) -> Result<bool, Error>;
+
+    fn to_sql(&self, filters: &mut Vec<String>, params: &mut Vec<Box<dyn ToSql + Sync + Send>>);
+
+    fn to_sql_literal(&self, filters: &mut Vec<String>);
+
+    fn is_sqlable(&self) -> bool;
 }
 
 /// Filters peptides which not are in SwissProt
@@ -146,6 +153,24 @@ where
 {
     fn is_match(&self, peptide: &T) -> Result<bool, Error> {
         Ok(peptide.is_swiss_prot())
+    }
+
+    fn to_sql(&self, filters: &mut Vec<String>, _params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {
+        filters.push(format!(
+            "ascii({FLAGS_COLUMN}) & {} = 1",
+            IS_SWISS_PROT_BIT + 1
+        ))
+    }
+
+    fn to_sql_literal(&self, filters: &mut Vec<String>) {
+        filters.push(format!(
+            "ascii({FLAGS_COLUMN}) & {} = 1",
+            IS_SWISS_PROT_BIT + 1
+        ));
+    }
+
+    fn is_sqlable(&self) -> bool {
+        true
     }
 }
 
@@ -165,6 +190,18 @@ where
 {
     fn is_match(&self, peptide: &T) -> Result<bool, Error> {
         Ok(peptide.is_trembl())
+    }
+
+    fn to_sql(&self, filters: &mut Vec<String>, _params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {
+        filters.push(format!("ascii({FLAGS_COLUMN}) & {} = 2", IS_TREMBL_BIT + 1));
+    }
+
+    fn to_sql_literal(&self, filters: &mut Vec<String>) {
+        filters.push(format!("ascii({FLAGS_COLUMN}) & {} = 2", IS_TREMBL_BIT + 1));
+    }
+
+    fn is_sqlable(&self) -> bool {
+        true
     }
 }
 
@@ -188,6 +225,14 @@ where
     // Returns true if the peptide is distinct (not seen before), false otherwise.
     fn is_match(&self, peptide: &T) -> Result<bool, Error> {
         Ok(self.sequences.insert(peptide.sequence().clone()))
+    }
+
+    fn to_sql(&self, _filters: &mut Vec<String>, _params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {}
+
+    fn to_sql_literal(&self, _filters: &mut Vec<String>) {}
+
+    fn is_sqlable(&self) -> bool {
+        false
     }
 }
 
@@ -259,6 +304,14 @@ where
     fn is_match(&self, peptide: &T) -> Result<bool, Error> {
         Ok(peptide.sequence().first() == Some(&self.amino_acid))
     }
+
+    fn to_sql(&self, _filters: &mut Vec<String>, _params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {}
+
+    fn to_sql_literal(&self, _filters: &mut Vec<String>) {}
+
+    fn is_sqlable(&self) -> bool {
+        false
+    }
 }
 
 impl Display for StartsWithFilterFunction {
@@ -284,6 +337,14 @@ where
 {
     fn is_match(&self, peptide: &T) -> Result<bool, Error> {
         Ok(peptide.sequence().last() == Some(&self.amino_acid))
+    }
+
+    fn to_sql(&self, _filters: &mut Vec<String>, _params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {}
+
+    fn to_sql_literal(&self, _filters: &mut Vec<String>) {}
+
+    fn is_sqlable(&self) -> bool {
+        false
     }
 }
 
@@ -312,6 +373,30 @@ where
     fn is_match(&self, peptide: &T) -> Result<bool, Error> {
         let count = peptide.amino_acid_count_by_bit_code(self.amino_acid);
         Ok(count == self.amount)
+    }
+
+    fn to_sql(&self, filters: &mut Vec<String>, params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {
+        filters.push(format!(
+            "get_byte(amino_acid_counts, ${}) = ${}",
+            params.len() + 1,
+            params.len() + 2
+        ));
+        params.push(Box::new(
+            AminoAcid::by_bit_code(&self.amino_acid).counts_idx() as i32,
+        ));
+        params.push(Box::new(self.amount as i32));
+    }
+
+    fn to_sql_literal(&self, filters: &mut Vec<String>) {
+        filters.push(format!(
+            "get_byte(amino_acid_counts, {}) = {}",
+            AminoAcid::by_bit_code(&self.amino_acid).counts_idx(),
+            self.amount
+        ));
+    }
+
+    fn is_sqlable(&self) -> bool {
+        true
     }
 }
 
@@ -342,6 +427,30 @@ where
         let count = peptide.amino_acid_count_by_bit_code(self.amino_acid);
         Ok(count >= self.amount)
     }
+
+    fn to_sql(&self, filters: &mut Vec<String>, params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {
+        filters.push(format!(
+            "get_byte(amino_acid_counts, ${}) >= ${}",
+            params.len() + 1,
+            params.len() + 2
+        ));
+        params.push(Box::new(
+            AminoAcid::by_bit_code(&self.amino_acid).counts_idx() as i32,
+        ));
+        params.push(Box::new(self.amount as i32));
+    }
+
+    fn to_sql_literal(&self, filters: &mut Vec<String>) {
+        filters.push(format!(
+            "get_byte(amino_acid_counts, {}) >= {}",
+            AminoAcid::by_bit_code(&self.amino_acid).counts_idx(),
+            self.amount
+        ));
+    }
+
+    fn is_sqlable(&self) -> bool {
+        true
+    }
 }
 
 impl Display for GreaterOrEqualsNumberOfOccurrencesFilterFunction {
@@ -369,6 +478,29 @@ where
     fn is_match(&self, peptide: &T) -> Result<bool, Error> {
         let count = peptide.amino_acid_count_by_bit_code(self.amino_acid);
         Ok(count == 0)
+    }
+
+    fn to_sql(&self, filters: &mut Vec<String>, params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {
+        filters.push(format!(
+            "get_byte(amino_acid_counts, ${}) = ${}",
+            params.len() + 1,
+            params.len() + 2
+        ));
+        params.push(Box::new(
+            AminoAcid::by_bit_code(&self.amino_acid).counts_idx() as i32,
+        ));
+        params.push(Box::new(0_i32));
+    }
+
+    fn to_sql_literal(&self, filters: &mut Vec<String>) {
+        filters.push(format!(
+            "get_byte(amino_acid_counts, {}) = 0",
+            AminoAcid::by_bit_code(&self.amino_acid).counts_idx(),
+        ));
+    }
+
+    fn is_sqlable(&self) -> bool {
+        true
     }
 }
 
@@ -442,6 +574,16 @@ where
     pub fn is_empty(&self) -> bool {
         self.filter_functions.is_empty()
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &Box<dyn FilterFunction<T>>> {
+        self.filter_functions.iter()
+    }
+
+    pub fn remove_sqlable_filters(&mut self) {
+        self.filter_functions
+            .retain(|filter_fn| !filter_fn.is_sqlable());
+        self.filter_functions.shrink_to_fit();
+    }
 }
 
 impl<T> Display for FilterPipeline<T>
@@ -493,7 +635,7 @@ struct ConditionalPeptideStream {
 impl ConditionalPeptideStream {
     pub async fn new(
         client: Arc<Client>,
-        condition: PeptideCondition,
+        mut condition: PeptideCondition,
         resolve_modification: bool,
         agg: Arc<SearchTimingAgg>,
     ) -> Result<Self, Error> {
@@ -501,15 +643,28 @@ impl ConditionalPeptideStream {
         // at plan time only for an inlined query — a parameterized distributed query
         // re-plans every execute (~11 ms) and cannot use a cached generic plan.
         let num_partitions = condition.partitions().len() as u64;
-        let where_clause = format!(
-            "WHERE partition = ANY(ARRAY[{}]::bigint[]) AND mass >= {} AND mass <= {}",
-            condition.partitions().iter().join(","),
-            condition.lower_mass(),
-            condition.upper_mass(),
-        );
+
+        let mut filters = vec![
+            format!(
+                "{PARTITION_COL} = ANY(ARRAY[{}]::bigint[])",
+                condition.partitions().iter().join(",")
+            ),
+            format!("{MASS_COL} >= {}", condition.lower_mass()),
+            format!("{MASS_COL} <= {}", condition.upper_mass()),
+        ];
+        for filter_fn in condition.filter_pipeline().iter() {
+            filter_fn.to_sql_literal(&mut filters);
+        }
+        condition.remove_sqlable_filters();
+
+        let where_clause = format!("WHERE {}", filters.join(" AND "));
+
         let setup_start = std::time::Instant::now();
-        let inner: BoxedPeptideRowStream =
-            Box::pin(PeptideTable::new(client).select_inline(&where_clause).await?);
+        let inner: BoxedPeptideRowStream = Box::pin(
+            PeptideTable::new(client)
+                .select_inline(&where_clause)
+                .await?,
+        );
         agg.record_setup(setup_start.elapsed().as_micros() as u64, num_partitions);
         Ok(Self {
             resolve_modification,
@@ -605,8 +760,13 @@ impl FallibleMatchingPeptideStream {
             let client_clone = client.clone();
             let agg_clone = agg.clone();
             pending.push(Box::pin(async move {
-                ConditionalPeptideStream::new(client_clone, condition, resolve_modifications, agg_clone)
-                    .await
+                ConditionalPeptideStream::new(
+                    client_clone,
+                    condition,
+                    resolve_modifications,
+                    agg_clone,
+                )
+                .await
             }));
         }
 
@@ -826,7 +986,7 @@ impl UnionAllFallibleMatchingPeptideStream {
     pub async fn new(
         client: Arc<Client>,
         filter_pipeline: FilterPipeline<Peptidoform>,
-        conditions: Vec<PeptideCondition>,
+        mut conditions: Vec<PeptideCondition>,
         resolve_modifications: bool,
     ) -> Result<Self, Error> {
         // One UNION ALL branch per condition (a mass range over its partition set), with
@@ -834,16 +994,24 @@ impl UnionAllFallibleMatchingPeptideStream {
         // shards + columnar chunk groups at plan time; a parameterized distributed query
         // cannot (Citus errors on a generic plan and re-plans every execute).
         let statement = conditions
-            .iter()
+            .iter_mut()
             .enumerate()
             .map(|(condition_idx, condition)| {
+                let mut filters = vec![
+                    format!(
+                        "{PARTITION_COL} = ANY(ARRAY[{}]::bigint[])",
+                        condition.partitions().iter().join(",")
+                    ),
+                    format!("{MASS_COL} >= {}", condition.lower_mass()),
+                    format!("{MASS_COL} <= {}", condition.upper_mass()),
+                ];
+                for filter_fn in condition.filter_pipeline().iter() {
+                    filter_fn.to_sql_literal(&mut filters);
+                }
+                condition.remove_sqlable_filters();
+
                 format!(
-                    "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {SEARCH_COLUMNS} FROM {TABLE_NAME} \
-                     WHERE {PARTITION_COL} = ANY(ARRAY[{}]::bigint[]) \
-                     AND {MASS_COL} >= {} AND {MASS_COL} <= {}",
-                    condition.partitions().iter().join(","),
-                    condition.lower_mass(),
-                    condition.upper_mass(),
+                    "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {SEARCH_COLUMNS} FROM {TABLE_NAME} WHERE {}", filters.join(" AND ")
                 )
             })
             .join(" UNION ALL ");
@@ -1972,6 +2140,10 @@ impl PeptideCondition {
 
     pub fn upper_mass(&self) -> i64 {
         self.upper_mass
+    }
+
+    pub fn remove_sqlable_filters(&mut self) {
+        self.filter_pipeline.remove_sqlable_filters()
     }
 }
 

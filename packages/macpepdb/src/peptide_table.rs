@@ -50,6 +50,8 @@ pub const PARTITION_COL: &str = "partition";
 
 pub const MASS_COL: &str = "mass";
 
+pub const FLAGS_COLUMN: &str = "flags";
+
 pub const COLUMNS: &str = "partition, mass, sequence, amino_acid_counts, metadata_id, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
 
 static COPY_STATEMENT: LazyLock<String> =
