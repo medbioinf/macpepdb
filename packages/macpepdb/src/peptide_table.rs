@@ -44,10 +44,16 @@ const MAX_PARTITION_BYTES: usize = 256 * 1024 * 1024;
 /// Newly-interned `peptide_metadata` rows are COPYed in batches of this size per worker.
 const METADATA_FLUSH_ROWS: usize = 8192;
 
-/// Target number of mass chunks each build worker claims from the shared cursor. Smaller
-/// chunks balance load better but inflate the partition count via per-chunk underfilled
-/// tails; this value keeps that inflation to a few percent while staying well-balanced.
-const CHUNKS_PER_THREAD: usize = 24;
+/// Protein associations a build worker claims per contiguous mass chunk. Sizing claims by
+/// associations (not mass count) makes each chunk ~equal *work* — digestion cost is roughly
+/// proportional to associations — which keeps worker run lengths even and avoids the
+/// heavy-chunk tail a fixed mass-count claim suffers under skewed per-mass work.
+///
+/// Each chunk flushes its (possibly partial) trailing partition at the chunk boundary, so
+/// the chunk count (`total_associations / this`) bounds the extra underfilled partitions.
+/// Larger ⇒ fuller partitions / lower search fan-out but a longer tail; smaller ⇒ shorter
+/// tail but more partitions. A few × `STRIPE_ROW_LIMIT` keeps both comfortably in range.
+const TARGET_ASSOCIATIONS_PER_CLAIM: u64 = 16 * STRIPE_ROW_LIMIT as u64;
 
 pub const PARTITION_COL: &str = "partition";
 
@@ -255,13 +261,12 @@ impl PeptideTable {
         // shared cursor (instead of interleaving a shared per-mass queue). Each chunk is
         // digested ascending into one or more partitions and the buffer is flushed at the
         // chunk boundary, so every partition covers a disjoint contiguous mass range — which
-        // collapses search-time partition fan-out. `claim_size` targets ~CHUNKS_PER_THREAD
-        // chunks per worker: small enough for dynamic load balancing, large enough that the
-        // per-chunk underfilled tail inflates the partition count by only a few percent.
+        // collapses search-time partition fan-out. Chunks are sized by protein associations
+        // (~equal work per chunk) rather than mass count, so per-mass work skew can't strand
+        // a worker on one heavy chunk while the rest idle.
         let total_masses = mass_index.len();
         let part_offsets = Arc::new(mass_index.part_offsets());
         let cursor = Arc::new(AtomicUsize::new(0));
-        let claim_size = (total_masses / (CHUNKS_PER_THREAD * num_threads.get())).max(1);
 
         let digest_and_insertion_threads = (0..num_threads.get())
             .map(|_| {
@@ -292,11 +297,25 @@ impl PeptideTable {
                     let mut buffer_masses: HashSet<i64> = HashSet::new();
 
                     loop {
-                        let start = cursor.fetch_add(claim_size, Ordering::Relaxed);
+                        // Claim a work-balanced contiguous chunk: the mass range starting at
+                        // `start` that carries ~TARGET_ASSOCIATIONS_PER_CLAIM associations.
+                        // `claim_end` is a pure function of `start`, so the CAS only decides
+                        // which worker wins this chunk; losers retry with the advanced cursor.
+                        let start = cursor.load(Ordering::Relaxed);
                         if start >= total_masses {
                             break;
                         }
-                        let end = (start + claim_size).min(total_masses);
+                        let end = mass_index.claim_end(
+                            &part_offsets,
+                            start,
+                            TARGET_ASSOCIATIONS_PER_CLAIM,
+                        );
+                        if cursor
+                            .compare_exchange_weak(start, end, Ordering::Relaxed, Ordering::Relaxed)
+                            .is_err()
+                        {
+                            continue;
+                        }
 
                         // Digest the claimed mass range in ascending order so each stripe is
                         // mass-sorted (tight columnar chunk-group pruning at search time).

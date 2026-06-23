@@ -51,7 +51,7 @@ const _: () = {
 };
 
 impl MassPidPair {
-    pub const SIZE: usize = 96;
+    pub const SIZE: usize = std::mem::size_of::<Self>();
 
     #[inline]
     fn new(mass: i64, pid: i32) -> Self {
@@ -266,6 +266,28 @@ impl MassIndex {
         let local = g - offsets[part_idx];
         let part = &self.parts[part_idx];
         (part.mass_at(local), part.protein_ids_at(local))
+    }
+
+    /// Smallest global mass index strictly greater than `start` whose masses (starting at
+    /// `start`) carry at least `target_associations` protein associations, clamped to the
+    /// end of `start`'s part.
+    ///
+    /// Build workers claim contiguous chunks `[start, claim_end(start))` so each chunk does
+    /// roughly equal *work* — digestion cost is ~proportional to the number of protein
+    /// associations, not the mass count — which keeps the per-worker run lengths even and
+    /// avoids a heavy-chunk tail. It reads each part's `indptr` (already a cumulative
+    /// association count) directly, so no global prefix-sum is needed. Always advances by at
+    /// least one mass so the claim cursor makes progress.
+    pub fn claim_end(&self, offsets: &[usize], start: usize, target_associations: u64) -> usize {
+        let part_idx = offsets.partition_point(|&o| o <= start) - 1;
+        let part = &self.parts[part_idx];
+        let local_start = start - offsets[part_idx];
+        let goal = part.indptr[local_start] + target_associations;
+        let local_end = part
+            .indptr
+            .partition_point(|&cumulative| cumulative < goal)
+            .clamp(local_start + 1, part.len());
+        offsets[part_idx] + local_end
     }
 
     pub fn is_empty(&self) -> bool {
@@ -510,7 +532,7 @@ impl MassIndex {
             .map_err(|err| Error::Join(err.to_string()))??;
 
         tracing::info!(
-            "Build for interval [{}, {}) produced {} pairs ({}, MB) in {:}s",
+            "Build for interval [{}, {}) produced {} pairs ({} MB) in {:}s",
             mass_to_float(mass_interval.0),
             mass_to_float(mass_interval.1),
             pairs.len(),
@@ -804,5 +826,18 @@ mod tests {
             prev = Some(mass);
             assert_eq!(ids, &mass_index[mass], "ids mismatch at global index {g}");
         }
+
+        // The build's claim cursor walks `claim_end` from 0; the chunks it produces must
+        // tile [0, total) exactly — contiguous, gap-free, disjoint — or partitions would
+        // overlap in mass. Use a small association target to force many chunks.
+        let target = 500u64;
+        let mut pos = 0usize;
+        while pos < total {
+            let end = mass_index.claim_end(&offsets, pos, target);
+            assert!(end > pos, "claim must advance past {pos}");
+            assert!(end <= total, "claim {end} must not exceed total {total}");
+            pos = end;
+        }
+        assert_eq!(pos, total, "claims must cover the whole index with no gap");
     }
 }
