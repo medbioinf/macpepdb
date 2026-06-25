@@ -31,7 +31,7 @@ static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
 const PID_BLOCK_ASSOCIATIONS: usize = 150_000;
 /// zstd level for the on-disk `protein_ids` blocks — read back during the digestion-bound stage 3,
 /// so a fast level is plenty; the win is fewer disk bytes.
-const ZSTD_PID_LEVEL: i32 = 3;
+const ZSTD_PID_LEVEL: i32 = 1;
 
 /// Generic margin biasing the bucket count toward more/smaller buckets so estimate error pushes
 /// buckets *under* the sort budget rather than over. Not protease-specific.
