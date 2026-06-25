@@ -398,14 +398,19 @@ impl<'a> DatabaseBuild<'a> {
         // 2. step create mass to protein index
         if let Some(tui) = &self.tui {
             tui.add_metric(MetricConfig::progress(
-                crate::mass_index::PARTIAL_PROGRESS_METRIC,
-                crate::mass_index::PARTIAL_PROGRESS_METRIC,
+                crate::mass_index::SCATTER_PROGRESS_METRIC,
+                crate::mass_index::SCATTER_PROGRESS_METRIC,
                 protein_ctr as f64,
+            ));
+            tui.add_metric(MetricConfig::counter(
+                crate::mass_index::FINALIZE_PROGRESS_METRIC,
+                crate::mass_index::FINALIZE_PROGRESS_METRIC,
             ));
         }
         let mass_index = self.build_db_mass_index(protein_access.clone()).await?;
         if let Some(tui) = &self.tui {
-            tui.remove_metric(crate::mass_index::PARTIAL_PROGRESS_METRIC);
+            tui.remove_metric(crate::mass_index::SCATTER_PROGRESS_METRIC);
+            tui.remove_metric(crate::mass_index::FINALIZE_PROGRESS_METRIC);
         }
 
         // 5. go through masses and digest the proteins collect distinct peptides and upsert them with proteins

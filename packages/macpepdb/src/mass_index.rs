@@ -1,6 +1,5 @@
 use std::{
     fs::File,
-    hash::Hash,
     io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
     num::NonZeroUsize,
     path::{Path, PathBuf},
@@ -21,7 +20,12 @@ use crate::{
     molecules::WATER_MONO_MASS, protease::Protease, protein::Protein,
 };
 
-pub static PARTIAL_PROGRESS_METRIC: &str = "mass_index::partial_progress::processed_proteins";
+/// Progress of the scatter (digestion) pass: proteins cleaved, out of the total protein count.
+pub static SCATTER_PROGRESS_METRIC: &str = "mass_index::scatter::processed_proteins";
+/// Progress of the finalize pass: associations written to the on-disk pid store. Registered as a
+/// counter (the total isn't known until finalize runs), so it shows a live count + rate while the
+/// scatter bar sits at 100%.
+pub static FINALIZE_PROGRESS_METRIC: &str = "mass_index::finalize::associations";
 
 /// Per digest-worker pair buffer before it is flushed to the collector (~100 MB).
 static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
@@ -101,15 +105,6 @@ impl MassPidPair {
     }
 }
 
-impl Eq for MassPidPair {}
-
-impl Hash for MassPidPair {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.mass().hash(state);
-        self.pid().hash(state);
-    }
-}
-
 impl PartialEq for MassPidPair {
     fn eq(&self, other: &Self) -> bool {
         self.mass() == other.mass() && self.pid() == other.pid()
@@ -169,12 +164,10 @@ fn bytes_to_i32_vec(bytes: &[u8]) -> Vec<i32> {
 /// Read every `MassPidPair` out of a bucket file into memory. Only called on buckets that fit the
 /// budget (oversized buckets are handled by `restream_into_subbuckets` without a full load).
 fn read_pairs(path: &Path) -> Result<Vec<MassPidPair>, Error> {
-    let bytes = std::fs::read(path)?;
-    let n = bytes.len() / MassPidPair::SIZE;
-    let mut pairs = Vec::with_capacity(n);
-    for chunk in bytes.chunks_exact(MassPidPair::SIZE) {
-        pairs.push(MassPidPair::read_from_bytes(chunk).expect("12-byte chunk is a MassPidPair"));
-    }
+    let mut file = File::open(path)?;
+    let n = file.metadata()?.len() as usize / MassPidPair::SIZE;
+    let mut pairs = vec![MassPidPair::new(0, 0); n];
+    file.read_exact(pairs.as_mut_slice().as_mut_bytes())?;
     Ok(pairs)
 }
 
@@ -457,6 +450,8 @@ impl MassIndex {
         let mut indptr: Vec<u64> = vec![0u64];
         let mut pid_writer = PidStoreWriter::create(pids_path(&dir), PID_BLOCK_ASSOCIATIONS)?;
         let mut subspill_count = 0usize;
+        let finalize_metric = metrics::counter!(FINALIZE_PROGRESS_METRIC);
+        finalize_metric.absolute(0);
 
         for bucket in 0..num_buckets {
             let lo = bucket as i64 * bucket_width;
@@ -471,6 +466,7 @@ impl MassIndex {
                 &mut indptr,
                 &mut pid_writer,
                 &mut subspill_count,
+                &finalize_metric,
             )?;
         }
 
@@ -480,7 +476,7 @@ impl MassIndex {
 
         if subspill_count > 0 {
             tracing::warn!(
-                "Mass index sub-spill fired on {} bucket(s): the pairs estimate under-provisioned bucket sizes. Correctness is unaffected; a larger memory budget would avoid the extra disk passes.",
+                "Mass index sub-spill fired on {} bucket(s): mass skew made some equal-width bands exceed the sort budget (independent of estimate accuracy). Correctness is unaffected; finer initial bands (a larger BUCKET_MARGIN) would reduce the extra disk passes.",
                 subspill_count
             );
         }
@@ -515,8 +511,10 @@ async fn scatter(
     let protein_queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
         Arc::new(ArrayQueue::new(num_threads.get() * 3));
     let pair_queue: PairQueue = Arc::new(ArrayQueue::new(num_threads.get()));
-    let partial_progress_metric = Arc::new(metrics::counter!(PARTIAL_PROGRESS_METRIC));
-    partial_progress_metric.absolute(0);
+    let scatter_progress_metric = Arc::new(metrics::counter!(SCATTER_PROGRESS_METRIC));
+    scatter_progress_metric.absolute(0);
+
+    let mut proteins = protein_access.all().await?;
 
     let collector_task = {
         let pair_queue = pair_queue.clone();
@@ -556,13 +554,11 @@ async fn scatter(
         })
     };
 
-    let mut proteins = protein_access.all().await?;
-
     let digest_threads = (0..num_threads.get())
         .map(|_| {
             let protease = protease.clone();
             let protein_queue = protein_queue.clone();
-            let partial_progress_metric = partial_progress_metric.clone();
+            let scatter_progress_metric = scatter_progress_metric.clone();
             let pair_queue = pair_queue.clone();
 
             tokio::spawn(async move {
@@ -603,7 +599,7 @@ async fn scatter(
                         }
                     }
 
-                    partial_progress_metric.increment(1);
+                    scatter_progress_metric.increment(1);
                 }
 
                 let mut batch = Some(local_pairs);
@@ -622,13 +618,26 @@ async fn scatter(
         })
         .collect::<Vec<_>>();
 
-    while let Some(protein) = proteins.next().await.transpose()? {
+    loop {
+        let protein = match proteins.next().await {
+            Some(Ok(protein)) => protein,
+            Some(Err(err)) => {
+                collector_task.abort();
+                for thread in &digest_threads {
+                    thread.abort();
+                }
+                return Err(err.into());
+            }
+            None => break,
+        };
+
         let mut protein = Some(protein);
         loop {
             protein = match protein_queue.push(protein) {
                 Ok(()) => break,
                 Err(entry) => {
                     if digest_threads.iter().any(|thread| thread.is_finished()) {
+                        collector_task.abort();
                         return Err(find_errored_thread(digest_threads).await);
                     }
                     entry
@@ -648,7 +657,17 @@ async fn scatter(
     }
 
     for thread in digest_threads {
-        thread.await.map_err(|err| Error::Join(err.to_string()))??;
+        match thread.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                collector_task.abort();
+                return Err(err);
+            }
+            Err(err) => {
+                collector_task.abort();
+                return Err(Error::Join(err.to_string()));
+            }
+        }
     }
 
     // Signal stop to the collector.
@@ -683,6 +702,7 @@ fn finalize_bucket(
     indptr: &mut Vec<u64>,
     pid_writer: &mut PidStoreWriter,
     subspill_count: &mut usize,
+    finalize_metric: &metrics::Counter,
 ) -> Result<(), Error> {
     let (lo, hi) = range;
     // A bucket that received no pairs is never created by the scatter collector.
@@ -713,6 +733,7 @@ fn finalize_bucket(
                 indptr,
                 pid_writer,
                 subspill_count,
+                finalize_metric,
             )?;
         }
         return Ok(());
@@ -741,6 +762,7 @@ fn finalize_bucket(
         pid_writer.push(pair.pid())?;
     }
 
+    finalize_metric.increment(pairs.len() as u64);
     Ok(())
 }
 
@@ -845,16 +867,21 @@ async fn estimate_pairs_per_protein(
 }
 
 async fn find_errored_thread(threads: Vec<tokio::task::JoinHandle<Result<(), Error>>>) -> Error {
+    let mut found = None;
     for thread in threads {
         if thread.is_finished() {
             match thread.await {
-                Ok(Ok(())) => continue,
-                Ok(Err(err)) => return err,
-                Err(_err) => continue,
+                Ok(Ok(())) => {}
+                Ok(Err(err)) => {
+                    found.get_or_insert(err);
+                }
+                Err(_err) => {}
             }
+        } else {
+            thread.abort();
         }
     }
-    Error::NoErroredThread
+    found.unwrap_or(Error::NoErroredThread)
 }
 
 #[cfg(test)]
