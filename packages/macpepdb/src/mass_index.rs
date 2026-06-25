@@ -4,12 +4,11 @@ use std::{
     num::NonZeroUsize,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
 };
 
-use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
+use tokio::sync::mpsc;
 
 use rayon::prelude::ParallelSliceMut;
 use thiserror::Error;
@@ -29,6 +28,9 @@ pub static FINALIZE_PROGRESS_METRIC: &str = "mass_index::finalize::associations"
 
 /// Per digest-worker pair buffer before it is flushed to the collector (~100 MB).
 static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
+/// Per-worker protein channel depth (proteins are `Arc` pointers, so this is cheap RAM); bounds how
+/// far the feeder may run ahead of a worker before backpressure kicks in.
+const PROTEIN_CHANNEL_CAP: usize = 64;
 
 /// Associations per compressed `pids` block. Independent of (but chosen to mirror) the columnar
 /// stripe size so a block is a natural unit; a worker decompresses only the blocks its claim spans.
@@ -121,15 +123,11 @@ pub enum Error {
     MissingProteinId,
     #[error("Unable to build rayon thread pool for sorting: {0}")]
     SortThreadPool(rayon::ThreadPoolBuildError),
-    #[error("No errored thread found in mass index, but one finished early.")]
-    NoErroredThread,
     #[error("Protease error in mass index: {0}")]
     Protease(#[from] crate::protease::Error),
     #[error("Protein access error in mass index: {0}")]
     ProteinAccess(#[from] crate::database_build::Error),
 }
-
-type PairQueue = Arc<ArrayQueue<Option<Vec<MassPidPair>>>>;
 
 fn bucket_path(dir: &Path, bucket: usize) -> PathBuf {
     dir.join(format!("bucket_{bucket}.bin"))
@@ -508,32 +506,22 @@ async fn scatter(
     num_buckets: usize,
     scatter_flush_pairs: usize,
 ) -> Result<(), Error> {
-    let protein_queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
-        Arc::new(ArrayQueue::new(num_threads.get() * 3));
-    let pair_queue: PairQueue = Arc::new(ArrayQueue::new(num_threads.get()));
+    let n = num_threads.get();
     let scatter_progress_metric = Arc::new(metrics::counter!(SCATTER_PROGRESS_METRIC));
     scatter_progress_metric.absolute(0);
 
     let mut proteins = protein_access.all().await?;
 
-    let collector_task = {
-        let pair_queue = pair_queue.clone();
+    // Pairs: every digest worker -> one collector (mpsc fits N producers -> 1 consumer). The
+    // collector buffers per bucket and flushes via append; the channel closing (all worker senders
+    // dropped) is the EOF signal. A bucket that receives no pairs is never created — finalize
+    // treats a missing file as empty.
+    let (pair_tx, mut pair_rx) = mpsc::channel::<Vec<MassPidPair>>(n);
+    let collector = {
+        let dir = dir.clone();
         tokio::spawn(async move {
-            // Buffer per bucket in RAM (total bounded by the budget); flush via open/append/close
-            // so open FDs stay ~1 regardless of bucket count. A bucket that receives no pairs is
-            // simply never created — finalize treats a missing file as empty.
             let mut buffers: Vec<Vec<MassPidPair>> = (0..num_buckets).map(|_| Vec::new()).collect();
-
-            loop {
-                let batch = match pair_queue.pop() {
-                    Some(Some(batch)) => batch,
-                    Some(None) => break,
-                    None => {
-                        tokio::time::sleep(Duration::from_millis(50)).await;
-                        continue;
-                    }
-                };
-
+            while let Some(batch) = pair_rx.recv().await {
                 for pair in batch {
                     let idx = ((pair.mass() / bucket_width) as usize).min(num_buckets - 1);
                     let buf = &mut buffers[idx];
@@ -544,7 +532,6 @@ async fn scatter(
                     }
                 }
             }
-
             for (idx, buf) in buffers.iter().enumerate() {
                 if !buf.is_empty() {
                     append_pairs(&bucket_path(&dir, idx), buf)?;
@@ -554,138 +541,96 @@ async fn scatter(
         })
     };
 
-    let digest_threads = (0..num_threads.get())
-        .map(|_| {
-            let protease = protease.clone();
-            let protein_queue = protein_queue.clone();
-            let scatter_progress_metric = scatter_progress_metric.clone();
-            let pair_queue = pair_queue.clone();
-
-            tokio::spawn(async move {
-                let mut local_pairs: Vec<MassPidPair> = Vec::with_capacity(LOCAL_MASS_LIMIT);
-
-                loop {
-                    let protein = match protein_queue.pop() {
-                        Some(Some(protein)) => protein,
-                        Some(None) => break,
-                        None => {
-                            tokio::time::sleep(Duration::from_millis(50)).await;
-                            continue;
-                        }
-                    };
-
-                    let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
-
-                    protease
-                        .cleave_masses_only(protein.sequence().as_ref())
-                        .for_each(|mass| {
-                            local_pairs.push(MassPidPair::new(mass, protein_id));
-                            Ok(())
-                        })?;
-
-                    if local_pairs.len() >= LOCAL_MASS_LIMIT {
-                        let mut batch = Some(std::mem::replace(
-                            &mut local_pairs,
-                            Vec::with_capacity(LOCAL_MASS_LIMIT),
-                        ));
-                        loop {
-                            batch = match pair_queue.push(batch) {
-                                Ok(()) => break,
-                                Err(errored_batch) => {
-                                    tokio::time::sleep(Duration::from_millis(50)).await;
-                                    errored_batch
-                                }
-                            };
-                        }
+    // Proteins: one feeder -> N workers. mpsc is single-consumer, so each worker gets its own
+    // bounded channel and the feeder round-robins into them. The bounded channel applies
+    // backpressure (the feeder awaits when a worker is behind) without any polling.
+    let mut worker_txs: Vec<mpsc::Sender<Arc<Protein>>> = Vec::with_capacity(n);
+    let mut workers = Vec::with_capacity(n);
+    for _ in 0..n {
+        let (tx, mut rx) = mpsc::channel::<Arc<Protein>>(PROTEIN_CHANNEL_CAP);
+        worker_txs.push(tx);
+        let protease = protease.clone();
+        let pair_tx = pair_tx.clone();
+        let scatter_progress_metric = scatter_progress_metric.clone();
+        workers.push(tokio::spawn(async move {
+            let mut local: Vec<MassPidPair> = Vec::with_capacity(LOCAL_MASS_LIMIT);
+            while let Some(protein) = rx.recv().await {
+                let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
+                protease
+                    .cleave_masses_only(protein.sequence().as_ref())
+                    .for_each(|mass| {
+                        local.push(MassPidPair::new(mass, protein_id));
+                        Ok(())
+                    })?;
+                if local.len() >= LOCAL_MASS_LIMIT {
+                    let batch = std::mem::replace(&mut local, Vec::with_capacity(LOCAL_MASS_LIMIT));
+                    // Collector gone (it errored) -> stop; its error surfaces when we join below.
+                    if pair_tx.send(batch).await.is_err() {
+                        return Ok(());
                     }
-
-                    scatter_progress_metric.increment(1);
                 }
-
-                let mut batch = Some(local_pairs);
-                loop {
-                    batch = match pair_queue.push(batch) {
-                        Ok(()) => break,
-                        Err(errored_batch) => {
-                            tokio::time::sleep(Duration::from_millis(50)).await;
-                            errored_batch
-                        }
-                    };
-                }
-
-                Ok::<_, Error>(())
-            })
-        })
-        .collect::<Vec<_>>();
-
-    loop {
-        let protein = match proteins.next().await {
-            Some(Ok(protein)) => protein,
-            Some(Err(err)) => {
-                collector_task.abort();
-                for thread in &digest_threads {
-                    thread.abort();
-                }
-                return Err(err.into());
+                scatter_progress_metric.increment(1);
             }
-            None => break,
-        };
-
-        let mut protein = Some(protein);
-        loop {
-            protein = match protein_queue.push(protein) {
-                Ok(()) => break,
-                Err(entry) => {
-                    if digest_threads.iter().any(|thread| thread.is_finished()) {
-                        collector_task.abort();
-                        return Err(find_errored_thread(digest_threads).await);
-                    }
-                    entry
-                }
-            };
-        }
+            if !local.is_empty() {
+                let _ = pair_tx.send(local).await;
+            }
+            Ok::<_, Error>(())
+        }));
     }
+    // Drop the original pair sender so the collector's channel closes once all workers finish.
+    drop(pair_tx);
 
-    // Signal stop to digest workers.
-    for _ in 0..num_threads.get() {
-        loop {
-            if protein_queue.push(None).is_ok() {
+    // Feed proteins round-robin. A send error means that worker stopped early (it errored, or the
+    // collector died and it returned) — stop feeding; the real error is collected on join below.
+    let mut next = 0usize;
+    let mut feed_err: Option<Error> = None;
+    loop {
+        match proteins.next().await {
+            Some(Ok(protein)) => {
+                if worker_txs[next].send(protein).await.is_err() {
+                    break;
+                }
+                next = (next + 1) % n;
+            }
+            Some(Err(err)) => {
+                feed_err = Some(err.into());
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(100)).await;
+            None => break,
         }
     }
 
-    for thread in digest_threads {
-        match thread.await {
+    // Close the protein channels so workers drain their queue and exit (no sentinels). Dropping the
+    // senders guarantees every worker — and then, once their pair senders drop, the collector —
+    // terminates, so nothing is left running on any path.
+    drop(worker_txs);
+
+    let mut first_err = feed_err;
+    for worker in workers {
+        match worker.await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
-                collector_task.abort();
-                return Err(err);
+                first_err.get_or_insert(err);
             }
             Err(err) => {
-                collector_task.abort();
-                return Err(Error::Join(err.to_string()));
+                first_err.get_or_insert(Error::Join(err.to_string()));
             }
         }
     }
-
-    // Signal stop to the collector.
-    loop {
-        match pair_queue.push(None) {
-            Ok(()) => break,
-            Err(_) => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
+    match collector.await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            first_err.get_or_insert(err);
+        }
+        Err(err) => {
+            first_err.get_or_insert(Error::Join(err.to_string()));
         }
     }
 
-    collector_task
-        .await
-        .map_err(|err| Error::Join(err.to_string()))??;
-
-    Ok(())
+    match first_err {
+        Some(err) => Err(err),
+        None => Ok(()),
+    }
 }
 
 /// Finalize one bucket file into the global metadata + on-disk pid store. If the bucket is larger
@@ -864,24 +809,6 @@ async fn estimate_pairs_per_protein(
         prev = Some(est);
         sample_size = (sample_size * 4).min(total);
     }
-}
-
-async fn find_errored_thread(threads: Vec<tokio::task::JoinHandle<Result<(), Error>>>) -> Error {
-    let mut found = None;
-    for thread in threads {
-        if thread.is_finished() {
-            match thread.await {
-                Ok(Ok(())) => {}
-                Ok(Err(err)) => {
-                    found.get_or_insert(err);
-                }
-                Err(_err) => {}
-            }
-        } else {
-            thread.abort();
-        }
-    }
-    found.unwrap_or(Error::NoErroredThread)
 }
 
 #[cfg(test)]
