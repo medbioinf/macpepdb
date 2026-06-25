@@ -36,7 +36,9 @@ const ZSTD_PID_LEVEL: i32 = 3;
 /// Generic margin biasing the bucket count toward more/smaller buckets so estimate error pushes
 /// buckets *under* the sort budget rather than over. Not protease-specific.
 const BUCKET_MARGIN: f64 = 1.3;
-/// Cap on bucket count so the scatter write-buffers (`K × flush`) stay bounded.
+/// Cap on bucket count so the scatter write-buffers (`K × flush`) stay bounded. Does NOT bound
+/// total data: a dataset larger than `MAX_BUCKETS × budget` is handled by the sub-spill guard.
+/// It is not an FD limit either — the collector opens at most one bucket file at a time.
 const MAX_BUCKETS: usize = 4096;
 /// Bounds for a single bucket's scatter write-buffer (in pairs).
 const MIN_FLUSH_PAIRS: usize = 4096;
@@ -140,6 +142,19 @@ fn bucket_path(dir: &Path, bucket: usize) -> PathBuf {
 
 fn pids_path(dir: &Path) -> PathBuf {
     dir.join("pids.zst")
+}
+
+/// Append packed pairs to a bucket file, opening and closing it per call. This keeps the scatter's
+/// open file-descriptor count at ~1 regardless of how many buckets exist — bucket counts can reach
+/// thousands on low-memory builds and must never exhaust the process FD limit. Flushes are chunky
+/// (>= `scatter_flush_pairs`), so the open/close overhead is amortised.
+fn append_pairs(path: &Path, pairs: &[MassPidPair]) -> Result<(), Error> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(pairs.as_bytes())?;
+    Ok(())
 }
 
 /// Decode native-endian `i32`s out of a freshly-decompressed byte buffer (1-byte aligned, so a
@@ -506,10 +521,9 @@ async fn scatter(
     let collector_task = {
         let pair_queue = pair_queue.clone();
         tokio::spawn(async move {
-            let mut writers: Vec<BufWriter<File>> = Vec::with_capacity(num_buckets);
-            for bucket in 0..num_buckets {
-                writers.push(BufWriter::new(File::create(bucket_path(&dir, bucket))?));
-            }
+            // Buffer per bucket in RAM (total bounded by the budget); flush via open/append/close
+            // so open FDs stay ~1 regardless of bucket count. A bucket that receives no pairs is
+            // simply never created — finalize treats a missing file as empty.
             let mut buffers: Vec<Vec<MassPidPair>> = (0..num_buckets).map(|_| Vec::new()).collect();
 
             loop {
@@ -527,17 +541,16 @@ async fn scatter(
                     let buf = &mut buffers[idx];
                     buf.push(pair);
                     if buf.len() >= scatter_flush_pairs {
-                        writers[idx].write_all(buf.as_bytes())?;
+                        append_pairs(&bucket_path(&dir, idx), buf)?;
                         buf.clear();
                     }
                 }
             }
 
-            for (writer, buf) in writers.iter_mut().zip(buffers.iter()) {
+            for (idx, buf) in buffers.iter().enumerate() {
                 if !buf.is_empty() {
-                    writer.write_all(buf.as_bytes())?;
+                    append_pairs(&bucket_path(&dir, idx), buf)?;
                 }
-                writer.flush()?;
             }
             Ok::<_, Error>(())
         })
@@ -672,7 +685,12 @@ fn finalize_bucket(
     subspill_count: &mut usize,
 ) -> Result<(), Error> {
     let (lo, hi) = range;
-    let n_pairs = std::fs::metadata(&path)?.len() / MassPidPair::SIZE as u64;
+    // A bucket that received no pairs is never created by the scatter collector.
+    let n_pairs = match std::fs::metadata(&path) {
+        Ok(meta) => meta.len() / MassPidPair::SIZE as u64,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
 
     if n_pairs > budget_pairs && hi - lo > 1 && depth < MAX_SUBSPILL_DEPTH {
         *subspill_count += 1;
