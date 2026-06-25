@@ -58,6 +58,7 @@ pub struct Trypsin;
 
 impl Trypsin {
     pub const NAME: &'static str = "trypsin";
+    pub const SEMI_NAME: &'static str = "semi-trypsin";
 }
 
 impl IsProtease for Trypsin {
@@ -281,10 +282,198 @@ where
     }
 }
 
+/// Iterator for semi-specific digestion.
+///
+/// For each tryptic window (considering missed cleavages), generates:
+/// - Left-anchored sub-sequences T[0..j] (N-terminal tryptic terminus)
+/// - Right-anchored sub-sequences T[i..L] (C-terminal tryptic terminus)
+///
+/// This matches the proteomics definition of semi-specific: every yielded peptide has
+/// at least one tryptic terminus.
+pub struct SemiSpecificIterator<
+    'a,
+    T: Sized,
+    F: Fn(&[AminoAcidBitCode]) -> Result<Option<T>, Error>,
+> {
+    min_length: NonZeroUsize,
+    max_length: NonZeroUsize,
+    keep_unknown: bool,
+    full_digest: Vec<&'a [AminoAcidBitCode]>,
+    max_window_size: usize,
+    mass_range: Option<RangeInclusive<i64>>,
+    conversion_fn: F,
+    // Outer: tryptic window state
+    tryptic_start: usize,
+    tryptic_window: usize, // 0 = not yet initialized
+    // Inner: sub-sequence state within the merged tryptic peptide
+    current_merged: Vec<AminoAcidBitCode>,
+    current_unknown: Vec<bool>, // per amino acid, true = unknown and keep_unknown is false
+    // left_done = false: generating left-anchored (N-term tryptic) sub-seqs, sub_len varies
+    // left_done = true:  generating right-anchored (C-term tryptic) sub-seqs, sub_start varies
+    left_done: bool,
+    sub_start: usize, // used in right mode
+    sub_len: usize,   // used in left mode
+}
+
+impl<'a, T, F> SemiSpecificIterator<'a, T, F>
+where
+    T: Sized,
+    F: Fn(&[AminoAcidBitCode]) -> Result<Option<T>, Error>,
+{
+    pub fn new(
+        min_length: NonZeroUsize,
+        max_length: NonZeroUsize,
+        max_missed_cleavages: usize,
+        keep_unknown: bool,
+        mass_range: Option<RangeInclusive<i64>>,
+        full_digest: Vec<&'a [AminoAcidBitCode]>,
+        conversion_fn: F,
+    ) -> Self {
+        let max_window_size = max_missed_cleavages + 1;
+        Self {
+            min_length,
+            max_length,
+            keep_unknown,
+            full_digest,
+            max_window_size,
+            mass_range,
+            conversion_fn,
+            tryptic_start: 0,
+            tryptic_window: 0,
+            current_merged: Vec::new(),
+            current_unknown: Vec::new(),
+            left_done: false,
+            sub_start: 0,
+            sub_len: 0,
+        }
+    }
+
+    /// Returns true if all sub-sequences for current_merged have been emitted.
+    fn is_sub_exhausted(&self) -> bool {
+        // In right mode, exhausted when sub_start is beyond the last valid position.
+        self.left_done
+            && self.sub_start + self.min_length.get() > self.current_merged.len()
+    }
+
+    /// Advance the sub-sequence cursor within the current tryptic window.
+    ///
+    /// Left mode: increment sub_len; when exhausted switch to right mode.
+    /// Right mode: increment sub_start.
+    fn advance_sub(&mut self) {
+        let merged_len = self.current_merged.len();
+        if !self.left_done {
+            self.sub_len += 1;
+            if self.sub_len > self.max_length.get().min(merged_len) {
+                // Switch to right mode. Skip sub_start=0 to avoid re-emitting the full fragment
+                // that was already yielded in left mode (when merged_len <= max_length).
+                self.left_done = true;
+                self.sub_start = 1_usize.max(merged_len.saturating_sub(self.max_length.get()));
+            }
+        } else {
+            self.sub_start += 1;
+        }
+    }
+
+    /// Advance the outer tryptic window and populate current_merged / current_unknown.
+    /// Returns false when all windows are exhausted.
+    fn advance_tryptic(&mut self) -> bool {
+        loop {
+            if self.tryptic_window == 0 {
+                self.tryptic_start = 0;
+                self.tryptic_window = 1;
+            } else {
+                self.tryptic_window += 1;
+                if self.tryptic_window > self.max_window_size
+                    || self.tryptic_start + self.tryptic_window > self.full_digest.len()
+                {
+                    self.tryptic_start += 1;
+                    self.tryptic_window = 1;
+                }
+            }
+
+            if self.tryptic_start >= self.full_digest.len() {
+                return false;
+            }
+
+            let end = self.tryptic_start + self.tryptic_window;
+            self.current_merged = self.full_digest[self.tryptic_start..end]
+                .iter()
+                .flat_map(|s| s.iter().copied())
+                .collect();
+
+            let unknown_byte = UNKNOWN.bit_code().as_bytes()[0];
+            self.current_unknown = if self.keep_unknown {
+                vec![false; self.current_merged.len()]
+            } else {
+                self.current_merged
+                    .iter()
+                    .map(|aa| aa.as_bytes()[0] == unknown_byte)
+                    .collect()
+            };
+
+            // Reset to left mode, starting at min_length
+            self.left_done = false;
+            self.sub_start = 0;
+            self.sub_len = self.min_length.get();
+
+            if self.current_merged.len() >= self.min_length.get() {
+                return true;
+            }
+        }
+    }
+}
+
+impl<'a, T, F> FallibleIterator for SemiSpecificIterator<'a, T, F>
+where
+    T: Sized,
+    F: Fn(&[AminoAcidBitCode]) -> Result<Option<T>, Error>,
+{
+    type Item = T;
+    type Error = Error;
+
+    fn next(&mut self) -> Result<Option<Self::Item>, Self::Error> {
+        loop {
+            if (self.tryptic_window == 0 || self.is_sub_exhausted()) && !self.advance_tryptic() {
+                return Ok(None);
+            }
+
+            let merged_len = self.current_merged.len();
+            let (sub_start, sub_end) = if !self.left_done {
+                (0, self.sub_len) // Left-anchored: T[0..sub_len]
+            } else {
+                (self.sub_start, merged_len) // Right-anchored: T[sub_start..L]
+            };
+
+            if self.current_unknown[sub_start..sub_end].iter().any(|&x| x) {
+                self.advance_sub();
+                continue;
+            }
+
+            let sub_seq = &self.current_merged[sub_start..sub_end];
+
+            if let Some(ref mass_range) = self.mass_range {
+                let mass = Peptide::peptide_mass_from_amino_acid_bits(sub_seq.iter());
+                if !mass_range.contains(&mass) {
+                    self.advance_sub();
+                    continue;
+                }
+            }
+
+            let result = (self.conversion_fn)(sub_seq)?;
+            self.advance_sub();
+            if result.is_some() {
+                return Ok(result);
+            }
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct Protease {
     #[serde(with = "is_protease_serde")]
     inner: Box<dyn IsProtease>,
+    #[serde(default)]
+    semi_specific: bool,
     min_length: NonZeroUsize,
     max_length: NonZeroUsize,
     max_missed_cleavages: usize,
@@ -292,55 +481,91 @@ pub struct Protease {
 }
 
 impl Protease {
-    /// Cleaves a protein into peptides and returns a iterator over the peptides
+    /// Cleaves a protein into peptides and returns an iterator over the peptides.
     ///
-    /// # Arguments
-    /// * `sequence` - Amino acid sequence
+    /// For semi-specific proteases, each tryptic window is sub-cleaved unspecifically.
     ///
     pub fn cleave<'a>(
         &'a self,
         sequence: &'a [AminoAcidBitCode],
         mass_range: Option<RangeInclusive<i64>>,
-    ) -> impl FallibleIterator<Item = Peptide, Error = Error> + 'a {
+    ) -> Box<dyn FallibleIterator<Item = Peptide, Error = Error> + 'a> {
         let full_digest = self.inner.full_digest(sequence);
-        MissedCleavageIterator::new(
-            self.min_length,
-            self.max_length,
-            self.max_missed_cleavages,
-            self.keep_unknown,
-            mass_range,
-            full_digest,
-            |raw_seq| {
-                Ok(Some(Peptide::new(
-                    Sequence::try_from(raw_seq)?,
-                    Vec::new(),
-                    Vec::new(),
-                    Vec::new(),
-                    false,
-                    false,
-                )))
-            },
-        )
+        if self.semi_specific {
+            Box::new(SemiSpecificIterator::new(
+                self.min_length,
+                self.max_length,
+                self.max_missed_cleavages,
+                self.keep_unknown,
+                mass_range,
+                full_digest,
+                |sub_seq: &[AminoAcidBitCode]| {
+                    Ok(Some(Peptide::new(
+                        Sequence::try_from([sub_seq].as_slice())?,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                        false,
+                    )))
+                },
+            ))
+        } else {
+            Box::new(MissedCleavageIterator::new(
+                self.min_length,
+                self.max_length,
+                self.max_missed_cleavages,
+                self.keep_unknown,
+                mass_range,
+                full_digest,
+                |raw_seq| {
+                    Ok(Some(Peptide::new(
+                        Sequence::try_from(raw_seq)?,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                        false,
+                    )))
+                },
+            ))
+        }
     }
 
     pub(crate) fn cleave_masses_only<'a>(
         &'a self,
         sequence: &'a [AminoAcidBitCode],
-    ) -> impl FallibleIterator<Item = i64, Error = Error> + 'a {
+    ) -> Box<dyn FallibleIterator<Item = i64, Error = Error> + 'a> {
         let full_digest = self.inner.full_digest(sequence);
-        MissedCleavageIterator::new(
-            self.min_length,
-            self.max_length,
-            self.max_missed_cleavages,
-            self.keep_unknown,
-            None,
-            full_digest,
-            |raw_seq| {
-                Ok(Some(Peptide::peptide_mass_from_amino_acid_bits(
-                    raw_seq.iter().flat_map(|sequences| sequences.iter()),
-                )))
-            },
-        )
+        if self.semi_specific {
+            Box::new(SemiSpecificIterator::new(
+                self.min_length,
+                self.max_length,
+                self.max_missed_cleavages,
+                self.keep_unknown,
+                None,
+                full_digest,
+                |sub_seq: &[AminoAcidBitCode]| {
+                    Ok(Some(Peptide::peptide_mass_from_amino_acid_bits(
+                        sub_seq.iter(),
+                    )))
+                },
+            ))
+        } else {
+            Box::new(MissedCleavageIterator::new(
+                self.min_length,
+                self.max_length,
+                self.max_missed_cleavages,
+                self.keep_unknown,
+                None,
+                full_digest,
+                |raw_seq| {
+                    Ok(Some(Peptide::peptide_mass_from_amino_acid_bits(
+                        raw_seq.iter().flat_map(|sequences| sequences.iter()),
+                    )))
+                },
+            ))
+        }
     }
 
     pub fn by_name(
@@ -362,7 +587,14 @@ impl Protease {
         // a peptided can only contain as many missed cleavages as there a are amino acids allowed
         let max_missed_cleavages = max_missed_cleavages.unwrap_or(max_length.get());
 
-        let inner = Self::inner_by_name(name)?;
+        let lower = name.to_lowercase();
+        let (semi_specific, base_name) = if let Some(base) = lower.strip_prefix("semi-") {
+            (true, base.to_string())
+        } else {
+            (false, lower)
+        };
+
+        let inner = Self::inner_by_name(&base_name)?;
 
         Ok(Self {
             min_length,
@@ -370,6 +602,7 @@ impl Protease {
             max_missed_cleavages,
             keep_unknown,
             inner,
+            semi_specific,
         })
     }
 
@@ -381,8 +614,12 @@ impl Protease {
         }
     }
 
-    pub fn name(&self) -> &str {
-        self.inner.name()
+    pub fn name(&self) -> String {
+        if self.semi_specific {
+            format!("semi-{}", self.inner.name())
+        } else {
+            self.inner.name().to_string()
+        }
     }
 
     pub fn min_length(&self) -> NonZeroUsize {
@@ -401,7 +638,7 @@ impl Protease {
 impl Clone for Protease {
     fn clone(&self) -> Self {
         Self::by_name(
-            self.name(),
+            &self.name(),
             Some(self.min_length),
             Some(self.max_length),
             Some(self.max_missed_cleavages),
@@ -550,6 +787,47 @@ mod tests {
             .collect();
 
         let peps = unspecific
+            .cleave(leptin.as_ref(), None)
+            .map(|peptide| Ok(peptide.into_sequence()))
+            .collect::<HashSet<Sequence>>()
+            .unwrap();
+
+        assert_eq!(peps.len(), expected_peps.len());
+        assert_eq!(peps, expected_peps);
+    }
+
+    #[test]
+    fn test_semi_trypsin() {
+        let leptin = ProteinSequence::try_from(
+            "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
+        ).unwrap();
+
+        let expected_pepts_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("leptin.semi-tryptic.6-50.2-missed-cleavages.txt");
+
+        let expected_peps: HashSet<Sequence> = std::fs::read_to_string(expected_pepts_file_path)
+            .unwrap()
+            .split("\n")
+            .map(|line| line.trim())
+            .filter(|line| !line.is_empty())
+            .map(|line| Sequence::try_from(line).unwrap())
+            .collect();
+
+        let semi_trypsin = Protease::by_name(
+            Trypsin::SEMI_NAME,
+            Some(NonZeroUsize::new(6).unwrap()),
+            Some(NonZeroUsize::new(50).unwrap()),
+            Some(2),
+            false,
+        )
+        .unwrap();
+
+        let peps = semi_trypsin
             .cleave(leptin.as_ref(), None)
             .map(|peptide| Ok(peptide.into_sequence()))
             .collect::<HashSet<Sequence>>()
