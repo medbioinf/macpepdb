@@ -69,10 +69,10 @@ static COPY_STATEMENT: LazyLock<String> =
 /// Column types for the binary COPY into `peptides`, in column order.
 static COPY_TYPES: LazyLock<[Type; 8]> = LazyLock::new(|| {
     [
-        Type::INT8,  // partition
-        Type::INT8,  // mass
-        Type::BYTEA, // sequence (CompactSequence bytes)
-        Type::BYTEA,
+        Type::INT8,       // partition
+        Type::INT8,       // mass
+        Type::BYTEA,      // sequence (CompactSequence bytes)
+        Type::BYTEA,      // amino acid counts
         Type::INT8,       // metadata_id (reference into peptide_metadata)
         Type::INT4_ARRAY, // unique_taxonomy_ids
         Type::INT4_ARRAY, // non_unique_taxonomy_ids
