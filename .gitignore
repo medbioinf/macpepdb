@@ -1,6 +1,10 @@
 # Rust
 /target
 
+# Dioxus
+packages/frontend/dist
+packages/frontend/public/index.css*
+
 # OS
 .DS_Store
 

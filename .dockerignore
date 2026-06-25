@@ -2,9 +2,13 @@
 *
 
 # Allow the following files and directories
+!/assets/**/*
 !/build.rs
 !/Cargo.toml
 !/Cargo.lock
+!/Dioxus.toml
+!/LICENSE
 !/README.md
 !/packages/**/*
 !/test_files/**/*
+!/docker/**/*

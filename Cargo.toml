@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+    "packages/frontend",
     "packages/macpepdb",
     "packages/metrics-peek",
     "packages/uniprot_reader",
@@ -9,6 +10,7 @@ members = [
 
 [workspace.dependencies]
 async-compression = "0.4.42"
+async-std = "1.13.2"
 async-stream = "0.3.6"
 axum = "0.8.9"
 base64 = "0.22.1"
@@ -21,11 +23,15 @@ crossbeam = "~0.8.4"
 crossterm = "0.28"
 csv = "1.4.0"
 dashmap = "6.1"
+deadpool-postgres = "~0.14.1"
 dihardts_omicstools = "~3.1.0"
+dioxus = "0.7.1"
+dioxus-logger = "0.6.2"
 fallible-iterator = "~0.3.0"
 fancy-regex = "~0.17.0"
 flate2 = "1"
 futures = "~0.3.32"
+futures-util = "0.3.32"
 glob = "0.3.3"
 http = "1.4.0"
 itertools = "~0.14.0"
@@ -37,16 +43,15 @@ mimalloc = "0.1.50"
 num-traits = "~0.2.19"
 parking_lot = "0.12"
 pastey = "~0.2.1"
+plotly = "0.12.1"
 postcard = "~1.1.3"
+postgres-protocol = "~0.6.7"
+postgres-types = "~0.2.8"
 rand = "0.9"
 ratatui = "0.29"
 reqwest = "0.13.3"
 serde = "~1.0.228"
 serde_json = "~1.0.149"
-tokio-postgres = "~0.7.12"
-deadpool-postgres = "~0.14.1"
-postgres-types = "~0.2.8"
-postgres-protocol = "~0.6.7"
 static_assertions = "1.1.0"
 sysinfo = "0.39.2"
 tcmalloc2 = "0.3.2"
@@ -54,6 +59,8 @@ thiserror = "~2.0.18"
 tikv-jemallocator = "0.6"
 tinyvec = { version = "1.11", features = ["alloc"] }
 tokio = "1.51"
+tokio-postgres = "~0.7.12"
+toml = "0.8.8"
 tower-http = "0.6.8"
 tracing = "0.1"
 tracing-appender = "0.2"
@@ -62,11 +69,13 @@ tracing-subscriber = "0.3"
 url = "2.5"
 urlencoding = "2.1.3"
 uuid = "1.23.1"
+web-sys = "0.3.77"
 xxhash-rust = "0.8.15"
 zerocopy = "0.8.48"
 
 # workspace
 macpepdb = { path = "packages/macpepdb" }
+macpepdb-frontend = { path = "packages/frontend" }
 metrics-peek = { path = "packages/metrics-peek" }
 macpepdb_tui = { path = "packages/tui" }
 uniprot_reader = { path = "packages/uniprot_reader" }
