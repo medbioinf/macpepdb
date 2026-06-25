@@ -157,7 +157,10 @@ impl TuiState {
     ///
     /// Returns the [`MetricRowId`] assigned to each row in the same order as
     /// the provided configs.
-    pub fn set_metrics(&mut self, configs: impl IntoIterator<Item = MetricConfig>) -> Vec<MetricRowId> {
+    pub fn set_metrics(
+        &mut self,
+        configs: impl IntoIterator<Item = MetricConfig>,
+    ) -> Vec<MetricRowId> {
         let configs: Vec<MetricConfig> = configs.into_iter().collect();
         for cfg in &configs {
             self.metrics

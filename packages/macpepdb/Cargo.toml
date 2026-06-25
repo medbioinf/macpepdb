@@ -44,6 +44,7 @@ postgres-protocol = { workspace = true }
 static_assertions = { workspace = true }
 sysinfo = { workspace = true }
 tcmalloc2 = { workspace = true, optional = true }
+tempfile = { workspace = true }
 thiserror = { workspace = true }
 tinyvec = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
@@ -57,6 +58,7 @@ url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v7"] }
 zerocopy = { workspace = true, features = ["derive"] }
+zstd = { workspace = true }
 xxhash-rust = { workspace = true, features = ["xxh3"] }
 rayon = "1.12.0"
 

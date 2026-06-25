@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    num::{NonZeroI64, NonZeroUsize},
+    num::NonZeroUsize,
     path::PathBuf,
     sync::Arc,
     time::Instant,
@@ -288,7 +288,7 @@ pub struct DatabaseBuild<'a> {
     skip_protein_associations: bool,
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
-    mass_interval_with: Option<NonZeroI64>,
+    scratch_dir: PathBuf,
     tui: Option<&'a TuiHandle>,
 }
 
@@ -305,7 +305,7 @@ impl<'a> DatabaseBuild<'a> {
         skip_protein_associations: bool,
         skip_taxonomies: bool,
         num_threads: NonZeroUsize,
-        mass_interval_with: Option<NonZeroI64>,
+        scratch_dir: PathBuf,
         tui: Option<&'a TuiHandle>,
     ) -> Self {
         Self {
@@ -319,7 +319,7 @@ impl<'a> DatabaseBuild<'a> {
             skip_taxonomies,
             num_threads,
             tui,
-            mass_interval_with,
+            scratch_dir,
             protease: Arc::new(protease),
         }
     }
@@ -398,22 +398,13 @@ impl<'a> DatabaseBuild<'a> {
         // 2. step create mass to protein index
         if let Some(tui) = &self.tui {
             tui.add_metric(MetricConfig::progress(
-                crate::mass_index::TOTAL_PROGRESS_METRIC,
-                crate::mass_index::TOTAL_PROGRESS_METRIC,
-                MassIndex::number_of_intervals(self.mass_interval_with, self.protease.max_length())
-                    as f64,
-            ));
-            tui.add_metric(MetricConfig::progress(
                 crate::mass_index::PARTIAL_PROGRESS_METRIC,
                 crate::mass_index::PARTIAL_PROGRESS_METRIC,
                 protein_ctr as f64,
             ));
         }
-        let mass_index = self
-            .build_db_mass_index(protein_access.clone(), self.mass_interval_with)
-            .await?;
+        let mass_index = self.build_db_mass_index(protein_access.clone()).await?;
         if let Some(tui) = &self.tui {
-            tui.remove_metric(crate::mass_index::TOTAL_PROGRESS_METRIC);
             tui.remove_metric(crate::mass_index::PARTIAL_PROGRESS_METRIC);
         }
 
@@ -472,25 +463,48 @@ impl<'a> DatabaseBuild<'a> {
     async fn build_db_mass_index(
         &self,
         protein_access: Arc<Box<dyn IsProteinAccess>>,
-        mass_interval_with: Option<NonZeroI64>,
     ) -> Result<MassIndex, Error> {
         let now = std::time::Instant::now();
+        let memory_budget = self.mass_index_sort_budget();
+        tracing::info!(
+            "db mass index: sort budget = {} MB; scratch dir = {}",
+            memory_budget / (1024 * 1024),
+            self.scratch_dir.display()
+        );
         let index = MassIndex::build(
-            self.client.clone(),
             protein_access,
             self.protease.clone(),
             self.num_threads,
-            mass_interval_with,
+            self.scratch_dir.clone(),
+            memory_budget,
         )
         .await?;
+        StatsTable::new(self.client.clone())
+            .upsert_mass_count(index.len())
+            .await?;
         tracing::info!(
-            "db mass index: time = {:.2?} s; #masses = {}; size: {:.2?} MB",
+            "db mass index: time = {:.2?} s; #masses = {}; metadata size: {:.2?} MB",
             now.elapsed().as_secs_f64(),
             index.len(),
             index.size() / (1024 * 1024)
         );
 
         Ok(index)
+    }
+
+    /// Auto-derive the per-bucket sort budget for the mass index. Read at stage-2 start, so
+    /// `available_memory` already reflects RAM left after protein loading. Capped so a big machine
+    /// does not size one giant bucket (which would reproduce the old peak); the available-memory
+    /// term only pulls the budget lower on small machines.
+    fn mass_index_sort_budget(&self) -> usize {
+        const CAP: usize = 4 * 1024 * 1024 * 1024; // 4 GiB
+        const SAFETY: f64 = 0.5;
+        const FLOOR: usize = 64 * 1024 * 1024; // 64 MiB
+        let mut sys = System::new_all();
+        sys.refresh_all();
+        let available = sys.available_memory() as f64;
+        // FLOOR < CAP always, so clamp cannot panic.
+        ((available * SAFETY) as usize).clamp(FLOOR, CAP)
     }
 
     async fn build_db_peptides(

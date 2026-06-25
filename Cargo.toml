@@ -50,6 +50,7 @@ postgres-protocol = "~0.6.7"
 static_assertions = "1.1.0"
 sysinfo = "0.39.2"
 tcmalloc2 = "0.3.2"
+tempfile = "3.14"
 thiserror = "~2.0.18"
 tikv-jemallocator = "0.6"
 tinyvec = { version = "1.11", features = ["alloc"] }
@@ -64,6 +65,7 @@ urlencoding = "2.1.3"
 uuid = "1.23.1"
 xxhash-rust = "0.8.15"
 zerocopy = "0.8.48"
+zstd = "0.13.2"
 
 # workspace
 macpepdb = { path = "packages/macpepdb" }

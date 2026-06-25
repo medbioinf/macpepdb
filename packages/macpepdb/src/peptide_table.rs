@@ -265,7 +265,6 @@ impl PeptideTable {
         // (~equal work per chunk) rather than mass count, so per-mass work skew can't strand
         // a worker on one heavy chunk while the rest idle.
         let total_masses = mass_index.len();
-        let part_offsets = Arc::new(mass_index.part_offsets());
         let cursor = Arc::new(AtomicUsize::new(0));
 
         let digest_and_insertion_threads = (0..num_threads.get())
@@ -280,7 +279,6 @@ impl PeptideTable {
                 let metadata_interner = metadata_interner.clone();
                 let metadata_id_counter = metadata_id_counter.clone();
                 let mass_index = mass_index.clone();
-                let part_offsets = part_offsets.clone();
                 let cursor = cursor.clone();
 
                 tokio::spawn(async move {
@@ -305,11 +303,7 @@ impl PeptideTable {
                         if start >= total_masses {
                             break;
                         }
-                        let end = mass_index.claim_end(
-                            &part_offsets,
-                            start,
-                            TARGET_ASSOCIATIONS_PER_CLAIM,
-                        );
+                        let end = mass_index.claim_end(start, TARGET_ASSOCIATIONS_PER_CLAIM);
                         if cursor
                             .compare_exchange_weak(start, end, Ordering::Relaxed, Ordering::Relaxed)
                             .is_err()
@@ -318,11 +312,10 @@ impl PeptideTable {
                         }
 
                         // Digest the claimed mass range in ascending order so each stripe is
-                        // mass-sorted (tight columnar chunk-group pruning at search time).
-                        for g in start..end {
-                            let (mass, protein_ids_slice) =
-                                mass_index.resolve_global(&part_offsets, g);
-                            let protein_ids = protein_ids_slice.to_vec();
+                        // mass-sorted (tight columnar chunk-group pruning at search time). The
+                        // reader streams the claim's protein_ids from disk on demand.
+                        let mut claim_reader = mass_index.claim_reader(start, end)?;
+                        while let Some((mass, protein_ids)) = claim_reader.next_entry()? {
                             let protein_ids_len = protein_ids.len();
 
                             let mut proteins = protein_access.by_ids(&protein_ids).await?;
