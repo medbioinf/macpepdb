@@ -1,6 +1,6 @@
 /target
-/dist
-/public/index.css*
+packages/frontend/dist
+packages/frontend/public/index.css*
 
 # OS
 .DS_Store

@@ -1,0 +1,43 @@
+[package]
+name = "macpepdb-frontend"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = { workflow = true }
+async = { workflow = true }
+base64 = { workflow = true }
+chrono = { workflow = true }
+dioxus = { workflow = true, features = ["router", "logger"] }
+dioxus-logger = { workflow = true }
+futures = { workflow = true }
+log = { workflow = true }
+plotly = { workflow = true, features = ["wasm"] }
+reqwest = { workflow = true, features = ["json", "http2"] }
+serde = { workflow = true, features = ["rc"] }
+serde_json = { workflow = true }
+thiserror = { workflow = true }
+toml = { workflow = true }
+urlencoding = { workflow = true }
+uuid = { workflow = true, features = ["js", "v4"] }
+web-sys = { workflow = true, features = ["Clipboard", "Navigator"] }
+xxhash-rust = { workflow = true, features = ["xxh3"] }
+
+[dev-dependencies]
+toml = { workflow = true }
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

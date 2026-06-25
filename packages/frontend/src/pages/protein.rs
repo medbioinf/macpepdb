@@ -31,7 +31,7 @@ pub fn Protein(props: ProteinProps) -> Element {
     let protein_id = use_signal(|| props.protein_id.to_owned());
 
     let protein: Resource<Result<ProteinEntity, GeneralError>> = use_resource(move || async move {
-        let app_config = app_config.read_unchecked();
+        let app_config = app_config.read();
         let macpepdb_base_url = match app_config.as_ref() {
             Some(config) => config.get_macpepdb_base_url(),
             None => return Err(GeneralError::ConfigurationNotLoaded),
