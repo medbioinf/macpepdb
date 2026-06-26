@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use dihardts_omicstools::biology::taxonomy::Taxonomy as OmicstoolsTaxonomy;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_postgres::Row;
 
@@ -22,7 +23,7 @@ pub enum Error {
 
 into_thiserror_boxed!(tokio_postgres::Error, Error, Row);
 
-#[derive(Clone)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct Taxonomy {
     id: i32,
     parent_id: i32,

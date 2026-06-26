@@ -23,6 +23,7 @@ use crate::web::peptide_controller::{
     post_search as post_peptide_search,
 };
 use crate::web::server_state::{MatomoInfo, ServerState};
+use crate::web::taxonomy_controller::TaxonomyController;
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -110,6 +111,10 @@ pub async fn start(
         .route("/api/peptides/{sequence}", get(get_peptide))
         // Configuration routes
         .route("/api/configuration", get(get_configuration))
+        .nest(
+            TaxonomyController::controller_path(),
+            TaxonomyController::routes(server_state.clone()),
+        )
         .with_state(server_state.clone())
         .fallback(page_not_found)
         .layer(cors);

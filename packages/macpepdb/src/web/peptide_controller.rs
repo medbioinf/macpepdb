@@ -1,5 +1,5 @@
 use std::ops::Deref;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use async_stream::stream;
 use axum::body::Body;
@@ -20,18 +20,10 @@ use crate::peptide_metadata_table::PeptideMetadataTable;
 use crate::peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch};
 use crate::peptide_table::PeptideTable;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
+use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::server_state::ServerState;
 
 const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
-
-static DEFAULT_ERROR_HEADER_MAP: LazyLock<HeaderMap> = LazyLock::new(|| {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        header::CONTENT_TYPE,
-        HeaderValue::from_static("text/plain; charset=utf-8"),
-    );
-    headers
-});
 
 #[derive(Debug, Error)]
 pub enum Error {

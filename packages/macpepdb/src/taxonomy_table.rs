@@ -164,7 +164,7 @@ impl TaxonomyTable {
             .execute("SET CONSTRAINTS taxonomies_parent_id_fkey DEFERRED", &[])
             .await?;
 
-        for chunk in taxonomies.chunks(10_000) {
+        for chunk in taxonomies.chunks(20_000) {
             let count = self.insert_batch(&transaction, chunk).await?;
             counter.increment(count as u64);
         }
