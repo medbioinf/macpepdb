@@ -19,6 +19,8 @@ use crate::{
     protein_table::ProteinTable, stats_table::StatsTable,
 };
 
+const PROGRESS_REPORT_EVERY: u64 = 8192;
+
 pub static IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS: &str =
     "database::build::load_proteins_into_memory";
 
@@ -212,10 +214,18 @@ impl InMemoryProteinAccess {
                         .select_by_id_range(start, end)
                         .await?;
                     let mut local: Vec<(i32, Arc<Protein>)> = Vec::new();
+                    let mut since_report: u64 = 0;
                     while let Some(protein) = stream.next().await {
                         let protein = protein?;
                         local.push((protein.id().unwrap(), Arc::new(protein)));
-                        progress_counter_metric.increment(1);
+                        since_report += 1;
+                        if since_report == PROGRESS_REPORT_EVERY {
+                            progress_counter_metric.increment(since_report);
+                            since_report = 0;
+                        }
+                    }
+                    if since_report > 0 {
+                        progress_counter_metric.increment(since_report);
                     }
                     Ok::<Vec<(i32, Arc<Protein>)>, Error>(local)
                 })
