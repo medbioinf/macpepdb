@@ -6,6 +6,7 @@ use std::{
     time::Instant,
 };
 
+use dihardts_omicstools::biology::io::taxonomy_reader::TaxonomyReader;
 use futures::{FutureExt, StreamExt, TryStreamExt, future::BoxFuture, stream::BoxStream};
 use macpepdb_tui::{MetricConfig, TuiHandle};
 use metrics::counter;
@@ -16,7 +17,9 @@ use thiserror::Error;
 use crate::{
     blob_table::BlobTable, client::Client, configuration::RuntimeConfiguration,
     mass_index::MassIndex, peptide_table::PeptideTable, protease::Protease, protein::Protein,
-    protein_table::ProteinTable, stats_table::StatsTable,
+    protein_table::ProteinTable, stats_table::StatsTable, taxonomy::Taxonomy,
+    taxonomy_rank::TaxonomyRank, taxonomy_rank_table::TaxonomyRankTable,
+    taxonomy_table::TaxonomyTable,
 };
 
 pub static IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS: &str =
@@ -46,6 +49,16 @@ pub enum Error {
     ProteinTable(Box<crate::protein_table::Error>),
     #[error("Stats table error in database build: {0}")]
     StatsTable(Box<crate::stats_table::Error>),
+    #[error("Taxonomy error in taxonomy tree build: {0}")]
+    Taxonomy(Box<crate::taxonomy::Error>),
+    #[error("Taxonomy table error in taxonomy tree build: {0}")]
+    TaxonomyTable(Box<crate::taxonomy_table::Error>),
+    #[error("Taxonomy error in taxonomy tree build: {0}")]
+    TaxonomyRank(Box<crate::taxonomy_rank::Error>),
+    #[error("Taxonomy rank table error in taxonomy tree build: {0}")]
+    TaxonomyRankTable(Box<crate::taxonomy_rank_table::Error>),
+    #[error("Taxonomy tree read error in taxonomy tree build: {0}")]
+    TaxonomyTreeReadError(String),
     #[error("Unable to join protein-loading task: {0}")]
     Join(String),
 }
@@ -55,6 +68,10 @@ into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);
 into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
 into_thiserror_boxed!(crate::protein_table::Error, Error, ProteinTable);
 into_thiserror_boxed!(crate::stats_table::Error, Error, StatsTable);
+into_thiserror_boxed!(crate::taxonomy::Error, Error, Taxonomy);
+into_thiserror_boxed!(crate::taxonomy_table::Error, Error, TaxonomyTable);
+into_thiserror_boxed!(crate::taxonomy_rank::Error, Error, TaxonomyRank);
+into_thiserror_boxed!(crate::taxonomy_rank_table::Error, Error, TaxonomyRankTable);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MassPartitionMap {
@@ -289,6 +306,7 @@ pub struct DatabaseBuild<'a> {
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
     mass_interval_with: Option<NonZeroI64>,
+    taxonomy_dump_file_path: Option<PathBuf>,
     tui: Option<&'a TuiHandle>,
 }
 
@@ -306,6 +324,7 @@ impl<'a> DatabaseBuild<'a> {
         skip_taxonomies: bool,
         num_threads: NonZeroUsize,
         mass_interval_with: Option<NonZeroI64>,
+        taxonomy_dump_file_path: Option<PathBuf>,
         tui: Option<&'a TuiHandle>,
     ) -> Self {
         Self {
@@ -320,6 +339,7 @@ impl<'a> DatabaseBuild<'a> {
             num_threads,
             tui,
             mass_interval_with,
+            taxonomy_dump_file_path,
             protease: Arc::new(protease),
         }
     }
@@ -445,6 +465,24 @@ impl<'a> DatabaseBuild<'a> {
         )
         .await?;
 
+        if let Some(tui) = &self.tui {
+            tui.add_metric(MetricConfig::counter(
+                crate::taxonomy_rank_table::INSERTED_RANKS_METRIC,
+                crate::taxonomy_rank_table::INSERTED_RANKS_METRIC,
+            ));
+            tui.add_metric(MetricConfig::counter(
+                crate::taxonomy_table::INSERTED_TAXONOMIES_METRIC,
+                crate::taxonomy_table::INSERTED_TAXONOMIES_METRIC,
+            ));
+        }
+
+        self.build_taxonomy_tree().await?;
+
+        if let Some(tui) = &self.tui {
+            tui.remove_metric(crate::taxonomy_rank_table::INSERTED_RANKS_METRIC);
+            tui.remove_metric(crate::taxonomy_table::INSERTED_TAXONOMIES_METRIC);
+        }
+
         Ok(configuration)
     }
 
@@ -522,5 +560,60 @@ impl<'a> DatabaseBuild<'a> {
         let mut sys = System::new_all();
         sys.refresh_all();
         (sys.available_memory() as f64 * self.proteins_memory_limit) as usize
+    }
+
+    pub async fn build_taxonomy_tree(&self) -> Result<(), Error> {
+        if let Some(taxonomy_dump_file_path) = &self.taxonomy_dump_file_path {
+            let taxonomy_tree = TaxonomyReader::new(taxonomy_dump_file_path)
+                .map_err(|err| Error::TaxonomyTreeReadError(format!("{}", err)))?
+                .read()
+                .map_err(|err| Error::TaxonomyTreeReadError(format!("{}", err)))?;
+
+            let now = std::time::Instant::now();
+
+            let ranks = taxonomy_tree
+                .get_ranks()
+                .iter()
+                .map(TaxonomyRank::try_from)
+                .collect::<Result<Vec<TaxonomyRank>, _>>()
+                .map_err(Error::from)?;
+
+            let ranks_len = ranks.len();
+
+            TaxonomyRankTable::new(self.client.clone())
+                .build(ranks)
+                .await?;
+
+            tracing::info!(
+                "db taxonomy ranks: time = {:.2?} s; #ranks = {}",
+                now.elapsed().as_secs_f64(),
+                ranks_len
+            );
+
+            let now = std::time::Instant::now();
+
+            let taxonomies = taxonomy_tree
+                .get_taxonomies()
+                .iter()
+                .map(Taxonomy::try_from)
+                .collect::<Result<Vec<Taxonomy>, _>>()
+                .map_err(Error::from)?;
+
+            let tax_len = taxonomies.len();
+
+            drop(taxonomy_tree);
+
+            TaxonomyTable::new(self.client.clone())
+                .build(taxonomies)
+                .await?;
+
+            tracing::info!(
+                "db taxonomies: time = {:.2?} s; #taxonomies = {}",
+                now.elapsed().as_secs_f64(),
+                tax_len
+            );
+        }
+
+        Ok(())
     }
 }

@@ -7,7 +7,7 @@ use std::{
     sync::Arc,
 };
 
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use futures::StreamExt;
 use macpepdb::{
     blob_table::BlobTable,
@@ -25,6 +25,7 @@ use macpepdb::{
     protein_table::ProteinTable,
     sequence::{IsBitSequence, IsSimpleSequence, PeptideSequence},
     stats_table::StatsTable,
+    taxonomy_table::TaxonomyTable,
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
 use postgres_types::ToSql;
@@ -79,6 +80,8 @@ enum Error {
         "Missing runtime configuration in blob table. Are you sure the database was build correctly?"
     )]
     MissingRuntimeConfiguration,
+    #[error("Missing taxonomy search attribute. Please provide either scientific name or ID.")]
+    MissingTaxonomySearchAttribute,
     #[error("Sequence error: {0}")]
     Sequence(Box<macpepdb::sequence::Error>),
     #[error("Peptide not found")]
@@ -91,6 +94,8 @@ enum Error {
     ProteinTable(#[from] macpepdb::protein_table::Error),
     #[error("Stats table error: {0}")]
     StatsTable(Box<macpepdb::stats_table::Error>),
+    #[error("Taxonomy table error: {0}")]
+    TaxonomyTable(Box<macpepdb::taxonomy_table::Error>),
 }
 
 #[derive(Subcommand)]
@@ -104,6 +109,26 @@ enum PeptideCommand {
     Show {
         /// Sequence to select
         sequence: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum TaxonomyCommand {
+    #[command(group = ArgGroup::new("search_attribute").required(true))]
+    Show {
+        /// scientific name
+        #[arg(short, long, group = "search_attribute")]
+        scientific_name: Option<String>,
+        #[arg(short, long, group = "search_attribute")]
+        id: Option<i32>,
+    },
+    #[command(group = ArgGroup::new("search_attribute").required(true))]
+    Subspecies {
+        /// scientific name
+        #[arg(short, long, group = "search_attribute")]
+        scientific_name: Option<String>,
+        #[arg(short, long, group = "search_attribute")]
+        id: Option<i32>,
     },
 }
 
@@ -168,6 +193,9 @@ enum Command {
         /// If set no taxonomies will be collected on peptide level
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         skip_taxonomies: bool,
+        /// Taxonomy dmp file from NCBI FTP: https://ftp.ncbi.nih.gov/pub/taxonomy/ (zip file)
+        #[arg(long)]
+        taxonomies: Option<PathBuf>,
         /// Batch size of records to insert concurrently
         #[arg(short, long, default_value_t = NonZeroUsize::new(16).unwrap())]
         threads: NonZeroUsize,
@@ -227,6 +255,10 @@ enum Command {
     Peptide {
         #[command(subcommand)]
         command: PeptideCommand,
+    },
+    Taxonomy {
+        #[command(subcommand)]
+        command: TaxonomyCommand,
     },
     /// Prints stats
     Stats {},
@@ -365,6 +397,7 @@ async fn main() -> Result<(), Error> {
             skip_protein_associations,
             skip_taxonomies,
             threads,
+            taxonomies,
         } => {
             if !(0.0..=1.0).contains(&proteins_memory_limit) {
                 return Err(Error::ProteinsMemoryLimit);
@@ -403,6 +436,7 @@ async fn main() -> Result<(), Error> {
                 skip_taxonomies,
                 threads,
                 mass_interval_width,
+                taxonomies,
                 tui.as_ref(),
             )
             .start()
@@ -519,6 +553,11 @@ async fn main() -> Result<(), Error> {
                 } else {
                     println!("{peptide}");
                 }
+
+                if let Some(mut tui) = tui {
+                    tracing::info!("Done. Press Ctrl+C or q to exit.");
+                    tui.wait().await;
+                }
             }
         },
         Command::Stats {} => {
@@ -545,6 +584,137 @@ async fn main() -> Result<(), Error> {
                 tui.wait().await;
             }
         }
+
+        Command::Taxonomy { command } => match command {
+            TaxonomyCommand::Show {
+                scientific_name,
+                id,
+            } => {
+                let client = Arc::new(Client::new(&cli.database_url).await?);
+                let (where_clause, params) = if let Some(scientific_name) = scientific_name {
+                    (
+                        format!(
+                            "WHERE {}.scientific_name = $1 LIMIT 1",
+                            macpepdb::taxonomy_table::TABLE_NAME
+                        ),
+                        vec![Box::new(scientific_name) as Box<dyn ToSql + Sync + Send>],
+                    )
+                } else if let Some(id) = id {
+                    (
+                        format!(
+                            "WHERE {}.id = $1 LIMIT 1",
+                            macpepdb::taxonomy_table::TABLE_NAME
+                        ),
+                        vec![Box::new(id) as Box<dyn ToSql + Sync + Send>],
+                    )
+                } else {
+                    return Err(Error::MissingTaxonomySearchAttribute);
+                };
+                let taxonomy = TaxonomyTable::new(client.clone())
+                    .select_with_rank(&where_clause, params)
+                    .await
+                    .map_err(|err| Error::TaxonomyTable(Box::new(err)))?
+                    .next()
+                    .await;
+
+                let output = match taxonomy {
+                    Some(Ok(taxonomy)) => format!("{taxonomy}"),
+                    Some(Err(err)) => format!("Error retrieving taxonomy: {err}"),
+                    None => String::from("Requested taxonomy not found"),
+                };
+
+                if cli.terminal || cli.tui {
+                    tracing::info!(output);
+                } else {
+                    println!("{}", output);
+                }
+
+                if let Some(mut tui) = tui {
+                    tracing::info!("Done. Press Ctrl+C or q to exit.");
+                    tui.wait().await;
+                }
+            }
+            TaxonomyCommand::Subspecies {
+                scientific_name,
+                id,
+            } => {
+                let client = Arc::new(Client::new(&cli.database_url).await?);
+                let (where_clause, params) = if let Some(scientific_name) = scientific_name {
+                    (
+                        format!(
+                            "WHERE {}.scientific_name = $1 LIMIT 1",
+                            macpepdb::taxonomy_table::TABLE_NAME
+                        ),
+                        vec![Box::new(scientific_name) as Box<dyn ToSql + Sync + Send>],
+                    )
+                } else if let Some(id) = id {
+                    (
+                        format!(
+                            "WHERE {}.id = $1 LIMIT 1",
+                            macpepdb::taxonomy_table::TABLE_NAME
+                        ),
+                        vec![Box::new(id) as Box<dyn ToSql + Sync + Send>],
+                    )
+                } else {
+                    return Err(Error::MissingTaxonomySearchAttribute);
+                };
+                let taxonomy_table = TaxonomyTable::new(client.clone());
+                let taxonomy = taxonomy_table
+                    .select_with_rank(&where_clause, params)
+                    .await
+                    .map_err(|err| Error::TaxonomyTable(Box::new(err)))?
+                    .next()
+                    .await;
+
+                if taxonomy.is_none() {
+                    if cli.terminal || cli.tui {
+                        tracing::info!("Requested taxonomy not found");
+                    } else {
+                        println!("Requested taxonomy not found");
+                    }
+                    if let Some(mut tui) = tui {
+                        tracing::info!("Done. Press Ctrl+C or q to exit.");
+                        tui.wait().await;
+                    }
+                    return Ok(());
+                }
+
+                let taxonomy = taxonomy.unwrap();
+
+                if let Err(err) = taxonomy {
+                    if cli.terminal || cli.tui {
+                        tracing::info!("Error retrieving taxonomy: {err}");
+                    } else {
+                        println!("Error retrieving taxonomy: {err}");
+                    }
+                    if let Some(mut tui) = tui {
+                        tracing::info!("Done. Press Ctrl+C or q to exit.");
+                        tui.wait().await;
+                    }
+                    return Ok(());
+                }
+
+                let taxonomy = taxonomy.unwrap();
+
+                let mut stream = taxonomy_table
+                    .select_sub_species(taxonomy.id())
+                    .await
+                    .map_err(|err| Error::TaxonomyTable(Box::new(err)))?;
+
+                while let Some(result) = stream.next().await {
+                    let output = match result {
+                        Ok(sub_taxonomy) => format!("{sub_taxonomy}"),
+                        Err(err) => format!("Error retrieving sub-taxonomy: {err}"),
+                    };
+
+                    if cli.terminal || cli.tui {
+                        tracing::info!(output);
+                    } else {
+                        println!("{output}");
+                    }
+                }
+            }
+        },
     }
 
     Ok(())

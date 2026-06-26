@@ -21,6 +21,7 @@
 
 CREATE EXTENSION IF NOT EXISTS citus;
 CREATE EXTENSION IF NOT EXISTS citus_columnar;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
 -- --------------------------------------------------------------------------
 -- Row-store tables (distributed): proteins by `id`, blobs/stats by `key`.
@@ -76,6 +77,28 @@ ALTER TABLE peptides SET (
     columnar.stripe_row_limit  = 150000,
     columnar.chunk_group_row_limit = 10000
 );
+
+-- --------------------------------------------------------------------------
+-- Taxonomy
+-- --------------------------------------------------------------------------
+DROP TABLE IF EXISTS taxonomy_ranks;
+CREATE TABLE taxonomy_ranks (
+    id SMALLINT PRIMARY KEY,
+    name TEXT NOT NULL
+);
+
+
+DROP TABLE IF EXISTS taxonomies;
+CREATE TABLE taxonomies (
+    id INT PRIMARY KEY,
+    parent_id INT REFERENCES taxonomies(id) DEFERRABLE INITIALLY DEFERRED,
+    scientific_name TEXT NOT NULL,
+    rank_id SMALLINT REFERENCES taxonomy_ranks(id)
+
+);
+
+CREATE INDEX tax_name_idx ON taxonomies USING GIN (scientific_name gin_trgm_ops);
+
 
 -- --------------------------------------------------------------------------
 -- Citus distribution.

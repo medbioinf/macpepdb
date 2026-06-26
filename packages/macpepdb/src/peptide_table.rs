@@ -67,6 +67,7 @@ static COPY_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("COPY {TABLE_NAME} ({COLUMNS}) FROM STDIN (FORMAT binary)"));
 
 /// Column types for the binary COPY into `peptides`, in column order.
+// TODO: No need for a lazy lock
 static COPY_TYPES: LazyLock<[Type; 8]> = LazyLock::new(|| {
     [
         Type::INT8,       // partition
