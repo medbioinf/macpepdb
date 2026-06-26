@@ -135,7 +135,7 @@ enum Command {
         /// protein_ids store). Place it on a roomy disk; the whole tree is removed after the build.
         /// Defaults to the system temp directory.
         #[arg(long)]
-        build_scratch_dir: Option<PathBuf>,
+        scratch_dir: Option<PathBuf>,
         /// Max peptide length
         #[arg(long, default_value_t = PeptideSequence::MAX_LENGTH)]
         max_length: NonZeroUsize,
@@ -154,7 +154,7 @@ enum Command {
         /// Fraction of free memory to use as limit for keeping proteins in memory.
         /// Keeping the proteins in memory can significantly speed up the digestion.
         /// The mass index no longer competes for this RAM (it spills to disk under
-        /// `--build-scratch-dir`); set this to 0.0 to read proteins from the database instead,
+        /// `--scratch-dir`); set this to 0.0 to read proteins from the database instead,
         /// which lowers peak memory further at the cost of slower digestion.
         #[arg(long, default_value_t = 0.8)]
         proteins_memory_limit: f64,
@@ -352,7 +352,7 @@ async fn main() -> Result<(), Error> {
             concurrent_batch_size,
             batch_size_limit,
             keep_unknown,
-            build_scratch_dir,
+            scratch_dir,
             max_length,
             min_length,
             max_missed_cleavages,
@@ -369,7 +369,7 @@ async fn main() -> Result<(), Error> {
                 return Err(Error::ProteinsMemoryLimit);
             }
 
-            let scratch_dir = build_scratch_dir.unwrap_or_else(std::env::temp_dir);
+            let scratch_dir = scratch_dir.unwrap_or_else(std::env::temp_dir);
 
             let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
             let protein_file_paths =
