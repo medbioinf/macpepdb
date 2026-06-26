@@ -28,6 +28,10 @@ pub static FINALIZE_PROGRESS_METRIC: &str = "mass_index::finalize::associations"
 
 /// Per digest-worker pair buffer before it is flushed to the collector (~100 MB).
 static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
+/// Report scatter progress every N proteins rather than per protein. The metrics recorder forwards
+/// every update over a channel, so a per-protein increment from 128 workers is ~71 M contended
+/// cross-thread sends; batching makes it a handful per worker.
+const PROGRESS_REPORT_EVERY: u64 = 8192;
 
 /// Associations per compressed `pids` block. Independent of (but chosen to mirror) the columnar
 /// stripe size so a block is a natural unit; a worker decompresses only the blocks its claim spans.
@@ -551,6 +555,7 @@ async fn scatter(
         let scatter_progress_metric = scatter_progress_metric.clone();
         workers.push(tokio::spawn(async move {
             let mut local: Vec<MassPidPair> = Vec::with_capacity(LOCAL_MASS_LIMIT);
+            let mut since_report: u64 = 0;
             let mut proteins = protein_access.by_ids(&chunk).await?;
             while let Some(protein) = proteins.next().await.transpose()? {
                 let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
@@ -567,7 +572,14 @@ async fn scatter(
                         return Ok(());
                     }
                 }
-                scatter_progress_metric.increment(1);
+                since_report += 1;
+                if since_report >= PROGRESS_REPORT_EVERY {
+                    scatter_progress_metric.increment(since_report);
+                    since_report = 0;
+                }
+            }
+            if since_report > 0 {
+                scatter_progress_metric.increment(since_report);
             }
             if !local.is_empty() {
                 let _ = pair_tx.send(local).await;
