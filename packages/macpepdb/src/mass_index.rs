@@ -16,7 +16,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
     amino_acid::TRYPTOPHAN, database_build::IsProteinAccess, mass::to_float as mass_to_float,
-    molecules::WATER_MONO_MASS, protease::Protease, protein::Protein,
+    molecules::WATER_MONO_MASS, protease::Protease,
 };
 
 /// Progress of the scatter (digestion) pass: proteins cleaved, out of the total protein count.
@@ -28,9 +28,6 @@ pub static FINALIZE_PROGRESS_METRIC: &str = "mass_index::finalize::associations"
 
 /// Per digest-worker pair buffer before it is flushed to the collector (~100 MB).
 static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
-/// Per-worker protein channel depth (proteins are `Arc` pointers, so this is cheap RAM); bounds how
-/// far the feeder may run ahead of a worker before backpressure kicks in.
-const PROTEIN_CHANNEL_CAP: usize = 64;
 
 /// Associations per compressed `pids` block. Independent of (but chosen to mirror) the columnar
 /// stripe size so a block is a natural unit; a worker decompresses only the blocks its claim spans.
@@ -510,7 +507,8 @@ async fn scatter(
     let scatter_progress_metric = Arc::new(metrics::counter!(SCATTER_PROGRESS_METRIC));
     scatter_progress_metric.absolute(0);
 
-    let mut proteins = protein_access.all().await?;
+    let ids = protein_access.ids().await?;
+    let chunk_size = ids.len().div_ceil(n).max(1);
 
     // Pairs: every digest worker -> one collector (mpsc fits N producers -> 1 consumer). The
     // collector buffers per bucket and flushes via append; the channel closing (all worker senders
@@ -541,20 +539,20 @@ async fn scatter(
         })
     };
 
-    // Proteins: one feeder -> N workers. mpsc is single-consumer, so each worker gets its own
-    // bounded channel and the feeder round-robins into them. The bounded channel applies
-    // backpressure (the feeder awaits when a worker is behind) without any polling.
-    let mut worker_txs: Vec<mpsc::Sender<Arc<Protein>>> = Vec::with_capacity(n);
+    // Proteins: no feeder. Partition the id space across workers; each worker pulls its own slice
+    // via `by_ids` (a local HashMap walk for the in-memory access — no syscall, no cross-thread
+    // handoff) and digests it flat-out, sending coarse pair batches to the collector.
     let mut workers = Vec::with_capacity(n);
-    for _ in 0..n {
-        let (tx, mut rx) = mpsc::channel::<Arc<Protein>>(PROTEIN_CHANNEL_CAP);
-        worker_txs.push(tx);
+    for chunk in ids.chunks(chunk_size) {
+        let chunk = chunk.to_vec();
+        let protein_access = protein_access.clone();
         let protease = protease.clone();
         let pair_tx = pair_tx.clone();
         let scatter_progress_metric = scatter_progress_metric.clone();
         workers.push(tokio::spawn(async move {
             let mut local: Vec<MassPidPair> = Vec::with_capacity(LOCAL_MASS_LIMIT);
-            while let Some(protein) = rx.recv().await {
+            let mut proteins = protein_access.by_ids(&chunk).await?;
+            while let Some(protein) = proteins.next().await.transpose()? {
                 let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
                 protease
                     .cleave_masses_only(protein.sequence().as_ref())
@@ -580,32 +578,7 @@ async fn scatter(
     // Drop the original pair sender so the collector's channel closes once all workers finish.
     drop(pair_tx);
 
-    // Feed proteins round-robin. A send error means that worker stopped early (it errored, or the
-    // collector died and it returned) — stop feeding; the real error is collected on join below.
-    let mut next = 0usize;
-    let mut feed_err: Option<Error> = None;
-    loop {
-        match proteins.next().await {
-            Some(Ok(protein)) => {
-                if worker_txs[next].send(protein).await.is_err() {
-                    break;
-                }
-                next = (next + 1) % n;
-            }
-            Some(Err(err)) => {
-                feed_err = Some(err.into());
-                break;
-            }
-            None => break,
-        }
-    }
-
-    // Close the protein channels so workers drain their queue and exit (no sentinels). Dropping the
-    // senders guarantees every worker — and then, once their pair senders drop, the collector —
-    // terminates, so nothing is left running on any path.
-    drop(worker_txs);
-
-    let mut first_err = feed_err;
+    let mut first_err: Option<Error> = None;
     for worker in workers {
         match worker.await {
             Ok(Ok(())) => {}
