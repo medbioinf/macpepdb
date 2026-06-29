@@ -11,7 +11,8 @@ use thiserror::Error;
 use zerocopy::IntoBytes;
 
 use crate::{
-    amino_acid::{ARGININE, AminoAcidBitCode, LYSINE, PROLINE, UNKNOWN},
+    amino_acid::{ARGININE, AminoAcid, AminoAcidBitCode, LYSINE, PROLINE, UNKNOWN},
+    molecules::WATER_MONO_MASS,
     peptide::Peptide,
     sequence::{IsBitSequence, PeptideSequence as Sequence},
 };
@@ -151,7 +152,7 @@ impl IsProtease for Unspecific {
 pub struct MissedCleavageIterator<
     'a,
     T: Sized,
-    F: Fn(&[&[AminoAcidBitCode]]) -> Result<Option<T>, Error>,
+    F: Fn(&[&[AminoAcidBitCode]], i64) -> Result<Option<T>, Error>,
 > {
     min_length: NonZeroUsize,
     max_length: NonZeroUsize,
@@ -159,7 +160,8 @@ pub struct MissedCleavageIterator<
     max_window_size: usize,
     mass_range: Option<RangeInclusive<i64>>,
     prefix_len: Vec<usize>,
-    has_unknown: Vec<bool>,
+    prefix_mass: Vec<i64>,
+    unknown_prefix: Vec<usize>,
     start: usize,
     window_size: usize,
     conversion_fn: F,
@@ -168,7 +170,7 @@ pub struct MissedCleavageIterator<
 impl<'a, T, F> MissedCleavageIterator<'a, T, F>
 where
     T: Sized,
-    F: Fn(&[&[AminoAcidBitCode]]) -> Result<Option<T>, Error>,
+    F: Fn(&[&[AminoAcidBitCode]], i64) -> Result<Option<T>, Error>,
 {
     pub fn new(
         min_length: NonZeroUsize,
@@ -181,20 +183,27 @@ where
     ) -> Self {
         let max_window_size = max_missed_cleavages + 1;
         let mut prefix_len = Vec::with_capacity(full_digest.len());
-        let mut acc = 0usize;
+        let mut prefix_mass = Vec::with_capacity(full_digest.len());
+        let mut unknown_prefix = Vec::with_capacity(full_digest.len());
+        let mut acc_len = 0usize;
+        let mut acc_mass = 0i64;
+        let mut acc_unknown = 0usize;
+        let unknown_byte = UNKNOWN.bit_code().as_bytes()[0];
 
         for seq in &full_digest {
-            acc += seq.len();
-            prefix_len.push(acc);
-        }
+            acc_len += seq.len();
+            prefix_len.push(acc_len);
 
-        let mut has_unknown = Vec::with_capacity(full_digest.len());
+            acc_mass += seq
+                .iter()
+                .map(|bit_code| AminoAcid::by_bit_code(bit_code).mono_mass())
+                .sum::<i64>();
+            prefix_mass.push(acc_mass);
 
-        for seq in &full_digest {
-            has_unknown.push(
-                !keep_unknown
-                    && memchr::memchr(UNKNOWN.bit_code().as_bytes()[0], seq.as_bytes()).is_some(),
-            );
+            if !keep_unknown && memchr::memchr(unknown_byte, seq.as_bytes()).is_some() {
+                acc_unknown += 1;
+            }
+            unknown_prefix.push(acc_unknown);
         }
 
         Self {
@@ -204,7 +213,8 @@ where
             full_digest,
             max_window_size,
             prefix_len,
-            has_unknown,
+            prefix_mass,
+            unknown_prefix,
             conversion_fn,
             start: 0,
             window_size: 1,
@@ -226,7 +236,7 @@ where
 impl<'a, T, F> FallibleIterator for MissedCleavageIterator<'a, T, F>
 where
     T: Sized,
-    F: Fn(&[&[AminoAcidBitCode]]) -> Result<Option<T>, Error>,
+    F: Fn(&[&[AminoAcidBitCode]], i64) -> Result<Option<T>, Error>,
 {
     type Item = T;
     type Error = Error;
@@ -260,25 +270,32 @@ where
             return self.continue_window_size();
         }
 
-        if self.has_unknown[self.start..end].iter().any(|&x| x) {
+        let unknown_count = if self.start == 0 {
+            self.unknown_prefix[end - 1]
+        } else {
+            self.unknown_prefix[end - 1] - self.unknown_prefix[self.start - 1]
+        };
+
+        if unknown_count > 0 {
             return self.continue_window_size();
         }
 
-        if let Some(mass_range) = self.mass_range.as_ref() {
-            let mass = Peptide::peptide_mass_from_amino_acid_bits(
-                self.full_digest[self.start..end]
-                    .iter()
-                    .flat_map(|sequences| sequences.iter()),
-            );
+        let mass = WATER_MONO_MASS
+            + if self.start == 0 {
+                self.prefix_mass[end - 1]
+            } else {
+                self.prefix_mass[end - 1] - self.prefix_mass[self.start - 1]
+            };
 
-            if !mass_range.contains(&mass) {
-                return self.continue_window_size();
-            }
+        if let Some(mass_range) = self.mass_range.as_ref()
+            && !mass_range.contains(&mass)
+        {
+            return self.continue_window_size();
         }
 
         self.window_size += 1;
 
-        (self.conversion_fn)(&self.full_digest[self.start..end])
+        (self.conversion_fn)(&self.full_digest[self.start..end], mass)
     }
 }
 
@@ -293,7 +310,7 @@ where
 pub struct SemiSpecificIterator<
     'a,
     T: Sized,
-    F: Fn(&[AminoAcidBitCode]) -> Result<Option<T>, Error>,
+    F: Fn(&[AminoAcidBitCode], i64) -> Result<Option<T>, Error>,
 > {
     min_length: NonZeroUsize,
     max_length: NonZeroUsize,
@@ -307,7 +324,11 @@ pub struct SemiSpecificIterator<
     tryptic_window: usize, // 0 = not yet initialized
     // Inner: sub-sequence state within the merged tryptic peptide
     current_merged: Vec<AminoAcidBitCode>,
-    current_unknown: Vec<bool>, // per amino acid, true = unknown and keep_unknown is false
+    // Prefix sums over `current_merged` (length merged_len + 1, [0] = 0): cumulative residue
+    // mass and count of unknown residues, so any ragged sub-window T[i..j] has O(1) mass
+    // (`prefix_mass[j] - prefix_mass[i]`) and O(1) unknown count.
+    prefix_mass: Vec<i64>,
+    unknown_prefix: Vec<usize>,
     // left_done = false: generating left-anchored (N-term tryptic) sub-seqs, sub_len varies
     // left_done = true:  generating right-anchored (C-term tryptic) sub-seqs, sub_start varies
     left_done: bool,
@@ -318,7 +339,7 @@ pub struct SemiSpecificIterator<
 impl<'a, T, F> SemiSpecificIterator<'a, T, F>
 where
     T: Sized,
-    F: Fn(&[AminoAcidBitCode]) -> Result<Option<T>, Error>,
+    F: Fn(&[AminoAcidBitCode], i64) -> Result<Option<T>, Error>,
 {
     pub fn new(
         min_length: NonZeroUsize,
@@ -341,7 +362,8 @@ where
             tryptic_start: 0,
             tryptic_window: 0,
             current_merged: Vec::new(),
-            current_unknown: Vec::new(),
+            prefix_mass: Vec::new(),
+            unknown_prefix: Vec::new(),
             left_done: false,
             sub_start: 0,
             sub_len: 0,
@@ -351,8 +373,7 @@ where
     /// Returns true if all sub-sequences for current_merged have been emitted.
     fn is_sub_exhausted(&self) -> bool {
         // In right mode, exhausted when sub_start is beyond the last valid position.
-        self.left_done
-            && self.sub_start + self.min_length.get() > self.current_merged.len()
+        self.left_done && self.sub_start + self.min_length.get() > self.current_merged.len()
     }
 
     /// Advance the sub-sequence cursor within the current tryptic window.
@@ -402,14 +423,20 @@ where
                 .collect();
 
             let unknown_byte = UNKNOWN.bit_code().as_bytes()[0];
-            self.current_unknown = if self.keep_unknown {
-                vec![false; self.current_merged.len()]
-            } else {
-                self.current_merged
-                    .iter()
-                    .map(|aa| aa.as_bytes()[0] == unknown_byte)
-                    .collect()
-            };
+            self.prefix_mass.clear();
+            self.unknown_prefix.clear();
+            self.prefix_mass.push(0);
+            self.unknown_prefix.push(0);
+            let mut acc_mass = 0i64;
+            let mut acc_unknown = 0usize;
+            for aa in &self.current_merged {
+                acc_mass += AminoAcid::by_bit_code(aa).mono_mass();
+                self.prefix_mass.push(acc_mass);
+                if !self.keep_unknown && aa.as_bytes()[0] == unknown_byte {
+                    acc_unknown += 1;
+                }
+                self.unknown_prefix.push(acc_unknown);
+            }
 
             // Reset to left mode, starting at min_length
             self.left_done = false;
@@ -426,7 +453,7 @@ where
 impl<'a, T, F> FallibleIterator for SemiSpecificIterator<'a, T, F>
 where
     T: Sized,
-    F: Fn(&[AminoAcidBitCode]) -> Result<Option<T>, Error>,
+    F: Fn(&[AminoAcidBitCode], i64) -> Result<Option<T>, Error>,
 {
     type Item = T;
     type Error = Error;
@@ -444,22 +471,22 @@ where
                 (self.sub_start, merged_len) // Right-anchored: T[sub_start..L]
             };
 
-            if self.current_unknown[sub_start..sub_end].iter().any(|&x| x) {
+            if self.unknown_prefix[sub_end] - self.unknown_prefix[sub_start] > 0 {
+                self.advance_sub();
+                continue;
+            }
+
+            let mass = WATER_MONO_MASS + self.prefix_mass[sub_end] - self.prefix_mass[sub_start];
+
+            if let Some(ref mass_range) = self.mass_range
+                && !mass_range.contains(&mass)
+            {
                 self.advance_sub();
                 continue;
             }
 
             let sub_seq = &self.current_merged[sub_start..sub_end];
-
-            if let Some(ref mass_range) = self.mass_range {
-                let mass = Peptide::peptide_mass_from_amino_acid_bits(sub_seq.iter());
-                if !mass_range.contains(&mass) {
-                    self.advance_sub();
-                    continue;
-                }
-            }
-
-            let result = (self.conversion_fn)(sub_seq)?;
+            let result = (self.conversion_fn)(sub_seq, mass)?;
             self.advance_sub();
             if result.is_some() {
                 return Ok(result);
@@ -499,7 +526,7 @@ impl Protease {
                 self.keep_unknown,
                 mass_range,
                 full_digest,
-                |sub_seq: &[AminoAcidBitCode]| {
+                |sub_seq: &[AminoAcidBitCode], _mass: i64| {
                     Ok(Some(Peptide::new(
                         Sequence::try_from([sub_seq].as_slice())?,
                         Vec::new(),
@@ -518,7 +545,7 @@ impl Protease {
                 self.keep_unknown,
                 mass_range,
                 full_digest,
-                |raw_seq| {
+                |raw_seq, _mass: i64| {
                     Ok(Some(Peptide::new(
                         Sequence::try_from(raw_seq)?,
                         Vec::new(),
@@ -545,11 +572,7 @@ impl Protease {
                 self.keep_unknown,
                 None,
                 full_digest,
-                |sub_seq: &[AminoAcidBitCode]| {
-                    Ok(Some(Peptide::peptide_mass_from_amino_acid_bits(
-                        sub_seq.iter(),
-                    )))
-                },
+                |_sub_seq: &[AminoAcidBitCode], mass: i64| Ok(Some(mass)),
             ))
         } else {
             Box::new(MissedCleavageIterator::new(
@@ -559,11 +582,7 @@ impl Protease {
                 self.keep_unknown,
                 None,
                 full_digest,
-                |raw_seq| {
-                    Ok(Some(Peptide::peptide_mass_from_amino_acid_bits(
-                        raw_seq.iter().flat_map(|sequences| sequences.iter()),
-                    )))
-                },
+                |_raw_seq, mass: i64| Ok(Some(mass)),
             ))
         }
     }
