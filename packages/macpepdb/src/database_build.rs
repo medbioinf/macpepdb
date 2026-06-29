@@ -216,7 +216,7 @@ impl InMemoryProteinAccess {
 
         let now = Instant::now();
         let count = ProteinTable::new(client.clone()).count().await?;
-        let parallelism = client.congestion().window().min(count).max(1);
+        let parallelism = 8; // temporary workaround
         let id_lo = i32::MIN as i64;
         let span = count as i64;
 
