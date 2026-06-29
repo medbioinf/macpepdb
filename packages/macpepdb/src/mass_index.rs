@@ -159,6 +159,19 @@ fn bytes_to_i32_vec(bytes: &[u8]) -> Vec<i32> {
         .map(|c| i32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
+fn partition_dedup_by_mass(run: &mut [MassPidPair]) -> usize {
+    if run.is_empty() {
+        return 0;
+    }
+    let mut write = 0;
+    for read in 1..run.len() {
+        if run[read].mass() != run[write].mass() {
+            write += 1;
+            run[write] = run[read];
+        }
+    }
+    write + 1
+}
 
 /// Read every `MassPidPair` out of a bucket file into memory. Only called on buckets that fit the
 /// budget (oversized buckets are handled by `restream_into_subbuckets` without a full load).
@@ -559,12 +572,17 @@ async fn scatter(
             let mut proteins = protein_access.by_ids(&chunk).await?;
             while let Some(protein) = proteins.next().await.transpose()? {
                 let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
+                let run_start = local.len();
                 protease
                     .cleave_masses_only(protein.sequence().as_ref())
                     .for_each(|mass| {
                         local.push(MassPidPair::new(mass, protein_id));
                         Ok(())
                     })?;
+                let run = &mut local[run_start..];
+                run.sort_unstable_by_key(|pair| pair.mass());
+                let kept = partition_dedup_by_mass(run);
+                local.truncate(run_start + kept);
                 if local.len() >= LOCAL_MASS_LIMIT {
                     let batch = std::mem::replace(&mut local, Vec::with_capacity(LOCAL_MASS_LIMIT));
                     // Collector gone (it errored) -> stop; its error surfaces when we join below.
@@ -747,10 +765,6 @@ fn restream_into_subbuckets(
     Ok(sub_paths)
 }
 
-/// Estimate the average number of `(mass, pid)` pairs a protein produces under the *configured*
-/// protease, by digesting a growing random sample until the estimate stabilises. Protease-agnostic
-/// (it runs the real cleave), so it is correct for tryptic, semi-tryptic, unspecific, and any
-/// future protease.
 async fn estimate_pairs_per_protein(
     protein_access: &Arc<Box<dyn IsProteinAccess>>,
     protease: &Arc<Protease>,
@@ -777,9 +791,13 @@ async fn estimate_pairs_per_protein(
         let mut pairs = 0u64;
         let mut n = 0u64;
         while let Some(protein) = proteins.next().await.transpose()? {
-            pairs += protease
+            // Mirror the scatter's per-protein dedup: count distinct masses, not raw peptides.
+            let mut masses: Vec<i64> = protease
                 .cleave_masses_only(protein.sequence().as_ref())
-                .count()? as u64;
+                .collect()?;
+            masses.sort_unstable();
+            masses.dedup();
+            pairs += masses.len() as u64;
             n += 1;
         }
         if n == 0 {
@@ -861,6 +879,37 @@ mod tests {
                 .unwrap();
         }
         manual
+    }
+
+    #[test]
+    fn test_partition_dedup_by_mass() {
+        let pid = 42;
+        let mk = |masses: &[i64]| {
+            masses
+                .iter()
+                .map(|&m| MassPidPair::new(m, pid))
+                .collect::<Vec<_>>()
+        };
+
+        // Empty
+        assert_eq!(partition_dedup_by_mass(&mut []), 0);
+
+        // Sorted run with adjacent duplicates (the only shape the caller produces).
+        let mut run = mk(&[1, 1, 2, 3, 3, 3, 5]);
+        let kept = partition_dedup_by_mass(&mut run);
+        assert_eq!(kept, 4);
+        assert_eq!(
+            run[..kept].iter().map(|p| p.mass()).collect::<Vec<_>>(),
+            vec![1, 2, 3, 5]
+        );
+
+        // No duplicates -> unchanged length.
+        let mut run = mk(&[1, 2, 3]);
+        assert_eq!(partition_dedup_by_mass(&mut run), 3);
+
+        // All identical -> collapses to one.
+        let mut run = mk(&[7, 7, 7, 7]);
+        assert_eq!(partition_dedup_by_mass(&mut run), 1);
     }
 
     /// Exercise the block-framed pid store directly with a tiny block size so reads cross many
