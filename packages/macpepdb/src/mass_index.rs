@@ -1,29 +1,65 @@
 use std::{
-    hash::Hash,
-    num::{NonZeroI64, NonZeroUsize},
-    ops::Index,
+    fs::File,
+    io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write},
+    num::NonZeroUsize,
+    path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
 };
 
-use crossbeam::queue::ArrayQueue;
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
+use tokio::sync::mpsc;
 
-use metrics::counter;
 use rayon::prelude::ParallelSliceMut;
 use thiserror::Error;
+use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 use crate::{
-    amino_acid::TRYPTOPHAN, client::Client, database_build::IsProteinAccess,
-    mass::to_float as mass_to_float, molecules::WATER_MONO_MASS, protease::Protease,
-    protein::Protein, stats_table::StatsTable,
+    amino_acid::TRYPTOPHAN, database_build::IsProteinAccess, mass::to_float as mass_to_float,
+    molecules::WATER_MONO_MASS, protease::Protease,
 };
 
-pub static PARTIAL_PROGRESS_METRIC: &str = "mass_index::partial_progress::processed_proteins";
-pub static TOTAL_PROGRESS_METRIC: &str = "mass_index::total_progress::processed_proteins";
+/// Progress of the scatter (digestion) pass: proteins cleaved, out of the total protein count.
+pub static SCATTER_PROGRESS_METRIC: &str = "mass_index::scatter::processed_proteins";
+/// Progress of the finalize pass: associations written to the on-disk pid store. Registered as a
+/// counter (the total isn't known until finalize runs), so it shows a live count + rate while the
+/// scatter bar sits at 100%.
+pub static FINALIZE_PROGRESS_METRIC: &str = "mass_index::finalize::associations";
 
+/// Per digest-worker pair buffer before it is flushed to the collector (~100 MB).
 static LOCAL_MASS_LIMIT: usize = 8_333_333; // 100 MB for i64 + i32
+/// Report scatter progress every N proteins rather than per protein. The metrics recorder forwards
+/// every update over a channel, so a per-protein increment from 128 workers is ~71 M contended
+/// cross-thread sends; batching makes it a handful per worker.
+const PROGRESS_REPORT_EVERY: u64 = 8192;
+
+/// Associations per compressed `pids` block. Independent of (but chosen to mirror) the columnar
+/// stripe size so a block is a natural unit; a worker decompresses only the blocks its claim spans.
+const PID_BLOCK_ASSOCIATIONS: usize = 150_000;
+/// zstd level for the on-disk `protein_ids` blocks — read back during the digestion-bound stage 3,
+/// so a fast level is plenty; the win is fewer disk bytes.
+const ZSTD_PID_LEVEL: i32 = 1;
+
+/// Generic margin biasing the bucket count toward more/smaller buckets so estimate error pushes
+/// buckets *under* the sort budget rather than over. Not protease-specific.
+const BUCKET_MARGIN: f64 = 1.3;
+/// Cap on bucket count so the scatter write-buffers (`K × flush`) stay bounded. Does NOT bound
+/// total data: a dataset larger than `MAX_BUCKETS × budget` is handled by the sub-spill guard.
+/// It is not an FD limit either — the collector opens at most one bucket file at a time.
+const MAX_BUCKETS: usize = 4096;
+/// Bounds for a single bucket's scatter write-buffer (in pairs).
+const MIN_FLUSH_PAIRS: usize = 4096;
+const MAX_FLUSH_PAIRS: usize = 1 << 20; // 1M pairs ≈ 12 MB
+
+/// Sub-spill guard: if a bucket exceeds the budget at finalize, re-scatter it into this many
+/// finer sub-buckets, up to this recursion depth.
+const MAX_SUBSPILL_DEPTH: usize = 4;
+const SUBSPILL_FANOUT: usize = 16;
+const SUBSPILL_FLUSH_PAIRS: usize = 1 << 18;
+
+/// Sample sizing for the pairs-per-protein estimate (grows ×4 until the estimate stabilises).
+const SAMPLE_START: usize = 2048;
+const ESTIMATE_TOLERANCE: f64 = 0.05;
 
 fn max_peptide_mass(max_length: NonZeroUsize) -> i64 {
     WATER_MONO_MASS + TRYPTOPHAN.mono_mass() * max_length.get() as i64
@@ -32,12 +68,10 @@ fn max_peptide_mass(max_length: NonZeroUsize) -> i64 {
 /// A `(mass, protein_id)` pair packed into 12 bytes (no alignment padding).
 ///
 /// A plain `(i64, i32)` is 16 bytes — the `i64` forces 8-byte alignment, wasting 4 bytes
-/// per pair. With billions of pairs that 33% is real memory. The mass is split into two
-/// `u32` halves so every field is `i32`-sized and the struct keeps a 4-byte alignment.
-/// That alignment matters: the CSR build reinterprets the pair buffer in place as a
-/// `Vec<i32>` (see `partial_build`), which is only sound when the allocation's layout
-/// matches `[i32]`. The const asserts below pin that invariant.
-#[derive(Clone, Copy)]
+/// per pair. With billions of pairs that 33% is real memory and real disk. The mass is split
+/// into two `u32` halves so every field is `i32`-sized and the struct keeps a 4-byte alignment.
+/// The zerocopy derives let the scatter/spill code read and write the packed bytes directly.
+#[derive(Clone, Copy, FromBytes, IntoBytes, Immutable, KnownLayout)]
 #[repr(C)]
 struct MassPidPair {
     mass_lo: u32,
@@ -74,15 +108,6 @@ impl MassPidPair {
     }
 }
 
-impl Eq for MassPidPair {}
-
-impl Hash for MassPidPair {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.mass().hash(state);
-        self.pid().hash(state);
-    }
-}
-
 impl PartialEq for MassPidPair {
     fn eq(&self, other: &Self) -> bool {
         self.mass() == other.mass() && self.pid() == other.pid()
@@ -91,562 +116,683 @@ impl PartialEq for MassPidPair {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error(
-        "Unable to unwrap masses from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
-    )]
-    FinalMassesUnwrap,
     #[error("IO error in mass index: {0}")]
     Io(#[from] std::io::Error),
-    #[error(
-        "Unable to unwrap index ptr from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
-    )]
-    IndexPtrUnwrap,
-    #[error("Unable to join insertion task: {0}")]
+    #[error("Unable to join task: {0}")]
     Join(String),
-    #[error(
-        "Unable to unwrap masses from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
-    )]
-    MassesUnwrap,
     #[error("Protein ID missing")]
     MissingProteinId,
     #[error("Unable to build rayon thread pool for sorting: {0}")]
     SortThreadPool(rayon::ThreadPoolBuildError),
-    #[error("No errored thread found in mass index, but one finished early.")]
-    NoErroredThread,
     #[error("Protease error in mass index: {0}")]
     Protease(#[from] crate::protease::Error),
     #[error("Protein access error in mass index: {0}")]
     ProteinAccess(#[from] crate::database_build::Error),
-    #[error(
-        "Unable to unwrap protein IDs from Arc. At this point only one reference should be exists. Maybe a thread did not stop?"
-    )]
-    ProteinIdsUnwrap,
-    // #[error("Protein reader thread error: {0}")]
-    // ProteinReaderThread(String),
-    #[error("StatsTable error in mass index: {0}")]
-    StatsTale(#[from] crate::stats_table::Error),
-    #[error("UnipotReader error in mass index: {0}")]
-    UnprotReader(#[from] uniprot_reader::reader::Error),
 }
 
-type PairQueue = Arc<ArrayQueue<Option<Vec<MassPidPair>>>>;
+fn bucket_path(dir: &Path, bucket: usize) -> PathBuf {
+    dir.join(format!("bucket_{bucket}.bin"))
+}
 
-pub struct PartialMassIndex {
-    mass_interval: (i64, i64),
+fn pids_path(dir: &Path) -> PathBuf {
+    dir.join("pids.zst")
+}
+
+/// Append packed pairs to a bucket file, opening and closing it per call. This keeps the scatter's
+/// open file-descriptor count at ~1 regardless of how many buckets exist — bucket counts can reach
+/// thousands on low-memory builds and must never exhaust the process FD limit. Flushes are chunky
+/// (>= `scatter_flush_pairs`), so the open/close overhead is amortised.
+fn append_pairs(path: &Path, pairs: &[MassPidPair]) -> Result<(), Error> {
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    file.write_all(pairs.as_bytes())?;
+    Ok(())
+}
+
+/// Decode native-endian `i32`s out of a freshly-decompressed byte buffer (1-byte aligned, so a
+/// zero-copy reinterpret is not sound — copy through `from_ne_bytes`).
+fn bytes_to_i32_vec(bytes: &[u8]) -> Vec<i32> {
+    bytes
+        .chunks_exact(4)
+        .map(|c| i32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
+        .collect()
+}
+
+/// Read every `MassPidPair` out of a bucket file into memory. Only called on buckets that fit the
+/// budget (oversized buckets are handled by `restream_into_subbuckets` without a full load).
+fn read_pairs(path: &Path) -> Result<Vec<MassPidPair>, Error> {
+    let mut file = File::open(path)?;
+    let n = file.metadata()?.len() as usize / MassPidPair::SIZE;
+    let mut pairs = vec![MassPidPair::new(0, 0); n];
+    file.read_exact(pairs.as_mut_slice().as_mut_bytes())?;
+    Ok(pairs)
+}
+
+// ---------------------------------------------------------------------------------------------
+// On-disk protein-ids store: a single block-framed zstd file. Stage 3 streams it forward; the
+// in-RAM block directory maps a block index to its byte offset so a worker can seek to the block
+// containing the first association of its claim.
+// ---------------------------------------------------------------------------------------------
+
+struct PidStore {
+    path: PathBuf,
+    /// Byte offset of each block, length `num_blocks + 1` (the trailing entry is EOF).
+    block_dir: Vec<u64>,
+    /// Associations per block (uniform except the last). Injectable so tests can force many blocks.
+    block_assoc: usize,
+}
+
+impl PidStore {
+    /// Open a streaming reader positioned at association index `assoc`.
+    fn reader_at(&self, assoc: u64) -> Result<PidBlockReader<'_>, Error> {
+        let block = (assoc / self.block_assoc as u64) as usize;
+        let mut reader = PidBlockReader {
+            file: File::open(&self.path)?,
+            block_dir: &self.block_dir,
+            cur_block: block,
+            buf: Vec::new(),
+            pos: 0,
+        };
+        reader.load_block(block)?;
+        reader.pos = (assoc - block as u64 * self.block_assoc as u64) as usize;
+        Ok(reader)
+    }
+
+    fn metadata_bytes(&self) -> usize {
+        self.block_dir.capacity() * std::mem::size_of::<u64>()
+    }
+}
+
+struct PidStoreWriter {
+    file: BufWriter<File>,
+    path: PathBuf,
+    block_dir: Vec<u64>,
+    block_buf: Vec<i32>,
+    bytes_written: u64,
+    block_assoc: usize,
+}
+
+impl PidStoreWriter {
+    fn create(path: PathBuf, block_assoc: usize) -> Result<Self, Error> {
+        let file = BufWriter::new(File::create(&path)?);
+        Ok(Self {
+            file,
+            path,
+            block_dir: vec![0],
+            block_buf: Vec::with_capacity(block_assoc),
+            bytes_written: 0,
+            block_assoc,
+        })
+    }
+
+    fn push(&mut self, pid: i32) -> Result<(), Error> {
+        self.block_buf.push(pid);
+        if self.block_buf.len() >= self.block_assoc {
+            self.flush_block()?;
+        }
+        Ok(())
+    }
+
+    fn flush_block(&mut self) -> Result<(), Error> {
+        if self.block_buf.is_empty() {
+            return Ok(());
+        }
+        let compressed = zstd::encode_all(self.block_buf.as_bytes(), ZSTD_PID_LEVEL)?;
+        self.file.write_all(&compressed)?;
+        self.bytes_written += compressed.len() as u64;
+        self.block_dir.push(self.bytes_written);
+        self.block_buf.clear();
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<PidStore, Error> {
+        self.flush_block()?;
+        self.file.flush()?;
+        Ok(PidStore {
+            path: self.path,
+            block_dir: self.block_dir,
+            block_assoc: self.block_assoc,
+        })
+    }
+}
+
+struct PidBlockReader<'a> {
+    file: File,
+    block_dir: &'a [u64],
+    cur_block: usize,
+    buf: Vec<i32>,
+    pos: usize,
+}
+
+impl PidBlockReader<'_> {
+    fn load_block(&mut self, block: usize) -> Result<(), Error> {
+        let start = self.block_dir[block];
+        let end = self.block_dir[block + 1];
+        self.file.seek(SeekFrom::Start(start))?;
+        let mut compressed = vec![0u8; (end - start) as usize];
+        self.file.read_exact(&mut compressed)?;
+        let raw = zstd::decode_all(&compressed[..])?;
+        self.buf = bytes_to_i32_vec(&raw);
+        self.cur_block = block;
+        self.pos = 0;
+        Ok(())
+    }
+
+    /// Read the next `n` protein ids, crossing block boundaries as needed.
+    fn read_n(&mut self, n: usize) -> Result<Vec<i32>, Error> {
+        let mut out = Vec::with_capacity(n);
+        while out.len() < n {
+            if self.pos >= self.buf.len() {
+                self.load_block(self.cur_block + 1)?;
+            }
+            let take = (n - out.len()).min(self.buf.len() - self.pos);
+            out.extend_from_slice(&self.buf[self.pos..self.pos + take]);
+            self.pos += take;
+        }
+        Ok(out)
+    }
+}
+
+/// A forward, streaming view over a claimed global range `[start, end)`. Yields `(mass, ids)` in
+/// ascending mass order, reading the `protein_ids` blocks from disk on demand.
+pub struct MassIndexReader<'a> {
+    masses: &'a [i64],
+    indptr: &'a [u64],
+    g: usize,
+    end: usize,
+    pids: PidBlockReader<'a>,
+}
+
+impl MassIndexReader<'_> {
+    /// Next `(mass, protein_ids)` in the claim, or `None` when the range is exhausted.
+    pub fn next_entry(&mut self) -> Result<Option<(i64, Vec<i32>)>, Error> {
+        if self.g >= self.end {
+            return Ok(None);
+        }
+        let mass = self.masses[self.g];
+        let n = (self.indptr[self.g + 1] - self.indptr[self.g]) as usize;
+        let ids = self.pids.read_n(n)?;
+        self.g += 1;
+        Ok(Some((mass, ids)))
+    }
+}
+
+/// Disk-backed mass index. The metadata (`masses`, cumulative `indptr`) lives in RAM as a single
+/// global, ascending run; the `protein_ids` array lives in a block-framed zstd file on disk and is
+/// streamed in stage 3. The whole scratch tree is removed when this drops (success or error).
+pub struct MassIndex {
     masses: Vec<i64>,
     indptr: Vec<u64>,
-    protein_ids: Vec<i32>,
+    pids: PidStore,
+    // Owns the scratch directory holding `pids.zst`; dropping it deletes the tree.
+    _scratch: tempfile::TempDir,
 }
 
-impl PartialMassIndex {
-    pub fn size(&self) -> usize {
-        std::mem::size_of::<(i64, i64)>()
-            + std::mem::size_of::<Self>()
-            + self.masses.capacity() * std::mem::size_of::<i64>()
-            + self.indptr.capacity() * std::mem::size_of::<u64>()
-            + self.protein_ids.capacity() * std::mem::size_of::<i32>()
-    }
-
-    /// Number of distinct masses in this part.
-    pub fn len(&self) -> usize {
-        self.masses.len()
-    }
-
+impl MassIndex {
     pub fn is_empty(&self) -> bool {
         self.masses.is_empty()
     }
 
-    /// Mass at local index `i` (masses are sorted ascending within a part).
-    pub fn mass_at(&self, i: usize) -> i64 {
-        self.masses[i]
-    }
-
-    /// Protein ids associated with the mass at local index `i`, sliced from the CSR
-    /// buffer (non-copying).
-    pub fn protein_ids_at(&self, i: usize) -> &[i32] {
-        &self.protein_ids[self.indptr[i] as usize..self.indptr[i + 1] as usize]
-    }
-}
-
-pub struct IntoIter {
-    masses: Vec<i64>,
-    indptr: Vec<u64>,
-    protein_ids: Vec<i32>,
-}
-
-impl Iterator for IntoIter {
-    type Item = (i64, Vec<i32>);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        let mass = self.masses.pop()?;
-        self.indptr.pop(); // drop the trailing end pointer for this row
-        let start = *self.indptr.last().unwrap() as usize;
-        // start..protein_ids.len() is always the tail when going back-to-front
-        let ids = self.protein_ids.split_off(start);
-        Some((mass, ids))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (self.masses.len(), Some(self.masses.len()))
-    }
-}
-
-impl ExactSizeIterator for IntoIter {}
-
-impl IntoIterator for PartialMassIndex {
-    type Item = (i64, Vec<i32>);
-    type IntoIter = IntoIter;
-
-    fn into_iter(self) -> Self::IntoIter {
-        IntoIter {
-            masses: self.masses,
-            indptr: self.indptr,
-            protein_ids: self.protein_ids,
-        }
-    }
-}
-
-impl Index<i64> for PartialMassIndex {
-    type Output = [i32];
-
-    fn index(&self, mass: i64) -> &Self::Output {
-        if let Ok(idx) = self.masses.binary_search(&mass) {
-            &self.protein_ids[self.indptr[idx] as usize..self.indptr[idx + 1] as usize]
-        } else {
-            &[]
-        }
-    }
-}
-
-pub struct MassIndex {
-    parts: Vec<PartialMassIndex>,
-}
-
-impl MassIndex {
-    pub fn with_capacity(capacity: usize) -> Self {
-        Self {
-            parts: Vec::with_capacity(capacity),
-        }
-    }
-
-    fn push(&mut self, part: PartialMassIndex) {
-        // Parts must be pushed in ascending, non-overlapping mass-interval order so that
-        // concatenating their (internally ascending) masses yields a globally ascending
-        // sequence — the concurrent build relies on this for disjoint contiguous partitions.
-        debug_assert!(
-            self.parts
-                .last()
-                .is_none_or(|prev| prev.mass_interval.1 <= part.mass_interval.0),
-            "mass index parts must be pushed in ascending, non-overlapping interval order"
-        );
-        self.parts.push(part);
-    }
-
-    pub fn parts(&self) -> &[PartialMassIndex] {
-        &self.parts
-    }
-
-    /// Cumulative mass counts per part (length `num_parts + 1`, last element == [`Self::len`]).
-    /// Used to map a global mass index into `(part, local)` via [`Self::resolve_global`].
-    pub fn part_offsets(&self) -> Vec<usize> {
-        let mut offsets = Vec::with_capacity(self.parts.len() + 1);
-        offsets.push(0);
-        let mut acc = 0;
-        for part in &self.parts {
-            acc += part.len();
-            offsets.push(acc);
-        }
-        offsets
-    }
-
-    /// Resolve a global mass index `g` (`0..self.len()`) to its `(mass, protein_ids)` using
-    /// precomputed `offsets` from [`Self::part_offsets`]. Non-copying.
-    pub fn resolve_global(&self, offsets: &[usize], g: usize) -> (i64, &[i32]) {
-        let part_idx = offsets.partition_point(|&o| o <= g) - 1;
-        let local = g - offsets[part_idx];
-        let part = &self.parts[part_idx];
-        (part.mass_at(local), part.protein_ids_at(local))
-    }
-
-    /// Smallest global mass index strictly greater than `start` whose masses (starting at
-    /// `start`) carry at least `target_associations` protein associations, clamped to the
-    /// end of `start`'s part.
-    ///
-    /// Build workers claim contiguous chunks `[start, claim_end(start))` so each chunk does
-    /// roughly equal *work* — digestion cost is ~proportional to the number of protein
-    /// associations, not the mass count — which keeps the per-worker run lengths even and
-    /// avoids a heavy-chunk tail. It reads each part's `indptr` (already a cumulative
-    /// association count) directly, so no global prefix-sum is needed. Always advances by at
-    /// least one mass so the claim cursor makes progress.
-    pub fn claim_end(&self, offsets: &[usize], start: usize, target_associations: u64) -> usize {
-        let part_idx = offsets.partition_point(|&o| o <= start) - 1;
-        let part = &self.parts[part_idx];
-        let local_start = start - offsets[part_idx];
-        let goal = part.indptr[local_start] + target_associations;
-        let local_end = part
-            .indptr
-            .partition_point(|&cumulative| cumulative < goal)
-            .clamp(local_start + 1, part.len());
-        offsets[part_idx] + local_end
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.parts.is_empty()
-    }
-
+    /// Number of distinct masses.
     pub fn len(&self) -> usize {
-        self.parts.iter().map(|part| part.masses.len()).sum()
+        self.masses.len()
     }
 
     pub fn num_protein_associations(&self) -> usize {
-        self.parts.iter().map(|part| part.protein_ids.len()).sum()
+        self.indptr.last().copied().unwrap_or(0) as usize
     }
 
-    pub fn masses(&self) -> impl Iterator<Item = &i64> {
-        self.parts.iter().flat_map(|part| part.masses.as_slice())
+    /// In-RAM footprint of the index metadata (the `protein_ids` array is on disk).
+    pub fn size(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.masses.capacity() * std::mem::size_of::<i64>()
+            + self.indptr.capacity() * std::mem::size_of::<u64>()
+            + self.pids.metadata_bytes()
     }
 
-    pub fn number_of_intervals(
-        mass_interval_width: Option<NonZeroI64>,
-        max_length: NonZeroUsize,
-    ) -> usize {
-        if let Some(width) = mass_interval_width {
-            (max_peptide_mass(max_length) / width.get()) as usize
-        } else {
-            1
-        }
+    /// Smallest global mass index strictly greater than `start` whose masses (from `start`) carry at
+    /// least `target_associations` associations, clamped to the end of the index.
+    ///
+    /// Build workers claim contiguous chunks `[start, claim_end(start))` so each chunk does roughly
+    /// equal *work* — digestion cost is ~proportional to associations, not mass count. The index is
+    /// a single global run, so claims span freely (no per-part clamping). Always advances by at
+    /// least one mass so the claim cursor makes progress.
+    pub fn claim_end(&self, start: usize, target_associations: u64) -> usize {
+        let goal = self.indptr[start] + target_associations;
+        self.indptr
+            .partition_point(|&cumulative| cumulative < goal)
+            .clamp(start + 1, self.masses.len())
     }
 
-    pub async fn build(
-        client: Arc<Client>,
-        protein_access: Arc<Box<dyn IsProteinAccess>>,
-        protease: Arc<Protease>,
-        num_threads: NonZeroUsize,
-        mass_interval_width: Option<NonZeroI64>,
-    ) -> Result<Self, Error> {
-        let max_mass = max_peptide_mass(protease.max_length());
-        let intervals = if let Some(width) = mass_interval_width {
-            (0..=max_mass / width.get())
-                .map(|i| {
-                    let start = i * width.get();
-                    let end = (i + 1) * width.get();
-                    (start, end)
-                })
-                .collect()
-        } else {
-            vec![(0, max_mass)]
-        };
-
-        tracing::info!(
-            "Mass index will be built with {} intervals",
-            intervals.len()
-        );
-        let progress_metric = counter!(TOTAL_PROGRESS_METRIC);
-
-        let mut mass_index = Self::with_capacity(intervals.len());
-
-        for interval in intervals.into_iter() {
-            tracing::info!(
-                "Building mass index for interval [{}, {})",
-                mass_to_float(interval.0),
-                mass_to_float(interval.1)
-            );
-            let partial_mass_index = Self::partial_build(
-                protein_access.clone(),
-                protease.clone(),
-                num_threads,
-                interval,
-            )
-            .await?;
-            mass_index.push(partial_mass_index);
-            progress_metric.increment(1);
-        }
-
-        StatsTable::new(client.clone())
-            .upsert_mass_count(mass_index.len())
-            .await?;
-
-        Ok(mass_index)
-    }
-
-    async fn partial_build(
-        protein_access: Arc<Box<dyn IsProteinAccess>>,
-        protease: Arc<Protease>,
-        num_threads: NonZeroUsize,
-        mass_interval: (i64, i64),
-    ) -> Result<PartialMassIndex, Error> {
-        let interval = Arc::new(mass_interval);
-        let protein_count = protein_access.count().await?;
-
-        let now = std::time::Instant::now();
-
-        let protein_queue: Arc<ArrayQueue<Option<Arc<Protein>>>> =
-            Arc::new(ArrayQueue::new(num_threads.get() * 3));
-        let pair_queue: PairQueue = Arc::new(ArrayQueue::new(num_threads.get()));
-        let partial_progress_metric = Arc::new(metrics::counter!(PARTIAL_PROGRESS_METRIC));
-        partial_progress_metric.absolute(0);
-
-        let collector_task = {
-            let pair_queue = pair_queue.clone();
-            tokio::spawn(async move {
-                // Intermediate: unsorted flat (mass, protein_id) pairs from all threads, packed
-                // into 12 bytes each. Sorted + deduped after threads finish, then converted to CSR
-                // in one pass that reuses this buffer's allocation for `protein_ids`.
-                let mut pairs: Vec<MassPidPair> = Vec::with_capacity(protein_count);
-
-                loop {
-                    let batch = match pair_queue.pop() {
-                        Some(Some(batch)) => batch,
-                        Some(None) => break,
-                        None => {
-                            tokio::time::sleep(Duration::from_millis(50)).await;
-                            continue;
-                        }
-                    };
-
-                    pairs.extend(batch);
-                }
-
-                pairs.shrink_to_fit();
-                Ok::<_, Error>(pairs)
-            })
-        };
-
-        let mut proteins = protein_access.all().await?;
-
-        let digest_and_insertion_threads = (0..num_threads.get())
-            .map(|_| {
-                let protease = protease.clone();
-                let protein_queue = protein_queue.clone();
-                let partial_progress_metric = partial_progress_metric.clone();
-                let mass_interval = interval.clone();
-                let pair_queue = pair_queue.clone();
-
-                tokio::spawn(async move {
-                    let mut local_pairs: Vec<MassPidPair> = Vec::with_capacity(LOCAL_MASS_LIMIT);
-
-                    loop {
-                        let protein = match protein_queue.pop() {
-                            Some(Some(protein)) => protein,
-                            Some(None) => break,
-                            None => {
-                                tokio::time::sleep(Duration::from_millis(50)).await;
-                                continue;
-                            }
-                        };
-
-                        let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
-
-                        protease
-                            .cleave_masses_only(protein.sequence().as_ref())
-                            .filter(|mass| Ok(mass_interval.0 <= *mass && *mass < mass_interval.1))
-                            .for_each(|mass| {
-                                local_pairs.push(MassPidPair::new(mass, protein_id));
-                                Ok(())
-                            })?;
-
-                        if local_pairs.len() >= LOCAL_MASS_LIMIT {
-                            let mut batch = Some(std::mem::replace(
-                                &mut local_pairs,
-                                Vec::with_capacity(LOCAL_MASS_LIMIT),
-                            ));
-
-                            loop {
-                                batch = match pair_queue.push(batch) {
-                                    Ok(()) => break,
-                                    Err(errored_batched) => {
-                                        tokio::time::sleep(Duration::from_millis(50)).await;
-                                        errored_batched
-                                    }
-                                };
-                            }
-                        }
-
-                        partial_progress_metric.increment(1);
-                    }
-
-                    let mut batch = Some(local_pairs);
-                    loop {
-                        batch = match pair_queue.push(batch) {
-                            Ok(()) => break,
-                            Err(errored_batched) => {
-                                tokio::time::sleep(Duration::from_millis(50)).await;
-                                errored_batched
-                            }
-                        };
-                    }
-
-                    Ok::<_, Error>(())
-                })
-            })
-            .collect::<Vec<_>>();
-
-        while let Some(protein) = proteins.next().await.transpose()? {
-            let mut protein = Some(protein);
-            loop {
-                protein = match protein_queue.push(protein) {
-                    Ok(()) => break,
-                    Err(entry) => {
-                        // check if all threads still running
-                        if digest_and_insertion_threads
-                            .iter()
-                            .any(|thread| thread.is_finished())
-                        {
-                            // find errored_thread and return error
-                            return Err(
-                                Self::find_errored_thread(digest_and_insertion_threads).await
-                            );
-                        }
-                        entry
-                    }
-                };
-            }
-        }
-
-        // Send none to signal stop
-        for _ in 0..num_threads.get() {
-            loop {
-                if protein_queue.push(None).is_ok() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-
-        for thread in digest_and_insertion_threads {
-            thread.await.map_err(|err| Error::Join(err.to_string()))??;
-        }
-
-        loop {
-            match pair_queue.push(None) {
-                Ok(()) => break,
-                Err(_) => {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
-            }
-        }
-
-        let mut pairs = collector_task
-            .await
-            .map_err(|err| Error::Join(err.to_string()))??;
-
-        tracing::info!(
-            "Build for interval [{}, {}) produced {} pairs ({} MB) in {:}s",
-            mass_to_float(mass_interval.0),
-            mass_to_float(mass_interval.1),
-            pairs.len(),
-            pairs.len() * MassPidPair::SIZE / 1024 / 1024,
-            now.elapsed().as_secs_f32()
-        );
-
-        let now = std::time::Instant::now();
-        let sort_pool = rayon::ThreadPoolBuilder::new()
-            .stack_size(512 << 20) // 512 MB per worker
-            .build()
-            .map_err(Error::SortThreadPool)?;
-        sort_pool.install(|| {
-            pairs.par_sort_unstable_by(|a, b| {
-                a.mass().cmp(&b.mass()).then_with(|| a.pid().cmp(&b.pid()))
-            })
-        });
-        pairs.dedup();
-        tracing::info!(
-            "Sorting and deduplication for interval [{}, {}) produced {} unique pairs in {:}s",
-            mass_to_float(mass_interval.0),
-            mass_to_float(mass_interval.1),
-            pairs.len(),
-            now.elapsed().as_secs_f32()
-        );
-
-        // Build CSR from the sorted pairs in a single pass, reusing the pair buffer's own
-        // allocation for `protein_ids` so we never hold both buffers at once.
-        //
-        // Each `MassPidPair` is exactly three `i32` slots and the id we keep is one `i32`.
-        // Reading pair `i` touches slots `3*i..3*i+3` and writes its id to slot `i`. Since
-        // `i <= 3*i`, the write cursor always trails the read cursor and never clobbers a
-        // pair that has not been read yet.
-        let len = pairs.len();
-        let capacity = pairs.capacity();
-        let mut masses: Vec<i64> = Vec::new();
-        let mut indptr: Vec<u64> = vec![0u64];
-
-        // All access goes through this single raw pointer (no reborrow of `pairs`) so the
-        // aliasing between the reads and the in-place writes stays well-defined.
-        let slots = pairs.as_mut_ptr() as *mut i32;
-        for i in 0..len {
-            // SAFETY: `3*i + 2 < 3*len <= 3*capacity` i32 slots, all in bounds and 4-byte aligned.
-            let (mass, pid) = unsafe {
-                let lo = slots.add(3 * i).read() as u32;
-                let hi = slots.add(3 * i + 1).read() as u32;
-                let pid = slots.add(3 * i + 2).read();
-                ((((hi as u64) << 32) | lo as u64) as i64, pid)
-            };
-            if masses.last() != Some(&mass) {
-                masses.push(mass);
-                indptr.push(*indptr.last().unwrap());
-            }
-            *indptr.last_mut().unwrap() += 1;
-            // SAFETY: `i <= 3*i`, so slot `i` was already read on this (or an earlier) pass.
-            unsafe { slots.add(i).write(pid) };
-        }
-
-        // Hand the (now id-only) allocation to a `Vec<i32>`. The buffer holds `3*capacity`
-        // i32 slots; the const asserts on `MassPidPair` guarantee it has the same size and
-        // alignment as `[i32; 3]`, so this matches the layout `Vec<i32>` will free.
-        std::mem::forget(pairs);
-        let mut protein_ids = unsafe { Vec::from_raw_parts(slots, len, capacity * 3) };
-        // And shrink to size
-        protein_ids.shrink_to_fit();
-
-        Ok(PartialMassIndex {
-            mass_interval,
-            masses,
-            indptr,
-            protein_ids,
+    /// Open a streaming reader over the claimed global range `[start, end)`.
+    pub fn claim_reader(&self, start: usize, end: usize) -> Result<MassIndexReader<'_>, Error> {
+        let pids = self.pids.reader_at(self.indptr[start])?;
+        Ok(MassIndexReader {
+            masses: &self.masses,
+            indptr: &self.indptr,
+            g: start,
+            end,
+            pids,
         })
     }
 
-    async fn find_errored_thread(
-        threads: Vec<tokio::task::JoinHandle<Result<(), Error>>>,
-    ) -> Error {
-        for thread in threads {
-            if thread.is_finished() {
-                match thread.await {
-                    Ok(Ok(())) => continue,
-                    Ok(Err(err)) => return err,
-                    Err(_err) => continue,
+    /// Build the disk-backed mass index in a single digestion pass.
+    ///
+    /// 1. Estimate pairs-per-protein from a protease-agnostic sample to size the buckets.
+    /// 2. Scatter every `(mass, pid)` pair (one cleave per protein) into per-mass-range disk
+    ///    buckets sized to fit `memory_budget_bytes` when sorted.
+    /// 3. Finalize buckets in ascending mass order: sort, dedup, append ids to the on-disk store,
+    ///    and accumulate the global `masses`/`indptr` metadata. Oversized buckets sub-spill.
+    pub async fn build(
+        protein_access: Arc<Box<dyn IsProteinAccess>>,
+        protease: Arc<Protease>,
+        num_threads: NonZeroUsize,
+        scratch_dir: PathBuf,
+        memory_budget_bytes: usize,
+    ) -> Result<Self, Error> {
+        std::fs::create_dir_all(&scratch_dir)?;
+        let scratch = tempfile::Builder::new()
+            .prefix("macpepdb-massindex-")
+            .tempdir_in(&scratch_dir)?;
+        let dir = scratch.path().to_path_buf();
+
+        let max_mass = max_peptide_mass(protease.max_length());
+        let protein_count = protein_access.count().await?;
+
+        // --- size the buckets ---
+        let pairs_per_protein = estimate_pairs_per_protein(&protein_access, &protease).await?;
+        let est_total_pairs = (pairs_per_protein * protein_count as f64).ceil().max(1.0) as u64;
+        let budget_pairs = (memory_budget_bytes / MassPidPair::SIZE).max(1) as u64;
+        let target_buckets =
+            ((est_total_pairs as f64 * BUCKET_MARGIN) / budget_pairs as f64).ceil() as usize;
+        let target_buckets = target_buckets.clamp(1, MAX_BUCKETS);
+        let bucket_width = (max_mass / target_buckets as i64).max(1);
+        let num_buckets = (max_mass / bucket_width + 1) as usize;
+        let scatter_flush_pairs =
+            (budget_pairs as usize / num_buckets).clamp(MIN_FLUSH_PAIRS, MAX_FLUSH_PAIRS);
+
+        tracing::info!(
+            "Mass index: ~{:.1} pairs/protein, est {} pairs, budget {} pairs/bucket, {} buckets (width {:.4} Da)",
+            pairs_per_protein,
+            est_total_pairs,
+            budget_pairs,
+            num_buckets,
+            mass_to_float(bucket_width)
+        );
+
+        // --- scatter (single digestion pass) ---
+        let now = std::time::Instant::now();
+        scatter(
+            protein_access,
+            protease,
+            num_threads,
+            dir.clone(),
+            bucket_width,
+            num_buckets,
+            scatter_flush_pairs,
+        )
+        .await?;
+        tracing::info!(
+            "Mass index scatter done in {:.2?}s",
+            now.elapsed().as_secs_f64()
+        );
+
+        // --- finalize buckets into the global metadata + on-disk pids ---
+        let now = std::time::Instant::now();
+        let sort_pool = rayon::ThreadPoolBuilder::new()
+            .stack_size(512 << 20)
+            .build()
+            .map_err(Error::SortThreadPool)?;
+        let mut masses: Vec<i64> = Vec::new();
+        let mut indptr: Vec<u64> = vec![0u64];
+        let mut pid_writer = PidStoreWriter::create(pids_path(&dir), PID_BLOCK_ASSOCIATIONS)?;
+        let mut subspill_count = 0usize;
+        let finalize_metric = metrics::counter!(FINALIZE_PROGRESS_METRIC);
+        finalize_metric.absolute(0);
+
+        for bucket in 0..num_buckets {
+            let lo = bucket as i64 * bucket_width;
+            let hi = (bucket as i64 + 1) * bucket_width;
+            finalize_bucket(
+                bucket_path(&dir, bucket),
+                (lo, hi),
+                budget_pairs,
+                0,
+                &sort_pool,
+                &mut masses,
+                &mut indptr,
+                &mut pid_writer,
+                &mut subspill_count,
+                &finalize_metric,
+            )?;
+        }
+
+        let pids = pid_writer.finish()?;
+        masses.shrink_to_fit();
+        indptr.shrink_to_fit();
+
+        if subspill_count > 0 {
+            tracing::warn!(
+                "Mass index sub-spill fired on {} bucket(s): mass skew made some equal-width bands exceed the sort budget (independent of estimate accuracy). Correctness is unaffected; finer initial bands (a larger BUCKET_MARGIN) would reduce the extra disk passes.",
+                subspill_count
+            );
+        }
+        tracing::info!(
+            "Mass index finalize done in {:.2?}s; {} masses, {} associations",
+            now.elapsed().as_secs_f64(),
+            masses.len(),
+            indptr.last().copied().unwrap_or(0)
+        );
+
+        Ok(MassIndex {
+            masses,
+            indptr,
+            pids,
+            _scratch: scratch,
+        })
+    }
+}
+
+/// Single digestion pass: cleave each protein once and scatter its `(mass, pid)` pairs into
+/// per-mass-range bucket files on disk. A single collector task owns all bucket writers (no
+/// per-bucket lock contention); the parallel digest workers feed it through `pair_queue`.
+async fn scatter(
+    protein_access: Arc<Box<dyn IsProteinAccess>>,
+    protease: Arc<Protease>,
+    num_threads: NonZeroUsize,
+    dir: PathBuf,
+    bucket_width: i64,
+    num_buckets: usize,
+    scatter_flush_pairs: usize,
+) -> Result<(), Error> {
+    let n = num_threads.get();
+    let scatter_progress_metric = Arc::new(metrics::counter!(SCATTER_PROGRESS_METRIC));
+    scatter_progress_metric.absolute(0);
+
+    let ids = protein_access.ids().await?;
+    let chunk_size = ids.len().div_ceil(n).max(1);
+
+    // Pairs: every digest worker -> one collector (mpsc fits N producers -> 1 consumer). The
+    // collector buffers per bucket and flushes via append; the channel closing (all worker senders
+    // dropped) is the EOF signal. A bucket that receives no pairs is never created — finalize
+    // treats a missing file as empty.
+    let (pair_tx, mut pair_rx) = mpsc::channel::<Vec<MassPidPair>>(n);
+    let collector = {
+        let dir = dir.clone();
+        tokio::spawn(async move {
+            let mut buffers: Vec<Vec<MassPidPair>> = (0..num_buckets).map(|_| Vec::new()).collect();
+            while let Some(batch) = pair_rx.recv().await {
+                for pair in batch {
+                    let idx = ((pair.mass() / bucket_width) as usize).min(num_buckets - 1);
+                    let buf = &mut buffers[idx];
+                    buf.push(pair);
+                    if buf.len() >= scatter_flush_pairs {
+                        append_pairs(&bucket_path(&dir, idx), buf)?;
+                        buf.clear();
+                    }
                 }
             }
-        }
+            for (idx, buf) in buffers.iter().enumerate() {
+                if !buf.is_empty() {
+                    append_pairs(&bucket_path(&dir, idx), buf)?;
+                }
+            }
+            Ok::<_, Error>(())
+        })
+    };
 
-        Error::NoErroredThread
+    // Proteins: no feeder. Partition the id space across workers; each worker pulls its own slice
+    // via `by_ids` (a local HashMap walk for the in-memory access — no syscall, no cross-thread
+    // handoff) and digests it flat-out, sending coarse pair batches to the collector.
+    let mut workers = Vec::with_capacity(n);
+    for chunk in ids.chunks(chunk_size) {
+        let chunk = chunk.to_vec();
+        let protein_access = protein_access.clone();
+        let protease = protease.clone();
+        let pair_tx = pair_tx.clone();
+        let scatter_progress_metric = scatter_progress_metric.clone();
+        workers.push(tokio::spawn(async move {
+            let mut local: Vec<MassPidPair> = Vec::with_capacity(LOCAL_MASS_LIMIT);
+            let mut since_report: u64 = 0;
+            let mut proteins = protein_access.by_ids(&chunk).await?;
+            while let Some(protein) = proteins.next().await.transpose()? {
+                let protein_id = protein.id().ok_or(Error::MissingProteinId)?;
+                protease
+                    .cleave_masses_only(protein.sequence().as_ref())
+                    .for_each(|mass| {
+                        local.push(MassPidPair::new(mass, protein_id));
+                        Ok(())
+                    })?;
+                if local.len() >= LOCAL_MASS_LIMIT {
+                    let batch = std::mem::replace(&mut local, Vec::with_capacity(LOCAL_MASS_LIMIT));
+                    // Collector gone (it errored) -> stop; its error surfaces when we join below.
+                    if pair_tx.send(batch).await.is_err() {
+                        return Ok(());
+                    }
+                }
+                since_report += 1;
+                if since_report >= PROGRESS_REPORT_EVERY {
+                    scatter_progress_metric.increment(since_report);
+                    since_report = 0;
+                }
+            }
+            if since_report > 0 {
+                scatter_progress_metric.increment(since_report);
+            }
+            if !local.is_empty() {
+                let _ = pair_tx.send(local).await;
+            }
+            Ok::<_, Error>(())
+        }));
     }
+    // Drop the original pair sender so the collector's channel closes once all workers finish.
+    drop(pair_tx);
 
-    pub fn size(&self) -> usize {
-        std::mem::size_of::<Self>() + self.parts.iter().map(|part| part.size()).sum::<usize>()
-    }
-}
-
-impl Index<i64> for MassIndex {
-    type Output = [i32];
-
-    fn index(&self, mass: i64) -> &Self::Output {
-        for part in &self.parts {
-            if part.mass_interval.0 <= mass && mass < part.mass_interval.1 {
-                return &part[mass];
+    let mut first_err: Option<Error> = None;
+    for worker in workers {
+        match worker.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                first_err.get_or_insert(err);
+            }
+            Err(err) => {
+                first_err.get_or_insert(Error::Join(err.to_string()));
             }
         }
-        &[]
+    }
+    match collector.await {
+        Ok(Ok(())) => {}
+        Ok(Err(err)) => {
+            first_err.get_or_insert(err);
+        }
+        Err(err) => {
+            first_err.get_or_insert(Error::Join(err.to_string()));
+        }
+    }
+
+    match first_err {
+        Some(err) => Err(err),
+        None => Ok(()),
     }
 }
 
-impl IntoIterator for MassIndex {
-    type Item = PartialMassIndex;
-    type IntoIter = std::vec::IntoIter<Self::Item>;
+/// Finalize one bucket file into the global metadata + on-disk pid store. If the bucket is larger
+/// than the sort budget, re-scatter it into finer sub-buckets over its mass range and recurse
+/// (the sub-spill guard) instead of loading it whole.
+#[allow(clippy::too_many_arguments)]
+fn finalize_bucket(
+    path: PathBuf,
+    range: (i64, i64),
+    budget_pairs: u64,
+    depth: usize,
+    sort_pool: &rayon::ThreadPool,
+    masses: &mut Vec<i64>,
+    indptr: &mut Vec<u64>,
+    pid_writer: &mut PidStoreWriter,
+    subspill_count: &mut usize,
+    finalize_metric: &metrics::Counter,
+) -> Result<(), Error> {
+    let (lo, hi) = range;
+    // A bucket that received no pairs is never created by the scatter collector.
+    let n_pairs = match std::fs::metadata(&path) {
+        Ok(meta) => meta.len() / MassPidPair::SIZE as u64,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
 
-    fn into_iter(self) -> Self::IntoIter {
-        self.parts.into_iter()
+    if n_pairs > budget_pairs && hi - lo > 1 && depth < MAX_SUBSPILL_DEPTH {
+        *subspill_count += 1;
+        let fanout = SUBSPILL_FANOUT.min((hi - lo) as usize).max(2);
+        let sub_width = ((hi - lo) / fanout as i64).max(1);
+        let actual = (((hi - lo) - 1) / sub_width + 1) as usize;
+        let sub_paths = restream_into_subbuckets(&path, lo, sub_width, actual)?;
+        std::fs::remove_file(&path)?;
+
+        for (s, sub_path) in sub_paths.into_iter().enumerate() {
+            let slo = lo + s as i64 * sub_width;
+            let shi = (lo + (s as i64 + 1) * sub_width).min(hi);
+            finalize_bucket(
+                sub_path,
+                (slo, shi),
+                budget_pairs,
+                depth + 1,
+                sort_pool,
+                masses,
+                indptr,
+                pid_writer,
+                subspill_count,
+                finalize_metric,
+            )?;
+        }
+        return Ok(());
+    }
+
+    let mut pairs = read_pairs(&path)?;
+    std::fs::remove_file(&path)?;
+    if pairs.is_empty() {
+        return Ok(());
+    }
+
+    sort_pool.install(|| {
+        pairs.par_sort_unstable_by(|a, b| {
+            a.mass().cmp(&b.mass()).then_with(|| a.pid().cmp(&b.pid()))
+        })
+    });
+    pairs.dedup();
+
+    for pair in &pairs {
+        let mass = pair.mass();
+        if masses.last() != Some(&mass) {
+            masses.push(mass);
+            indptr.push(*indptr.last().unwrap());
+        }
+        *indptr.last_mut().unwrap() += 1;
+        pid_writer.push(pair.pid())?;
+    }
+
+    finalize_metric.increment(pairs.len() as u64);
+    Ok(())
+}
+
+/// Stream an oversized bucket file and re-scatter its pairs into `actual` finer sub-bucket files
+/// over `[lo, lo + actual*sub_width)`, without loading the whole file into RAM.
+fn restream_into_subbuckets(
+    path: &Path,
+    lo: i64,
+    sub_width: i64,
+    actual: usize,
+) -> Result<Vec<PathBuf>, Error> {
+    let dir = path.parent().expect("bucket file has a parent dir");
+    let stem = path
+        .file_stem()
+        .expect("bucket file has a stem")
+        .to_string_lossy();
+    let sub_paths: Vec<PathBuf> = (0..actual)
+        .map(|s| dir.join(format!("{stem}_s{s}.bin")))
+        .collect();
+
+    let mut writers: Vec<BufWriter<File>> = Vec::with_capacity(actual);
+    for sub_path in &sub_paths {
+        writers.push(BufWriter::new(File::create(sub_path)?));
+    }
+    let mut buffers: Vec<Vec<MassPidPair>> = (0..actual).map(|_| Vec::new()).collect();
+
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut bytes = [0u8; MassPidPair::SIZE];
+    loop {
+        match reader.read_exact(&mut bytes) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err.into()),
+        }
+        let pair = MassPidPair::read_from_bytes(&bytes).expect("12-byte chunk is a MassPidPair");
+        let s = (((pair.mass() - lo) / sub_width) as usize).min(actual - 1);
+        let buf = &mut buffers[s];
+        buf.push(pair);
+        if buf.len() >= SUBSPILL_FLUSH_PAIRS {
+            writers[s].write_all(buf.as_bytes())?;
+            buf.clear();
+        }
+    }
+
+    for (writer, buf) in writers.iter_mut().zip(buffers.iter()) {
+        if !buf.is_empty() {
+            writer.write_all(buf.as_bytes())?;
+        }
+        writer.flush()?;
+    }
+
+    Ok(sub_paths)
+}
+
+/// Estimate the average number of `(mass, pid)` pairs a protein produces under the *configured*
+/// protease, by digesting a growing random sample until the estimate stabilises. Protease-agnostic
+/// (it runs the real cleave), so it is correct for tryptic, semi-tryptic, unspecific, and any
+/// future protease.
+async fn estimate_pairs_per_protein(
+    protein_access: &Arc<Box<dyn IsProteinAccess>>,
+    protease: &Arc<Protease>,
+) -> Result<f64, Error> {
+    let ids = protein_access.ids().await?;
+    let total = ids.len();
+    if total == 0 {
+        return Ok(0.0);
+    }
+
+    let mut sample_size = SAMPLE_START.min(total);
+    let mut prev: Option<f64> = None;
+    loop {
+        // Stride through the id space so the sample spans the whole proteome.
+        let stride = (total / sample_size).max(1);
+        let sample_ids: Vec<i32> = ids
+            .iter()
+            .copied()
+            .step_by(stride)
+            .take(sample_size)
+            .collect();
+
+        let mut proteins = protein_access.by_ids(&sample_ids).await?;
+        let mut pairs = 0u64;
+        let mut n = 0u64;
+        while let Some(protein) = proteins.next().await.transpose()? {
+            pairs += protease
+                .cleave_masses_only(protein.sequence().as_ref())
+                .count()? as u64;
+            n += 1;
+        }
+        if n == 0 {
+            return Ok(0.0);
+        }
+
+        let est = pairs as f64 / n as f64;
+        let stable = prev.is_some_and(|pv| (est - pv).abs() <= ESTIMATE_TOLERANCE * pv);
+        if stable || sample_size >= total {
+            return Ok(est);
+        }
+        prev = Some(est);
+        sample_size = (sample_size * 4).min(total);
     }
 }
 
@@ -670,8 +816,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_mass_index() {
+    async fn load_fixture_proteins() -> Vec<Protein> {
         let proteins_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -680,164 +825,180 @@ mod tests {
             .join("test_data")
             .join("some_human_proteins.uniprot.txt");
 
-        let protease = Protease::by_name(
+        let mut buf_reader =
+            tokio::io::BufReader::new(tokio::fs::File::open(proteins_file).await.unwrap());
+        let reader = AsyncReader::new(&mut buf_reader);
+        reader
+            .enumerate()
+            .map(|(protein_id, entry)| {
+                Protein::try_from((protein_id as i32, entry.unwrap().entry())).unwrap()
+            })
+            .collect::<Vec<_>>()
+            .await
+    }
+
+    fn trypsin() -> Protease {
+        Protease::by_name(
             "trypsin",
             Some(NonZeroUsize::new(6).unwrap()),
             Some(NonZeroUsize::new(50).unwrap()),
             Some(2),
             false,
         )
-        .unwrap();
+        .unwrap()
+    }
 
-        let mut buf_reader =
-            tokio::io::BufReader::new(tokio::fs::File::open(proteins_file).await.unwrap());
-        let reader = AsyncReader::new(&mut buf_reader);
-
-        let proteins = reader
-            .enumerate()
-            .map(|(protein_id, entry)| {
-                Protein::try_from((protein_id as i32, entry.unwrap().entry())).unwrap()
-            })
-            .collect::<Vec<_>>()
-            .await;
-
-        let mut manual_index: HashMap<i64, HashSet<i32>> = HashMap::new();
-        proteins.iter().for_each(|protein| {
+    fn manual_index(proteins: &[Protein], protease: &Protease) -> HashMap<i64, HashSet<i32>> {
+        let mut manual: HashMap<i64, HashSet<i32>> = HashMap::new();
+        for protein in proteins {
             let protein_id = protein.id().unwrap();
             protease
                 .cleave_masses_only(protein.sequence().as_ref())
                 .for_each(|mass| {
-                    manual_index.entry(mass).or_default().insert(protein_id);
-
+                    manual.entry(mass).or_default().insert(protein_id);
                     Ok(())
                 })
                 .unwrap();
-        });
+        }
+        manual
+    }
+
+    /// Exercise the block-framed pid store directly with a tiny block size so reads cross many
+    /// block boundaries and start mid-block — the path the fixture-driven tests can't reach
+    /// (the fixture has far fewer than `PID_BLOCK_ASSOCIATIONS` associations, i.e. one block).
+    #[test]
+    fn test_pid_store_multi_block_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pids.zst");
+
+        // 1000 ids, blocks of 7 -> ~143 blocks; varied values incl. negatives.
+        let ids: Vec<i32> = (0..1000).map(|i| (i as i32 * 7) - 1500).collect();
+        let mut writer = PidStoreWriter::create(path, 7).unwrap();
+        for &id in &ids {
+            writer.push(id).unwrap();
+        }
+        let store = writer.finish().unwrap();
+
+        // Read from several association offsets, each spanning many blocks, and verify contents.
+        for &start in &[0usize, 1, 6, 7, 8, 13, 500, 993] {
+            let mut reader = store.reader_at(start as u64).unwrap();
+            let got = reader.read_n(ids.len() - start).unwrap();
+            assert_eq!(got, ids[start..], "mismatch reading from offset {start}");
+        }
+
+        // Many small reads in sequence must also reconstruct the full stream across blocks.
+        let mut reader = store.reader_at(0).unwrap();
+        let mut acc = Vec::new();
+        for chunk in [3usize, 4, 5, 9, 100, 1, 878] {
+            acc.extend(reader.read_n(chunk).unwrap());
+        }
+        assert_eq!(acc, ids);
+    }
+
+    /// Build via the disk-backed pipeline and verify every `(mass, ids)` streamed back matches a
+    /// directly-computed reference index. A generous budget keeps this to a single bucket.
+    #[tokio::test]
+    async fn test_mass_index_single_bucket() {
+        let proteins = load_fixture_proteins().await;
+        let protease = trypsin();
+        let manual = manual_index(&proteins, &protease);
 
         let protein_access: Arc<Box<dyn IsProteinAccess>> = Arc::new(Box::new(
             InMemoryProteinAccess::with_proteins(proteins.into_iter()),
         ));
 
-        let max_mass = max_peptide_mass(protease.max_length());
-        let mass_index = MassIndex::partial_build(
+        let mass_index = MassIndex::build(
             protein_access,
             Arc::new(protease),
             NonZeroUsize::new(4).unwrap(),
-            (0, max_mass),
+            std::env::temp_dir(),
+            256 * 1024 * 1024,
         )
         .await
         .unwrap();
 
-        for (mass, protein_ids) in mass_index.into_iter() {
-            let expected_protein_ids = manual_index.get(&mass).unwrap();
-            assert_eq!(
-                expected_protein_ids.len(),
-                protein_ids.len(),
-                "Mass {}: expected {} protein IDs, got {}",
-                mass,
-                expected_protein_ids.len(),
-                protein_ids.len()
-            );
-            for protein_id in protein_ids {
-                assert!(
-                    expected_protein_ids.contains(&protein_id),
-                    "Mass {}: unexpected protein ID {}",
-                    mass,
-                    protein_id
-                );
+        let total = mass_index.len();
+        assert_eq!(total, manual.len(), "distinct mass count must match");
+
+        let mut reader = mass_index.claim_reader(0, total).unwrap();
+        let mut seen = 0usize;
+        while let Some((mass, ids)) = reader.next_entry().unwrap() {
+            let expected = manual.get(&mass).unwrap();
+            assert_eq!(expected.len(), ids.len(), "mass {mass}: id count");
+            for id in &ids {
+                assert!(expected.contains(id), "mass {mass}: unexpected id {id}");
             }
+            seen += 1;
         }
+        assert_eq!(seen, total);
     }
 
-    /// The concurrent build claims contiguous global mass-index ranges and relies on
-    /// `part_offsets` + `resolve_global` to map a global position to its `(mass, ids)`.
-    /// Verify that across multiple parts the global ordering is strictly ascending
-    /// (so claimed chunks are disjoint contiguous mass ranges) and that `resolve_global`
-    /// returns the same protein-id set as the per-mass `Index` lookup.
+    /// A tiny budget forces many small buckets (and likely sub-spills). Verify the concatenated
+    /// index is still globally ascending, ids match, and `claim_end` tiles `[0, total)` exactly —
+    /// the invariants the disjoint-contiguous-partition build relies on.
     #[tokio::test]
-    async fn test_resolve_global_over_parts() {
-        let proteins_file = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join("test_data")
-            .join("some_human_proteins.uniprot.txt");
-
-        let protease = Arc::new(
-            Protease::by_name(
-                "trypsin",
-                Some(NonZeroUsize::new(6).unwrap()),
-                Some(NonZeroUsize::new(50).unwrap()),
-                Some(2),
-                false,
-            )
-            .unwrap(),
-        );
-
-        let mut buf_reader =
-            tokio::io::BufReader::new(tokio::fs::File::open(proteins_file).await.unwrap());
-        let reader = AsyncReader::new(&mut buf_reader);
-        let proteins = reader
-            .enumerate()
-            .map(|(protein_id, entry)| {
-                Protein::try_from((protein_id as i32, entry.unwrap().entry())).unwrap()
-            })
-            .collect::<Vec<_>>()
-            .await;
+    async fn test_mass_index_multi_bucket_and_claims() {
+        let proteins = load_fixture_proteins().await;
+        let protease = trypsin();
+        let manual = manual_index(&proteins, &protease);
 
         let protein_access: Arc<Box<dyn IsProteinAccess>> = Arc::new(Box::new(
             InMemoryProteinAccess::with_proteins(proteins.into_iter()),
         ));
 
-        // Split the mass domain into two adjacent, disjoint intervals -> two parts.
-        let max_mass = max_peptide_mass(protease.max_length());
-        let mid = max_mass / 2;
-        let mut mass_index = MassIndex::with_capacity(2);
-        for interval in [(0, mid), (mid, max_mass)] {
-            mass_index.push(
-                MassIndex::partial_build(
-                    protein_access.clone(),
-                    protease.clone(),
-                    NonZeroUsize::new(4).unwrap(),
-                    interval,
-                )
-                .await
-                .unwrap(),
-            );
-        }
+        // ~341 pairs per bucket -> many buckets for the fixture.
+        let mass_index = MassIndex::build(
+            protein_access,
+            Arc::new(protease),
+            NonZeroUsize::new(4).unwrap(),
+            std::env::temp_dir(),
+            4096,
+        )
+        .await
+        .unwrap();
 
         let total = mass_index.len();
         assert!(total > 0, "expected a non-empty index for the fixture");
+        assert_eq!(total, manual.len());
 
-        // part_offsets: cumulative mass counts, last == total.
-        let offsets = mass_index.part_offsets();
-        assert_eq!(offsets.first(), Some(&0));
-        assert_eq!(offsets.last(), Some(&total));
-
-        // Walking global positions 0..total yields strictly ascending masses, and each
-        // resolved id set matches the per-mass Index lookup.
+        // Strictly ascending masses across all buckets, ids match the reference.
+        let mut reader = mass_index.claim_reader(0, total).unwrap();
         let mut prev: Option<i64> = None;
-        for g in 0..total {
-            let (mass, ids) = mass_index.resolve_global(&offsets, g);
+        let mut count = 0usize;
+        while let Some((mass, ids)) = reader.next_entry().unwrap() {
             if let Some(p) = prev {
-                assert!(mass > p, "masses must be strictly ascending across parts");
+                assert!(mass > p, "masses must be strictly ascending across buckets");
             }
             prev = Some(mass);
-            assert_eq!(ids, &mass_index[mass], "ids mismatch at global index {g}");
+            let expected = manual.get(&mass).unwrap();
+            assert_eq!(ids.len(), expected.len(), "mass {mass}: id count");
+            for id in &ids {
+                assert!(expected.contains(id), "mass {mass}: unexpected id {id}");
+            }
+            count += 1;
         }
+        assert_eq!(count, total);
 
-        // The build's claim cursor walks `claim_end` from 0; the chunks it produces must
-        // tile [0, total) exactly — contiguous, gap-free, disjoint — or partitions would
-        // overlap in mass. Use a small association target to force many chunks.
-        let target = 500u64;
+        // claim_end must tile [0, total) — contiguous, gap-free, disjoint — with a small target to
+        // force many chunks; each claim's reader must reproduce the same masses.
+        let target = 50u64;
         let mut pos = 0usize;
+        let mut walked = 0usize;
         while pos < total {
-            let end = mass_index.claim_end(&offsets, pos, target);
+            let end = mass_index.claim_end(pos, target);
             assert!(end > pos, "claim must advance past {pos}");
             assert!(end <= total, "claim {end} must not exceed total {total}");
+            let mut chunk = mass_index.claim_reader(pos, end).unwrap();
+            while let Some((mass, _ids)) = chunk.next_entry().unwrap() {
+                assert!(manual.contains_key(&mass));
+                walked += 1;
+            }
             pos = end;
         }
         assert_eq!(pos, total, "claims must cover the whole index with no gap");
+        assert_eq!(
+            walked, total,
+            "claim readers must cover every mass exactly once"
+        );
     }
 }
