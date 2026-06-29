@@ -16,7 +16,7 @@ pub fn Configuration() -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
     let macpepdb_configuration: Resource<Result<MacPepDBConfiguration, GeneralError>> =
         use_resource(move || async move {
-            let app_config = app_config.read_unchecked();
+            let app_config = app_config.read();
             let macpepdb_base_url = match app_config.as_ref() {
                 Some(config) => config.get_macpepdb_base_url(),
                 None => return Err(GeneralError::ConfigurationNotLoaded),
@@ -26,17 +26,29 @@ pub fn Configuration() -> Element {
 
             Ok(client.get_configuration().await?)
         });
-    let mut is_partition_plot_element_mounted = use_signal(|| false);
 
-    // Need to be made reactive to be trigger the effect
     use_effect(move || {
-        let macpepdb_configuration = macpepdb_configuration.read_unchecked();
-        let partition_limits = match &*macpepdb_configuration {
-            Some(Ok(config)) => config.get_partition_limits(),
+        let config = macpepdb_configuration.read();
+        let partition_limits = match config.as_ref() {
+            Some(Ok(c)) => c.get_partition_limits().to_vec(),
             _ => return,
         };
+        drop(config);
 
-        if is_partition_plot_element_mounted() {
+        spawn(async move {
+            // The Plotly JS library is fetched asynchronously from CDN after WASM starts,
+            // so we poll until it's available before trying to render.
+            loop {
+                let ready = js_sys::eval("typeof window.Plotly !== 'undefined'")
+                    .ok()
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if ready {
+                    break;
+                }
+                gloo_timers::future::TimeoutFuture::new(50).await;
+            }
+
             let mut plot = Plot::new();
             let trace = Scatter::new(
                 partition_limits
@@ -53,10 +65,9 @@ pub fn Configuration() -> Element {
             let layout = Layout::new().x_axis(x_axis).y_axis(y_axis);
             plot.set_layout(layout);
 
-            spawn(async move {
-                plotly::bindings::new_plot("partition-plot", &plot).await;
-            });
-        }
+            #[cfg(target_arch = "wasm32")]
+            plotly::bindings::react(PARTITION_PLOT_ID, &plot).await;
+        });
     });
 
     rsx! {
@@ -131,7 +142,6 @@ pub fn Configuration() -> Element {
                 }
                 div {
                     id: PARTITION_PLOT_ID,
-                    onmounted: move |_| is_partition_plot_element_mounted.set(true),
                 }
             }
         }

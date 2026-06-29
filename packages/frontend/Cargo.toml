@@ -10,7 +10,9 @@ chrono = { workspace = true }
 dioxus = { workspace = true, features = ["router", "logger"] }
 dioxus-logger = { workspace = true }
 futures = { workspace = true }
-plotly = { workspace = true, features = ["wasm"] }
+gloo-timers = { workspace = true }
+js-sys = { workspace = true }
+plotly = { workspace = true }
 reqwest = { workspace = true, features = ["json", "http2"] }
 serde = { workspace = true, features = ["rc"] }
 serde_json = { workspace = true }
