@@ -534,10 +534,13 @@ async fn main() -> Result<(), Error> {
                 }
 
                 let params: Vec<Box<dyn ToSql + Sync + Send>> =
-                    vec![Box::new(partitions), Box::new(mass)];
+                    vec![Box::new(partitions), Box::new(mass), Box::new(sequence)];
 
                 let peptide = PeptideTable::new(client)
-                    .select("WHERE partition = ANY($1) AND mass = $2 LIMIT 1", params)
+                    .select(
+                        "WHERE partition = ANY($1) AND mass = $2 AND sequence = $3 LIMIT 1",
+                        params,
+                    )
                     .await?
                     .next()
                     .await
