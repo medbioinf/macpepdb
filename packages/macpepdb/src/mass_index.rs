@@ -872,7 +872,7 @@ mod tests {
         let path = dir.path().join("pids.zst");
 
         // 1000 ids, blocks of 7 -> ~143 blocks; varied values incl. negatives.
-        let ids: Vec<i32> = (0..1000).map(|i| (i as i32 * 7) - 1500).collect();
+        let ids: Vec<i32> = (0..1000).map(|i| (i * 7) - 1500).collect();
         let mut writer = PidStoreWriter::create(path, 7).unwrap();
         for &id in &ids {
             writer.push(id).unwrap();
