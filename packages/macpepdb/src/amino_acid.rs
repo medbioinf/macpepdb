@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use pastey::paste;
+use serde::Serialize;
 use thiserror::Error;
 
 use crate::mass_to_int;
@@ -15,12 +16,14 @@ pub enum Error {
     InvalidAminoAcidBitCode(u8),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct AminoAcid {
     code: char,
     mono_mass: i64,
+    #[serde(skip)]
     bit_code: AminoAcidBitCode,
     is_canonical: bool,
+    name: &'static str,
 }
 
 impl AminoAcid {
@@ -40,6 +43,10 @@ impl AminoAcid {
 
     pub fn is_canonical(&self) -> bool {
         self.is_canonical
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
     }
 
     /// Returns the index in the counts array of a peptide.
@@ -80,6 +87,7 @@ macro_rules! create_const_amino_acids {
                     mono_mass: mass_to_int!{$mass},
                     bit_code: AminoAcidBitCode::[< $one_letter_code:upper>],
                     is_canonical: $is_canonical,
+                    name: $name,
                 };
              )+
 

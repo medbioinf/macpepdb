@@ -2,6 +2,7 @@ use std::sync::LazyLock;
 
 use http::{HeaderMap, HeaderValue, header};
 
+pub mod chemistry_controller;
 pub mod configuration_controller;
 pub mod error_controller;
 pub mod headers;
