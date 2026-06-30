@@ -26,14 +26,25 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- --------------------------------------------------------------------------
 -- Row-store tables (distributed): proteins by `id`, blobs/stats by `key`.
 -- --------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION genes_as_text(text[])
+RETURNS text LANGUAGE sql IMMUTABLE AS $$
+  SELECT array_to_string($1, ' ')
+$$;
+
 DROP TABLE IF EXISTS proteins;
 CREATE TABLE proteins (
     id          INTEGER PRIMARY KEY,
     accession   TEXT,
     sequence    BYTEA,
     taxonomy_id INTEGER,
-    flags       "char" -- `"char"` is different from CHAR"
+    flags       "char", -- `"char"` is different from CHAR"
+    genes       TEXT[]
 );
+CREATE INDEX prot_acc_idx ON proteins USING GIN (accession gin_trgm_ops);
+-- a cleaner approach would require a normalized table proteins.id => to gene but will unnecessarily copy the protein ID
+CREATE INDEX prot_gene_str_idx ON proteins USING GIN (genes_as_text(genes) gin_trgm_ops);
+
+
 DROP TABLE IF EXISTS blobs;
 CREATE TABLE blobs (
     key  TEXT,

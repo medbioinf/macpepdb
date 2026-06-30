@@ -22,6 +22,7 @@ use crate::web::peptide_controller::{
     get_peptide, get_peptide_existence, get_search as get_peptide_search,
     post_search as post_peptide_search,
 };
+use crate::web::protein_controller::ProteinController;
 use crate::web::server_state::{MatomoInfo, ServerState};
 use crate::web::taxonomy_controller::TaxonomyController;
 
@@ -114,6 +115,10 @@ pub async fn start(
         .nest(
             TaxonomyController::controller_path(),
             TaxonomyController::routes(server_state.clone()),
+        )
+        .nest(
+            ProteinController::controller_path(),
+            ProteinController::routes(server_state.clone()),
         )
         .with_state(server_state.clone())
         .fallback(page_not_found)

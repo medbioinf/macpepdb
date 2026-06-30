@@ -78,6 +78,8 @@ enum Error {
         "Missing runtime configuration in blob table. Are you sure the database was build correctly?"
     )]
     MissingRuntimeConfiguration,
+    #[error("Missing protein search attribute. Please provide either accession or gene.")]
+    MissingProteinSearchAttribute,
     #[error("Missing taxonomy search attribute. Please provide either scientific name or ID.")]
     MissingTaxonomySearchAttribute,
     #[error("Sequence error: {0}")]
@@ -107,6 +109,26 @@ enum PeptideCommand {
     Show {
         /// Sequence to select
         sequence: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProteinCommand {
+    /// Show protein by
+    #[command(group = ArgGroup::new("search_attribute").required(true))]
+    Show {
+        #[arg(short, long, group = "search_attribute")]
+        accession: Option<String>,
+        #[arg(short, long, group = "search_attribute")]
+        gene: Option<String>,
+    },
+    /// Search for partial gene or accession
+    #[command(group = ArgGroup::new("search_attribute").required(true))]
+    Search {
+        #[arg(short, long, group = "search_attribute")]
+        accession: Option<String>,
+        #[arg(short, long, group = "search_attribute")]
+        gene: Option<String>,
     },
 }
 
@@ -254,6 +276,10 @@ enum Command {
     Peptide {
         #[command(subcommand)]
         command: PeptideCommand,
+    },
+    Protein {
+        #[command(subcommand)]
+        command: ProteinCommand,
     },
     Taxonomy {
         #[command(subcommand)]
@@ -550,6 +576,75 @@ async fn main() -> Result<(), Error> {
                     tracing::info!("{peptide}");
                 } else {
                     println!("{peptide}");
+                }
+
+                if let Some(mut tui) = tui {
+                    tracing::info!("Done. Press Ctrl+C or q to exit.");
+                    tui.wait().await;
+                }
+            }
+        },
+        Command::Protein { command } => match command {
+            ProteinCommand::Show { accession, gene } => {
+                let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
+                let (where_clause, params) = if let Some(accession) = accession {
+                    (
+                        format!(
+                            "WHERE {} = $1 LIMIT 1",
+                            macpepdb::protein_table::ACCESSION_COL
+                        ),
+                        vec![Box::new(accession) as Box<dyn ToSql + Sync + Send>],
+                    )
+                } else if let Some(gene) = gene {
+                    (
+                        format!("WHERE {} = $1 LIMIT 1", macpepdb::protein_table::GENES_COL),
+                        vec![Box::new(gene) as Box<dyn ToSql + Sync + Send>],
+                    )
+                } else {
+                    return Err(Error::MissingProteinSearchAttribute);
+                };
+                let protein = ProteinTable::new(client.clone())
+                    .select(&where_clause, params)
+                    .await?
+                    .next()
+                    .await;
+
+                let output = match protein {
+                    Some(Ok(protein)) => format!("{protein}"),
+                    Some(Err(err)) => format!("Error retrieving protein: {err}"),
+                    None => String::from("Requested protein not found"),
+                };
+
+                if cli.terminal || cli.tui {
+                    tracing::info!(output);
+                } else {
+                    println!("{}", output);
+                }
+
+                if let Some(mut tui) = tui {
+                    tracing::info!("Done. Press Ctrl+C or q to exit.");
+                    tui.wait().await;
+                }
+            }
+            ProteinCommand::Search { accession, gene } => {
+                let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
+                let output = ProteinTable::new(client.clone())
+                    .search(accession.as_ref(), gene.as_ref())
+                    .await?
+                    .map(|protein_res| {
+                        protein_res
+                            .map(|protein| format!("{protein}\n--"))
+                            .map_err(|err| format!("Error retrieving protein: {err}--\n"))
+                            .unwrap()
+                    })
+                    .collect::<Vec<String>>()
+                    .await
+                    .join("\n");
+
+                if cli.terminal || cli.tui {
+                    tracing::info!(output);
+                } else {
+                    println!("{}", output);
                 }
 
                 if let Some(mut tui) = tui {

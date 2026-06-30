@@ -33,7 +33,11 @@ CREATE TABLE IF NOT EXISTS proteins (
     sequence    BYTEA,
     taxonomy_id INTEGER,
     flags       "char" -- `"char"` is different from CHAR"
+    genes       TEXT[],
 );
+CREATE INDEX prot_acc_idx ON proteins USING GIN (accession gin_trgm_ops);
+CREATE INDEX prot_gene_idx ON proteins USING GIN (proteins gin_trgm_ops);
+
 DROP TABLE IF EXISTS blobs;
 CREATE TABLE blobs (
     key  TEXT,

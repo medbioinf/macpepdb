@@ -534,7 +534,8 @@ mod tests {
                 "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
             ).unwrap(),
             0,
-            true
+            true,
+            Vec::new()
         );
         let leptin1 = Protein::new(
             "O42164".to_string(),
@@ -543,7 +544,8 @@ mod tests {
                 "MHWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
             ).unwrap(),
             0,
-            true
+            true,
+            Vec::new()
         );
         // missing M at the beginning makes first peptide unique among this three proteins
         let leptin2 = Protein::new(
@@ -553,7 +555,8 @@ mod tests {
                 "HWGTLCGFLWLWPYLFYVQAVPIQKVQDDTKTLIKTIVTRINDISHTQSVSSKQKVTGLDFIPGLHPILTLSKMDQTLAVYQQILTSMPSRNVIQISNDLENLRDLLHVLAFSKSCHLPWASGLETLDSLGGVLEASGYSTEVVALSRLQGSLQDMLWQLDLSPGC",
             ).unwrap(),
             0,
-            false
+            false,
+            Vec::new()
         );
 
         let trypsin = Protease::by_name(

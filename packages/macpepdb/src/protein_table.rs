@@ -21,40 +21,51 @@ use crate::{client::Client, protein::Protein, stats_table::StatsTable};
 
 static TABLE_NAME: &str = "proteins";
 
+pub static ACCESSION_COL: &str = "accession";
+pub static GENES_COL: &str = "genes";
+
 static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "INSERT INTO {TABLE_NAME} (id, accession, sequence, taxonomy_id, flags) VALUES ($1, $2, $3, $4, $5)"
+        "INSERT INTO {TABLE_NAME} (id, accession, sequence, taxonomy_id, flags, genes) VALUES ($1, $2, $3, $4, $5, $6)"
     )
 });
 
 static COPY_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "COPY {TABLE_NAME} (id, accession, sequence, taxonomy_id, flags) FROM STDIN (FORMAT binary)"
+        "COPY {TABLE_NAME} (id, accession, sequence, taxonomy_id, flags, genes) FROM STDIN (FORMAT binary)"
     )
 });
 
 /// Column types for the binary COPY into `proteins`, in column order.
-static COPY_TYPES: LazyLock<[Type; 5]> =
-    LazyLock::new(|| [Type::INT4, Type::TEXT, Type::BYTEA, Type::INT4, Type::CHAR]);
-
-static SELECT_ALL_STATEMENT: LazyLock<String> = LazyLock::new(|| {
-    format!("SELECT id, accession, sequence, taxonomy_id, flags FROM {TABLE_NAME}")
+static COPY_TYPES: LazyLock<[Type; 6]> = LazyLock::new(|| {
+    [
+        Type::INT4,       // ID
+        Type::TEXT,       // accession
+        Type::BYTEA,      // seqeunce
+        Type::INT4,       // taxonomy IDs
+        Type::CHAR,       // flags
+        Type::TEXT_ARRAY, // genes
+    ]
 });
 
 static SELECT_BY_IDS_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "SELECT id, accession, sequence, taxonomy_id, flags FROM {TABLE_NAME} WHERE id = ANY($1)"
+        "SELECT id, accession, sequence, taxonomy_id, flags, genes FROM {TABLE_NAME} WHERE id = ANY($1)"
     )
 });
 
 static SELECT_BY_ID_RANGE_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "SELECT id, accession, sequence, taxonomy_id, flags FROM {TABLE_NAME} WHERE id >= $1 AND id < $2"
+        "SELECT id, accession, sequence, taxonomy_id, flags, genes FROM {TABLE_NAME} WHERE id >= $1 AND id < $2"
     )
 });
 
 static SELECT_ID_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT id FROM {TABLE_NAME}"));
+
+static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!("SELECT id, accession, sequence, taxonomy_id, flags, genes FROM {TABLE_NAME}")
+});
 
 pub static INSERTED_PROTEINS_METRIC: &str = "protein_table::build::inserted_proteins";
 
@@ -67,6 +78,8 @@ pub enum Error {
         StatsTable::table_name()
     )]
     CountNotFound,
+    #[error("At leas on search term needs to be present")]
+    SearchTerm,
     #[error("Row decoding error in protein: {0}")]
     Row(#[from] tokio_postgres::Error),
     #[error("Unable to open proteins file: {0}")]
@@ -138,6 +151,7 @@ impl ProteinTable {
                         protein.sequence(),
                         &taxonomy_id,
                         protein.flags_as_ref(),
+                        protein.genes(),
                     ])
                     .await?;
                 }
@@ -149,19 +163,27 @@ impl ProteinTable {
         Ok(())
     }
 
-    /// Streams every protein (`SELECT id, accession, sequence, taxonomy_id FROM proteins`).
-    pub async fn select_all(
+    /// Streams proteins matching `where_clause` (e.g. `WHERE accession = $1)
+    /// , binding `params` positionally.
+    pub async fn select(
         &self,
+        where_clause: &str,
+        params: Vec<Box<dyn ToSql + Sync + Send>>,
     ) -> Result<impl Stream<Item = Result<Protein, Error>> + Send + use<>, Error> {
-        let stream = self
-            .client
-            .query_stream(SELECT_ALL_STATEMENT.as_str(), Vec::new())
-            .await?;
+        let statement = format!("{} {where_clause}", SELECT_STATEMENT.as_str());
+        let stream = self.client.query_stream(&statement, params).await?;
         Ok(stream.map(|row_res| {
             row_res
                 .map_err(Error::Row)
                 .and_then(|row| Protein::try_from(row).map_err(Error::from))
         }))
+    }
+
+    /// Streams every protein (`SELECT id, accession, sequence, taxonomy_id FROM proteins`).
+    pub async fn select_all(
+        &self,
+    ) -> Result<impl Stream<Item = Result<Protein, Error>> + Send + use<>, Error> {
+        self.select("", Vec::new()).await
     }
 
     /// Streams the proteins with the given ids (`WHERE id = ANY($1)`).
@@ -196,6 +218,40 @@ impl ProteinTable {
                 .map_err(Error::Row)
                 .and_then(|row| Protein::try_from(row).map_err(Error::from))
         }))
+    }
+
+    pub async fn search(
+        &self,
+        accession: Option<&String>,
+        gene: Option<&String>,
+    ) -> Result<impl Stream<Item = Result<Protein, Error>> + Send + use<>, Error> {
+        if accession.is_none() && gene.is_none() {
+            return Err(Error::SearchTerm);
+        }
+
+        let mut where_clauses = Vec::new();
+        let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
+
+        if let Some(accession) = accession {
+            where_clauses.push(format!("{ACCESSION_COL} ILIKE ${}", params.len() + 1));
+            params.push(Box::new(format!("%{}%", accession)));
+        }
+
+        if let Some(gene) = gene {
+            where_clauses.push(format!(
+                "genes_as_text({GENES_COL}) ILIKE ${}",
+                params.len() + 1
+            ));
+            params.push(Box::new(format!("%{}%", gene)));
+        }
+
+        let where_clause = if !where_clauses.is_empty() {
+            format!("WHERE {}", where_clauses.join(" OR "))
+        } else {
+            String::new()
+        };
+
+        self.select(&where_clause, params).await
     }
 
     pub async fn count(&self) -> Result<usize, Error> {
