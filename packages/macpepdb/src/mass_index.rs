@@ -8,7 +8,8 @@ use std::{
 
 use fallible_iterator::FallibleIterator;
 use futures::StreamExt;
-use tokio::sync::mpsc;
+use tokio::sync::{Semaphore, mpsc};
+use tokio::task::JoinSet;
 
 use rayon::prelude::ParallelSliceMut;
 use thiserror::Error;
@@ -39,6 +40,11 @@ const PID_BLOCK_ASSOCIATIONS: usize = 150_000;
 /// zstd level for the on-disk `protein_ids` blocks — read back during the digestion-bound stage 3,
 /// so a fast level is plenty; the win is fewer disk bytes.
 const ZSTD_PID_LEVEL: i32 = 1;
+/// zstd level for the scatter bucket frames. Bucket files are write-once / read-once scratch and
+/// the pairs compress well (within a bucket the masses span only `bucket_width`, so the `mass_hi`
+/// plane is near-constant and `mass_lo` is tightly banded), so a fast level is the right trade:
+/// the saved IO outweighs the CPU, which runs in parallel off the build's critical path.
+const ZSTD_BUCKET_LEVEL: i32 = 1;
 
 /// Generic margin biasing the bucket count toward more/smaller buckets so estimate error pushes
 /// buckets *under* the sort budget rather than over. Not protease-specific.
@@ -138,16 +144,17 @@ fn pids_path(dir: &Path) -> PathBuf {
     dir.join("pids.zst")
 }
 
-/// Append packed pairs to a bucket file, opening and closing it per call. This keeps the scatter's
-/// open file-descriptor count at ~1 regardless of how many buckets exist — bucket counts can reach
-/// thousands on low-memory builds and must never exhaust the process FD limit. Flushes are chunky
-/// (>= `scatter_flush_pairs`), so the open/close overhead is amortised.
-fn append_pairs(path: &Path, pairs: &[MassPidPair]) -> Result<(), Error> {
+/// Append already-serialized bytes (one frame) to a bucket file, opening and closing it per call.
+/// This keeps the scatter's open file-descriptor count at ~1 regardless of how many buckets exist
+/// — bucket counts can reach thousands on low-memory builds and must never exhaust the process FD
+/// limit. Frames are chunky (>= `scatter_flush_pairs` pairs), so the open/close overhead is
+/// amortised.
+fn append_bytes(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)?;
-    file.write_all(pairs.as_bytes())?;
+    file.write_all(bytes)?;
     Ok(())
 }
 
@@ -159,6 +166,10 @@ fn bytes_to_i32_vec(bytes: &[u8]) -> Vec<i32> {
         .map(|c| i32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
         .collect()
 }
+
+/// In-place dedup of a `MassPidPair` slice already sorted by mass and holding a single pid (one
+/// protein's run): compact the first pair of each equal-mass group to the front and return the
+/// kept count. Stable equivalent of the unstable `[T]::partition_dedup_by_key`.
 fn partition_dedup_by_mass(run: &mut [MassPidPair]) -> usize {
     if run.is_empty() {
         return 0;
@@ -173,13 +184,85 @@ fn partition_dedup_by_mass(run: &mut [MassPidPair]) -> usize {
     write + 1
 }
 
-/// Read every `MassPidPair` out of a bucket file into memory. Only called on buckets that fit the
-/// budget (oversized buckets are handled by `restream_into_subbuckets` without a full load).
-fn read_pairs(path: &Path) -> Result<Vec<MassPidPair>, Error> {
-    let mut file = File::open(path)?;
-    let n = file.metadata()?.len() as usize / MassPidPair::SIZE;
-    let mut pairs = vec![MassPidPair::new(0, 0); n];
-    file.read_exact(pairs.as_mut_slice().as_mut_bytes())?;
+// ---------------------------------------------------------------------------------------------
+// Bucket frames: the scatter writes each flush as one self-describing, zstd-compressed frame:
+//     [u32 n_pairs][u32 comp_len][ zstd(SoA payload) ]      (all little-endian)
+// The payload is struct-of-arrays — all `mass_lo`, then all `mass_hi`, then all `pid` — because
+// splitting the planes is what makes the data compress: within a bucket the masses span only
+// `bucket_width`, so the `mass_hi` plane is near-constant and the `mass_lo` plane is tightly
+// banded, far more redundant than interleaved 12-byte records. Bucket files are write-once /
+// read-once scratch, so a fast zstd level is the right trade (see `ZSTD_BUCKET_LEVEL`).
+// ---------------------------------------------------------------------------------------------
+
+/// Pack a run of pairs into the struct-of-arrays payload (uncompressed).
+fn pairs_to_soa(pairs: &[MassPidPair]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pairs.len() * MassPidPair::SIZE);
+    out.extend(pairs.iter().flat_map(|p| p.mass_lo.to_le_bytes()));
+    out.extend(pairs.iter().flat_map(|p| p.mass_hi.to_le_bytes()));
+    out.extend(pairs.iter().flat_map(|p| p.pid.to_le_bytes()));
+    out
+}
+
+/// Reconstruct `n` pairs from a struct-of-arrays payload produced by `pairs_to_soa`.
+fn soa_to_pairs(raw: &[u8], n: usize) -> Vec<MassPidPair> {
+    let lo = &raw[0..4 * n];
+    let hi = &raw[4 * n..8 * n];
+    let pid = &raw[8 * n..12 * n];
+    (0..n)
+        .map(|i| MassPidPair {
+            mass_lo: u32::from_le_bytes(lo[4 * i..4 * i + 4].try_into().unwrap()),
+            mass_hi: u32::from_le_bytes(hi[4 * i..4 * i + 4].try_into().unwrap()),
+            pid: i32::from_le_bytes(pid[4 * i..4 * i + 4].try_into().unwrap()),
+        })
+        .collect()
+}
+
+/// Compress a run of pairs into one self-describing frame (header + `zstd(SoA)`).
+fn compress_frame(pairs: &[MassPidPair]) -> Result<Vec<u8>, Error> {
+    let payload = pairs_to_soa(pairs);
+    let compressed = zstd::encode_all(payload.as_slice(), ZSTD_BUCKET_LEVEL)?;
+    let mut frame = Vec::with_capacity(8 + compressed.len());
+    frame.extend_from_slice(&(pairs.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&(compressed.len() as u32).to_le_bytes());
+    frame.extend_from_slice(&compressed);
+    Ok(frame)
+}
+
+/// Decode a block-framed bucket file frame by frame, invoking `on_pairs` with each frame's pairs.
+/// Streaming (one frame resident at a time), so it works on oversized buckets that the sort budget
+/// would reject loading whole.
+fn stream_frames<F>(path: &Path, mut on_pairs: F) -> Result<(), Error>
+where
+    F: FnMut(&[MassPidPair]) -> Result<(), Error>,
+{
+    let mut reader = BufReader::new(File::open(path)?);
+    let mut header = [0u8; 8];
+    loop {
+        match reader.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(err.into()),
+        }
+        let n = u32::from_le_bytes(header[0..4].try_into().unwrap()) as usize;
+        let comp_len = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+        let mut compressed = vec![0u8; comp_len];
+        reader.read_exact(&mut compressed)?;
+        let raw = zstd::decode_all(compressed.as_slice())?;
+        on_pairs(&soa_to_pairs(&raw, n))?;
+    }
+    Ok(())
+}
+
+/// Read every `MassPidPair` out of a block-framed bucket file into memory. Only called on buckets
+/// that fit the budget (oversized buckets are handled by `restream_into_subbuckets` without a full
+/// load). `n_hint` is the bucket's known pair count (from the scatter's per-bucket counter), used
+/// to preallocate.
+fn read_pairs(path: &Path, n_hint: usize) -> Result<Vec<MassPidPair>, Error> {
+    let mut pairs = Vec::with_capacity(n_hint);
+    stream_frames(path, |frame| {
+        pairs.extend_from_slice(frame);
+        Ok(())
+    })?;
     Ok(pairs)
 }
 
@@ -437,7 +520,7 @@ impl MassIndex {
 
         // --- scatter (single digestion pass) ---
         let now = std::time::Instant::now();
-        scatter(
+        let bucket_counts = scatter(
             protein_access,
             protease,
             num_threads,
@@ -465,12 +548,13 @@ impl MassIndex {
         let finalize_metric = metrics::counter!(FINALIZE_PROGRESS_METRIC);
         finalize_metric.absolute(0);
 
-        for bucket in 0..num_buckets {
+        for (bucket, &n_pairs) in bucket_counts.iter().enumerate() {
             let lo = bucket as i64 * bucket_width;
             let hi = (bucket as i64 + 1) * bucket_width;
             finalize_bucket(
                 bucket_path(&dir, bucket),
                 (lo, hi),
+                n_pairs,
                 budget_pairs,
                 0,
                 &sort_pool,
@@ -509,8 +593,15 @@ impl MassIndex {
 }
 
 /// Single digestion pass: cleave each protein once and scatter its `(mass, pid)` pairs into
-/// per-mass-range bucket files on disk. A single collector task owns all bucket writers (no
-/// per-bucket lock contention); the parallel digest workers feed it through `pair_queue`.
+/// per-mass-range bucket files on disk, returning the per-bucket pair count.
+///
+/// Dataflow: parallel digest workers -> one collector (mpsc, N producers -> 1 consumer) that owns
+/// the single bounded set of per-bucket buffers and does only cheap per-pair routing. On flush the
+/// collector offloads compression to a bounded pool of blocking tasks (CPU on otherwise-idle cores
+/// during this IO-bound pass), each of which forwards its compressed frame to a single writer task
+/// that appends it. Keeping compression off the collector/writer spine means the saved IO is a net
+/// win on slow disks and the single core never becomes the ceiling on fast ones. A bucket that
+/// receives no pairs is never created — finalize treats a zero count as empty.
 async fn scatter(
     protein_access: Arc<Box<dyn IsProteinAccess>>,
     protease: Arc<Protease>,
@@ -519,7 +610,7 @@ async fn scatter(
     bucket_width: i64,
     num_buckets: usize,
     scatter_flush_pairs: usize,
-) -> Result<(), Error> {
+) -> Result<Vec<u64>, Error> {
     let n = num_threads.get();
     let scatter_progress_metric = Arc::new(metrics::counter!(SCATTER_PROGRESS_METRIC));
     scatter_progress_metric.absolute(0);
@@ -527,34 +618,100 @@ async fn scatter(
     let ids = protein_access.ids().await?;
     let chunk_size = ids.len().div_ceil(n).max(1);
 
-    // Pairs: every digest worker -> one collector (mpsc fits N producers -> 1 consumer). The
-    // collector buffers per bucket and flushes via append; the channel closing (all worker senders
-    // dropped) is the EOF signal. A bucket that receives no pairs is never created — finalize
-    // treats a missing file as empty.
-    let (pair_tx, mut pair_rx) = mpsc::channel::<Vec<MassPidPair>>(n);
-    let collector = {
+    // Writer: a single task appends compressed frames to bucket files. Serial writes (no per-bucket
+    // locks); the frames are already compressed, so one writer keeps up even on fast disks. Returns
+    // the total compressed bytes written for the ratio log.
+    let (frame_tx, mut frame_rx) = mpsc::channel::<(usize, Vec<u8>)>(n);
+    let writer = {
         let dir = dir.clone();
         tokio::spawn(async move {
+            let mut compressed_bytes: u64 = 0;
+            while let Some((idx, frame)) = frame_rx.recv().await {
+                compressed_bytes += frame.len() as u64;
+                append_bytes(&bucket_path(&dir, idx), &frame)?;
+            }
+            Ok::<u64, Error>(compressed_bytes)
+        })
+    };
+
+    // Collector: routes pairs into the single bounded set of per-bucket buffers. The Semaphore caps
+    // in-flight compressions (and therefore buffers handed off), bounding extra memory to roughly
+    // `n × flush size`; the channel closing (all worker senders dropped) is the EOF signal.
+    let (pair_tx, mut pair_rx) = mpsc::channel::<Vec<MassPidPair>>(n);
+    let collector = {
+        let frame_tx = frame_tx.clone();
+        tokio::spawn(async move {
             let mut buffers: Vec<Vec<MassPidPair>> = (0..num_buckets).map(|_| Vec::new()).collect();
+            let mut counts: Vec<u64> = vec![0u64; num_buckets];
+            let sem = Arc::new(Semaphore::new(n));
+            let mut compressors: JoinSet<Result<(), Error>> = JoinSet::new();
+
+            // Hand a filled buffer to a blocking compressor that forwards its frame to the writer.
+            // The permit (acquired by the caller) is released when the task finishes.
+            let spawn_compress =
+                |compressors: &mut JoinSet<Result<(), Error>>,
+                 idx: usize,
+                 buf: Vec<MassPidPair>,
+                 permit: tokio::sync::OwnedSemaphorePermit,
+                 frame_tx: mpsc::Sender<(usize, Vec<u8>)>| {
+                    compressors.spawn(async move {
+                        let frame = tokio::task::spawn_blocking(move || compress_frame(&buf))
+                            .await
+                            .map_err(|err| Error::Join(err.to_string()))??;
+                        // Writer gone (it errored) -> drop the frame; its error surfaces on join.
+                        let _ = frame_tx.send((idx, frame)).await;
+                        drop(permit);
+                        Ok(())
+                    });
+                };
+
             while let Some(batch) = pair_rx.recv().await {
                 for pair in batch {
                     let idx = ((pair.mass() / bucket_width) as usize).min(num_buckets - 1);
                     let buf = &mut buffers[idx];
                     buf.push(pair);
                     if buf.len() >= scatter_flush_pairs {
-                        append_pairs(&bucket_path(&dir, idx), buf)?;
-                        buf.clear();
+                        counts[idx] += buf.len() as u64;
+                        let to_compress = std::mem::take(buf);
+                        let permit = sem.clone().acquire_owned().await.expect("semaphore open");
+                        spawn_compress(
+                            &mut compressors,
+                            idx,
+                            to_compress,
+                            permit,
+                            frame_tx.clone(),
+                        );
+                        // Reap finished compressors to surface errors early and bound the JoinSet.
+                        while let Some(res) = compressors.try_join_next() {
+                            res.map_err(|err| Error::Join(err.to_string()))??;
+                        }
                     }
                 }
             }
-            for (idx, buf) in buffers.iter().enumerate() {
-                if !buf.is_empty() {
-                    append_pairs(&bucket_path(&dir, idx), buf)?;
+
+            // Flush the trailing non-empty buffers.
+            for idx in 0..num_buckets {
+                if buffers[idx].is_empty() {
+                    continue;
                 }
+                counts[idx] += buffers[idx].len() as u64;
+                let to_compress = std::mem::take(&mut buffers[idx]);
+                let permit = sem.clone().acquire_owned().await.expect("semaphore open");
+                spawn_compress(&mut compressors, idx, to_compress, permit, frame_tx.clone());
             }
-            Ok::<_, Error>(())
+
+            // Drain every compressor so all frames reach the writer before this task's `frame_tx`
+            // clone drops (which, with the workers done, lets the writer see EOF).
+            while let Some(res) = compressors.join_next().await {
+                res.map_err(|err| Error::Join(err.to_string()))??;
+            }
+
+            Ok::<Vec<u64>, Error>(counts)
         })
     };
+    // The collector holds its own `frame_tx` clone; drop the original so the writer's channel can
+    // close once the collector finishes.
+    drop(frame_tx);
 
     // Proteins: no feeder. Partition the id space across workers; each worker pulls its own slice
     // via `by_ids` (a local HashMap walk for the in-memory access — no syscall, no cross-thread
@@ -620,20 +777,46 @@ async fn scatter(
             }
         }
     }
-    match collector.await {
-        Ok(Ok(())) => {}
+    let counts = match collector.await {
+        Ok(Ok(counts)) => Some(counts),
         Ok(Err(err)) => {
             first_err.get_or_insert(err);
+            None
         }
         Err(err) => {
             first_err.get_or_insert(Error::Join(err.to_string()));
+            None
         }
+    };
+    let compressed_bytes = match writer.await {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(err)) => {
+            first_err.get_or_insert(err);
+            0
+        }
+        Err(err) => {
+            first_err.get_or_insert(Error::Join(err.to_string()));
+            0
+        }
+    };
+
+    if let Some(err) = first_err {
+        return Err(err);
+    }
+    let counts = counts.expect("collector succeeded => counts present");
+
+    let raw_bytes: u64 = counts.iter().sum::<u64>() * MassPidPair::SIZE as u64;
+    if raw_bytes > 0 {
+        tracing::info!(
+            "Mass index scatter buckets: {} MB raw -> {} MB zstd-{} ({:.0}%)",
+            raw_bytes / (1024 * 1024),
+            compressed_bytes / (1024 * 1024),
+            ZSTD_BUCKET_LEVEL,
+            compressed_bytes as f64 / raw_bytes as f64 * 100.0
+        );
     }
 
-    match first_err {
-        Some(err) => Err(err),
-        None => Ok(()),
-    }
+    Ok(counts)
 }
 
 /// Finalize one bucket file into the global metadata + on-disk pid store. If the bucket is larger
@@ -643,6 +826,7 @@ async fn scatter(
 fn finalize_bucket(
     path: PathBuf,
     range: (i64, i64),
+    n_pairs: u64,
     budget_pairs: u64,
     depth: usize,
     sort_pool: &rayon::ThreadPool,
@@ -653,27 +837,27 @@ fn finalize_bucket(
     finalize_metric: &metrics::Counter,
 ) -> Result<(), Error> {
     let (lo, hi) = range;
-    // A bucket that received no pairs is never created by the scatter collector.
-    let n_pairs = match std::fs::metadata(&path) {
-        Ok(meta) => meta.len() / MassPidPair::SIZE as u64,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(err) => return Err(err.into()),
-    };
+    // A bucket that received no pairs is never created by the scatter collector. Pair counts come
+    // from the scatter's per-bucket counter (the compressed file size no longer reveals them).
+    if n_pairs == 0 {
+        return Ok(());
+    }
 
     if n_pairs > budget_pairs && hi - lo > 1 && depth < MAX_SUBSPILL_DEPTH {
         *subspill_count += 1;
         let fanout = SUBSPILL_FANOUT.min((hi - lo) as usize).max(2);
         let sub_width = ((hi - lo) / fanout as i64).max(1);
         let actual = (((hi - lo) - 1) / sub_width + 1) as usize;
-        let sub_paths = restream_into_subbuckets(&path, lo, sub_width, actual)?;
+        let sub_buckets = restream_into_subbuckets(&path, lo, sub_width, actual)?;
         std::fs::remove_file(&path)?;
 
-        for (s, sub_path) in sub_paths.into_iter().enumerate() {
+        for (s, (sub_path, sub_count)) in sub_buckets.into_iter().enumerate() {
             let slo = lo + s as i64 * sub_width;
             let shi = (lo + (s as i64 + 1) * sub_width).min(hi);
             finalize_bucket(
                 sub_path,
                 (slo, shi),
+                sub_count,
                 budget_pairs,
                 depth + 1,
                 sort_pool,
@@ -687,7 +871,7 @@ fn finalize_bucket(
         return Ok(());
     }
 
-    let mut pairs = read_pairs(&path)?;
+    let mut pairs = read_pairs(&path, n_pairs as usize)?;
     std::fs::remove_file(&path)?;
     if pairs.is_empty() {
         return Ok(());
@@ -715,13 +899,14 @@ fn finalize_bucket(
 }
 
 /// Stream an oversized bucket file and re-scatter its pairs into `actual` finer sub-bucket files
-/// over `[lo, lo + actual*sub_width)`, without loading the whole file into RAM.
+/// over `[lo, lo + actual*sub_width)`, without loading the whole file into RAM. Returns each
+/// sub-bucket's path paired with its pair count; an empty sub-bucket gets no file (count 0).
 fn restream_into_subbuckets(
     path: &Path,
     lo: i64,
     sub_width: i64,
     actual: usize,
-) -> Result<Vec<PathBuf>, Error> {
+) -> Result<Vec<(PathBuf, u64)>, Error> {
     let dir = path.parent().expect("bucket file has a parent dir");
     let stem = path
         .file_stem()
@@ -731,38 +916,31 @@ fn restream_into_subbuckets(
         .map(|s| dir.join(format!("{stem}_s{s}.bin")))
         .collect();
 
-    let mut writers: Vec<BufWriter<File>> = Vec::with_capacity(actual);
-    for sub_path in &sub_paths {
-        writers.push(BufWriter::new(File::create(sub_path)?));
-    }
     let mut buffers: Vec<Vec<MassPidPair>> = (0..actual).map(|_| Vec::new()).collect();
+    let mut counts: Vec<u64> = vec![0u64; actual];
 
-    let mut reader = BufReader::new(File::open(path)?);
-    let mut bytes = [0u8; MassPidPair::SIZE];
-    loop {
-        match reader.read_exact(&mut bytes) {
-            Ok(()) => {}
-            Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(err) => return Err(err.into()),
+    stream_frames(path, |frame| {
+        for &pair in frame {
+            let s = (((pair.mass() - lo) / sub_width) as usize).min(actual - 1);
+            counts[s] += 1;
+            buffers[s].push(pair);
+            if buffers[s].len() >= SUBSPILL_FLUSH_PAIRS {
+                let compressed = compress_frame(&buffers[s])?;
+                append_bytes(&sub_paths[s], &compressed)?;
+                buffers[s].clear();
+            }
         }
-        let pair = MassPidPair::read_from_bytes(&bytes).expect("12-byte chunk is a MassPidPair");
-        let s = (((pair.mass() - lo) / sub_width) as usize).min(actual - 1);
-        let buf = &mut buffers[s];
-        buf.push(pair);
-        if buf.len() >= SUBSPILL_FLUSH_PAIRS {
-            writers[s].write_all(buf.as_bytes())?;
-            buf.clear();
-        }
-    }
+        Ok(())
+    })?;
 
-    for (writer, buf) in writers.iter_mut().zip(buffers.iter()) {
+    for (s, buf) in buffers.iter().enumerate() {
         if !buf.is_empty() {
-            writer.write_all(buf.as_bytes())?;
+            let compressed = compress_frame(buf)?;
+            append_bytes(&sub_paths[s], &compressed)?;
         }
-        writer.flush()?;
     }
 
-    Ok(sub_paths)
+    Ok(sub_paths.into_iter().zip(counts).collect())
 }
 
 async fn estimate_pairs_per_protein(
@@ -912,6 +1090,42 @@ mod tests {
         assert_eq!(partition_dedup_by_mass(&mut run), 1);
     }
 
+    /// Round-trip a multi-frame bucket file through `compress_frame`/`append_bytes` and
+    /// `stream_frames`/`read_pairs`, including masses whose high 32 bits are set (so the
+    /// `mass_hi` plane is exercised, not just `mass_lo`).
+    #[test]
+    fn test_bucket_frame_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bucket_0.bin");
+
+        // Three frames' worth of pairs, with masses spanning the 32-bit boundary.
+        let pairs: Vec<MassPidPair> = (0..2500)
+            .map(|i| MassPidPair::new((i as i64) * 1_000_003 + (1i64 << 33), (i % 7) as i32 - 3))
+            .collect();
+        for chunk in pairs.chunks(1000) {
+            let frame = compress_frame(chunk).unwrap();
+            append_bytes(&path, &frame).unwrap();
+        }
+
+        // read_pairs concatenates every frame in order.
+        let got = read_pairs(&path, pairs.len()).unwrap();
+        assert_eq!(got.len(), pairs.len());
+        for (a, b) in got.iter().zip(pairs.iter()) {
+            assert_eq!(a.mass(), b.mass());
+            assert_eq!(a.pid(), b.pid());
+        }
+
+        // stream_frames yields the same pairs frame by frame.
+        let mut streamed = Vec::new();
+        stream_frames(&path, |frame| {
+            streamed.extend_from_slice(frame);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(streamed.len(), pairs.len());
+        assert!(streamed.iter().zip(pairs.iter()).all(|(a, b)| a == b));
+    }
+
     /// Exercise the block-framed pid store directly with a tiny block size so reads cross many
     /// block boundaries and start mid-block — the path the fixture-driven tests can't reach
     /// (the fixture has far fewer than `PID_BLOCK_ASSOCIATIONS` associations, i.e. one block).
@@ -1049,5 +1263,53 @@ mod tests {
             walked, total,
             "claim readers must cover every mass exactly once"
         );
+    }
+
+    /// A 16-byte memory budget drives `budget_pairs` to 1, so essentially every band overflows and
+    /// recurses through `restream_into_subbuckets` to the depth cap. Verifies the framed sub-spill
+    /// path stays correct (and that pair counts thread through sub-buckets) by matching the
+    /// reference index.
+    #[tokio::test]
+    async fn test_mass_index_forced_subspill() {
+        let proteins = load_fixture_proteins().await;
+        let protease = trypsin();
+        let manual = manual_index(&proteins, &protease);
+
+        let protein_access: Arc<Box<dyn IsProteinAccess>> = Arc::new(Box::new(
+            InMemoryProteinAccess::with_proteins(proteins.into_iter()),
+        ));
+
+        let mass_index = MassIndex::build(
+            protein_access,
+            Arc::new(protease),
+            NonZeroUsize::new(4).unwrap(),
+            std::env::temp_dir(),
+            16, // budget_pairs == 1 -> maximal sub-spill
+        )
+        .await
+        .unwrap();
+
+        let total = mass_index.len();
+        assert_eq!(total, manual.len(), "distinct mass count must match");
+
+        let mut reader = mass_index.claim_reader(0, total).unwrap();
+        let mut prev: Option<i64> = None;
+        let mut seen = 0usize;
+        while let Some((mass, ids)) = reader.next_entry().unwrap() {
+            if let Some(p) = prev {
+                assert!(
+                    mass > p,
+                    "masses must stay strictly ascending after sub-spill"
+                );
+            }
+            prev = Some(mass);
+            let expected = manual.get(&mass).unwrap();
+            assert_eq!(ids.len(), expected.len(), "mass {mass}: id count");
+            for id in &ids {
+                assert!(expected.contains(id), "mass {mass}: unexpected id {id}");
+            }
+            seen += 1;
+        }
+        assert_eq!(seen, total);
     }
 }
