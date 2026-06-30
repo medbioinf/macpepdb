@@ -2,11 +2,13 @@ use std::ops::Deref;
 use std::sync::Arc;
 
 use async_stream::stream;
+use axum::Router;
 use axum::body::Body;
 use axum::extract::{Json, Path, Query, State};
 use axum::http::header::ACCEPT;
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
 use base64::{Engine as _, engine::general_purpose::STANDARD as Base64Standard};
 use futures::StreamExt;
 use http::header;
@@ -24,6 +26,12 @@ use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::server_state::ServerState;
 
 const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
+
+static CONTROLLER_PATH: &str = "/api/peptides";
+static SEARCH_POST_PATH: &str = "/search/{payload}/{accept}";
+static SEARCH_GET_PATH: &str = "/search";
+static EXISTS_PATH: &str = "/{sequence}/exists";
+static SHOW_PATH: &str = "/{sequence}";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -77,195 +85,6 @@ pub struct GetPeptideRequestQuery {
     _include_protein_peptides_sequences: bool,
 }
 
-/// Returns the peptide for given sequence.
-/// Important: This endpoint will return the the peptide inclduing a list of full records of the proteins of origin. The proteins will include only the contained peptide sequences. Not the entire peptide records.
-///
-/// # Arguments
-/// * `db_client` - The database client
-/// * `configuration` - MaCPepDB configuration
-/// * `accession` - Protein accession extracted from URL path
-///
-/// # API
-/// ## Request
-/// * Path: `/api/peptides/:sequence`
-/// * Method: `GET`
-///
-/// ## Query
-/// * `include_protein_peptides_sequences`: `bool` (optional, default: `false`, if true, the peptide sequence will be included in the proteins)
-///
-/// ## Response
-/// ```json
-/// {
-///     "partition": 19,
-///     "mass": 1015475679562,
-///     "sequence": "HMENEKTK",
-///     "missed_cleavages": 1,
-///     # Amino acid counts, the amino acid at index 0 is A, at index 1 is B, ...
-///     "aa_counts": [
-///         0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 2, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
-///     ],
-///     "proteins": [
-///          {
-///             "accession": "Q924W6",
-///             "domains": [],
-///             "entry_name": "TRI66_MOUSE",
-///             "genes": [
-///                 ...
-///             ],
-///             "is_reviewed": true,
-///             "name": "Tripartite motif-containing protein 66",
-///             "peptides": [
-///                 "MSPGLPVSIPSQPHCSTDERVEALAPTCSMCGRDLQAEGSR",
-///                 ...
-///             ],
-///             "proteome_id": "UP000000589",
-///             "secondary_accessions": [
-///                 ...
-///             ],
-///             "sequence": "...",
-///             "taxonomy_id": 10090,
-///             "updated_at": 1687910400
-///         },
-///         ...
-///     ],
-///     "is_swiss_prot": true,
-///     "is_trembl": false,
-///     "taxonomy_ids": [
-///         10090
-///     ],
-///     "unique_taxonomy_ids": [
-///         10090
-///     ],
-///     "proteome_ids": [
-///         "UP000000589"
-///     ]
-/// }
-///
-pub async fn get_peptide(
-    State(server_state): State<Arc<ServerState>>,
-    Path(sequence): Path<String>,
-    Query(_query): Query<GetPeptideRequestQuery>,
-) -> Result<Json<Peptide>, Error> {
-    let peptide = Peptide::try_from(sequence)?;
-
-    let mut peptide = select_one_peptide(&server_state, &peptide)
-        .await?
-        .ok_or(Error::PeptideNotFound)?;
-
-    // Peptides store only a `metadata_id`; resolve it to the deduplicated protein-id set
-    // so the response is byte-identical to the pre-dedup shape.
-    if let Some(metadata_id) = peptide.metadata_id() {
-        let mut groups = PeptideMetadataTable::new(server_state.db_client())
-            .select_by_ids(&[metadata_id])
-            .await?;
-        if let Some(protein_ids) = groups.remove(&metadata_id) {
-            peptide.set_protein_ids(protein_ids);
-        }
-    }
-
-    // let proteins: Vec<Protein> =
-    //     ProteinTable::get_proteins_of_peptide(server_state.db_client_as_ref(), &peptide)
-    //         .await?
-    //         .try_collect()
-    //         .await?;
-
-    // let protein_jsons = if !query.include_protein_peptides_sequences {
-    //     proteins
-    //         .into_iter()
-    //         .map(|protein| protein.to_json_without_peptides())
-    //         .collect::<Result<Vec<_>>>()?
-    // } else {
-    //     proteins
-    //         .into_iter()
-    //         .map(|protein| protein.to_json_with_peptide_sequences(server_state.protease()))
-    //         .collect::<Result<Vec<_>>>()?
-    // };
-
-    // let mut peptide_json = match serde_json::to_value(peptide) {
-    //     Ok(json) => json,
-    //     Err(err) => {
-    //         return Err(Error::new(
-    //             StatusCode::INTERNAL_SERVER_ERROR,
-    //             format!("Error while serializing peptide: {:?}", err),
-    //         ));
-    //     }
-    // };
-    // peptide_json["proteins"] = match serde_json::to_value(protein_jsons) {
-    //     Ok(json) => json,
-    //     Err(err) => {
-    //         return Err(Error::new(
-    //             StatusCode::INTERNAL_SERVER_ERROR,
-    //             format!("Error while serializing proteins: {:?}", err),
-    //         ));
-    //     }
-    // };
-    Ok(Json(peptide))
-}
-
-/// Returns if a peptide exists.
-///
-/// # Arguments
-/// * `db_client` - The database client
-/// * `configuration` - MaCPepDB configuration
-/// * `sequence` - Peptide sequence from path
-///
-/// # API
-/// ## Request
-/// * Path: `/api/peptides/:sequence/exists`
-/// * Method: `GET`
-///
-/// ## Response
-/// Response will be empty.
-/// Statuscode 200 if peptide exists, otherwise 404
-///
-pub async fn get_peptide_existence(
-    State(server_state): State<Arc<ServerState>>,
-    Path(sequence): Path<String>,
-) -> Result<Response, Error> {
-    let peptide = Peptide::try_from(sequence)?;
-
-    if select_one_peptide(&server_state, &peptide).await?.is_some() {
-        Ok((StatusCode::OK, "").into_response())
-    } else {
-        Ok((StatusCode::NOT_FOUND, "").into_response())
-    }
-}
-
-/// Looks up a single stored peptide by `(mass, sequence)`, resolving the candidate
-/// partitions for the mass from the configuration's mass partitioning. Returns `None`
-/// if the mass has no partitions or the sequence is not present.
-async fn select_one_peptide(
-    server_state: &ServerState,
-    peptide: &Peptide,
-) -> Result<Option<Peptide>, Error> {
-    let mass = peptide.mass();
-    let partitions: Vec<i64> = server_state
-        .configuration_as_ref()
-        .mass_partitioning()
-        .partition_by_mass(mass)
-        .map(|(_, partition)| partition)
-        .collect();
-
-    if partitions.is_empty() {
-        return Ok(None);
-    }
-
-    let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
-        Box::new(partitions),
-        Box::new(mass),
-        Box::new(peptide.sequence().clone()),
-    ];
-
-    let mut stream = PeptideTable::new(server_state.db_client())
-        .select(
-            "WHERE partition = ANY($1) AND mass = $2 AND sequence = $3 LIMIT 1",
-            params,
-        )
-        .await?;
-
-    Ok(stream.next().await.transpose()?)
-}
-
 /// Struct for mass as thompson & charge or dalton
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
@@ -297,512 +116,722 @@ pub struct SearchRequestQuery {
     is_download: bool,
 }
 
-#[allow(clippy::tabs_in_doc_comments)]
-/// Returns a stream of peptides matching the given parameters.
-/// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
-/// Important: Peptides only contain the accession of the proteins of origin.
-///
-/// # Arguments
-/// * `db_client` - The database client
-/// * `configuration` - The configuration
-/// * `payload` - The request body
-///
-/// # API
-/// ## Request
-/// * Path: `/api/peptides/search`
-/// * Method: `POST`
-/// * Headers:
-///     * `Content-Type`: `application/json`
-///     * `Accept`: `application/json`, `text/tab-separated-values`, `text/plain`, `text/proforma` (optional, default: `application/json`, controls the output format)
-/// * Query:
-///     * `is_download`: `bool` (optional, default: `false`, if true set the Content-Disposition header to download the response instead of showing it in the browser)
-/// * Body:
-///     ```json
-///     {
-///         # Mass to search for
-///         "mass": 2006.988396539,
-///         # Mass can also be given as tuple of m/z and charge
-///         # "mass": [2006.988396539, 2],
-///         # Lower mass tolerance in ppm
-///         "lower_mass_tolerance_ppm": 5,
-///         # Upper mass tolerance in ppm
-///         "upper_mass_tolerance_ppm": 5,
-///         # Optional parameters for digestion, if one of them is skipped
-///         "max_variable_modifications": 3,
-///         # List of post translational modifications
-///         "modifications": [
-///             {
-///                 "name": "Mod something",
-///                 "amino_acid": "C",
-///                 "mass_delta": 42.0,
-///                 "mod_type": Static,     # Type: Static, Variable
-///                 "position": Anywhere    # Position: Anywhere, Terminus-N, Terminus-C, Bond-C, Bond-N
-///             }
-///         ],
-///         # Optional taxonomy ID to search for
-///         "taxonomy_id": 10090,
-///         # Optional proteome ID to search for
-///         "proteome_id": "UP000000589",
-///         # Optional flag to search only reviewed proteins
-///         "is_reviewed": true
-///         # Optional: If the PTMs in sequences should be resolved
-///         "resolve_modifications": true
-///     }
-///     ```
-///     Deserialized into [SearchRequestBody]
-///
-/// ## Response
-/// ### `application/json`
-/// ```json
-/// [
-///    peptide_1,
-///    peptide_2,
-///    ...
-/// ]
-/// ```
-/// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](get_peptide) + attribute `additional_sequences` if `resolve_modifications` is true.
-///
-/// ### `text/tsv`
-/// ```tsv
-/// partition	mass	sequence	missed_cleavages	aa_counts	proteins	is_swiss_prot	is_trembl	taxonomy_ids	unique_taxonomy_ids	proteome_ids
-/// 51\t2006.988396539\tNLETPSCKNGFLLDGFPR\t1,0,0,1,1,1,2,2,0,0,0,1,3,0,2,0,2,0,1,1,1,0,0,0,0,0,0\tQ9WTP6\ttrue\tfalse\t10090\t10090\tUP000000589
-/// ...
-/// ```
-///
-/// ### `text/plain`
-/// ```text
-/// sequence_1
-/// sequence_2
-/// ...
-///
-/// ### `text/proforma`
-/// Note: The output will only contain the mass shifts but not the modification ID.
-///
-/// ```text
-/// <57.021464@C>NCLETPSCKNGFLLDGFPR
-/// <57.021464@C>NCLETPSCKNGFLLM[+15.994915]DGFPR
-/// ...
-/// ```
-///
-pub async fn post_search(
-    State(server_state): State<Arc<ServerState>>,
-    headers: HeaderMap,
-    Query(query): Query<SearchRequestQuery>,
-    Json(payload): Json<SearchRequestBody>,
-) -> Result<(StatusCode, HeaderMap, Body), Error> {
-    let default_header: HeaderValue = match HeaderValue::from_str(DEFAULT_POST_SEARCH_ACCEPT_HEADER)
-    {
-        Ok(header) => header,
-        Err(err) => {
-            return Ok((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                HeaderMap::new(),
-                Body::from(format!("!!! Error while setting default header: {:?}", err)),
-            ));
-        }
-    };
+pub struct PeptideController;
 
-    let accept_header = headers
-        .get(ACCEPT)
-        .unwrap_or(&default_header)
-        .to_str()
-        .unwrap_or(DEFAULT_POST_SEARCH_ACCEPT_HEADER)
-        .to_string();
+impl PeptideController {
+    pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
+        let router: Router<Arc<ServerState>> = Router::new()
+            .route(SEARCH_POST_PATH, post(Self::search_by_post_request))
+            .route(SEARCH_GET_PATH, get(Self::search_by_get_request))
+            .route(EXISTS_PATH, get(Self::exists))
+            .route(SHOW_PATH, get(Self::show));
 
-    search(server_state, payload, accept_header, query.is_download).await
-}
+        router.with_state(state)
+    }
 
-/// This is basically the same as [post_search], but the payload and mime type are base64 encoded in the URL.
-/// This is useful for GET requests, where the body is not allowed. E.g. for initializing browser downloads via JS or WASM
-/// where the usual blob-download is not possible or would be too large
-///
-/// # API
-/// ## Request
-/// * Path: `/api/peptides/search/:playload/:accept`
-///     * `:accept`: Allowed are the same values like in [post_search] Accept-header, but urlsafe encoded
-///     * `:payload`: The payload as urlsafe base64 encoded JSON string, see [post_search]
-/// * Method: `GET`
-///
-///
-pub async fn get_search(
-    State(server_state): State<Arc<ServerState>>,
-    Query(query): Query<SearchRequestQuery>,
-    Path((payload, accept)): Path<(String, String)>,
-) -> Result<(StatusCode, HeaderMap, Body), Error> {
-    // Decode payload from URL saftyness
-    let payload: String = match urldecode(payload.as_str()) {
-        Ok(payload) => payload.into_owned(),
-        Err(err) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                Body::from(format!(
-                    "!!! Error while decoding payload form URL: {:?}",
-                    err
-                )),
-            ));
-        }
-    };
+    pub fn controller_path() -> &'static str {
+        CONTROLLER_PATH
+    }
 
-    // Decode payload from base64
-    let payload: Vec<u8> = match Base64Standard.decode(payload.as_bytes()) {
-        Ok(payload) => payload,
-        Err(err) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                Body::from(format!(
-                    "!!! Error while decoding payload from base64: {:?}",
-                    err
-                )),
-            ));
-        }
-    };
+    /// Returns the peptide for given sequence.
+    /// Important: This endpoint will return the the peptide inclduing a list of full records of the proteins of origin. The proteins will include only the contained peptide sequences. Not the entire peptide records.
+    ///
+    /// # Arguments
+    /// * `state` - Server state
+    /// * `sequence` - Sequence from path segment
+    /// * 'query' - Query params see [GetPeptideRequestQuery]
+    ///
+    /// # API
+    /// ## Request
+    /// * Path: `/api/peptides/:sequence`
+    /// * Method: `GET`
+    ///
+    /// ## Query
+    /// * `include_protein_peptides_sequences`: `bool` (optional, default: `false`, if true, the peptide sequence will be included in the proteins)
+    ///
+    /// ## Response
+    /// ```json
+    /// {
+    ///     "partition": 19,
+    ///     "mass": 1015475679562,
+    ///     "sequence": "HMENEKTK",
+    ///     # Amino acid counts, the amino acid at index 0 is A, at index 1 is B, ...
+    ///     "aa_counts": [
+    ///         0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 2, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
+    ///     ],
+    ///     "proteins": [
+    ///          {
+    ///             "accession": "Q924W6",
+    ///             "genes": [
+    ///                 ...
+    ///             ],
+    ///             "is_reviewed": true,
+    ///             "peptides": [
+    ///                 "MSPGLPVSIPSQPHCSTDERVEALAPTCSMCGRDLQAEGSR",
+    ///                 ...
+    ///             ],
+    ///             "proteome_id": "UP000000589",
+    ///             "secondary_accessions": [
+    ///                 ...
+    ///             ],
+    ///             "sequence": "...",
+    ///             "taxonomy_id": 10090,
+    ///         },
+    ///         ...
+    ///     ],
+    ///     "is_swiss_prot": true,
+    ///     "is_trembl": false,
+    ///     "taxonomy_ids": [
+    ///         10090
+    ///     ],
+    ///     "unique_taxonomy_ids": [
+    ///         10090
+    ///     ],
+    /// }
+    ///
+    pub async fn show(
+        State(server_state): State<Arc<ServerState>>,
+        Path(sequence): Path<String>,
+        Query(_query): Query<GetPeptideRequestQuery>,
+    ) -> Result<Json<Peptide>, Error> {
+        let peptide = Peptide::try_from(sequence)?;
 
-    // Create string from decoded bytes
-    let payload = match String::from_utf8(payload) {
-        Ok(payload) => payload,
-        Err(err) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                Body::from(format!(
-                    "!!! Error while decoding payload from bytes: {:?}",
-                    err
-                )),
-            ));
-        }
-    };
-
-    // Deserialize payload
-    let payload: SearchRequestBody = match serde_json::from_str(payload.as_str()) {
-        Ok(payload) => payload,
-        Err(err) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                Body::from(format!("!!! Error while deserializing payload: {:?}", err)),
-            ));
-        }
-    };
-
-    // Decode accept from URL saftyness
-    let accept: String = match urldecode(accept.as_str()) {
-        Ok(accept) => accept.into_owned(),
-        Err(err) => {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                Body::from(format!(
-                    "!!! Error while decoding payload form URL: {:?}",
-                    err
-                )),
-            ));
-        }
-    };
-
-    search(server_state, payload, accept, query.is_download).await
-}
-
-async fn search(
-    server_state: Arc<ServerState>,
-    payload: SearchRequestBody,
-    accept_header: String,
-    is_download: bool,
-) -> Result<(StatusCode, HeaderMap, Body), Error> {
-    let mass = match payload.mass {
-        SearchRequestMass::ThompsonCharge(mass, charge) => {
-            mass_to_int!(mass_to_charge_to_dalton(mass, charge))
-        }
-        SearchRequestMass::Dalton(mass) => mass_to_int!(mass),
-    };
-
-    // let mut taxonomy_ids: Option<Vec<i64>> = None;
-    // if let Some(taxonomy_id) = payload.taxonomy_id {
-    //     // Check if taxonomy exists
-    //     if server_state
-    //         .get_taxonomy_tree_as_ref()
-    //         .get_taxonomy(taxonomy_id as u64)
-    //         .is_none()
-    //     {
-    //         return Ok((
-    //             StatusCode::BAD_REQUEST,
-    //             DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-    //             Body::from(format!(
-    //                 "!!! Taxonomy with id {} does not exist",
-    //                 taxonomy_id
-    //             )),
-    //         ));
-    //     }
-
-    //     let mut ids: Vec<i64> = match server_state
-    //         .get_taxonomy_tree_as_ref()
-    //         .get_sub_taxonomies(taxonomy_id as u64)
-    //     {
-    //         Some(taxonomies) => taxonomies.iter().map(|tax| tax.get_id() as i64).collect(),
-    //         None => Vec::new(),
-    //     };
-    //     ids.push(taxonomy_id);
-    //     taxonomy_ids = Some(ids);
-    // }
-
-    let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
-
-    let ptm_collection = match PTMCollection::new(payload.modifications.into_iter().map(Arc::new)) {
-        Ok(collection) => Arc::new(collection),
-        Err(err) => {
-            return Ok((
-                StatusCode::UNPROCESSABLE_ENTITY,
-                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                Body::from(format!("Error while validating PTMs: {:?}", err)),
-            ));
-        }
-    };
-
-    let peptide_stream = match server_state.search_type() {
-        PeptideSearchType::UnionAll => {
-            UnionAllSearch::search(
-                server_state.db_client(),
-                server_state.configuration(),
-                mass,
-                payload.lower_mass_tolerance_ppm,
-                payload.upper_mass_tolerance_ppm,
-                payload.max_variable_modifications,
-                true,
-                None, // TODO: taxonomy_ids,
-                proteome_ids.clone(),
-                payload.is_reviewed,
-                ptm_collection.clone(),
-                payload.resolve_modifications.unwrap_or(false),
-                server_state.concurrent_searches(),
-            )
+        let mut peptide = Self::select_one_peptide(&server_state, &peptide)
             .await?
-        }
-        PeptideSearchType::MultiTask => {
-            MultiTaskSearch::search(
-                server_state.db_client(),
-                server_state.configuration(),
-                mass,
-                payload.lower_mass_tolerance_ppm,
-                payload.upper_mass_tolerance_ppm,
-                payload.max_variable_modifications,
-                true,
-                None, // TODO: taxonomy_ids,
-                proteome_ids.clone(),
-                payload.is_reviewed,
-                ptm_collection.clone(),
-                payload.resolve_modifications.unwrap_or(false),
-                server_state.concurrent_searches(),
-            )
-            .await?
-        }
-    };
+            .ok_or(Error::PeptideNotFound)?;
 
-    let mut headers = HeaderMap::new();
-    if is_download {
-        let file_extension = match accept_header.as_str() {
-            "application/json" => ".json",
-            "text/tab-separated-values" => ".tsv",
-            "text/plain" => ".txt",
-            _ => "",
+        // Peptides store only a `metadata_id`; resolve it to the deduplicated protein-id set
+        // so the response is byte-identical to the pre-dedup shape.
+        if let Some(metadata_id) = peptide.metadata_id() {
+            let mut groups = PeptideMetadataTable::new(server_state.db_client())
+                .select_by_ids(&[metadata_id])
+                .await?;
+            if let Some(protein_ids) = groups.remove(&metadata_id) {
+                peptide.set_protein_ids(protein_ids);
+            }
+        }
+
+        // let proteins: Vec<Protein> =
+        //     ProteinTable::get_proteins_of_peptide(server_state.db_client_as_ref(), &peptide)
+        //         .await?
+        //         .try_collect()
+        //         .await?;
+
+        // let protein_jsons = if !query.include_protein_peptides_sequences {
+        //     proteins
+        //         .into_iter()
+        //         .map(|protein| protein.to_json_without_peptides())
+        //         .collect::<Result<Vec<_>>>()?
+        // } else {
+        //     proteins
+        //         .into_iter()
+        //         .map(|protein| protein.to_json_with_peptide_sequences(server_state.protease()))
+        //         .collect::<Result<Vec<_>>>()?
+        // };
+
+        // let mut peptide_json = match serde_json::to_value(peptide) {
+        //     Ok(json) => json,
+        //     Err(err) => {
+        //         return Err(Error::new(
+        //             StatusCode::INTERNAL_SERVER_ERROR,
+        //             format!("Error while serializing peptide: {:?}", err),
+        //         ));
+        //     }
+        // };
+        // peptide_json["proteins"] = match serde_json::to_value(protein_jsons) {
+        //     Ok(json) => json,
+        //     Err(err) => {
+        //         return Err(Error::new(
+        //             StatusCode::INTERNAL_SERVER_ERROR,
+        //             format!("Error while serializing proteins: {:?}", err),
+        //         ));
+        //     }
+        // };
+        Ok(Json(peptide))
+    }
+
+    /// Returns if a peptide exists.
+    ///
+    /// # Arguments
+    /// * `state` - Server state
+    /// * `sequence` - Peptide sequence from path
+    ///
+    /// # API
+    /// ## Request
+    /// * Path: `/api/peptides/:sequence/exists`
+    /// * Method: `GET`
+    ///
+    /// ## Response
+    /// Response will be empty.
+    /// Statuscode 200 if peptide exists, otherwise 404
+    ///
+    pub async fn exists(
+        State(server_state): State<Arc<ServerState>>,
+        Path(sequence): Path<String>,
+    ) -> Result<Response, Error> {
+        let peptide = Peptide::try_from(sequence)?;
+
+        if Self::select_one_peptide(&server_state, &peptide)
+            .await?
+            .is_some()
+        {
+            Ok((StatusCode::OK, "").into_response())
+        } else {
+            Ok((StatusCode::NOT_FOUND, "").into_response())
+        }
+    }
+
+    /// Looks up a single stored peptide by `(mass, sequence)`, resolving the candidate
+    /// partitions for the mass from the configuration's mass partitioning. Returns `None`
+    /// if the mass has no partitions or the sequence is not present.
+    async fn select_one_peptide(
+        server_state: &ServerState,
+        peptide: &Peptide,
+    ) -> Result<Option<Peptide>, Error> {
+        let mass = peptide.mass();
+        let partitions: Vec<i64> = server_state
+            .configuration_as_ref()
+            .mass_partitioning()
+            .partition_by_mass(mass)
+            .map(|(_, partition)| partition)
+            .collect();
+
+        if partitions.is_empty() {
+            return Ok(None);
+        }
+
+        let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+            Box::new(partitions),
+            Box::new(mass),
+            Box::new(peptide.sequence().clone()),
+        ];
+
+        let mut stream = PeptideTable::new(server_state.db_client())
+            .select(
+                "WHERE partition = ANY($1) AND mass = $2 AND sequence = $3 LIMIT 1",
+                params,
+            )
+            .await?;
+
+        Ok(stream.next().await.transpose()?)
+    }
+
+    #[allow(clippy::tabs_in_doc_comments)]
+    /// Returns a stream of peptides matching the given parameters.
+    /// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
+    /// Important: Peptides only contain the accession of the proteins of origin.
+    ///
+    /// # Arguments
+    /// * `state` - Server state
+    /// * `headers` - The request headers
+    /// * `query` - The query parameters, see [SearchRequestQuery]
+    /// * `payload` - The request body, see [SearchRequestBody]
+    ///
+    /// # API
+    /// ## Request
+    /// * Path: `/api/peptides/search`
+    /// * Method: `POST`
+    /// * Headers:
+    ///     * `Content-Type`: `application/json`
+    ///     * `Accept`: `application/json`, `text/tab-separated-values`, `text/plain`, `text/proforma` (optional, default: `application/json`, controls the output format)
+    /// * Query:
+    ///     * `is_download`: `bool` (optional, default: `false`, if true set the Content-Disposition header to download the response instead of showing it in the browser)
+    /// * Body:
+    ///     ```json
+    ///     {
+    ///         # Mass to search for
+    ///         "mass": 2006.988396539,
+    ///         # Mass can also be given as tuple of m/z and charge
+    ///         # "mass": [2006.988396539, 2],
+    ///         # Lower mass tolerance in ppm
+    ///         "lower_mass_tolerance_ppm": 5,
+    ///         # Upper mass tolerance in ppm
+    ///         "upper_mass_tolerance_ppm": 5,
+    ///         # Optional parameters for digestion, if one of them is skipped
+    ///         "max_variable_modifications": 3,
+    ///         # List of post translational modifications
+    ///         "modifications": [
+    ///             {
+    ///                 "name": "Mod something",
+    ///                 "amino_acid": "C",
+    ///                 "mass_delta": 42.0,
+    ///                 "mod_type": Static,     # Type: Static, Variable
+    ///                 "position": Anywhere    # Position: Anywhere, Terminus-N, Terminus-C, Bond-C, Bond-N
+    ///             }
+    ///         ],
+    ///         # Optional taxonomy ID to search for
+    ///         "taxonomy_id": 10090,
+    ///         # Optional proteome ID to search for
+    ///         "proteome_id": "UP000000589",
+    ///         # Optional flag to search only reviewed proteins
+    ///         "is_reviewed": true
+    ///         # Optional: If the PTMs in sequences should be resolved
+    ///         "resolve_modifications": true
+    ///     }
+    ///     ```
+    ///     Deserialized into [SearchRequestBody]
+    ///
+    /// ## Response
+    /// ### `application/json`
+    /// ```json
+    /// [
+    ///    peptide_1,
+    ///    peptide_2,
+    ///    ...
+    /// ]
+    /// ```
+    /// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](get_peptide) + attribute `additional_sequences` if `resolve_modifications` is true.
+    ///
+    /// ### `text/tsv`
+    /// ```tsv
+    /// partition	mass	sequence	missed_cleavages	aa_counts	proteins	is_swiss_prot	is_trembl	taxonomy_ids	unique_taxonomy_ids	proteome_ids
+    /// 51\t2006.988396539\tNLETPSCKNGFLLDGFPR\t1,0,0,1,1,1,2,2,0,0,0,1,3,0,2,0,2,0,1,1,1,0,0,0,0,0,0\tQ9WTP6\ttrue\tfalse\t10090\t10090\tUP000000589
+    /// ...
+    /// ```
+    ///
+    /// ### `text/plain`
+    /// ```text
+    /// sequence_1
+    /// sequence_2
+    /// ...
+    ///
+    /// ### `text/proforma`
+    /// Note: The output will only contain the mass shifts but not the modification ID.
+    ///
+    /// ```text
+    /// <57.021464@C>NCLETPSCKNGFLLDGFPR
+    /// <57.021464@C>NCLETPSCKNGFLLM[+15.994915]DGFPR
+    /// ...
+    /// ```
+    ///
+    pub async fn search_by_post_request(
+        State(server_state): State<Arc<ServerState>>,
+        headers: HeaderMap,
+        Query(query): Query<SearchRequestQuery>,
+        Json(payload): Json<SearchRequestBody>,
+    ) -> Result<(StatusCode, HeaderMap, Body), Error> {
+        let default_header: HeaderValue =
+            match HeaderValue::from_str(DEFAULT_POST_SEARCH_ACCEPT_HEADER) {
+                Ok(header) => header,
+                Err(err) => {
+                    return Ok((
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        HeaderMap::new(),
+                        Body::from(format!("!!! Error while setting default header: {:?}", err)),
+                    ));
+                }
+            };
+
+        let accept_header = headers
+            .get(ACCEPT)
+            .unwrap_or(&default_header)
+            .to_str()
+            .unwrap_or(DEFAULT_POST_SEARCH_ACCEPT_HEADER)
+            .to_string();
+
+        Self::search(server_state, payload, accept_header, query.is_download).await
+    }
+
+    /// This is basically the same as [PeptideController::search_by_post_request], but the payload and mime type are base64 encoded in the URL.
+    /// This is useful for GET requests, where the body is not allowed. E.g. for initializing browser downloads via JS or WASM
+    /// where the usual blob-download is not possible or would be too large
+    ///
+    /// # Arguments
+    /// * `state` - Server state
+    /// * `headers` - The request headers
+    /// * `query` - The query parameters, see [SearchRequestQuery]
+    /// * `payload` - The request body, see [SearchRequestBody], but urlsafe base64 encoded JSON string
+    /// * `accept` - The accept header, but urlsafe base64 encoded
+    ///
+    /// # API
+    /// ## Request
+    /// * Path: `/api/peptides/search/:playload/:accept`
+    ///     * `:accept`: Allowed are the same values like in [post_search] Accept-header, but urlsafe encoded
+    ///     * `:payload`: The payload as urlsafe base64 encoded JSON string, see [post_search]
+    /// * Method: `GET`
+    ///
+    ///
+    pub async fn search_by_get_request(
+        State(server_state): State<Arc<ServerState>>,
+        Query(query): Query<SearchRequestQuery>,
+        Path((payload, accept)): Path<(String, String)>,
+    ) -> Result<(StatusCode, HeaderMap, Body), Error> {
+        // Decode payload from URL saftyness
+        let payload: String = match urldecode(payload.as_str()) {
+            Ok(payload) => payload.into_owned(),
+            Err(err) => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!(
+                        "!!! Error while decoding payload form URL: {:?}",
+                        err
+                    )),
+                ));
+            }
         };
 
-        headers.insert(
-            header::CONTENT_DISPOSITION,
-            HeaderValue::from_str(
-                format!(
-                    "attachment; filename=\"macpepdb_peptides_download{}\"",
-                    file_extension
+        // Decode payload from base64
+        let payload: Vec<u8> = match Base64Standard.decode(payload.as_bytes()) {
+            Ok(payload) => payload,
+            Err(err) => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!(
+                        "!!! Error while decoding payload from base64: {:?}",
+                        err
+                    )),
+                ));
+            }
+        };
+
+        // Create string from decoded bytes
+        let payload = match String::from_utf8(payload) {
+            Ok(payload) => payload,
+            Err(err) => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!(
+                        "!!! Error while decoding payload from bytes: {:?}",
+                        err
+                    )),
+                ));
+            }
+        };
+
+        // Deserialize payload
+        let payload: SearchRequestBody = match serde_json::from_str(payload.as_str()) {
+            Ok(payload) => payload,
+            Err(err) => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!("!!! Error while deserializing payload: {:?}", err)),
+                ));
+            }
+        };
+
+        // Decode accept from URL saftyness
+        let accept: String = match urldecode(accept.as_str()) {
+            Ok(accept) => accept.into_owned(),
+            Err(err) => {
+                return Ok((
+                    StatusCode::BAD_REQUEST,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!(
+                        "!!! Error while decoding payload form URL: {:?}",
+                        err
+                    )),
+                ));
+            }
+        };
+
+        Self::search(server_state, payload, accept, query.is_download).await
+    }
+
+    async fn search(
+        server_state: Arc<ServerState>,
+        payload: SearchRequestBody,
+        accept_header: String,
+        is_download: bool,
+    ) -> Result<(StatusCode, HeaderMap, Body), Error> {
+        let mass = match payload.mass {
+            SearchRequestMass::ThompsonCharge(mass, charge) => {
+                mass_to_int!(mass_to_charge_to_dalton(mass, charge))
+            }
+            SearchRequestMass::Dalton(mass) => mass_to_int!(mass),
+        };
+
+        // let mut taxonomy_ids: Option<Vec<i64>> = None;
+        // if let Some(taxonomy_id) = payload.taxonomy_id {
+        //     // Check if taxonomy exists
+        //     if server_state
+        //         .get_taxonomy_tree_as_ref()
+        //         .get_taxonomy(taxonomy_id as u64)
+        //         .is_none()
+        //     {
+        //         return Ok((
+        //             StatusCode::BAD_REQUEST,
+        //             DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+        //             Body::from(format!(
+        //                 "!!! Taxonomy with id {} does not exist",
+        //                 taxonomy_id
+        //             )),
+        //         ));
+        //     }
+
+        //     let mut ids: Vec<i64> = match server_state
+        //         .get_taxonomy_tree_as_ref()
+        //         .get_sub_taxonomies(taxonomy_id as u64)
+        //     {
+        //         Some(taxonomies) => taxonomies.iter().map(|tax| tax.get_id() as i64).collect(),
+        //         None => Vec::new(),
+        //     };
+        //     ids.push(taxonomy_id);
+        //     taxonomy_ids = Some(ids);
+        // }
+
+        let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
+
+        let ptm_collection =
+            match PTMCollection::new(payload.modifications.into_iter().map(Arc::new)) {
+                Ok(collection) => Arc::new(collection),
+                Err(err) => {
+                    return Ok((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                        Body::from(format!("Error while validating PTMs: {:?}", err)),
+                    ));
+                }
+            };
+
+        let peptide_stream = match server_state.search_type() {
+            PeptideSearchType::UnionAll => {
+                UnionAllSearch::search(
+                    server_state.db_client(),
+                    server_state.configuration(),
+                    mass,
+                    payload.lower_mass_tolerance_ppm,
+                    payload.upper_mass_tolerance_ppm,
+                    payload.max_variable_modifications,
+                    true,
+                    None, // TODO: taxonomy_ids,
+                    proteome_ids.clone(),
+                    payload.is_reviewed,
+                    ptm_collection.clone(),
+                    payload.resolve_modifications.unwrap_or(false),
+                    server_state.concurrent_searches(),
                 )
-                .as_str(),
-            )
-            .unwrap(),
-        );
-    }
+                .await?
+            }
+            PeptideSearchType::MultiTask => {
+                MultiTaskSearch::search(
+                    server_state.db_client(),
+                    server_state.configuration(),
+                    mass,
+                    payload.lower_mass_tolerance_ppm,
+                    payload.upper_mass_tolerance_ppm,
+                    payload.max_variable_modifications,
+                    true,
+                    None, // TODO: taxonomy_ids,
+                    proteome_ids.clone(),
+                    payload.is_reviewed,
+                    ptm_collection.clone(),
+                    payload.resolve_modifications.unwrap_or(false),
+                    server_state.concurrent_searches(),
+                )
+                .await?
+            }
+        };
 
-    match accept_header.as_str() {
-        "application/json" => {
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("application/json; charset=utf-8"),
-            );
-        }
-        "text/tab-separated-values" => {
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/tab-separated-values; charset=utf-8"),
-            );
-        }
-        "text/plain" => {
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; charset=utf-8"),
-            );
-        }
-        "text/proforma" => {
-            headers.insert(
-                header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; charset=utf-8"), // no official mime type for proforma most clients can deal with text/plain
-            );
-        }
-        _ => (),
-    }
+        let mut headers = HeaderMap::new();
+        if is_download {
+            let file_extension = match accept_header.as_str() {
+                "application/json" => ".json",
+                "text/tab-separated-values" => ".tsv",
+                "text/plain" => ".txt",
+                _ => "",
+            };
 
-    let (status_code, headers, body) = match accept_header.as_str() {
-        "application/json" => (
-            StatusCode::OK,
-            headers,
-            Body::from_stream(stream! {
-                // start json array
-                yield Ok("[".to_string());
-                // set delimiter to empty string for first element
-                let mut delimiter = "".to_string();
-                // create value to temporarily store peptidoform while it is consumed
-                #[allow(unused)]
-                let mut peptidoform_len: usize = 0;
-                // stream peptides
-                for await peptidoforms in peptide_stream {
-                    match peptidoforms {
-                        Ok(peptidoforms) => {
-                            yield Ok(delimiter.to_owned());
-                            peptidoform_len = peptidoforms.len() - 1;
-                            for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
-                                // convert to json and yield
-                                match serde_json::to_string(&peptidoform) {
-                                    Ok(json) => yield Ok(json),
-                                    Err(err) => {
-                                        tracing::error!("{:?}", err);
-                                        yield Err(format!("!!! {:?}", err));
-                                        break;
+            headers.insert(
+                header::CONTENT_DISPOSITION,
+                HeaderValue::from_str(
+                    format!(
+                        "attachment; filename=\"macpepdb_peptides_download{}\"",
+                        file_extension
+                    )
+                    .as_str(),
+                )
+                .unwrap(),
+            );
+        }
+
+        match accept_header.as_str() {
+            "application/json" => {
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json; charset=utf-8"),
+                );
+            }
+            "text/tab-separated-values" => {
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/tab-separated-values; charset=utf-8"),
+                );
+            }
+            "text/plain" => {
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"),
+                );
+            }
+            "text/proforma" => {
+                headers.insert(
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("text/plain; charset=utf-8"), // no official mime type for proforma most clients can deal with text/plain
+                );
+            }
+            _ => (),
+        }
+
+        let (status_code, headers, body) = match accept_header.as_str() {
+            "application/json" => (
+                StatusCode::OK,
+                headers,
+                Body::from_stream(stream! {
+                    // start json array
+                    yield Ok("[".to_string());
+                    // set delimiter to empty string for first element
+                    let mut delimiter = "".to_string();
+                    // create value to temporarily store peptidoform while it is consumed
+                    #[allow(unused)]
+                    let mut peptidoform_len: usize = 0;
+                    // stream peptides
+                    for await peptidoforms in peptide_stream {
+                        match peptidoforms {
+                            Ok(peptidoforms) => {
+                                yield Ok(delimiter.to_owned());
+                                peptidoform_len = peptidoforms.len() - 1;
+                                for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
+                                    // convert to json and yield
+                                    match serde_json::to_string(&peptidoform) {
+                                        Ok(json) => yield Ok(json),
+                                        Err(err) => {
+                                            tracing::error!("{:?}", err);
+                                            yield Err(format!("!!! {:?}", err));
+                                            break;
+                                        }
+                                    };
+                                    if peptidoform_id < peptidoform_len {
+                                        yield Ok(",".to_string());
                                     }
-                                };
-                                if peptidoform_id < peptidoform_len {
-                                    yield Ok(",".to_string());
                                 }
                             }
-                        }
-                        Err(err) => {
-                            tracing::error!("{:?}", err);
-                            yield Err(format!("!!! {:?}", err));
-                            break;
-                        }
-                    };
-                    delimiter = ",".to_string();
-                }
-                // end json array
-                yield Ok("]".to_string());
-            }),
-        ),
-        // "text/tab-separated-values" => (
-        //     StatusCode::OK,
-        //     headers,
-        //     Body::from_stream(stream! {
-        //         let mut has_headers = true;
-        //         for await peptide in peptide_stream {
-        //             // handle error on underlaying stream
-        //             if let Err(err) = peptide {
-        //                 tracing::error!("{:?}", err);
-        //                 yield Err(format!("!!! {:?}", err));
-        //                 break;
-        //             }
-        //             let peptide = match peptide {
-        //                 Ok(peptide) => peptide,
-        //                 Err(err) => {
-        //                     tracing::error!("{:?}", err);
-        //                     yield Err(format!("!!! {:?}", err));
-        //                     break;
-        //                 }
-        //             };
-        //             let peptide = TsvPeptide::from(peptide);
-        //             let mut writer = csv::WriterBuilder::new().has_headers(has_headers).delimiter(b'\t').from_writer(vec![]);
-        //             match writer.serialize(peptide) {
-        //                 Ok(_) => (),
-        //                 Err(err) => {
-        //                     tracing::error!("{:?}", err);
-        //                     yield Err(format!("!!! {:?}", err));
-        //                     break;
-        //                 }
-        //             };
-        //             match writer.into_inner() {
-        //                 Ok(csv) => yield Ok(csv),
-        //                 Err(err) => {
-        //                     tracing::error!("{:?}", err);
-        //                     yield Err(format!("!!! {:?}", err));
-        //                     break;
-        //                 }
-        //             };
-        //             has_headers = false;
-        //         }
-        //         yield Ok(vec![b'\n']);
-        //     }),
-        // ),
-        // Output format makes no difference, the steam controls if only canonical peptides (peptidoform without modificiation) of modified peptides getting returned
-        "text/plain" => (
-            StatusCode::OK,
-            headers,
-            Body::from_stream(stream! {
-                #[allow(unused)]
-                let mut peptidoform_len: usize = 0;
-                let mut delimiter = "".to_string();
-                for await peptidoforms in peptide_stream {
-                    match peptidoforms {
-                        Ok(peptidoforms) => {
-                            yield Ok(delimiter.to_owned());
-                            peptidoform_len = peptidoforms.len() - 1;
-                            for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
-                                yield Ok(peptidoform.sequence().to_string()); // TODO: Could as_bytes() work instead of string allocation? Each byte + 65 should be the ascii char
-                                if peptidoform_id < peptidoform_len {
-                                    yield Ok("\n".to_string());
+                            Err(err) => {
+                                tracing::error!("{:?}", err);
+                                yield Err(format!("!!! {:?}", err));
+                                break;
+                            }
+                        };
+                        delimiter = ",".to_string();
+                    }
+                    // end json array
+                    yield Ok("]".to_string());
+                }),
+            ),
+            // "text/tab-separated-values" => (
+            //     StatusCode::OK,
+            //     headers,
+            //     Body::from_stream(stream! {
+            //         let mut has_headers = true;
+            //         for await peptide in peptide_stream {
+            //             // handle error on underlaying stream
+            //             if let Err(err) = peptide {
+            //                 tracing::error!("{:?}", err);
+            //                 yield Err(format!("!!! {:?}", err));
+            //                 break;
+            //             }
+            //             let peptide = match peptide {
+            //                 Ok(peptide) => peptide,
+            //                 Err(err) => {
+            //                     tracing::error!("{:?}", err);
+            //                     yield Err(format!("!!! {:?}", err));
+            //                     break;
+            //                 }
+            //             };
+            //             let peptide = TsvPeptide::from(peptide);
+            //             let mut writer = csv::WriterBuilder::new().has_headers(has_headers).delimiter(b'\t').from_writer(vec![]);
+            //             match writer.serialize(peptide) {
+            //                 Ok(_) => (),
+            //                 Err(err) => {
+            //                     tracing::error!("{:?}", err);
+            //                     yield Err(format!("!!! {:?}", err));
+            //                     break;
+            //                 }
+            //             };
+            //             match writer.into_inner() {
+            //                 Ok(csv) => yield Ok(csv),
+            //                 Err(err) => {
+            //                     tracing::error!("{:?}", err);
+            //                     yield Err(format!("!!! {:?}", err));
+            //                     break;
+            //                 }
+            //             };
+            //             has_headers = false;
+            //         }
+            //         yield Ok(vec![b'\n']);
+            //     }),
+            // ),
+            // Output format makes no difference, the steam controls if only canonical peptides (peptidoform without modificiation) of modified peptides getting returned
+            "text/plain" => (
+                StatusCode::OK,
+                headers,
+                Body::from_stream(stream! {
+                    #[allow(unused)]
+                    let mut peptidoform_len: usize = 0;
+                    let mut delimiter = "".to_string();
+                    for await peptidoforms in peptide_stream {
+                        match peptidoforms {
+                            Ok(peptidoforms) => {
+                                yield Ok(delimiter.to_owned());
+                                peptidoform_len = peptidoforms.len() - 1;
+                                for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
+                                    yield Ok(peptidoform.sequence().to_string()); // TODO: Could as_bytes() work instead of string allocation? Each byte + 65 should be the ascii char
+                                    if peptidoform_id < peptidoform_len {
+                                        yield Ok("\n".to_string());
+                                    }
                                 }
                             }
-                        }
-                        Err(err) => {
-                            tracing::error!("{:?}", err);
-                            yield Err(format!("!!! {:?}", err));
-                            break;
-                        }
-                    };
-                    delimiter = "\n".to_string();
-                }
-            }),
-        ),
-        "text/fasta" => (
-            StatusCode::OK,
-            headers,
-            Body::from_stream(stream! {
-                let mut peptidoform_ctr: usize = 0;
-                #[allow(unused)]
-                let mut peptidoform_len: usize = 0;
-                let mut delimiter = "".to_string();
-                for await peptidoforms in peptide_stream {
-                    match peptidoforms {
-                        Ok(peptidoforms) => {
-                            yield Ok(delimiter.to_owned());
-                            peptidoform_len = peptidoforms.len() - 1;
-                            for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
-                                yield Ok(format!(">mdb|{peptidoform_ctr}|{}\n", mass_to_float(peptidoform.mass())));
-                                yield Ok(peptidoform.sequence().to_string()); // TODO: Could as_bytes() work instead of string allocation? Each byte + 65 should be the ascii char
-                                peptidoform_ctr += 1;
-                                if peptidoform_id < peptidoform_len {
-                                    yield Ok("\n".to_string());
+                            Err(err) => {
+                                tracing::error!("{:?}", err);
+                                yield Err(format!("!!! {:?}", err));
+                                break;
+                            }
+                        };
+                        delimiter = "\n".to_string();
+                    }
+                }),
+            ),
+            "text/fasta" => (
+                StatusCode::OK,
+                headers,
+                Body::from_stream(stream! {
+                    let mut peptidoform_ctr: usize = 0;
+                    #[allow(unused)]
+                    let mut peptidoform_len: usize = 0;
+                    let mut delimiter = "".to_string();
+                    for await peptidoforms in peptide_stream {
+                        match peptidoforms {
+                            Ok(peptidoforms) => {
+                                yield Ok(delimiter.to_owned());
+                                peptidoform_len = peptidoforms.len() - 1;
+                                for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
+                                    yield Ok(format!(">mdb|{peptidoform_ctr}|{}\n", mass_to_float(peptidoform.mass())));
+                                    yield Ok(peptidoform.sequence().to_string()); // TODO: Could as_bytes() work instead of string allocation? Each byte + 65 should be the ascii char
+                                    peptidoform_ctr += 1;
+                                    if peptidoform_id < peptidoform_len {
+                                        yield Ok("\n".to_string());
+                                    }
                                 }
                             }
-                        }
-                        Err(err) => {
-                            tracing::error!("{:?}", err);
-                            yield Err(format!("!!! {:?}", err));
-                            break;
-                        }
-                    };
-                    delimiter = "\n".to_string();
-                }
-            }),
-        ),
-        _ => (
-            StatusCode::NOT_ACCEPTABLE,
-            DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-            Body::from("Unsupported accept header".to_string()),
-        ),
-    };
-    Ok((status_code, headers, body))
+                            Err(err) => {
+                                tracing::error!("{:?}", err);
+                                yield Err(format!("!!! {:?}", err));
+                                break;
+                            }
+                        };
+                        delimiter = "\n".to_string();
+                    }
+                }),
+            ),
+            _ => (
+                StatusCode::NOT_ACCEPTABLE,
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                Body::from("Unsupported accept header".to_string()),
+            ),
+        };
+        Ok((status_code, headers, body))
+    }
 }

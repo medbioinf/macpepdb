@@ -4,7 +4,6 @@ use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use axum::routing::{get, post};
 use axum::{Router, middleware};
 use http::Method;
 use thiserror::Error;
@@ -14,14 +13,11 @@ use crate::blob_table::BlobTable;
 use crate::client::Client;
 use crate::configuration::RuntimeConfiguration;
 use crate::peptide_search::PeptideSearchType;
-use crate::web::configuration_controller::get_configuration;
+use crate::web::configuration_controller::ConfigurationController;
 use crate::web::error_controller::page_not_found;
 use crate::web::headers::X_DO_NOT_TRACK;
 use crate::web::middleware::tracking_middleware;
-use crate::web::peptide_controller::{
-    get_peptide, get_peptide_existence, get_search as get_peptide_search,
-    post_search as post_peptide_search,
-};
+use crate::web::peptide_controller::PeptideController;
 use crate::web::protein_controller::ProteinController;
 use crate::web::server_state::{MatomoInfo, ServerState};
 use crate::web::taxonomy_controller::TaxonomyController;
@@ -100,22 +96,21 @@ pub async fn start(
     // Build our application with route
     let mut app = Router::new()
         // Peptide routes
-        .route(
-            "/api/peptides/search/{payload}/{accept}",
-            get(get_peptide_search),
+        .nest(
+            PeptideController::controller_path(),
+            PeptideController::routes(server_state.clone()),
         )
-        .route("/api/peptides/search", post(post_peptide_search))
-        .route(
-            "/api/peptides/{sequence}/exists",
-            get(get_peptide_existence),
-        )
-        .route("/api/peptides/{sequence}", get(get_peptide))
         // Configuration routes
-        .route("/api/configuration", get(get_configuration))
+        .nest(
+            ConfigurationController::controller_path(),
+            ConfigurationController::routes(server_state.clone()),
+        )
+        // Taxonomy routes
         .nest(
             TaxonomyController::controller_path(),
             TaxonomyController::routes(server_state.clone()),
         )
+        // Protein routes
         .nest(
             ProteinController::controller_path(),
             ProteinController::routes(server_state.clone()),
