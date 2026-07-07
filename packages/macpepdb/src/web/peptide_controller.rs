@@ -12,6 +12,10 @@ use axum::routing::{get, post};
 use base64::{Engine as _, engine::general_purpose::STANDARD as Base64Standard};
 use futures::StreamExt;
 use http::header;
+use macpepdb_web_common::requests::peptide::{
+    SearchRequestBody, SearchRequestMass, SearchRequestQuery,
+};
+use macpepdb_web_common::responses::peptide::PeptideResponse;
 use postgres_types::ToSql;
 use thiserror::Error;
 use urlencoding::decode as urldecode;
@@ -28,8 +32,8 @@ use crate::web::server_state::ServerState;
 const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
 
 static CONTROLLER_PATH: &str = "/api/peptides";
-static SEARCH_POST_PATH: &str = "/search/{payload}/{accept}";
-static SEARCH_GET_PATH: &str = "/search";
+static SEARCH_GET_PATH: &str = "/search/{payload}/{accept}";
+static SEARCH_POST_PATH: &str = "/search";
 static EXISTS_PATH: &str = "/{sequence}/exists";
 static SHOW_PATH: &str = "/{sequence}";
 
@@ -77,45 +81,6 @@ impl IntoResponse for Error {
     }
 }
 
-/// Struct to deserialize the query parameters for get peptide
-///
-#[derive(serde::Deserialize)]
-pub struct GetPeptideRequestQuery {
-    #[serde(default)]
-    _include_protein_peptides_sequences: bool,
-}
-
-/// Struct for mass as thompson & charge or dalton
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-pub enum SearchRequestMass {
-    ThompsonCharge(f64, u8),
-    Dalton(f64),
-}
-
-/// Simple struct to deserialize the request body for peptide search
-///
-#[derive(serde::Deserialize)]
-pub struct SearchRequestBody {
-    mass: SearchRequestMass,
-    lower_mass_tolerance_ppm: i64,
-    upper_mass_tolerance_ppm: i64,
-    max_variable_modifications: usize,
-    modifications: Vec<PostTranslationalModification>,
-    _taxonomy_id: Option<i64>,
-    proteome_id: Option<String>,
-    is_reviewed: Option<bool>,
-    resolve_modifications: Option<bool>,
-}
-
-/// Struct to deserialize the query parameters for peptide search
-///
-#[derive(serde::Deserialize)]
-pub struct SearchRequestQuery {
-    #[serde(default)]
-    is_download: bool,
-}
-
 pub struct PeptideController;
 
 impl PeptideController {
@@ -134,66 +99,36 @@ impl PeptideController {
     }
 
     /// Returns the peptide for given sequence.
-    /// Important: This endpoint will return the the peptide inclduing a list of full records of the proteins of origin. The proteins will include only the contained peptide sequences. Not the entire peptide records.
+    /// Important: `protein_ids` are raw protein database IDs, not resolved protein records —
+    /// fetch `/api/proteins/{accession}` on demand for a specific protein instead.
     ///
     /// # Arguments
     /// * `state` - Server state
     /// * `sequence` - Sequence from path segment
-    /// * 'query' - Query params see [GetPeptideRequestQuery]
     ///
     /// # API
     /// ## Request
     /// * Path: `/api/peptides/:sequence`
     /// * Method: `GET`
     ///
-    /// ## Query
-    /// * `include_protein_peptides_sequences`: `bool` (optional, default: `false`, if true, the peptide sequence will be included in the proteins)
-    ///
     /// ## Response
     /// ```json
     /// {
     ///     "partition": 19,
-    ///     "mass": 1015475679562,
+    ///     "mass": 1015.475679562,
     ///     "sequence": "HMENEKTK",
-    ///     # Amino acid counts, the amino acid at index 0 is A, at index 1 is B, ...
-    ///     "aa_counts": [
-    ///         0, 0, 0, 0, 2, 0, 0, 1, 0, 0, 2, 0, 1, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0
-    ///     ],
-    ///     "proteins": [
-    ///          {
-    ///             "accession": "Q924W6",
-    ///             "genes": [
-    ///                 ...
-    ///             ],
-    ///             "is_reviewed": true,
-    ///             "peptides": [
-    ///                 "MSPGLPVSIPSQPHCSTDERVEALAPTCSMCGRDLQAEGSR",
-    ///                 ...
-    ///             ],
-    ///             "proteome_id": "UP000000589",
-    ///             "secondary_accessions": [
-    ///                 ...
-    ///             ],
-    ///             "sequence": "...",
-    ///             "taxonomy_id": 10090,
-    ///         },
-    ///         ...
-    ///     ],
+    ///     "protein_ids": [123, 456],
+    ///     "unique_taxonomy_ids": [10090],
+    ///     "non_unique_taxonomy_ids": [10090],
     ///     "is_swiss_prot": true,
-    ///     "is_trembl": false,
-    ///     "taxonomy_ids": [
-    ///         10090
-    ///     ],
-    ///     "unique_taxonomy_ids": [
-    ///         10090
-    ///     ],
+    ///     "is_trembl": false
     /// }
+    /// ```
     ///
     pub async fn show(
         State(server_state): State<Arc<ServerState>>,
         Path(sequence): Path<String>,
-        Query(_query): Query<GetPeptideRequestQuery>,
-    ) -> Result<Json<Peptide>, Error> {
+    ) -> Result<Json<PeptideResponse>, Error> {
         let peptide = Peptide::try_from(sequence)?;
 
         let mut peptide = Self::select_one_peptide(&server_state, &peptide)
@@ -211,43 +146,7 @@ impl PeptideController {
             }
         }
 
-        // let proteins: Vec<Protein> =
-        //     ProteinTable::get_proteins_of_peptide(server_state.db_client_as_ref(), &peptide)
-        //         .await?
-        //         .try_collect()
-        //         .await?;
-
-        // let protein_jsons = if !query.include_protein_peptides_sequences {
-        //     proteins
-        //         .into_iter()
-        //         .map(|protein| protein.to_json_without_peptides())
-        //         .collect::<Result<Vec<_>>>()?
-        // } else {
-        //     proteins
-        //         .into_iter()
-        //         .map(|protein| protein.to_json_with_peptide_sequences(server_state.protease()))
-        //         .collect::<Result<Vec<_>>>()?
-        // };
-
-        // let mut peptide_json = match serde_json::to_value(peptide) {
-        //     Ok(json) => json,
-        //     Err(err) => {
-        //         return Err(Error::new(
-        //             StatusCode::INTERNAL_SERVER_ERROR,
-        //             format!("Error while serializing peptide: {:?}", err),
-        //         ));
-        //     }
-        // };
-        // peptide_json["proteins"] = match serde_json::to_value(protein_jsons) {
-        //     Ok(json) => json,
-        //     Err(err) => {
-        //         return Err(Error::new(
-        //             StatusCode::INTERNAL_SERVER_ERROR,
-        //             format!("Error while serializing proteins: {:?}", err),
-        //         ));
-        //     }
-        // };
-        Ok(Json(peptide))
+        Ok(Json((&peptide).into()))
     }
 
     /// Returns if a peptide exists.
@@ -575,17 +474,32 @@ impl PeptideController {
 
         let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
 
-        let ptm_collection =
-            match PTMCollection::new(payload.modifications.into_iter().map(Arc::new)) {
-                Ok(collection) => Arc::new(collection),
-                Err(err) => {
-                    return Ok((
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                        Body::from(format!("Error while validating PTMs: {:?}", err)),
-                    ));
-                }
-            };
+        let modifications: Vec<PostTranslationalModification> = match payload
+            .modifications
+            .into_iter()
+            .map(PostTranslationalModification::try_from)
+            .collect::<Result<Vec<_>, _>>()
+        {
+            Ok(modifications) => modifications,
+            Err(err) => {
+                return Ok((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!("Error while parsing PTMs: {:?}", err)),
+                ));
+            }
+        };
+
+        let ptm_collection = match PTMCollection::new(modifications.into_iter().map(Arc::new)) {
+            Ok(collection) => Arc::new(collection),
+            Err(err) => {
+                return Ok((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!("Error while validating PTMs: {:?}", err)),
+                ));
+            }
+        };
 
         let peptide_stream = match server_state.search_type() {
             PeptideSearchType::UnionAll => {
@@ -696,7 +610,7 @@ impl PeptideController {
                                 peptidoform_len = peptidoforms.len() - 1;
                                 for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
                                     // convert to json and yield
-                                    match serde_json::to_string(&peptidoform) {
+                                    match serde_json::to_string(&PeptideResponse::from(&peptidoform)) {
                                         Ok(json) => yield Ok(json),
                                         Err(err) => {
                                             tracing::error!("{:?}", err);

@@ -1,7 +1,5 @@
 /// Page for configuration
 pub mod configuration;
-/// Components for peptide page
-pub mod peptide;
 /// Components for peptide search
 pub mod peptide_search;
 /// List of proteins

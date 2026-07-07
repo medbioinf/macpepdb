@@ -34,3 +34,13 @@ impl IsBlob for RuntimeConfiguration {
         Self::BLOB_KEY
     }
 }
+
+impl From<&RuntimeConfiguration>
+    for macpepdb_web_common::responses::configuration::RuntimeConfigurationResponse
+{
+    fn from(configuration: &RuntimeConfiguration) -> Self {
+        Self {
+            protease: (&configuration.protease).into(),
+        }
+    }
+}

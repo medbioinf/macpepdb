@@ -7,8 +7,8 @@ use axum::extract::{Json, State};
 use axum::routing::get;
 
 // internal imports
-use crate::configuration::RuntimeConfiguration;
 use crate::web::server_state::ServerState;
+use macpepdb_web_common::responses::configuration::RuntimeConfigurationResponse;
 
 static CONTROLLER_PATH: &str = "/api/configuration";
 static SHOW_PATH: &str = "/";
@@ -63,7 +63,9 @@ impl ConfigurationController {
     /// }
     /// ```
     ///
-    pub async fn show(State(server_state): State<Arc<ServerState>>) -> Json<RuntimeConfiguration> {
-        Json(server_state.configuration_as_ref().clone())
+    pub async fn show(
+        State(server_state): State<Arc<ServerState>>,
+    ) -> Json<RuntimeConfigurationResponse> {
+        Json(server_state.configuration_as_ref().into())
     }
 }

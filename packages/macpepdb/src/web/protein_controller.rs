@@ -9,9 +9,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
-use http::StatusCode;
+use http::{HeaderMap, StatusCode};
+use macpepdb_web_common::responses::peptide::PeptideResponse;
+use macpepdb_web_common::responses::protein::ProteinResponse;
 use postgres_types::ToSql;
-use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::peptide::{IsPeptide, Peptide};
@@ -30,8 +31,6 @@ static PROTEIN_PATH: &str = "/{accession}";
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Unable to deserialization: {0}")]
-    DeSerialization(Box<serde_json::Error>),
     #[error("Peptide table error: {0}")]
     PeptideTable(Box<crate::peptide_table::Error>),
     #[error("Protease error: {0}")]
@@ -46,7 +45,6 @@ pub enum Error {
     SearchTermTooShort,
 }
 
-into_thiserror_boxed!(serde_json::Error, Error, DeSerialization);
 into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
 into_thiserror_boxed!(crate::protease::Error, Error, Protease);
 into_thiserror_boxed!(crate::protein::Error, Error, Protein);
@@ -97,20 +95,18 @@ impl ProteinController {
         CONTROLLER_PATH
     }
 
-    /// Creates a JSON value of this protein including it's peptides
+    /// Builds the response for this protein including its peptides.
     /// As the peptides are not stored in the same record, the protein sequence needs to be digested
     /// using the given protease.
     ///
     /// # Arguments
-    /// * `client` - The database client
-    /// * `partition_limits` - The mass partition limits
-    /// * `protease` - The protease used to generate the peptides
-    /// * `include_protein_accessions` - If true, the returned peptides will include the protein accessions
+    /// * `protein` - The protein to build the response for
+    /// * `state` - Server state
     ///
-    pub async fn to_json_with_peptides(
+    pub async fn to_response(
         protein: &Protein,
         state: &ServerState,
-    ) -> Result<JsonValue, Error> {
+    ) -> Result<ProteinResponse<PeptideResponse>, Error> {
         let peptides = state
             .configuration()
             .protease()
@@ -160,15 +156,16 @@ impl ProteinController {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let mut protein_json: JsonValue = serde_json::to_value(protein)?;
-        protein_json["peptides"] = serde_json::to_value(peptides)?;
-        Ok(protein_json)
+        let peptides: Vec<PeptideResponse> = peptides.iter().map(PeptideResponse::from).collect();
+
+        Ok(protein.to_response(peptides))
     }
 
-    pub fn to_json_with_peptide_sequences(
+    /// Builds the response for this protein including just its peptide sequences.
+    pub fn to_summary_response(
         protein: Protein,
         protease: &Protease,
-    ) -> Result<JsonValue, Error> {
+    ) -> Result<ProteinResponse<String>, Error> {
         let mut peptides: Vec<Peptide> = protease
             .cleave(protein.sequence().data(), None)
             .collect()
@@ -186,13 +183,11 @@ impl ProteinController {
             .map(|pep| pep.into_sequence().to_string())
             .collect::<Vec<String>>();
 
-        let mut protein_json: JsonValue = serde_json::to_value(protein)?;
-        protein_json["peptides"] = serde_json::to_value(sequences)?;
-        Ok(protein_json)
+        Ok(protein.to_summary_response(sequences))
     }
 
     /// Returns the protein for given accession.
-    /// Important: This endpoint will return the the protein including a list of full records of the contained peptides. The peptides will contain just the protein accession. Not the entire protein record.
+    /// Important: This endpoint will return the the protein including a list of full records of the contained peptides. The peptides will contain just their protein IDs (see [PeptideResponse]), not the entire protein record.
     ///
     /// # Arguments
     /// * `db_client` - The database client
@@ -208,43 +203,33 @@ impl ProteinController {
     /// ```json
     /// {
     ///     "accession": "Q9WTP6",
+    ///     "id": 1,
     ///     "genes": [
     ///         "Ak2"
     ///     ],
     ///     "is_reviewed": true,
-    ///     # List of peptide sequences as stored in the database
     ///     "peptides": [
     ///         {
-    ///             "aa_counts": [
-    ///                 ...
-    ///             ],
-    ///             "is_swiss_prot": true,
-    ///             "is_trembl": false,
-    ///             "mass": 587.375495125,
     ///             "partition": 1,
-    ///             "proteins": [
-    ///                 "Q9WTP6"
-    ///             ],
+    ///             "mass": 587.375495125,
     ///             "sequence": "ALKTR",
-    ///             "taxonomy_ids": [
-    ///                 10090
-    ///             ],
-    ///             "unique_taxonomy_ids": [
-    ///                 10090
-    ///             ]
+    ///             "protein_ids": [1],
+    ///             "unique_taxonomy_ids": [10090],
+    ///             "non_unique_taxonomy_ids": [10090],
+    ///             "is_swiss_prot": true,
+    ///             "is_trembl": false
     ///         },
     ///         ...
     ///     ],
     ///     "sequence": "MAPNVLASEPEIPKGIRAVLLGPPG...DLVMFI",
-    ///     "taxonomy_id": 10090,
-    ///     "updated_at": 1687910400
+    ///     "taxonomy_id": 10090
     /// }
     /// ```
     ///
     pub async fn show(
         State(state): State<Arc<ServerState>>,
         Path(accession): Path<String>,
-    ) -> Result<Json<JsonValue>, Error> {
+    ) -> Result<Json<ProteinResponse<PeptideResponse>>, Error> {
         let protein_opt = ProteinTable::new(state.db_client())
             .select(
                 "WHERE accession = $1 LIMIT 1",
@@ -255,14 +240,9 @@ impl ProteinController {
             .await?
             .pop();
 
-        if protein_opt.is_none() {
-            return Err(Error::ProteinNotFound);
-        }
+        let protein = protein_opt.ok_or(Error::ProteinNotFound)?;
 
-        // Get the protein with the peptides as JSON value
-        Ok(Json(
-            Self::to_json_with_peptides(protein_opt.as_ref().unwrap(), state.as_ref()).await?,
-        ))
+        Ok(Json(Self::to_response(&protein, state.as_ref()).await?))
     }
 
     /// Fuzzy search protein for given (partial) accession or (partial) gene name.
@@ -282,26 +262,18 @@ impl ProteinController {
     /// [
     ///     {
     ///         "accession": "Q9WTP6",
+    ///         "id": 1,
     ///         "genes": [
     ///             "Ak2"
     ///         ],
     ///         "is_reviewed": true,
-    ///         # List of peptide sequences as stored in the database
     ///         "peptides": [
     ///             "SYHEEFNPPK",
     ///             ...,
     ///             "KLKATMDAGK"
     ///         ],
-    ///         "secondary_accessions": [
-    ///             "A2A820",
-    ///             "Q3THT3",
-    ///             "Q3TI11",
-    ///             "Q3TKI6",
-    ///             "Q8C7I9",
-    ///             "Q9CY37"
-    ///         ],
     ///         "sequence": "MAPNVLASEPEIPKGIRAVLLGPPG...DLVMFI",
-    ///         "taxonomy_id": 10090,
+    ///         "taxonomy_id": 10090
     ///     },
     ///    ...
     /// ]
@@ -310,7 +282,7 @@ impl ProteinController {
     pub async fn search(
         State(state): State<Arc<ServerState>>,
         Path(attribute): Path<String>,
-    ) -> Result<Body, Error> {
+    ) -> Result<(StatusCode, HeaderMap, Body), Error> {
         if attribute.len() < 3 {
             return Err(Error::SearchTermTooShort);
         }
@@ -318,35 +290,49 @@ impl ProteinController {
             .search(Some(&attribute), Some(&attribute))
             .await?;
 
-        Ok(Body::from_stream(stream! {
-            // start json array
-            yield Ok("[".to_string());
-            // set delimiter to empty string for first element
-            let mut delimiter = "".to_string();
-            // stream peptides
-            for await protein in protein_stream {
-                match protein {
-                    Ok(protein) => {
-                        yield Ok(delimiter.to_owned());
-                        match Self::to_json_with_peptide_sequences(protein, state.configuration().protease()) {
-                            Ok(json) => yield Ok(json.to_string()),
-                            Err(err) => {
-                                tracing::error!("{:?}", err);
-                                yield Err(format!("!!! {:?}", err));
-                                break;
-                            }
-                        };
-                    }
-                    Err(err) => {
-                        tracing::error!("{:?}", err);
-                        yield Err(format!("!!! {:?}", err));
-                        break;
-                    }
-                };
-                delimiter = ",".to_string();
-            }
-            // end json array
-            yield Ok("]".to_string());
-        }))
+        let mut headers = HeaderMap::with_capacity(1);
+        headers.insert("Content-Type", "application/json".parse().unwrap());
+
+        Ok((
+            StatusCode::OK,
+            headers,
+            Body::from_stream(stream! {
+                // start json array
+                yield Ok("[".to_string());
+                // set delimiter to empty string for first element
+                let mut delimiter = "".to_string();
+                // stream peptides
+                for await protein in protein_stream {
+                    match protein {
+                        Ok(protein) => {
+                            yield Ok(delimiter.to_owned());
+                            match Self::to_summary_response(protein, state.configuration().protease()) {
+                                Ok(response) => match serde_json::to_string(&response) {
+                                    Ok(json) => yield Ok(json),
+                                    Err(err) => {
+                                        tracing::error!("{:?}", err);
+                                        yield Err(format!("!!! {:?}", err));
+                                        break;
+                                    }
+                                },
+                                Err(err) => {
+                                    tracing::error!("{:?}", err);
+                                    yield Err(format!("!!! {:?}", err));
+                                    break;
+                                }
+                            };
+                        }
+                        Err(err) => {
+                            tracing::error!("{:?}", err);
+                            yield Err(format!("!!! {:?}", err));
+                            break;
+                        }
+                    };
+                    delimiter = ",".to_string();
+                }
+                // end json array
+                yield Ok("]".to_string());
+            }),
+        ))
     }
 }

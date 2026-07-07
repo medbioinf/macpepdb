@@ -21,6 +21,7 @@ glob = { workspace = true }
 http = { workspace = true }
 itertools = { workspace = true }
 macpepdb_tui = { workspace = true }
+macpepdb_web_common = { workspace = true }
 memchr = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }

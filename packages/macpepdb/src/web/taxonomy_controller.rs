@@ -9,9 +9,9 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::TryStreamExt;
 use http::StatusCode;
+use macpepdb_web_common::requests::taxonomy::SearchRequestBody;
+use macpepdb_web_common::responses::taxonomy::TaxonomyResponse;
 use postgres_types::ToSql;
-use serde::Deserialize;
-use serde_json::Value as JsonValue;
 use thiserror::Error;
 
 use crate::taxonomy_table::{ID_COL, SCIENTIFIC_NAME_COL, TABLE_NAME, TaxonomyTable};
@@ -25,8 +25,6 @@ static SEARCH_TAXONOMIES_PATH: &str = "/search";
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("Unable to deserialization: {0}")]
-    DeSerialization(serde_json::Error),
     #[error("Taxonomy error: {0}")]
     Taxonomy(Box<crate::taxonomy::Error>),
     #[error("Taxonomy not found")]
@@ -68,13 +66,6 @@ impl IntoResponse for Error {
     }
 }
 
-/// Simple struct to deserialize the request body for taxonomy search
-///
-#[derive(Deserialize)]
-pub struct SearchRequestBody {
-    pub search_query: String,
-}
-
 pub struct TaxonomyController;
 
 impl TaxonomyController {
@@ -107,7 +98,8 @@ impl TaxonomyController {
     /// {
     ///    "id": 9606,
     ///    "parent_id": 9605,
-    ///    "rank": "species",
+    ///    "rank_id": 1,
+    ///    "rank_name": "species",
     ///    "scientific_name": "Homo sapiens"
     /// }
     /// ```
@@ -115,7 +107,7 @@ impl TaxonomyController {
     pub async fn taxonomy(
         State(state): State<Arc<ServerState>>,
         Path(id): Path<i32>,
-    ) -> Result<Json<JsonValue>, Error> {
+    ) -> Result<Json<TaxonomyResponse>, Error> {
         let where_clause = format!("WHERE {TABLE_NAME}.{ID_COL} = $1 LIMIT 1",);
 
         let taxonomy = TaxonomyTable::new(state.db_client())
@@ -124,13 +116,10 @@ impl TaxonomyController {
             .try_next()
             .await?;
 
-        if taxonomy.is_none() {
-            return Err(Error::TaxonomyNotFound);
+        match taxonomy {
+            Some(taxonomy) => Ok(Json((&taxonomy).into())),
+            None => Err(Error::TaxonomyNotFound),
         }
-
-        Ok(Json(
-            serde_json::to_value(taxonomy.unwrap()).map_err(Error::DeSerialization)?,
-        ))
     }
 
     /// Returns all sub taxonomies for a given ID. If the initial taxonomy was merged with another on the new one is used.
@@ -151,7 +140,8 @@ impl TaxonomyController {
     ///     {
     ///        "id": 9606,
     ///        "parent_id": 9605,
-    ///        "rank": "species",
+    ///        "rank_id": 1,
+    ///        "rank_name": "species",
     ///        "scientific_name": "Homo sapiens"
     ///     }
     ///     ...
@@ -176,7 +166,7 @@ impl TaxonomyController {
                     Ok(taxonomy) => {
                         yield Ok(delimiter.to_owned());
                         // convert to json and yield
-                        match serde_json::to_string(&taxonomy) {
+                        match serde_json::to_string(&TaxonomyResponse::from(&taxonomy)) {
                             Ok(json) => yield Ok(json),
                             Err(err) => {
                                 tracing::error!("{:?}", err);
@@ -216,10 +206,12 @@ impl TaxonomyController {
     /// * Body:
     ///     ```json
     ///     {
-    ///         search_query: "*sapiens*"
+    ///         "search_query": "sapiens"
     ///     }
     ///     ```
-    ///     Deserialized into [SearchRequestBody]
+    ///   Deserialized into [SearchRequestBody] (matched as an exact taxonomy ID or a
+    ///   substring of the scientific name — no wildcard characters needed, the backend
+    ///   wraps the term in SQL `%...%` itself)
     ///
     ///
     /// ## Response
@@ -229,7 +221,8 @@ impl TaxonomyController {
     ///     {
     ///        "id": 9606,
     ///        "parent_id": 9605,
-    ///        "rank": "species",
+    ///        "rank_id": 1,
+    ///        "rank_name": "species",
     ///        "scientific_name": "Homo sapiens"
     ///     },
     ///     ...
@@ -267,7 +260,7 @@ impl TaxonomyController {
                     Ok(taxonomy) => {
                         yield Ok(delimiter.to_owned());
                         // convert to json and yield
-                        match serde_json::to_string(&taxonomy) {
+                        match serde_json::to_string(&TaxonomyResponse::from(&taxonomy)) {
                             Ok(json) => yield Ok(json),
                             Err(err) => {
                                 tracing::error!("{:?}", err);

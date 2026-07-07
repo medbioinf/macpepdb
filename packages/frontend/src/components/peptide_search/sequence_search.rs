@@ -4,13 +4,10 @@ use crate::api_client::Client;
 use crate::components::rounded_mass::RoundedMass;
 use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
-use crate::entities::peptide::Peptide as MaCPepDBPeptide;
-use crate::entities::protein::Protein as MaCPepDBProtein;
 use crate::errors::general_error::GeneralError;
 use crate::errors::peptide_search_page_error::PeptideSearchPageError;
 use crate::routes::Routes;
-
-type PeptideEntity = MaCPepDBPeptide<MaCPepDBProtein<String>>;
+use macpepdb_web_common::responses::peptide::PeptideResponse;
 
 /// Default minimum sequence length to search for
 ///
@@ -29,18 +26,16 @@ pub fn SequenceSearch() -> Element {
 
         let client = Client::new(macpepdb_base_url)?;
 
-        Ok(client.get_configuration().await.map_or(
-            DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH,
-            |config| {
-                config
-                    .get_min_peptide_length()
-                    .unwrap_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH)
-            },
-        ))
+        Ok(client
+            .get_configuration()
+            .await
+            .map_or(DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH, |config| {
+                config.protease.min_length
+            }))
     });
 
     // Action to search for peptide
-    let mut peptide: Action<(), PeptideEntity> = use_action(move || async move {
+    let mut peptide: Action<(), PeptideResponse> = use_action(move || async move {
         let min_peptide_length = match &*minimum_sequence_length_to_search.read_unchecked() {
             Some(Ok(length)) => *length,
             _ => DEFAULT_MINIMUM_SEQUENCE_LENGTH_TO_SEARCH,
@@ -100,14 +95,14 @@ pub fn SequenceSearch() -> Element {
                     tbody {
                         tr {
                             td {
-                                RoundedMass { mass: peptide.read().get_mass() }
+                                RoundedMass { mass: peptide.read().mass }
                             }
                             td { class: "text-break",
                                 Link {
                                     to: Routes::Peptide {
-                                        peptide_sequence: peptide.read().get_sequence().to_owned(),
+                                        peptide_sequence: peptide.read().sequence.clone(),
                                     },
-                                    "{peptide.read().get_sequence()}"
+                                    "{peptide.read().sequence}"
                                 }
                             }
                         }

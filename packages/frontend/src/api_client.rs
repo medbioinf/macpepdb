@@ -1,18 +1,20 @@
 use base64::{prelude::BASE64_STANDARD, Engine};
+use macpepdb_web_common::{
+    requests::{
+        peptide::{SearchRequestBody, SearchRequestMass},
+        ptm::PostTranslationalModificationRequest,
+        taxonomy::SearchRequestBody as TaxonomySearchRequestBody,
+    },
+    responses::{
+        amino_acid::AminoAcidResponse, configuration::RuntimeConfigurationResponse,
+        peptide::PeptideResponse, protein::ProteinResponse, taxonomy::TaxonomyResponse,
+    },
+};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
-use serde::de::DeserializeOwned;
-use serde_json::json;
+use serde::{de::DeserializeOwned, Serialize};
 use urlencoding::encode as urlencode;
 
-use crate::{
-    entities::{
-        amino_acid::AminoAcid, configuration::Configuration as MacPepDBConfiguration,
-        mass_unit::MassUnit, peptide::Peptide,
-        post_translational_modification::PostTranslationalModification, protein::Protein,
-        taxonomy::Taxonomy,
-    },
-    errors::api_client_error::ApiClientError,
-};
+use crate::{entities::mass_unit::MassUnit, errors::api_client_error::ApiClientError};
 
 const X_DO_NOT_TRACK: HeaderName = HeaderName::from_static("x-do-not-track");
 
@@ -78,14 +80,15 @@ impl<'a> Client<'a> {
             .map_err(ApiClientError::JsonParsingError)
     }
 
-    pub async fn post<T>(
+    pub async fn post<T, B>(
         &self,
         endpoint: &str,
-        body: serde_json::Value,
+        body: B,
         headers: Option<&[(HeaderName, HeaderValue)]>,
     ) -> Result<T, ApiClientError>
     where
         T: DeserializeOwned,
+        B: Serialize,
     {
         let url = format!("{}{endpoint}", self.base_url);
 
@@ -132,7 +135,7 @@ impl<'a> Client<'a> {
 
     /// Fetches the MaCPepDB configuration from the server
     ///
-    pub async fn get_configuration(&self) -> Result<MacPepDBConfiguration, ApiClientError> {
+    pub async fn get_configuration(&self) -> Result<RuntimeConfigurationResponse, ApiClientError> {
         self.get("/api/configuration").await
     }
 
@@ -141,10 +144,7 @@ impl<'a> Client<'a> {
     /// # Arguments
     /// * `sequence` - Peptide sequence
     ///
-    pub async fn get_peptide<T>(&self, sequence: &str) -> Result<Peptide<T>, ApiClientError>
-    where
-        T: 'static + PartialEq + DeserializeOwned,
-    {
+    pub async fn get_peptide(&self, sequence: &str) -> Result<PeptideResponse, ApiClientError> {
         let endpoint = format!("/api/peptides/{sequence}");
         self.get(&endpoint).await
     }
@@ -157,36 +157,31 @@ impl<'a> Client<'a> {
         dalton: f64,
         lower_mass_tolerance: i64,
         upper_mass_tolerance: i64,
-        taxonomy: &Option<Taxonomy>,
+        taxonomy: &Option<TaxonomyResponse>,
         max_variable_modifications: i16,
-        ptms: &Vec<PostTranslationalModification>,
+        ptms: &[PostTranslationalModificationRequest],
         is_reviewed: Option<bool>,
-    ) -> serde_json::Value {
-        let mut body = json!({
-            "lower_mass_tolerance_ppm": lower_mass_tolerance,
-            "upper_mass_tolerance_ppm": upper_mass_tolerance,
-            "max_variable_modifications": max_variable_modifications,
-            "modifications": *ptms,
-        });
-
-        match selected_mass_unit {
-            MassUnit::Thompson => body["mass"] = json!((thompson, charge)),
-            MassUnit::Dalton => body["mass"] = json!(dalton),
+    ) -> SearchRequestBody {
+        let mass = match selected_mass_unit {
+            MassUnit::Thompson => SearchRequestMass::ThompsonCharge(thompson, charge),
+            MassUnit::Dalton => SearchRequestMass::Dalton(dalton),
         };
 
-        if let Some(taxonomy) = taxonomy {
-            body["taxonomy_id"] = json!(taxonomy.id);
+        SearchRequestBody {
+            mass,
+            lower_mass_tolerance_ppm: lower_mass_tolerance,
+            upper_mass_tolerance_ppm: upper_mass_tolerance,
+            max_variable_modifications: max_variable_modifications.max(0) as usize,
+            modifications: ptms.to_vec(),
+            taxonomy_id: taxonomy.as_ref().map(|taxonomy| taxonomy.id as i64),
+            proteome_id: None,
+            is_reviewed,
+            resolve_modifications: None,
         }
-
-        if let Some(is_reviewed) = is_reviewed {
-            body["is_reviewed"] = json!(is_reviewed);
-        }
-
-        body
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn search_peptides<T>(
+    pub async fn search_peptides(
         &self,
         selected_mass_unit: MassUnit,
         thompson: f64,
@@ -194,14 +189,11 @@ impl<'a> Client<'a> {
         dalton: f64,
         lower_mass_tolerance: i64,
         upper_mass_tolerance: i64,
-        taxonomy: &Option<Taxonomy>,
+        taxonomy: &Option<TaxonomyResponse>,
         max_variable_modifications: i16,
-        ptms: &Vec<PostTranslationalModification>,
+        ptms: &[PostTranslationalModificationRequest],
         is_reviewed: Option<bool>,
-    ) -> Result<Vec<Peptide<T>>, ApiClientError>
-    where
-        T: 'static + PartialEq + DeserializeOwned,
-    {
+    ) -> Result<Vec<PeptideResponse>, ApiClientError> {
         let body = Self::build_search_peptide_body(
             selected_mass_unit,
             thompson,
@@ -259,9 +251,9 @@ impl<'a> Client<'a> {
         dalton: f64,
         lower_mass_tolerance: i64,
         upper_mass_tolerance: i64,
-        taxonomy: &Option<Taxonomy>,
+        taxonomy: &Option<TaxonomyResponse>,
         max_variable_modifications: i16,
-        ptms: &Vec<PostTranslationalModification>,
+        ptms: &[PostTranslationalModificationRequest],
         is_reviewed: Option<bool>,
     ) -> String {
         let body = Self::build_search_peptide_body(
@@ -285,18 +277,19 @@ impl<'a> Client<'a> {
         )
     }
 
-    /// Search taxonomies by name
+    /// Search taxonomies by name or ID.
     ///
     /// # Arguments
-    /// * `taxonomy_search_term` - Taxonomy name search term
+    /// * `taxonomy_search_term` - Taxonomy name (substring, matched case-sensitively by the
+    ///   backend, which wraps it in SQL `%...%` itself) or taxonomy ID search term.
     ///
     pub async fn search_taxonomies(
         &self,
         taxonomy_search_term: &str,
-    ) -> Result<Vec<Taxonomy>, ApiClientError> {
-        let body = json!({
-            "name_query": format!("*{taxonomy_search_term}*"),
-        });
+    ) -> Result<Vec<TaxonomyResponse>, ApiClientError> {
+        let body = TaxonomySearchRequestBody {
+            search_query: taxonomy_search_term.to_string(),
+        };
 
         self.post("/api/taxonomies/search", body, None).await
     }
@@ -305,7 +298,7 @@ impl<'a> Client<'a> {
     ///
     /// # Arguments
     /// * `taxonomy_id` - Taxonomy ID
-    pub async fn get_taxonomy(&self, taxonomy_id: u64) -> Result<Taxonomy, ApiClientError> {
+    pub async fn get_taxonomy(&self, taxonomy_id: u64) -> Result<TaxonomyResponse, ApiClientError> {
         let endpoint = format!("/api/taxonomies/{taxonomy_id}");
         self.get(&endpoint).await
     }
@@ -315,13 +308,10 @@ impl<'a> Client<'a> {
     /// # Arguments
     /// * `search_term` - Protein accession or gene name
     ///
-    pub async fn search_protein<T>(
+    pub async fn search_protein(
         &self,
         search_term: &str,
-    ) -> Result<Vec<Protein<T>>, ApiClientError>
-    where
-        T: 'static + PartialEq + DeserializeOwned,
-    {
+    ) -> Result<Vec<ProteinResponse<String>>, ApiClientError> {
         let endpoint = format!("/api/proteins/search/{search_term}");
 
         self.get(&endpoint).await
@@ -329,8 +319,8 @@ impl<'a> Client<'a> {
 
     /// Fetches amino acid
     ///
-    pub async fn get_amino_acid(&self) -> Result<Vec<AminoAcid>, ApiClientError> {
-        self.get("/api/chemistry/amino_acids").await
+    pub async fn get_amino_acid(&self) -> Result<Vec<AminoAcidResponse>, ApiClientError> {
+        self.get("/api/chemistry/amino-acids").await
     }
 
     /// Fetches a protein by its accession
@@ -338,10 +328,10 @@ impl<'a> Client<'a> {
     /// # Arguments
     /// * `accession` - Protein accession
     ///
-    pub async fn get_protein<T>(&self, accession: &str) -> Result<Protein<T>, ApiClientError>
-    where
-        T: 'static + PartialEq + DeserializeOwned,
-    {
+    pub async fn get_protein(
+        &self,
+        accession: &str,
+    ) -> Result<ProteinResponse<PeptideResponse>, ApiClientError> {
         let endpoint = format!("/api/proteins/{accession}");
         self.get(&endpoint).await
     }

@@ -3515,6 +3515,7 @@ dependencies = [
  "http 1.4.2",
  "itertools 0.14.0",
  "macpepdb_tui",
+ "macpepdb_web_common",
  "memchr",
  "metrics",
  "metrics-exporter-prometheus",
@@ -3565,6 +3566,7 @@ dependencies = [
  "futures",
  "gloo-timers",
  "js-sys",
+ "macpepdb_web_common",
  "plotly",
  "reqwest 0.13.4",
  "serde",
@@ -3591,6 +3593,14 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "macpepdb_web_common"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

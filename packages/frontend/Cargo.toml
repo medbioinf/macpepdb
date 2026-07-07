@@ -12,6 +12,7 @@ dioxus-logger = { workspace = true }
 futures = { workspace = true }
 gloo-timers = { workspace = true }
 js-sys = { workspace = true }
+macpepdb_web_common = { workspace = true }
 plotly = { workspace = true }
 reqwest = { workspace = true, features = ["json", "http2"] }
 serde = { workspace = true, features = ["rc"] }

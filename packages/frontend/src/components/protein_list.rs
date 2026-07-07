@@ -3,28 +3,25 @@ use std::rc::Rc;
 // 3rd party imports
 use dioxus::prelude::*;
 use dioxus_router::components::Link;
+use macpepdb_web_common::responses::protein::ProteinResponse;
 
 // internal imports
-use crate::entities::protein::Protein as MaCPepDBProtein;
 use crate::routes::Routes;
 
 /// Properties for protein list
 ///
 #[derive(Clone, PartialEq, Props)]
-pub struct ProteinListProps<T>
-where
-    T: 'static + PartialEq,
-{
+pub struct ProteinListProps {
     /// List of proteins to render
-    pub proteins: Rc<Vec<MaCPepDBProtein<T>>>,
+    pub proteins: Rc<Vec<ProteinResponse<String>>>,
 }
 
-/// Renders a list of proteins with most common attributes: accession, entry name, name, genes.
+/// Renders a list of proteins with most common attributes: accession, genes, is reviewed.
 ///
-pub fn ProteinList<T>(props: ProteinListProps<T>) -> Element
-where
-    T: 'static + PartialEq,
-{
+// TODO: `ProteinResponse<String>` (from `macpepdb_web_common`) does not carry `entry_name` or
+// `name` (both present on the old hand-rolled `entities::protein::Protein<T>`), so those columns
+// have been dropped from this table.
+pub fn ProteinList(props: ProteinListProps) -> Element {
     if props.proteins.is_empty() {
         return rsx! {
             div { "No proteins" }
@@ -34,14 +31,14 @@ where
     let reviewed_proteins = props
         .proteins
         .iter()
-        .filter(|protein| protein.get_is_reviewed())
-        .collect::<Vec<&MaCPepDBProtein<T>>>();
+        .filter(|protein| protein.is_reviewed)
+        .collect::<Vec<&ProteinResponse<String>>>();
 
     let unreviewed_proteins = props
         .proteins
         .iter()
-        .filter(|protein| !protein.get_is_reviewed())
-        .collect::<Vec<&MaCPepDBProtein<T>>>();
+        .filter(|protein| !protein.is_reviewed)
+        .collect::<Vec<&ProteinResponse<String>>>();
 
     let protein_lists = vec![
         ("Reviewed Proteins", reviewed_proteins),
@@ -55,8 +52,6 @@ where
                 thead {
                     tr {
                         th { "Accession" }
-                        th { "Entry name" }
-                        th { "Name" }
                         th { "Genes" }
                         th { "Is reviewed" }
                     }
@@ -67,16 +62,14 @@ where
                             td {
                                 Link {
                                     to: Routes::Protein {
-                                        protein_id: protein.get_accession().to_owned(),
+                                        protein_id: protein.accession.clone(),
                                     },
-                                    "{protein.get_accession()}"
+                                    "{protein.accession}"
                                 }
                             }
-                            td { "{protein.get_entry_name()}" }
-                            td { "{protein.get_name()}" }
-                            td { "{protein.get_genes().join(\", \")}" }
+                            td { "{protein.genes.join(\", \")}" }
                             td {
-                                i { class: if protein.get_is_reviewed() { "fas fa-check" } else { "fas fa-times" } }
+                                i { class: if protein.is_reviewed { "fas fa-check" } else { "fas fa-times" } }
                             }
                         }
                     }

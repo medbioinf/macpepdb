@@ -8,11 +8,10 @@ use axum::response::Response;
 use axum::routing::get;
 use axum::{Json, response::IntoResponse};
 use http::StatusCode;
-use serde_json::Value as JsonValue;
+use macpepdb_web_common::responses::amino_acid::AminoAcidResponse;
 use thiserror::Error;
 
 use crate::amino_acid::AminoAcid;
-use crate::mass::to_float as mass_to_float;
 use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::server_state::ServerState;
 
@@ -24,12 +23,8 @@ static AMINO_ACIDS_PATH: &str = "/amino-acids";
 pub enum Error {
     #[error("Amino acid error: {0}")]
     AminoAcid(Box<crate::amino_acid::Error>),
-    #[error("Amino acid serialization error: {0}")]
-    AminoAcidSerializationError(Box<serde_json::Error>),
     #[error("Invalid amino acid code, needs to be exactly 1 character.")]
     InvalidAminoAcidCode,
-    #[error("Unable to serialize amono acid mono mass: {0}")]
-    MonoMassFloatSerialization(Box<serde_json::Error>),
 }
 
 into_thiserror_boxed!(crate::amino_acid::Error, Error, AminoAcid);
@@ -49,17 +44,6 @@ impl IntoResponse for Error {
                 Body::from(format!("{}", self)),
             )
                 .into_response(),
-            _ => {
-                let uuid = uuid::Uuid::now_v7();
-                tracing::error!("[{uuid}] {self}");
-
-                (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                Body::from(format!("Internal server error. Contact the admin and provide this UUID `{uuid}` to help identifying the error.")),
-            )
-                .into_response()
-            }
         }
     }
 }
@@ -77,19 +61,6 @@ impl ChemistryController {
 
     pub fn controller_path() -> &'static str {
         CONTROLLER_PATH
-    }
-
-    /// Returns something which implements amino acid from `omicstools` crate to json
-    ///
-    /// # Arguments
-    /// * `amino_acid` - Amino acid
-    ///
-    fn amino_acid_to_json(amino_acid: &AminoAcid) -> Result<JsonValue, Error> {
-        let mut amino_acid_value = serde_json::to_value(amino_acid)
-            .map_err(|err| Error::AminoAcidSerializationError(Box::new(err)))?;
-        amino_acid_value["mono_mass"] = serde_json::to_value(mass_to_float(amino_acid.mono_mass()))
-            .map_err(|err| Error::MonoMassFloatSerialization(Box::new(err)))?;
-        Ok(amino_acid_value)
     }
 
     /// Gets the amino acid by one letter code
@@ -112,14 +83,14 @@ impl ChemistryController {
     /// }
     /// ```
     ///
-    pub async fn amino_acid(Path(code): Path<String>) -> Result<Json<JsonValue>, Error> {
+    pub async fn amino_acid(Path(code): Path<String>) -> Result<Json<AminoAcidResponse>, Error> {
         if code.len() != 1 {
             return Err(Error::InvalidAminoAcidCode);
         }
 
         let amino_acid = AminoAcid::by_code(code.chars().next().unwrap())?;
 
-        Ok(Json(Self::amino_acid_to_json(amino_acid)?))
+        Ok(Json(amino_acid.into()))
     }
 
     /// Returns all amino acids
@@ -145,12 +116,9 @@ impl ChemistryController {
     /// ]
     /// ```
     ///
-    pub async fn amino_acids() -> Result<Json<JsonValue>, Error> {
-        let amino_acid_values = AminoAcid::all()
-            .iter()
-            .map(|aa| Self::amino_acid_to_json(aa))
-            .collect::<Result<Vec<JsonValue>, Error>>()?;
+    pub async fn amino_acids() -> Result<Json<Vec<AminoAcidResponse>>, Error> {
+        let amino_acid_values = AminoAcid::all().iter().map(|aa| (*aa).into()).collect();
 
-        Ok(Json(serde_json::Value::Array(amino_acid_values)))
+        Ok(Json(amino_acid_values))
     }
 }

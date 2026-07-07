@@ -1,6 +1,7 @@
 use std::{fmt::Display, hash::Hash, sync::OnceLock};
 
 use itertools::Itertools;
+use macpepdb_web_common::responses::peptide::PeptideResponse;
 use serde::Serialize;
 use thiserror::Error;
 use tokio_postgres::Row;
@@ -532,6 +533,36 @@ impl Peptide {
             metadata_id: None,
             amino_acid_counts: OnceLock::new(),
         })
+    }
+}
+
+impl From<&Peptide> for PeptideResponse {
+    fn from(peptide: &Peptide) -> Self {
+        Self {
+            partition: peptide.partition,
+            mass: crate::mass::to_float(peptide.mass),
+            sequence: peptide.sequence.to_string(),
+            protein_ids: peptide.protein_ids.as_slice().to_vec(),
+            unique_taxonomy_ids: peptide.unique_taxonomy_ids.clone(),
+            non_unique_taxonomy_ids: peptide.non_unique_taxonomy_ids.clone(),
+            is_swiss_prot: peptide.is_swiss_prot(),
+            is_trembl: peptide.is_trembl(),
+        }
+    }
+}
+
+impl From<&Peptidoform> for PeptideResponse {
+    fn from(peptidoform: &Peptidoform) -> Self {
+        Self {
+            partition: None,
+            mass: crate::mass::to_float(peptidoform.mass),
+            sequence: peptidoform.sequence.to_string(),
+            protein_ids: Vec::new(),
+            unique_taxonomy_ids: Vec::new(),
+            non_unique_taxonomy_ids: Vec::new(),
+            is_swiss_prot: peptidoform.is_swiss_prot(),
+            is_trembl: peptidoform.is_trembl(),
+        }
     }
 }
 

@@ -654,6 +654,19 @@ impl Protease {
     }
 }
 
+impl From<&Protease> for macpepdb_web_common::responses::configuration::ProteaseResponse {
+    fn from(protease: &Protease) -> Self {
+        Self {
+            name: protease.inner.name().to_string(),
+            semi_specific: protease.semi_specific,
+            min_length: protease.min_length.get(),
+            max_length: protease.max_length.get(),
+            max_missed_cleavages: protease.max_missed_cleavages,
+            keep_unknown: protease.keep_unknown,
+        }
+    }
+}
+
 impl Clone for Protease {
     fn clone(&self) -> Self {
         Self::by_name(

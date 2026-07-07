@@ -12,14 +12,14 @@ use crate::{
         spinner::Spinner,
     },
     configuration::Configuration as AppConfiguration,
-    entities::{
-        amino_acid::AminoAcid,
-        mass_unit::MassUnit,
-        peptide::Peptide as MaCPepDBPeptide,
-        post_translational_modification::{PostTranslationalModification, PtmPosition, PtmType},
-        taxonomy::Taxonomy,
-    },
+    entities::mass_unit::MassUnit,
     errors::{api_client_error::ApiClientError, general_error::GeneralError},
+};
+use macpepdb_web_common::{
+    requests::ptm::{PostTranslationalModificationRequest, PtmPosition, PtmType},
+    responses::{
+        amino_acid::AminoAcidResponse, peptide::PeptideResponse, taxonomy::TaxonomyResponse,
+    },
 };
 
 /// Default upper and lower mass tolerance
@@ -34,10 +34,53 @@ const DEFAULT_CHARGE: u8 = 2;
 ///
 const DEFAULT_MAX_VAR_MODIFICATIONS: i16 = 2;
 
-/// As proteins contain their peptides and peptides contain their protein of origin, MaCPepDB
-/// stops the recursion on second level by only adding the Protein accession to the peptide
-/// instead of the whole protein.
-type PeptideEntity = MaCPepDBPeptide<String>;
+// `macpepdb_web_common::requests::ptm::{PtmType, PtmPosition}` intentionally only implement
+// `Serialize`/`Deserialize` (with the serde renames the backend's wire format needs) and not
+// `Display`/`FromStr` - the old, now-deleted `entities::post_translational_modification` copies
+// had those impls purely for this UI's `<select>` elements. Reproduce that mapping locally
+// instead of adding the impls to the shared crate.
+
+/// UI label for a [`PtmType`], used as both the `<option>` value and display text.
+fn ptm_type_label(ptm_type: PtmType) -> &'static str {
+    match ptm_type {
+        PtmType::Static => "Static",
+        PtmType::Variable => "Variable",
+    }
+}
+
+/// Parses a [`PtmType`] back from a label produced by [`ptm_type_label`], defaulting to
+/// `PtmType::Static` for unrecognized input.
+fn parse_ptm_type(value: &str) -> PtmType {
+    match value {
+        "Variable" => PtmType::Variable,
+        _ => PtmType::Static,
+    }
+}
+
+/// UI label for a [`PtmPosition`], used as both the `<option>` value and display text. These
+/// happen to match the backend wire format (`Terminus-N`, ...) for consistency, but are only
+/// used for display/parsing in this component.
+fn ptm_position_label(position: PtmPosition) -> &'static str {
+    match position {
+        PtmPosition::Anywhere => "Anywhere",
+        PtmPosition::NTerminus => "Terminus-N",
+        PtmPosition::CTerminus => "Terminus-C",
+        PtmPosition::NBond => "Bond-N",
+        PtmPosition::CBond => "Bond-C",
+    }
+}
+
+/// Parses a [`PtmPosition`] back from a label produced by [`ptm_position_label`], defaulting to
+/// `PtmPosition::Anywhere` for unrecognized input.
+fn parse_ptm_position(value: &str) -> PtmPosition {
+    match value {
+        "Terminus-N" => PtmPosition::NTerminus,
+        "Terminus-C" => PtmPosition::CTerminus,
+        "Bond-N" => PtmPosition::NBond,
+        "Bond-C" => PtmPosition::CBond,
+        _ => PtmPosition::Anywhere,
+    }
+}
 
 pub fn MassSearch() -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
@@ -57,7 +100,7 @@ pub fn MassSearch() -> Element {
     let mut taxonomy_search_term = use_signal(|| "".to_string());
     let mut selected_taxonomy_id: Signal<Option<u64>> = use_signal(|| None);
 
-    let taxonomies: Resource<Result<Option<Vec<Taxonomy>>, GeneralError>> =
+    let taxonomies: Resource<Result<Option<Vec<TaxonomyResponse>>, GeneralError>> =
         use_resource(move || async move {
             if taxonomy_search_term.read_unchecked().is_empty() {
                 return Ok(None);
@@ -80,7 +123,7 @@ pub fn MassSearch() -> Element {
             ))
         });
 
-    let selected_taxonomy: Resource<Result<Option<Taxonomy>, GeneralError>> =
+    let selected_taxonomy: Resource<Result<Option<TaxonomyResponse>, GeneralError>> =
         use_resource(move || async move {
             if selected_taxonomy_id.read_unchecked().is_none() {
                 return Ok(None);
@@ -108,19 +151,20 @@ pub fn MassSearch() -> Element {
     let mut new_ptm_type = use_signal(|| PtmType::Static);
     let mut new_ptm_position = use_signal(|| PtmPosition::Anywhere);
     let mut ptm_index = use_signal(|| 0); // Just to have something to use as name
-    let mut ptms: Signal<Vec<PostTranslationalModification>> = use_signal(Vec::new);
-    let amino_acids: Resource<Result<Option<Vec<AminoAcid>>>> = use_resource(move || async move {
-        let app_config = app_config.read_unchecked();
-        let macpepdb_base_url = match app_config.as_ref() {
-            Some(config) => config.get_macpepdb_base_url(),
-            None => return Ok(None),
-        };
+    let mut ptms: Signal<Vec<PostTranslationalModificationRequest>> = use_signal(Vec::new);
+    let amino_acids: Resource<Result<Option<Vec<AminoAcidResponse>>>> =
+        use_resource(move || async move {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => return Ok(None),
+            };
 
-        let url = format!("{macpepdb_base_url}/api/chemistry/amino_acids");
-        let mut amino_acids = reqwest::get(&url).await?.json::<Vec<AminoAcid>>().await?;
-        amino_acids.sort_by(|x, y| x.get_code().cmp(y.get_code()));
-        Ok(Some(amino_acids))
-    });
+            let client = Client::new(macpepdb_base_url)?;
+            let mut amino_acids = client.get_amino_acid().await?;
+            amino_acids.sort_by_key(|x| x.code);
+            Ok(Some(amino_acids))
+        });
 
     // review filter
     let mut is_reviewed: Signal<Option<bool>> = use_signal(|| None);
@@ -140,7 +184,7 @@ pub fn MassSearch() -> Element {
             None => &None,
         };
 
-        let peptides_result: Result<Vec<PeptideEntity>, ApiClientError> =
+        let peptides_result: Result<Vec<PeptideResponse>, ApiClientError> =
             Client::new(macpepdb_base_url)?
                 .search_peptides(
                     selected_mass_unit.read_unchecked().clone(),
@@ -307,7 +351,7 @@ pub fn MassSearch() -> Element {
                 Some(Ok(Some(taxonomy))) => rsx! {
                     div { class: "list-group",
                         div { class: "list-group-item d-flex justify-content-between align-items-center",
-                            "Selected taxonomy: {taxonomy.scientific_name} (ID: {taxonomy.id}, Rank: {taxonomy.rank})"
+                            "Selected taxonomy: {taxonomy.scientific_name} (ID: {taxonomy.id}, Rank: {taxonomy.rank_name.clone().unwrap_or_default()})"
                             button {
                                 class: "btn btn-danger",
                                 r#type: "button",
@@ -345,7 +389,7 @@ pub fn MassSearch() -> Element {
                                 tr {
                                     td { "{taxonomy.id}" }
                                     td { "{taxonomy.scientific_name}" }
-                                    td { "{taxonomy.rank}" }
+                                    td { "{taxonomy.rank_name.clone().unwrap_or_default()}" }
                                     td {
                                         input {
                                             r#type: "radio",
@@ -398,7 +442,7 @@ pub fn MassSearch() -> Element {
                     match &*amino_acids.read_unchecked() {
                         Some(Ok(Some(amino_acids))) => rsx! {
                             for aa in amino_acids {
-                                option { value: "{aa.get_code()}", "{aa.get_code()} - {aa.get_name()}" }
+                                option { value: "{aa.code}", "{aa.code} - {aa.name}" }
                             }
                         },
                         Some(Err(e)) => rsx! {
@@ -420,39 +464,39 @@ pub fn MassSearch() -> Element {
                 select {
                     class: "form-control",
                     oninput: move |evt| {
-                        new_ptm_type.set(evt.value().parse().unwrap_or(PtmType::Static));
+                        new_ptm_type.set(parse_ptm_type(&evt.value()));
                     },
-                    option { value: PtmType::Static.to_string(), "{PtmType::Static.to_string()}" }
-                    option { value: PtmType::Variable.to_string(), "{PtmType::Variable.to_string()}" }
+                    option { value: ptm_type_label(PtmType::Static), "{ptm_type_label(PtmType::Static)}" }
+                    option { value: ptm_type_label(PtmType::Variable), "{ptm_type_label(PtmType::Variable)}" }
                 }
                 select {
                     class: "form-control",
                     oninput: move |evt| {
-                        new_ptm_position.set(evt.value().parse().unwrap_or(PtmPosition::Anywhere));
+                        new_ptm_position.set(parse_ptm_position(&evt.value()));
                     },
-                    option { value: PtmPosition::Anywhere.to_string(),
-                        "{PtmPosition::Anywhere.to_string()}"
+                    option { value: ptm_position_label(PtmPosition::Anywhere),
+                        "{ptm_position_label(PtmPosition::Anywhere)}"
                     }
-                    option { value: PtmPosition::NTerminus.to_string(),
-                        "{PtmPosition::NTerminus.to_string()}"
+                    option { value: ptm_position_label(PtmPosition::NTerminus),
+                        "{ptm_position_label(PtmPosition::NTerminus)}"
                     }
-                    option { value: PtmPosition::CTerminus.to_string(),
-                        "{PtmPosition::CTerminus.to_string()}"
+                    option { value: ptm_position_label(PtmPosition::CTerminus),
+                        "{ptm_position_label(PtmPosition::CTerminus)}"
                     }
-                    option { value: PtmPosition::NBond.to_string(), "{PtmPosition::NBond.to_string()}" }
-                    option { value: PtmPosition::CBond.to_string(), "{PtmPosition::CBond.to_string()}" }
+                    option { value: ptm_position_label(PtmPosition::NBond), "{ptm_position_label(PtmPosition::NBond)}" }
+                    option { value: ptm_position_label(PtmPosition::CBond), "{ptm_position_label(PtmPosition::CBond)}" }
                 }
                 button {
                     class: "btn btn-primary",
                     r#type: "button",
                     onclick: move |_| {
                         ptm_index += 1;
-                        let ptm = PostTranslationalModification {
+                        let ptm = PostTranslationalModificationRequest {
                             name: format!("PTM {}", ptm_index),
                             amino_acid: *new_ptm_amino_acid.read(),
                             mass_delta: *new_ptm_mass.read(),
-                            mod_type: new_ptm_type.read().clone(),
-                            position: new_ptm_position.read().clone(),
+                            mod_type: *new_ptm_type.read(),
+                            position: *new_ptm_position.read(),
                         };
                         ptms.push(ptm);
                         info!("Add PTM");
@@ -478,13 +522,13 @@ pub fn MassSearch() -> Element {
                         input {
                             r#type: "text",
                             class: "form-control",
-                            value: "{ptm.mod_type}",
+                            value: "{ptm_type_label(ptm.mod_type)}",
                             disabled: true,
                         }
                         input {
                             r#type: "text",
                             class: "form-control",
-                            value: "{ptm.position}",
+                            value: "{ptm_position_label(ptm.position)}",
                             disabled: true,
                         }
                         button {

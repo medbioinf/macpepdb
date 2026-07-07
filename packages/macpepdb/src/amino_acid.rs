@@ -56,6 +56,17 @@ impl AminoAcid {
     }
 }
 
+impl From<&AminoAcid> for macpepdb_web_common::responses::amino_acid::AminoAcidResponse {
+    fn from(amino_acid: &AminoAcid) -> Self {
+        Self {
+            code: amino_acid.code,
+            mono_mass: crate::mass::to_float(amino_acid.mono_mass),
+            is_canonical: amino_acid.is_canonical,
+            name: amino_acid.name.to_string(),
+        }
+    }
+}
+
 macro_rules! create_const_amino_acids {
     ([$(($name:literal; $one_letter_code:literal; $mass:literal; $bit_code:literal; $is_canonical:literal)),* $(,)?]) => {
         paste! {

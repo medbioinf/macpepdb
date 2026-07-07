@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "packages/frontend",
     "packages/macpepdb",
+    "packages/web-common",
     "packages/metrics-peek",
     "packages/uniprot_reader",
     "packages/tui",
@@ -78,6 +79,7 @@ zstd = "0.13.2"
 # workspace
 macpepdb = { path = "packages/macpepdb" }
 macpepdb-frontend = { path = "packages/frontend" }
+macpepdb_web_common = { path = "packages/web-common" }
 metrics-peek = { path = "packages/metrics-peek" }
 macpepdb_tui = { path = "packages/tui" }
 uniprot_reader = { path = "packages/uniprot_reader" }

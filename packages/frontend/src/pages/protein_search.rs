@@ -2,21 +2,16 @@ use std::rc::Rc;
 
 use dioxus::html::input_data::keyboard_types::Code;
 use dioxus::prelude::*;
+use macpepdb_web_common::responses::protein::ProteinResponse;
 
 use crate::api_client::Client;
 use crate::components::protein_list::ProteinList;
 use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
-use crate::entities::peptide::Peptide as MaCPepDBPeptide;
-use crate::entities::protein::Protein as MaCPepDBProtein;
 use crate::errors::api_client_error::ApiClientError;
 use crate::errors::general_error::GeneralError;
 use crate::errors::protein_search_page_error::ProteinSearchPageError;
 use crate::tracking::track_page_visit;
-
-/// Proteins downloaded via the proteins endpoint contains full peptide entries instead of sequences,
-/// but the peptide's proteins only contain protein accession.
-type ProteinEntity = MaCPepDBProtein<MaCPepDBPeptide<String>>;
 
 /// Minimum length of search term
 ///
@@ -41,7 +36,7 @@ pub fn ProteinSearch() -> Element {
 
         let client = Client::new(macpepdb_base_url)?;
 
-        let fetched_proteins: Result<Vec<ProteinEntity>, ApiClientError> =
+        let fetched_proteins: Result<Vec<ProteinResponse<String>>, ApiClientError> =
             client.search_protein(&protein_id.read()).await;
 
         match fetched_proteins {

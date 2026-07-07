@@ -3,28 +3,20 @@ use std::{cmp::min, rc::Rc};
 use dioxus::prelude::*;
 use futures::StreamExt;
 
-use crate::{
-    components::rounded_mass::RoundedMass, entities::peptide::Peptide as MaCPepDBPeptide,
-    routes::Routes,
-};
+use crate::{components::rounded_mass::RoundedMass, routes::Routes};
+use macpepdb_web_common::responses::peptide::PeptideResponse;
 
 /// Properties for protein list
 ///
 #[derive(Clone, PartialEq, Props)]
-pub struct PaginatedPeptideListProps<T>
-where
-    T: 'static + PartialEq,
-{
+pub struct PaginatedPeptideListProps {
     pub peptides_per_page: usize,
 
     /// List of elements to render
-    pub peptides: Rc<Vec<MaCPepDBPeptide<T>>>,
+    pub peptides: Rc<Vec<PeptideResponse>>,
 }
 
-pub fn PaginatedPeptideList<T>(props: PaginatedPeptideListProps<T>) -> Element
-where
-    T: 'static + PartialEq,
-{
+pub fn PaginatedPeptideList(props: PaginatedPeptideListProps) -> Element {
     let number_of_pages =
         (props.peptides.len() as f64 / props.peptides_per_page as f64).ceil() as usize;
     let number_of_peptides = props.peptides.len();
@@ -67,14 +59,14 @@ where
                     for peptide in props.peptides[range.clone()].iter() {
                         tr {
                             td {
-                                RoundedMass { mass: peptide.get_mass() }
+                                RoundedMass { mass: peptide.mass }
                             }
                             td { class: "text-break",
                                 Link {
                                     to: Routes::Peptide {
-                                        peptide_sequence: peptide.get_sequence().to_owned(),
+                                        peptide_sequence: peptide.sequence.clone(),
                                     },
-                                    "{peptide.get_sequence()}"
+                                    "{peptide.sequence}"
                                 }
                             }
                         }

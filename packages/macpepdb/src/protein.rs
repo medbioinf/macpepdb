@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 use itertools::Itertools;
+use macpepdb_web_common::responses::{peptide::PeptideResponse, protein::ProteinResponse};
 use serde::Serialize;
 use thiserror::Error;
 use tokio_postgres::Row;
@@ -134,6 +135,32 @@ impl Protein {
             + self.sequence.size()
             + std::mem::size_of::<i32>() // 4 for id and taxonomy_id
             + std::mem::size_of::<Vec<String>>() + self.genes.iter().map(|g| std::mem::size_of::<String>() + g.len()).sum::<usize>()
+    }
+
+    /// Builds the wire response for `GET /api/proteins/{accession}` (full peptide records).
+    pub fn to_response(&self, peptides: Vec<PeptideResponse>) -> ProteinResponse<PeptideResponse> {
+        ProteinResponse {
+            accession: self.accession.clone(),
+            id: self.id,
+            sequence: self.sequence.to_string(),
+            taxonomy_id: self.taxonomy_id,
+            is_reviewed: self.is_reviewed(),
+            genes: self.genes.clone(),
+            peptides,
+        }
+    }
+
+    /// Builds the wire response for `GET /api/proteins/search/{attribute}` (peptide sequences only).
+    pub fn to_summary_response(&self, peptides: Vec<String>) -> ProteinResponse<String> {
+        ProteinResponse {
+            accession: self.accession.clone(),
+            id: self.id,
+            sequence: self.sequence.to_string(),
+            taxonomy_id: self.taxonomy_id,
+            is_reviewed: self.is_reviewed(),
+            genes: self.genes.clone(),
+            peptides,
+        }
     }
 }
 

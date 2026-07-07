@@ -133,3 +133,15 @@ impl TryFrom<&&OmicstoolsTaxonomy> for Taxonomy {
         })
     }
 }
+
+impl From<&Taxonomy> for macpepdb_web_common::responses::taxonomy::TaxonomyResponse {
+    fn from(taxonomy: &Taxonomy) -> Self {
+        Self {
+            id: taxonomy.id,
+            parent_id: taxonomy.parent_id,
+            scientific_name: taxonomy.scientific_name.clone(),
+            rank_id: taxonomy.rank_id,
+            rank_name: taxonomy.rank_name.clone(),
+        }
+    }
+}

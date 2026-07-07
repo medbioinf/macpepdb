@@ -158,6 +158,36 @@ impl TryFrom<OmicstoolsPostTranslationalModification> for PostTranslationalModif
     }
 }
 
+impl TryFrom<macpepdb_web_common::requests::ptm::PostTranslationalModificationRequest>
+    for PostTranslationalModification
+{
+    type Error = Error;
+
+    fn try_from(
+        ptm: macpepdb_web_common::requests::ptm::PostTranslationalModificationRequest,
+    ) -> Result<Self, Self::Error> {
+        use macpepdb_web_common::requests::ptm::{PtmPosition, PtmType};
+
+        let amino_acid = AminoAcid::by_code(ptm.amino_acid)?;
+        let mass_delta = mass_to_int(ptm.mass_delta);
+        let mod_type = match ptm.mod_type {
+            PtmType::Static => ModificationType::Static,
+            PtmType::Variable => ModificationType::Variable,
+        };
+        let position = match ptm.position {
+            PtmPosition::Anywhere => Position::Anywhere,
+            PtmPosition::NTerminus => Position::Terminus(Terminus::N),
+            PtmPosition::CTerminus => Position::Terminus(Terminus::C),
+            PtmPosition::NBond => Position::Bond(Terminus::N),
+            PtmPosition::CBond => Position::Bond(Terminus::C),
+        };
+
+        Ok(Self::new(
+            ptm.name, amino_acid, mass_delta, mod_type, position,
+        ))
+    }
+}
+
 impl Eq for PostTranslationalModification {}
 
 impl PartialEq for PostTranslationalModification {

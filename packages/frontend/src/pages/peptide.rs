@@ -1,28 +1,13 @@
-use std::collections::HashMap;
-use std::rc::Rc;
-
 use dioxus::prelude::*;
 
 use crate::api_client::Client;
-use crate::components::peptide::amino_acid_composition_header_cell::AminoAcidCompositionHeaderCell;
-use crate::components::protein_list::ProteinList;
 use crate::components::rounded_mass::RoundedMass;
 use crate::components::sequence_block::SequenceBlock;
 use crate::components::spinner::Spinner;
 use crate::configuration::Configuration as AppConfiguration;
-use crate::entities::amino_acid::AminoAcid;
-use crate::entities::peptide::Peptide as MaCPepDBPeptide;
-use crate::entities::protein::Protein as MaCPepDBProteins;
 use crate::errors::general_error::GeneralError;
 use crate::tracking::track_page_visit;
-
-/// As proteins contain their peptides and peptides contain their protein of origin, MaCPepDB
-/// stops the recursion on third level by only adding the Protein sequences to the protein
-/// instead of the whole peptide.
-type ProteinEntity = MaCPepDBProteins<String>;
-type PeptideEntity = MaCPepDBPeptide<ProteinEntity>;
-
-type AminoAcidMap = Rc<HashMap<char, AminoAcid>>;
+use macpepdb_web_common::responses::peptide::PeptideResponse;
 
 /// Properties for peptide page
 #[derive(Clone, PartialEq, Props)]
@@ -33,23 +18,16 @@ pub struct PeptideProps {
 
 /// Page for rendering a single peptide
 ///
+// TODO: `PeptideResponse` (from `macpepdb_web_common`) no longer carries `missed_cleavages`,
+// `proteome_ids`, or per-amino-acid `aa_counts` (all present on the old hand-rolled
+// `entities::peptide::Peptide<T>`), so the "# missed cleavages", "Proteome IDs", and "Amino acid
+// composition" rows/section that used to render them have been dropped. Amino acid composition
+// could be recomputed client-side from `sequence` if the feature is wanted back.
 pub fn Peptide(props: PeptideProps) -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
     let peptide_sequence = use_signal(|| props.peptide_sequence.clone());
 
-    let peptide: Resource<Result<PeptideEntity, GeneralError>> = use_resource(move || async move {
-        let app_config = app_config.read_unchecked();
-        let macpepdb_base_url = match app_config.as_ref() {
-            Some(config) => config.get_macpepdb_base_url(),
-            None => return Err(GeneralError::ConfigurationNotLoaded),
-        };
-
-        let client = Client::new(macpepdb_base_url)?;
-
-        Ok(client.get_peptide(peptide_sequence.read().as_str()).await?)
-    });
-
-    let amino_acid_map: Resource<Result<AminoAcidMap, GeneralError>> =
+    let peptide: Resource<Result<PeptideResponse, GeneralError>> =
         use_resource(move || async move {
             let app_config = app_config.read_unchecked();
             let macpepdb_base_url = match app_config.as_ref() {
@@ -59,14 +37,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
 
             let client = Client::new(macpepdb_base_url)?;
 
-            let map = client
-                .get_amino_acid()
-                .await?
-                .into_iter()
-                .map(|aa| (aa.get_code().to_owned(), aa))
-                .collect();
-
-            Ok(Rc::new(map))
+            Ok(client.get_peptide(peptide_sequence.read().as_str()).await?)
         });
 
     use_future(move || async move {
@@ -93,38 +64,24 @@ pub fn Peptide(props: PeptideProps) -> Element {
                             tr {
                                 td { "Sequence" }
                                 td {
-                                    SequenceBlock { sequence: peptide.get_sequence().to_owned() }
+                                    SequenceBlock { sequence: peptide.sequence.clone() }
                                 }
                             }
-                            tr { "data-partition": "{peptide.get_partition()}",
+                            tr { "data-partition": peptide.partition.map(|p| p.to_string()).unwrap_or_default(),
                                 td { "Theoretical mass (Da)" }
                                 td {
-                                    RoundedMass { mass: peptide.get_mass() }
+                                    RoundedMass { mass: peptide.mass }
                                 }
                             }
                             tr {
                                 td { "Length" }
-                                td { "{peptide.get_sequence().len()}" }
-                            }
-                            tr {
-                                td { "# missed cleavages" }
-                                td { "{peptide.get_missed_cleavages()}" }
-                            }
-                            tr {
-                                td { "Proteome IDs" }
-                                td {
-                                    ul {
-                                        for id in peptide.get_proteome_ids().iter() {
-                                            li { "{id}" }
-                                        }
-                                    }
-                                }
+                                td { "{peptide.sequence.len()}" }
                             }
                             tr {
                                 td { "Taxonomy IDs" }
                                 td {
                                     ul {
-                                        for id in peptide.get_taxonomy_ids().iter() {
+                                        for id in peptide.non_unique_taxonomy_ids.iter() {
                                             li { "{id}" }
                                         }
                                     }
@@ -139,7 +96,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 }
                                 td {
                                     ul {
-                                        for id in peptide.get_unique_taxonomy_ids().iter() {
+                                        for id in peptide.unique_taxonomy_ids.iter() {
                                             li { "{id}" }
                                         }
                                     }
@@ -148,43 +105,30 @@ pub fn Peptide(props: PeptideProps) -> Element {
                             tr {
                                 td { "SwissProt / TrEMBL " }
                                 td {
-                                    i { class: if peptide.get_is_swiss_prot() { "fas fa-check" } else { "fas fa-times" } }
+                                    i { class: if peptide.is_swiss_prot { "fas fa-check" } else { "fas fa-times" } }
                                     " / "
-                                    i { class: if peptide.get_is_trembl() { "fas fa-check" } else { "fas fa-times" } }
+                                    i { class: if peptide.is_trembl { "fas fa-check" } else { "fas fa-times" } }
+                                }
+                            }
+                            tr {
+                                td { "Protein IDs" }
+                                td {
+                                    // TODO: `PeptideResponse.protein_ids` only carries the raw numeric
+                                    // protein ids (no accessions), so we can no longer render a
+                                    // `ProteinList` inline here like the old nested `Peptide<Protein<..>>`
+                                    // entity allowed. Showing the raw ids for now; a nicer version would
+                                    // resolve each id to an accession (there is currently no
+                                    // `GET /api/proteins/by-id/{id}` endpoint, only lookup by accession)
+                                    // and fetch full `ProteinResponse`s on demand, e.g. on click.
+                                    ul {
+                                        for id in peptide.protein_ids.iter() {
+                                            li { "{id}" }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
-                    h3 { "Amino acid composition" }
-                    match &*amino_acid_map.read_unchecked() {
-                        Some(Ok(amino_acid_map)) => rsx! {
-                            table { class: "table table-sm",
-                                thead {
-                                    tr {
-                                        for (idx , _) in peptide.get_aa_counts().iter().enumerate() {
-                                            AminoAcidCompositionHeaderCell { index: idx, amino_acid_map: amino_acid_map.clone() }
-                                        }
-                                    }
-                                }
-                                tbody {
-                                    tr {
-                                        for count in peptide.get_aa_counts() {
-                                            td { "{count}" }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        Some(Err(err)) => rsx! {
-                            div { "Error loading the amino acid map {err}" }
-                        },
-                        None => rsx! {
-                            if amino_acid_map.pending() {
-                                Spinner {}
-                            }
-                        },
-                    }
-                    ProteinList { proteins: peptide.get_proteins() }
                 },
                 Some(Err(err)) => rsx! {
                     div { class: "alert alert-danger", "Error getting proteins: {err}" }
