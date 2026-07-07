@@ -18,7 +18,6 @@ use macpepdb::{
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide::{Peptide, Peptidoform},
-    peptide_metadata_table::PeptideMetadataTable,
     peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch},
     peptide_table::PeptideTable,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
@@ -92,8 +91,6 @@ enum Error {
     Sequence(Box<macpepdb::sequence::Error>),
     #[error("Peptide not found")]
     PeptideNotFound,
-    #[error("Peptide metadata table error: {0}")]
-    PeptideMetadataTable(#[from] macpepdb::peptide_metadata_table::Error),
     #[error("Peptide table error: {0}")]
     PeptideTable(#[from] macpepdb::peptide_table::Error),
     #[error("proteins_memory_limit should be between 0.0 and 1.0")]
@@ -587,7 +584,7 @@ async fn main() -> Result<(), Error> {
                 let params: Vec<Box<dyn ToSql + Sync + Send>> =
                     vec![Box::new(partitions), Box::new(mass), Box::new(sequence)];
 
-                let mut peptide = PeptideTable::new(client.clone())
+                let peptide = PeptideTable::new(client.clone())
                     .select(
                         "WHERE partition = ANY($1) AND mass = $2 AND sequence = $3 LIMIT 1",
                         params,
@@ -597,19 +594,26 @@ async fn main() -> Result<(), Error> {
                     .await
                     .ok_or(Error::PeptideNotFound)??;
 
-                let mut metadata = PeptideMetadataTable::new(client)
-                    .select_by_ids(&[peptide.metadata_id().unwrap()])
-                    .await?;
+                let proteins = ProteinTable::new(client.clone())
+                    .select_by_ids(peptide.protein_ids().as_slice())
+                    .await?
+                    .map(|protein_res| {
+                        protein_res
+                            .map(|protein| protein.accession().to_string())
+                            .unwrap_or_else(|err| format!("Error retrieving protein: {err}"))
+                    })
+                    .collect::<Vec<_>>()
+                    .await;
 
-                if let Some(protein_ids) = metadata.remove(peptide.metadata_id().as_ref().unwrap())
-                {
-                    peptide.set_protein_ids(protein_ids.clone());
-                }
+                let msg = format!(
+                    "{peptide}\nproteins:    {}",
+                    proteins.join("\n             ")
+                );
 
                 if cli.terminal || cli.tui {
-                    tracing::info!("{peptide}");
+                    tracing::info!(msg);
                 } else {
-                    println!("{peptide}");
+                    println!("{msg}");
                 }
 
                 if let Some(mut tui) = tui {

@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 // 3rd party imports
 use dioxus::prelude::*;
@@ -13,7 +13,7 @@ use crate::routes::Routes;
 #[derive(Clone, PartialEq, Props)]
 pub struct ProteinListProps {
     /// List of proteins to render
-    pub proteins: Rc<Vec<ProteinResponse<String>>>,
+    pub proteins: Arc<Vec<ProteinResponse<String>>>,
 }
 
 /// Renders a list of proteins with most common attributes: accession, genes, is reviewed.

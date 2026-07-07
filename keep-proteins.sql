@@ -6,13 +6,8 @@
 --
 -- Layout:
 --   peptides            COLUMNAR (zstd), distributed by `partition`     -- the bulk of the data
---   peptide_metadata    row-store, distributed by `metadata_id`         -- deduplicated protein-id sets
 --   proteins/blobs/stats: row-store, distributed (proteins by id; blobs/stats by key)
 --
--- `peptides.metadata_id` references `peptide_metadata.metadata_id` (a shared, deduplicated
--- protein-id set). There is intentionally NO foreign key: Citus restricts FKs across tables
--- with different distribution columns, and the build relies on a completion barrier (all
--- metadata rows are committed before serving) rather than per-row referential checks.
 --
 -- The peptides table has NO primary key / index: columnar storage does not support
 -- them. Selective reads (`WHERE partition = ANY($1) AND mass = $2`) rely on Citus shard
@@ -50,14 +45,6 @@ CREATE TABLE IF NOT EXISTS stats (
     value BIGINT
 );
 
--- Deduplicated protein-id sets. Each distinct set is stored once; peptides reference it by
--- `metadata_id`. Row-store with a PK so resolution (`WHERE metadata_id = ANY($1)`) uses shard
--- pruning + a local index lookup (columnar has no indexes and would scan).
-DROP TABLE IF EXISTS peptide_metadata;
-CREATE TABLE peptide_metadata (
-    metadata_id BIGINT PRIMARY KEY,
-    protein_ids BYTEA
-);
 
 -- --------------------------------------------------------------------------
 -- Peptides: columnar, distributed by `partition`.
@@ -67,7 +54,8 @@ CREATE TABLE peptides (
     partition               BIGINT,
     mass                    BIGINT,
     sequence                BYTEA,
-    metadata_id             BIGINT,
+    amino_acid_counts       BYTEA,
+    protein_ids             BYTEA,
     unique_taxonomy_ids     INTEGER[],
     non_unique_taxonomy_ids INTEGER[],
     flags                   "char" -- `"char"` is different from CHAR"
@@ -112,7 +100,6 @@ CREATE INDEX tax_name_idx ON taxonomies USING GIN (scientific_name gin_trgm_ops)
 SET citus.shard_count = 1024;
 
 SELECT create_distributed_table('peptides', 'partition');
-SELECT create_distributed_table('peptide_metadata', 'metadata_id');
 SELECT create_distributed_table('proteins', 'id');
 SELECT create_distributed_table('blobs', 'key');
 SELECT create_distributed_table('stats', 'key');

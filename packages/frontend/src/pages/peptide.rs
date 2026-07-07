@@ -1,6 +1,9 @@
+use std::sync::Arc;
+
 use dioxus::prelude::*;
 
 use crate::api_client::Client;
+use crate::components::protein_list::ProteinList;
 use crate::components::rounded_mass::RoundedMass;
 use crate::components::sequence_block::SequenceBlock;
 use crate::components::spinner::Spinner;
@@ -67,7 +70,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
             h2 { "Peptide: {peptide_sequence}" }
             match &*peptide.read_unchecked() {
                 Some(Ok(peptide)) => rsx! {
-                    table { class: "table table-striped",
+                    table { class: "table table-striped mb-3",
                         thead {
                             tr {
                                 th { "Attributes" }
@@ -125,23 +128,6 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 }
                             }
                             tr {
-                                td { "Protein IDs" }
-                                td {
-                                    // TODO: `PeptideResponse.protein_ids` only carries the raw numeric
-                                    // protein ids (no accessions), so we can no longer render a
-                                    // `ProteinList` inline here like the old nested `Peptide<Protein<..>>`
-                                    // entity allowed. Showing the raw ids for now; a nicer version would
-                                    // resolve each id to an accession (there is currently no
-                                    // `GET /api/proteins/by-id/{id}` endpoint, only lookup by accession)
-                                    // and fetch full `ProteinResponse`s on demand, e.g. on click.
-                                    ul {
-                                        for id in peptide.protein_ids.iter() {
-                                            li { "{id}" }
-                                        }
-                                    }
-                                }
-                            }
-                            tr {
                                 td { "Hydrophobicity (Krokhin et al.)" }
                                 td {
                                     match &*hydrophobicity.read_unchecked() {
@@ -160,6 +146,12 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 }
                             }
 
+                        }
+                    }
+                    div {
+                        class: "mb-3",
+                        ProteinList {
+                            proteins: peptide.proteins.clone().unwrap_or(Arc::new(Vec::new())),
                         }
                     }
                 },

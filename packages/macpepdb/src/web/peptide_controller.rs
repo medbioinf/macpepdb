@@ -22,10 +22,10 @@ use urlencoding::decode as urldecode;
 
 use crate::mass::{mass_to_charge_to_dalton, to_float as mass_to_float};
 use crate::peptide::{IsPeptide, Peptide};
-use crate::peptide_metadata_table::PeptideMetadataTable;
 use crate::peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch};
 use crate::peptide_table::PeptideTable;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
+use crate::protein_table::ProteinTable;
 use crate::taxonomy_table::TaxonomyTable;
 use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::server_state::ServerState;
@@ -46,10 +46,10 @@ pub enum Error {
     PeptideNotFound,
     #[error("Peptide search: {0}")]
     PeptideSearch(#[from] crate::peptide_search::Error),
-    #[error("Peptide error: {0}")]
+    #[error("Peptide table error: {0}")]
     PeptideTable(#[from] crate::peptide_table::Error),
-    #[error("Peptide metadata error: {0}")]
-    PeptideMetadata(#[from] crate::peptide_metadata_table::Error),
+    #[error("Protein table: {0}")]
+    ProteinTable(#[from] crate::protein_table::Error),
     #[error("Taxonomy with ID `{0}` not found. Are you sure it exists in NCBI?")]
     TaxonomyNotFound(i32),
     #[error("Taxonomy table error: {0}")]
@@ -144,22 +144,24 @@ impl PeptideController {
     ) -> Result<Json<PeptideResponse>, Error> {
         let peptide = Peptide::try_from(sequence)?;
 
-        let mut peptide = Self::select_one_peptide(&server_state, &peptide)
+        let peptide = Self::select_one_peptide(&server_state, &peptide)
             .await?
             .ok_or(Error::PeptideNotFound)?;
 
-        // Peptides store only a `metadata_id`; resolve it to the deduplicated protein-id set
-        // so the response is byte-identical to the pre-dedup shape.
-        if let Some(metadata_id) = peptide.metadata_id() {
-            let mut groups = PeptideMetadataTable::new(server_state.db_client())
-                .select_by_ids(&[metadata_id])
-                .await?;
-            if let Some(protein_ids) = groups.remove(&metadata_id) {
-                peptide.set_protein_ids(protein_ids);
-            }
-        }
+        let proteins = ProteinTable::new(server_state.db_client())
+            .select(
+                "WHERE id = ANY($1)",
+                vec![Box::new(peptide.protein_ids().as_vec()) as Box<dyn ToSql + Sync + Send>],
+            )
+            .await?
+            .map(|protein_res| protein_res.map(|protein| protein.to_shallow_response()))
+            .try_collect::<Vec<_>>()
+            .await?;
 
-        Ok(Json((&peptide).into()))
+        let mut peptide = PeptideResponse::from(&peptide);
+        peptide.proteins = Some(Arc::new(proteins));
+
+        Ok(Json(peptide))
     }
 
     /// Returns if a peptide exists.

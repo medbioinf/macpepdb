@@ -162,6 +162,18 @@ impl Protein {
             peptides,
         }
     }
+
+    pub fn to_shallow_response(&self) -> ProteinResponse<String> {
+        ProteinResponse {
+            accession: self.accession.clone(),
+            id: self.id,
+            sequence: self.sequence.to_string(),
+            taxonomy_id: self.taxonomy_id,
+            is_reviewed: self.is_reviewed(),
+            genes: self.genes.clone(),
+            peptides: Vec::new(),
+        }
+    }
 }
 
 /// Splits a UniProt gene-name group value (the part after `=`) on commas that are

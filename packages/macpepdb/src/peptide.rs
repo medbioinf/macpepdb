@@ -76,8 +76,6 @@ pub struct Peptide {
     /// Bit flags for e.g. review status, see constants to see what is stored in which bit
     flags: i8,
     #[serde(skip)]
-    metadata_id: Option<i64>,
-    #[serde(skip)]
     amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
 }
 
@@ -107,39 +105,6 @@ impl Peptide {
             non_unique_taxonomy_ids,
             partition: None,
             flags,
-            metadata_id: None,
-            amino_acid_counts: OnceLock::new(),
-        }
-    }
-
-    /// Build-time constructor: the protein-id set has been interned to `metadata_id`, so
-    /// the peptide carries only the reference. `protein_ids` stays empty until resolved.
-    pub fn new_with_metadata(
-        sequence: Sequence,
-        metadata_id: i64,
-        unique_taxonomy_ids: Vec<i32>,
-        non_unique_taxonomy_ids: Vec<i32>,
-        is_swiss_prot: bool,
-        is_trembl: bool,
-    ) -> Self {
-        let mass = Self::to_peptide_mass(&sequence);
-        let mut flags: i8 = 0b0100_0000;
-        if is_swiss_prot {
-            flags |= 1 << IS_SWISS_PROT_BIT;
-        }
-        if is_trembl {
-            flags |= 1 << IS_TREMBL_BIT;
-        }
-
-        Self {
-            mass,
-            sequence,
-            protein_ids: ProteinIds::default(),
-            unique_taxonomy_ids,
-            non_unique_taxonomy_ids,
-            flags,
-            partition: None,
-            metadata_id: Some(metadata_id),
             amino_acid_counts: OnceLock::new(),
         }
     }
@@ -198,16 +163,6 @@ impl Peptide {
 
     pub fn protein_ids(&self) -> &ProteinIds {
         &self.protein_ids
-    }
-
-    pub fn metadata_id(&self) -> Option<i64> {
-        self.metadata_id
-    }
-
-    /// Populate `protein_ids` after resolving `metadata_id` against `peptide_metadata`
-    /// (used by the single-peptide GET endpoint to reproduce the full response).
-    pub fn set_protein_ids(&mut self, protein_ids: ProteinIds) {
-        self.protein_ids = protein_ids;
     }
 
     pub fn cql_size(&self) -> usize {
@@ -530,12 +485,10 @@ impl TryFrom<Row> for Peptide {
                 once_lock.set(counts).unwrap();
                 once_lock
             })?,
-            // Resolved on demand (GET endpoint) from peptide_metadata; empty when read directly.
-            protein_ids: ProteinIds::default(),
+            protein_ids: row.try_get("protein_ids")?,
             unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
             non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
             flags: row.try_get("flags")?,
-            metadata_id: Some(row.try_get("metadata_id")?),
         })
     }
 }
@@ -546,11 +499,10 @@ impl Peptide {
             partition: None,
             mass: row.try_get("mass")?,
             sequence: row.try_get("sequence")?,
-            protein_ids: ProteinIds::default(),
+            protein_ids: row.try_get("protein_ids")?,
             unique_taxonomy_ids: Vec::new(),
             non_unique_taxonomy_ids: Vec::new(),
             flags: row.try_get("flags")?,
-            metadata_id: None,
             amino_acid_counts: OnceLock::new(),
         })
     }
@@ -567,6 +519,7 @@ impl From<&Peptide> for PeptideResponse {
             non_unique_taxonomy_ids: peptide.non_unique_taxonomy_ids.clone(),
             is_swiss_prot: peptide.is_swiss_prot(),
             is_trembl: peptide.is_trembl(),
+            proteins: None,
         }
     }
 }
@@ -582,6 +535,7 @@ impl From<&Peptidoform> for PeptideResponse {
             non_unique_taxonomy_ids: Vec::new(),
             is_swiss_prot: peptidoform.is_swiss_prot(),
             is_trembl: peptidoform.is_trembl(),
+            proteins: None,
         }
     }
 }

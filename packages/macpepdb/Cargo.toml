@@ -34,7 +34,7 @@ peptide_hydrophobicity = { workspace = true }
 postcard = { workspace = true, features = ["alloc"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true }
 tokio-postgres = { workspace = true, features = ["array-impls"] }
 deadpool-postgres = { workspace = true }

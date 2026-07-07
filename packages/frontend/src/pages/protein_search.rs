@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::sync::Arc;
 
 use dioxus::html::input_data::keyboard_types::Code;
 use dioxus::prelude::*;
@@ -40,7 +40,7 @@ pub fn ProteinSearch() -> Element {
             client.search_protein(&protein_id.read()).await;
 
         match fetched_proteins {
-            Ok(fetched_proteins) => Ok(Rc::new(fetched_proteins)),
+            Ok(fetched_proteins) => Ok(Arc::new(fetched_proteins)),
             Err(err) => Err(err.into()),
         }
     });

@@ -38,6 +38,7 @@ mod tests {
                 non_unique_taxonomy_ids: vec![10090],
                 is_swiss_prot: true,
                 is_trembl: false,
+                proteins: None,
             }],
         };
 

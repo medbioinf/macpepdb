@@ -83,6 +83,10 @@ impl ProteinIds {
         self.0
     }
 
+    pub fn as_vec(&self) -> Vec<i32> {
+        self.0.clone()
+    }
+
     /// Sort + dedup, then delta-encode into a varint blob. The first value is
     /// stored zigzag-encoded; subsequent values are stored as non-negative gaps.
     /// This is the canonical byte form of the set — stable across input order — so it

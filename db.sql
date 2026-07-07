@@ -31,19 +31,13 @@ CREATE TABLE stats (
     value BIGINT
 );
 
-DROP TABLE IF EXISTS peptide_metadata;
-CREATE TABLE peptide_metadata (
-    metadata_id BIGINT PRIMARY KEY,
-    protein_ids BYTEA
-);
-
 DROP TABLE IF EXISTS peptides;
 CREATE TABLE peptides (
     partition               BIGINT,
     mass                    BIGINT,
     sequence                BYTEA,
     amino_acid_counts       BYTEA,
-    metadata_id             BIGINT,
+    protein_ids             BYTEA,
     unique_taxonomy_ids     INTEGER[],
     non_unique_taxonomy_ids INTEGER[],
     flags                   "char" -- `"char"` is different from CHAR"
@@ -78,7 +72,6 @@ CREATE INDEX tax_name_idx ON taxonomies USING GIN (scientific_name gin_trgm_ops)
 SET citus.shard_count = 1024;
 
 SELECT create_distributed_table('peptides', 'partition');
-SELECT create_distributed_table('peptide_metadata', 'metadata_id');
 SELECT create_distributed_table('proteins', 'id');
 SELECT create_distributed_table('blobs', 'key');
 SELECT create_distributed_table('stats', 'key');

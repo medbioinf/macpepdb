@@ -1,4 +1,8 @@
+use std::sync::Arc;
+
 use serde::{Deserialize, Serialize};
+
+use crate::responses::protein::ProteinResponse;
 
 /// Wire shape for a single peptide (`GET /api/peptides/{sequence}`) or one element of a peptide
 /// search result stream (`POST/GET /api/peptides/search`). Covers both the backend's `Peptide`
@@ -14,6 +18,7 @@ pub struct PeptideResponse {
     pub non_unique_taxonomy_ids: Vec<i32>,
     pub is_swiss_prot: bool,
     pub is_trembl: bool,
+    pub proteins: Option<Arc<Vec<ProteinResponse<String>>>>,
 }
 
 #[cfg(test)]
@@ -31,6 +36,7 @@ mod tests {
             non_unique_taxonomy_ids: vec![10090],
             is_swiss_prot: true,
             is_trembl: false,
+            proteins: None,
         };
 
         let json = serde_json::to_string(&peptide).unwrap();
