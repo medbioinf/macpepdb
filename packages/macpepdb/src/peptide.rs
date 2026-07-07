@@ -256,7 +256,11 @@ impl Display for Peptide {
         writeln!(
             f,
             "proteins:    {}",
-            self.unique_taxonomy_ids().iter().join(", ")
+            self.protein_ids()
+                .as_slice()
+                .iter()
+                .map(|id| format!("{id}"))
+                .join(", ")
         )?;
         writeln!(
             f,

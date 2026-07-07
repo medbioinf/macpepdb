@@ -4,9 +4,12 @@ use itertools::Itertools;
 use serde::Serialize;
 use thiserror::Error;
 use tokio_postgres::Row;
+use uniprot_reader::feature_table::{
+    Feature, FeatureTable, Index, NoteOperation, Position, group_by_isoform,
+};
 
 use crate::{
-    amino_acid::AminoAcid,
+    amino_acid::{AminoAcid, AminoAcidBitCode},
     sequence::{IsBitSequence, IsSimpleSequence, ProteinSequence as Sequence},
 };
 
@@ -26,6 +29,31 @@ pub enum Error {
     TaxonomyIdParsing(std::num::ParseIntError),
     #[error("Row decoding error in protein: {0}")]
     Row(#[from] tokio_postgres::Error),
+    #[error("Feature table error in protein: {0}")]
+    FeatureTable(#[from] uniprot_reader::feature_table::Error),
+    #[error("Isoform feature contain non-fixed position: {0}")]
+    FeatureLocation(Position),
+    #[error("VAR_SEQ `{id}` position {start}..{end} overlaps another edit for the same isoform")]
+    VarSeqOverlap { id: String, start: u32, end: u32 },
+    #[error(
+        "VAR_SEQ `{id}` position {start}..{end} is out of bounds for a sequence of length {length}"
+    )]
+    VarSeqOutOfBounds {
+        id: String,
+        start: u32,
+        end: u32,
+        length: usize,
+    },
+    #[error(
+        "VAR_SEQ `{id}` note expects `{expected}` at position {start}..{end} but canonical sequence has `{found}`"
+    )]
+    VarSeqMismatch {
+        id: String,
+        start: u32,
+        end: u32,
+        expected: String,
+        found: String,
+    },
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -77,6 +105,10 @@ impl Protein {
 
     pub fn id(&self) -> Option<i32> {
         self.id
+    }
+
+    pub(crate) fn id_mut(&mut self) -> &mut Option<i32> {
+        &mut self.id
     }
 
     pub fn taxonomy_id(&self) -> i32 {
@@ -255,6 +287,185 @@ fn taxonomy_id_from_organism_taxonomy_cross_reference(
         .map_err(Error::TaxonomyIdParsing)
 }
 
+struct VarSeqEdit {
+    /// The `/id` (`VSP_...`), for error messages; empty if absent.
+    id: String,
+    /// 1-based inclusive, from `Feature::location()`.
+    start: u32,
+    end: u32,
+    /// Empty for `Missing`.
+    replacement: Vec<AminoAcidBitCode>,
+    /// The "from" side of a replacement, to sanity-check against the canonical sequence.
+    expected: Option<String>,
+}
+
+impl VarSeqEdit {
+    fn bit_codes_from_str(sequence: &str) -> Result<Vec<AminoAcidBitCode>, Error> {
+        sequence
+            .chars()
+            .map(|code| {
+                AminoAcid::by_code(code)
+                    .map(|aa| *aa.bit_code())
+                    .map_err(crate::sequence::Error::AminoAcid)
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(Error::Sequence)
+    }
+
+    /// `None` when the feature isn't an edit we understand (e.g. VAR_SEQ text that isn't `"Missing"`
+    /// or `"X -> Y"`) — such features are simply skipped, not treated as errors.
+    fn new(feature: &Feature) -> Result<Option<VarSeqEdit>, Error> {
+        let (replacement, expected) = match feature.note_operation() {
+            Some(NoteOperation::Missing) => (Vec::new(), None),
+            Some(NoteOperation::Replacement { from, to }) => {
+                (Self::bit_codes_from_str(&to)?, Some(from))
+            }
+            Some(NoteOperation::Other(_)) | None => return Ok(None),
+        };
+
+        let start = match feature.location().position().start() {
+            Index::Fix(pos) => pos,
+            _ => return Err(Error::FeatureLocation(feature.location().position())),
+        };
+
+        let end = match feature.location().position().end() {
+            Index::Fix(pos) => pos,
+            _ => return Err(Error::FeatureLocation(feature.location().position())),
+        };
+
+        Ok(Some(VarSeqEdit {
+            id: feature.id().unwrap_or_default().to_string(),
+            start,
+            end,
+            replacement,
+            expected,
+        }))
+    }
+}
+
+/// Collection if canonical and isoforms of protein
+///
+pub struct Variants {
+    proteins: Vec<Protein>,
+}
+
+impl Variants {
+    pub fn is_empty(&self) -> bool {
+        self.proteins.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.proteins.len()
+    }
+
+    pub fn proteins(&self) -> &[Protein] {
+        &self.proteins
+    }
+
+    /// Applies a set of VAR_SEQ edits — in canonical-sequence coordinates — to produce one isoform's
+    /// bit-code sequence.
+    fn apply_var_seq_edits(
+        canonical: &[AminoAcidBitCode],
+        mut edits: Vec<VarSeqEdit>,
+    ) -> Result<Vec<AminoAcidBitCode>, Error> {
+        edits.sort_by_key(|edit| edit.start);
+
+        let mut data = Vec::with_capacity(canonical.len());
+        let mut cursor = 0usize; // next uncopied canonical index (0-based)
+
+        for edit in &edits {
+            let start_idx = edit.start as usize - 1;
+            let end_idx = edit.end as usize; // exclusive bound; end is 1-based inclusive
+
+            if start_idx < cursor {
+                return Err(Error::VarSeqOverlap {
+                    id: edit.id.clone(),
+                    start: edit.start,
+                    end: edit.end,
+                });
+            }
+            if end_idx > canonical.len() {
+                return Err(Error::VarSeqOutOfBounds {
+                    id: edit.id.clone(),
+                    start: edit.start,
+                    end: edit.end,
+                    length: canonical.len(),
+                });
+            }
+            if let Some(expected) = &edit.expected {
+                let found: String = canonical[start_idx..end_idx]
+                    .iter()
+                    .map(|bit_code| AminoAcid::by_bit_code(bit_code).code())
+                    .collect();
+                if &found != expected {
+                    return Err(Error::VarSeqMismatch {
+                        id: edit.id.clone(),
+                        start: edit.start,
+                        end: edit.end,
+                        expected: expected.clone(),
+                        found,
+                    });
+                }
+            }
+
+            data.extend_from_slice(&canonical[cursor..start_idx]);
+            data.extend_from_slice(&edit.replacement);
+            cursor = end_idx;
+        }
+        data.extend_from_slice(&canonical[cursor..]);
+
+        Ok(data)
+    }
+}
+
+impl IntoIterator for Variants {
+    type Item = Protein;
+    type IntoIter = std::vec::IntoIter<Protein>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.proteins.into_iter()
+    }
+}
+impl TryFrom<&uniprot_reader::entry::Entry> for Variants {
+    type Error = Error;
+
+    fn try_from(entry: &uniprot_reader::entry::Entry) -> Result<Self, Error> {
+        let canonical_protein: Protein = Protein::try_from(entry)?;
+
+        let feature_table = FeatureTable::try_from(entry.feature_table())?;
+        let isoform_groups = group_by_isoform(feature_table.features());
+
+        let mut variants = Vec::with_capacity(isoform_groups.len() + 1);
+        for (isoform_idx, (_label, group)) in isoform_groups.iter().enumerate() {
+            let edits = group
+                .iter()
+                .filter(|feature| feature.key() == "VAR_SEQ")
+                .filter_map(|feature| VarSeqEdit::new(feature).transpose())
+                .collect::<Result<Vec<_>, Error>>()?;
+
+            if edits.is_empty() {
+                continue;
+            }
+
+            let sequence_data =
+                Self::apply_var_seq_edits(canonical_protein.sequence().data(), edits)?;
+
+            variants.push(Protein::new(
+                format!("{}-{}", canonical_protein.accession(), isoform_idx + 2),
+                None,
+                Sequence::new(sequence_data)?,
+                canonical_protein.taxonomy_id(),
+                canonical_protein.is_reviewed(),
+                canonical_protein.genes().clone(),
+            ));
+        }
+
+        variants.insert(0, canonical_protein);
+
+        Ok(Variants { proteins: variants })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -274,5 +485,177 @@ mod tests {
             })
             .collect();
         assert_eq!(genes, vec!["cmoB", "yecP", "b1871", "JW1860"]);
+    }
+
+    #[test]
+    fn test_apply_var_seq_edits_single_replacement() {
+        let canonical = VarSeqEdit::bit_codes_from_str("ACDEFG").unwrap();
+        let edits = vec![VarSeqEdit {
+            id: "VSP_1".to_string(),
+            start: 2,
+            end: 2,
+            replacement: VarSeqEdit::bit_codes_from_str("K").unwrap(),
+            expected: Some("C".to_string()),
+        }];
+        let result =
+            Sequence::new(Variants::apply_var_seq_edits(&canonical, edits).unwrap()).unwrap();
+        assert_eq!(result.to_string(), "AKDEFG");
+    }
+
+    #[test]
+    fn test_apply_var_seq_edits_missing() {
+        let canonical = VarSeqEdit::bit_codes_from_str("ACDEFG").unwrap();
+        let edits = vec![VarSeqEdit {
+            id: "VSP_2".to_string(),
+            start: 2,
+            end: 4,
+            replacement: Vec::new(),
+            expected: None,
+        }];
+        let result =
+            Sequence::new(Variants::apply_var_seq_edits(&canonical, edits).unwrap()).unwrap();
+        assert_eq!(result.to_string(), "AFG");
+    }
+
+    #[test]
+    fn test_apply_var_seq_edits_multiple_non_overlapping() {
+        let canonical = VarSeqEdit::bit_codes_from_str("ACDEFGHIKL").unwrap();
+        let edits = vec![
+            VarSeqEdit {
+                id: "1".to_string(),
+                start: 1,
+                end: 1,
+                replacement: VarSeqEdit::bit_codes_from_str("K").unwrap(),
+                expected: Some("A".to_string()),
+            },
+            VarSeqEdit {
+                id: "2".to_string(),
+                start: 8,
+                end: 10,
+                replacement: Vec::new(),
+                expected: None,
+            },
+        ];
+        let result =
+            Sequence::new(Variants::apply_var_seq_edits(&canonical, edits).unwrap()).unwrap();
+        assert_eq!(result.to_string(), "KCDEFGH");
+    }
+
+    #[test]
+    fn test_apply_var_seq_edits_overlap_errors() {
+        let canonical = VarSeqEdit::bit_codes_from_str("ACDEFG").unwrap();
+        let edits = vec![
+            VarSeqEdit {
+                id: "1".to_string(),
+                start: 2,
+                end: 4,
+                replacement: Vec::new(),
+                expected: None,
+            },
+            VarSeqEdit {
+                id: "2".to_string(),
+                start: 3,
+                end: 5,
+                replacement: Vec::new(),
+                expected: None,
+            },
+        ];
+        let err = Variants::apply_var_seq_edits(&canonical, edits).unwrap_err();
+        assert!(matches!(err, Error::VarSeqOverlap { .. }));
+    }
+
+    #[test]
+    fn test_apply_var_seq_edits_out_of_bounds_errors() {
+        let canonical = VarSeqEdit::bit_codes_from_str("ACDEFG").unwrap();
+        let edits = vec![VarSeqEdit {
+            id: "1".to_string(),
+            start: 5,
+            end: 10,
+            replacement: Vec::new(),
+            expected: None,
+        }];
+        let err = Variants::apply_var_seq_edits(&canonical, edits).unwrap_err();
+        assert!(matches!(err, Error::VarSeqOutOfBounds { .. }));
+    }
+
+    #[test]
+    fn test_apply_var_seq_edits_mismatch_errors() {
+        let canonical = VarSeqEdit::bit_codes_from_str("ACDEFG").unwrap();
+        let edits = vec![VarSeqEdit {
+            id: "1".to_string(),
+            start: 2,
+            end: 2,
+            replacement: Vec::new(),
+            expected: Some("D".to_string()),
+        }];
+        let err = Variants::apply_var_seq_edits(&canonical, edits).unwrap_err();
+        assert!(matches!(err, Error::VarSeqMismatch { .. }));
+    }
+
+    #[test]
+    fn test_isoforms_from_entry_with_var_seq() {
+        const RAW_ENTRY: &str = concat!(
+            "ID   TEST_HUMAN              Reviewed;         10 AA.\n",
+            "AC   P99999;\n",
+            "OX   NCBI_TaxID=9606;\n",
+            "FT   VAR_SEQ         3..5\n",
+            "FT                   /note=\"Missing (in isoform 2)\"\n",
+            "FT                   /id=\"VSP_000001\"\n",
+            "SQ   SEQUENCE   10 AA;  1160 MW;  0000000000000000 CRC64;\n",
+            "     ACDEFGHIKL\n",
+            "//\n",
+        );
+
+        let entry = uniprot_reader::entry::Entry::try_from(RAW_ENTRY.as_bytes().to_vec()).unwrap();
+        let proteins: Vec<Protein> = Variants::try_from(&entry).unwrap().into_iter().collect();
+
+        assert_eq!(proteins.len(), 2);
+        assert_eq!(proteins[0].accession(), "P99999");
+        assert_eq!(proteins[0].sequence().to_string(), "ACDEFGHIKL");
+        assert_eq!(proteins[1].accession(), "P99999-2");
+        assert_eq!(proteins[1].sequence().to_string(), "ACGHIKL");
+    }
+
+    #[test]
+    fn test_isoform_resolving() {
+        let expected_sequences_file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("A0A1B0GTW7.isoform.plain.txt");
+
+        let a0a1b0gtw7_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("test_data")
+            .join("A0A1B0GTW7.txt");
+
+        let expected_sequences = std::fs::read_to_string(expected_sequences_file_path)
+            .unwrap()
+            .split("\n")
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .map(Sequence::try_from)
+            .collect::<Result<Vec<_>, crate::sequence::Error>>()
+            .unwrap();
+
+        assert_eq!(expected_sequences.len(), 3);
+
+        let mut byte_reader =
+            std::io::BufReader::new(std::fs::File::open(a0a1b0gtw7_path).unwrap());
+        let entry_reader = uniprot_reader::reader::Reader::new(&mut byte_reader);
+        let entry = entry_reader.into_iter().next().unwrap().unwrap();
+
+        let variants = Variants::try_from(entry.entry()).unwrap();
+
+        assert_eq!(variants.len(), expected_sequences.len());
+
+        for variant in variants.into_iter() {
+            assert!(expected_sequences.contains(variant.sequence()));
+        }
     }
 }

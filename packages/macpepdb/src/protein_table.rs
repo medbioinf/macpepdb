@@ -17,7 +17,11 @@ use thiserror::Error;
 use tokio::io::{AsyncBufRead, BufReader};
 use uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
 
-use crate::{client::Client, protein::Protein, stats_table::StatsTable};
+use crate::{
+    client::Client,
+    protein::{Protein, Variants},
+    stats_table::StatsTable,
+};
 
 static TABLE_NAME: &str = "proteins";
 
@@ -343,30 +347,34 @@ impl ProteinTable {
                         let mut entry_reader = ProteinReader::new(&mut buf_reader);
 
                         while let Some(entry) = entry_reader.next().await {
-                            let pid = protein_id.fetch_add(1, Ordering::SeqCst);
-                            let protein = Protein::try_from((
-                                pid,
+                            let variants = Variants::try_from(
                                 entry
                                     .map_err(|err| {
                                         Error::ProteinReader(protein_file_path.clone(), err)
                                     })?
                                     .entry(),
-                            ))
+                            )
                             .map_err(|e| Error::Protein(Box::new(e)))?;
-                            buffer.push(protein);
 
-                            if buffer.len() == concurrent_batch_size.get() {
-                                // Push batch into queue, spin if full
-                                loop {
-                                    match protein_queue.push(Some(std::mem::take(&mut buffer))) {
-                                        Ok(()) => break,
-                                        Err(Some(batch)) => {
-                                            buffer = batch;
-                                            tokio::time::sleep(Duration::from_millis(50)).await;
-                                        }
-                                        Err(None) => {
-                                            // A None was already in the queue (shouldn't happen in normal flow)
-                                            tokio::time::sleep(Duration::from_millis(50)).await;
+                            for mut protein in variants.into_iter() {
+                                let pid = protein_id.fetch_add(1, Ordering::SeqCst);
+                                *protein.id_mut() = Some(pid);
+                                buffer.push(protein);
+
+                                if buffer.len() == concurrent_batch_size.get() {
+                                    // Push batch into queue, spin if full
+                                    loop {
+                                        match protein_queue.push(Some(std::mem::take(&mut buffer)))
+                                        {
+                                            Ok(()) => break,
+                                            Err(Some(batch)) => {
+                                                buffer = batch;
+                                                tokio::time::sleep(Duration::from_millis(50)).await;
+                                            }
+                                            Err(None) => {
+                                                // A None was already in the queue (shouldn't happen in normal flow)
+                                                tokio::time::sleep(Duration::from_millis(50)).await;
+                                            }
                                         }
                                     }
                                 }
