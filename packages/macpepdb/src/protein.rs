@@ -319,7 +319,7 @@ struct VarSeqEdit {
     id: String,
     /// 1-based inclusive, from `Feature::location()`.
     start: u32,
-    end: u32,
+    end: Option<u32>,
     /// Empty for `Missing`.
     replacement: Vec<AminoAcidBitCode>,
     /// The "from" side of a replacement, to sanity-check against the canonical sequence.
@@ -352,11 +352,13 @@ impl VarSeqEdit {
 
         let start = match feature.location().position().start() {
             Index::Fix(pos) => pos,
+            Index::Before(_) => 0,
             _ => return Err(Error::FeatureLocation(feature.location().position())),
         };
 
         let end = match feature.location().position().end() {
-            Index::Fix(pos) => pos,
+            Index::Fix(pos) => Some(pos),
+            Index::After(_) => None,
             _ => return Err(Error::FeatureLocation(feature.location().position())),
         };
 
@@ -402,20 +404,21 @@ impl Variants {
 
         for edit in &edits {
             let start_idx = edit.start as usize - 1;
-            let end_idx = edit.end as usize; // exclusive bound; end is 1-based inclusive
+            let end = edit.end.unwrap_or(canonical.len() as u32);
+            let end_idx = end as usize; // exclusive bound; end is 1-based inclusive
 
             if start_idx < cursor {
                 return Err(Error::VarSeqOverlap {
                     id: edit.id.clone(),
                     start: edit.start,
-                    end: edit.end,
+                    end,
                 });
             }
             if end_idx > canonical.len() {
                 return Err(Error::VarSeqOutOfBounds {
                     id: edit.id.clone(),
                     start: edit.start,
-                    end: edit.end,
+                    end,
                     length: canonical.len(),
                 });
             }
@@ -428,7 +431,7 @@ impl Variants {
                     return Err(Error::VarSeqMismatch {
                         id: edit.id.clone(),
                         start: edit.start,
-                        end: edit.end,
+                        end,
                         expected: expected.clone(),
                         found,
                     });
@@ -520,7 +523,7 @@ mod tests {
         let edits = vec![VarSeqEdit {
             id: "VSP_1".to_string(),
             start: 2,
-            end: 2,
+            end: Some(2),
             replacement: VarSeqEdit::bit_codes_from_str("K").unwrap(),
             expected: Some("C".to_string()),
         }];
@@ -535,7 +538,7 @@ mod tests {
         let edits = vec![VarSeqEdit {
             id: "VSP_2".to_string(),
             start: 2,
-            end: 4,
+            end: Some(4),
             replacement: Vec::new(),
             expected: None,
         }];
@@ -551,14 +554,14 @@ mod tests {
             VarSeqEdit {
                 id: "1".to_string(),
                 start: 1,
-                end: 1,
+                end: Some(1),
                 replacement: VarSeqEdit::bit_codes_from_str("K").unwrap(),
                 expected: Some("A".to_string()),
             },
             VarSeqEdit {
                 id: "2".to_string(),
                 start: 8,
-                end: 10,
+                end: Some(10),
                 replacement: Vec::new(),
                 expected: None,
             },
@@ -575,14 +578,14 @@ mod tests {
             VarSeqEdit {
                 id: "1".to_string(),
                 start: 2,
-                end: 4,
+                end: Some(4),
                 replacement: Vec::new(),
                 expected: None,
             },
             VarSeqEdit {
                 id: "2".to_string(),
                 start: 3,
-                end: 5,
+                end: Some(5),
                 replacement: Vec::new(),
                 expected: None,
             },
@@ -597,7 +600,7 @@ mod tests {
         let edits = vec![VarSeqEdit {
             id: "1".to_string(),
             start: 5,
-            end: 10,
+            end: Some(10),
             replacement: Vec::new(),
             expected: None,
         }];
@@ -611,7 +614,7 @@ mod tests {
         let edits = vec![VarSeqEdit {
             id: "1".to_string(),
             start: 2,
-            end: 2,
+            end: Some(2),
             replacement: Vec::new(),
             expected: Some("D".to_string()),
         }];

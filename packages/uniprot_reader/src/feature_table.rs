@@ -21,15 +21,23 @@ pub enum Error {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Index {
     Fix(u32),
+    /// e.g. <3
     Before(u32),
+    /// e.g. >3
     After(u32),
+    // e.g. ?
     Unknown,
+    /// e.g. ?3
+    Uncertain(u32),
 }
 
 impl Index {
     fn parse(value: &str) -> Result<Self, Error> {
         if value == "?" {
             return Ok(Index::Unknown);
+        }
+        if let Some(rest) = value.strip_prefix('?') {
+            return Ok(Index::Uncertain(rest.parse()?));
         }
         if let Some(rest) = value.strip_prefix('<') {
             return Ok(Index::Before(rest.parse()?));
@@ -47,6 +55,7 @@ impl fmt::Display for Index {
             Index::Fix(pos) => write!(f, "{pos}"),
             Index::Before(pos) => write!(f, "<{pos}"),
             Index::After(pos) => write!(f, ">{pos}"),
+            Index::Uncertain(pos) => write!(f, "?{pos}"),
             Index::Unknown => write!(f, "?"),
         }
     }
