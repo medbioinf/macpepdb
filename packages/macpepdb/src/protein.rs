@@ -352,13 +352,13 @@ impl VarSeqEdit {
 
         let start = match feature.location().position().start() {
             Index::Fix(pos) => pos,
-            Index::Before(_) => 0,
+            Index::Before(_) => 1, // set to lowest (1 based) index as we only know the variant goes beyond. this seems to be the UniProt behaviour
             _ => return Err(Error::FeatureLocation(feature.location().position())),
         };
 
         let end = match feature.location().position().end() {
             Index::Fix(pos) => Some(pos),
-            Index::After(_) => None,
+            Index::After(_) => None, // set to none, inidcating end of the seqeunces as we only the end goes beyond. this seems to be the UniProt behaviour
             _ => return Err(Error::FeatureLocation(feature.location().position())),
         };
 
