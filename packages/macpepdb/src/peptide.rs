@@ -59,6 +59,10 @@ pub trait IsPeptide: Send + Sync {
         let amino_acid = AminoAcid::by_bit_code(&code);
         self.amino_acid_count(amino_acid)
     }
+
+    fn unique_taxonomy_ids(&self) -> &[i32];
+
+    fn non_unique_taxonomy_ids(&self) -> &[i32];
 }
 
 #[derive(Serialize)]
@@ -320,6 +324,14 @@ impl IsPeptide for Peptide {
             counts
         })
     }
+
+    fn unique_taxonomy_ids(&self) -> &[i32] {
+        &self.unique_taxonomy_ids
+    }
+
+    fn non_unique_taxonomy_ids(&self) -> &[i32] {
+        &self.non_unique_taxonomy_ids
+    }
 }
 
 impl TryFrom<&str> for Peptide {
@@ -487,6 +499,14 @@ impl IsPeptide for Peptidoform {
                 .for_each(|bit_code| counts[bit_code.as_bytes()[0] as usize] += 1);
             counts
         })
+    }
+
+    fn unique_taxonomy_ids(&self) -> &[i32] {
+        &[]
+    }
+
+    fn non_unique_taxonomy_ids(&self) -> &[i32] {
+        &[]
     }
 }
 

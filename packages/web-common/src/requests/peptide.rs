@@ -20,7 +20,7 @@ pub struct SearchRequestBody {
     pub modifications: Vec<PostTranslationalModificationRequest>,
     /// Not wired up server-side yet (see `crate::web::peptide_controller::search`) — kept typed
     /// so the frontend can already send it once taxonomy filtering is implemented.
-    pub taxonomy_id: Option<i64>,
+    pub taxonomy_id: Option<i32>,
     pub proteome_id: Option<String>,
     pub is_reviewed: Option<bool>,
     pub resolve_modifications: Option<bool>,

@@ -173,7 +173,7 @@ impl<'a> Client<'a> {
             upper_mass_tolerance_ppm: upper_mass_tolerance,
             max_variable_modifications: max_variable_modifications.max(0) as usize,
             modifications: ptms.to_vec(),
-            taxonomy_id: taxonomy.as_ref().map(|taxonomy| taxonomy.id as i64),
+            taxonomy_id: taxonomy.as_ref().map(|taxonomy| taxonomy.id),
             proteome_id: None,
             is_reviewed,
             resolve_modifications: None,

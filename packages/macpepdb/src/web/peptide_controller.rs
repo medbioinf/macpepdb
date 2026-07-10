@@ -10,7 +10,7 @@ use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use base64::{Engine as _, engine::general_purpose::STANDARD as Base64Standard};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 use http::header;
 use macpepdb_web_common::requests::peptide::{
     SearchRequestBody, SearchRequestMass, SearchRequestQuery,
@@ -26,6 +26,7 @@ use crate::peptide_metadata_table::PeptideMetadataTable;
 use crate::peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch};
 use crate::peptide_table::PeptideTable;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
+use crate::taxonomy_table::TaxonomyTable;
 use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::server_state::ServerState;
 
@@ -49,6 +50,10 @@ pub enum Error {
     PeptideTable(#[from] crate::peptide_table::Error),
     #[error("Peptide metadata error: {0}")]
     PeptideMetadata(#[from] crate::peptide_metadata_table::Error),
+    #[error("Taxonomy with ID `{0}` not found. Are you sure it exists in NCBI?")]
+    TaxonomyNotFound(i32),
+    #[error("Taxonomy table error: {0}")]
+    TaxonomyTable(#[from] crate::taxonomy_table::Error),
 }
 
 impl IntoResponse for Error {
@@ -66,21 +71,29 @@ impl IntoResponse for Error {
                 Body::from("Peptide not found".to_string()),
             )
                 .into_response(),
+            Error::TaxonomyNotFound(err) => (
+                StatusCode::NOT_FOUND,
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                Body::from(format!(
+                    "Taxonomy with ID `{err}` not found. Are you sure it exists in NCBI?"
+                )),
+            )
+                .into_response(),
             _ => {
                 let uuid = uuid::Uuid::now_v7();
                 tracing::error!("[{uuid}] {self}");
-
                 (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-                Body::from(format!("Internal server error. Contact the admin and provide this UUID `{uuid}` to help identifying the error.")),
-            )
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!("Internal server error. Contact the admin and provide this UUID `{uuid}` to help identifying the error.")),
+                )
                 .into_response()
             }
         }
     }
 }
 
+// TODO: Adjust all controller methods to return error instread ok Ok(body) with error message.
 pub struct PeptideController;
 
 impl PeptideController {
@@ -443,34 +456,22 @@ impl PeptideController {
             SearchRequestMass::Dalton(mass) => mass_to_int!(mass),
         };
 
-        // let mut taxonomy_ids: Option<Vec<i64>> = None;
-        // if let Some(taxonomy_id) = payload.taxonomy_id {
-        //     // Check if taxonomy exists
-        //     if server_state
-        //         .get_taxonomy_tree_as_ref()
-        //         .get_taxonomy(taxonomy_id as u64)
-        //         .is_none()
-        //     {
-        //         return Ok((
-        //             StatusCode::BAD_REQUEST,
-        //             DEFAULT_ERROR_HEADER_MAP.deref().clone(),
-        //             Body::from(format!(
-        //                 "!!! Taxonomy with id {} does not exist",
-        //                 taxonomy_id
-        //             )),
-        //         ));
-        //     }
+        let mut taxonomy_ids: Option<Vec<i32>> = None;
+        if let Some(taxonomy_id) = payload.taxonomy_id {
+            // Check if taxonomy exists
+            let matching_taxonomy_ids = TaxonomyTable::new(server_state.db_client())
+                .select_sub_species(taxonomy_id)
+                .await?
+                .map(|taxonomy_result| taxonomy_result.map(|taxonomy| taxonomy.id()))
+                .try_collect::<Vec<i32>>()
+                .await?;
 
-        //     let mut ids: Vec<i64> = match server_state
-        //         .get_taxonomy_tree_as_ref()
-        //         .get_sub_taxonomies(taxonomy_id as u64)
-        //     {
-        //         Some(taxonomies) => taxonomies.iter().map(|tax| tax.get_id() as i64).collect(),
-        //         None => Vec::new(),
-        //     };
-        //     ids.push(taxonomy_id);
-        //     taxonomy_ids = Some(ids);
-        // }
+            if !matching_taxonomy_ids.is_empty() {
+                taxonomy_ids = Some(matching_taxonomy_ids);
+            } else {
+                return Err(Error::TaxonomyNotFound(taxonomy_id));
+            }
+        }
 
         let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
 
@@ -511,7 +512,7 @@ impl PeptideController {
                     payload.upper_mass_tolerance_ppm,
                     payload.max_variable_modifications,
                     true,
-                    None, // TODO: taxonomy_ids,
+                    taxonomy_ids,
                     proteome_ids.clone(),
                     payload.is_reviewed,
                     ptm_collection.clone(),

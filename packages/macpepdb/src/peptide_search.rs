@@ -80,7 +80,7 @@ pub static MATCHING_PEPTIDE_METRIC: &str = "peptide_search:matching_peptides";
 
 const CONDITION_REF_COL: &str = "condition_ref";
 
-const SEARCH_COLUMNS: &str = "mass, sequence, flags";
+const SEARCH_COLUMNS: &str = "mass, sequence, protein_ids, flags";
 
 /// Inlined-literal `SELECT` of `SEARCH_COLUMNS` used by the mass-search read path
 /// ([`PeptideTable::select_inline`]); a `where_clause` is appended per query.
@@ -245,28 +245,58 @@ where
     }
 }
 
-// /// Filters peptides which are not in the given taxonomy IDs
-// ///
-// struct TaxonomyFilterFunction {
-//     taxonomy_ids: Arc<Vec<i64>>,
-// }
+/// Filters peptides which are not in the given taxonomy IDs
+///
+struct TaxonomyFilterFunction {
+    taxonomy_ids: Arc<Vec<i32>>,
+}
 
-// impl FilterFunction for TaxonomyFilterFunction {
-//     fn is_match(&self, peptide: &Peptide) -> Result<bool, Error> {
-//         for taxonomy_id in self.taxonomy_ids.iter() {
-//             if peptide.taxonomy_ids().contains(taxonomy_id) {
-//                 return Ok(true);
-//             }
-//         }
-//         Ok(false)
-//     }
-// }
+impl<T> FilterFunction<T> for TaxonomyFilterFunction
+where
+    T: IsPeptide,
+{
+    fn is_match(&self, peptide: &T) -> Result<bool, Error> {
+        for taxonomy_id in self.taxonomy_ids.iter() {
+            if peptide.non_unique_taxonomy_ids().contains(taxonomy_id)
+                || peptide.unique_taxonomy_ids().contains(taxonomy_id)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
 
-// impl Display for TaxonomyFilterFunction {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         write!(f, "taxonomy in [{}]", self.taxonomy_ids.iter().join(", "))
-//     }
-// }
+    fn to_sql(&self, filters: &mut Vec<String>, params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {
+        filters.push(format!(
+            "unique_taxonomy_ids && Array[${}] OR non_unique_taxonomy_ids && Array[${}]",
+            params.len() + 1,
+            params.len() + 2
+        ));
+        params.push(Box::new(
+            self.taxonomy_ids.iter().cloned().collect::<Vec<i32>>(),
+        ));
+        params.push(Box::new(
+            self.taxonomy_ids.iter().cloned().collect::<Vec<i32>>(),
+        ));
+    }
+
+    fn to_sql_literal(&self, filters: &mut Vec<String>) {
+        filters.push(format!(
+            "unique_taxonomy_ids && Array[{ids}] OR non_unique_taxonomy_ids && Array[{ids}]",
+            ids = self.taxonomy_ids.iter().join(",")
+        ));
+    }
+
+    fn is_sqlable(&self) -> bool {
+        true
+    }
+}
+
+impl Display for TaxonomyFilterFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "taxonomy in [{}]", self.taxonomy_ids.iter().join(", "))
+    }
+}
 
 // /// Filters peptides which are not in the given proteome IDs
 // ///
@@ -528,7 +558,7 @@ where
 
     pub fn new_for_general_peptide_attributes(
         distinct: bool,
-        _taxonomy_ids: Option<Arc<Vec<i32>>>,
+        taxonomy_ids: Option<Arc<Vec<i32>>>,
         _proteome_ids: Option<Arc<Vec<String>>>,
         is_reviewed: Option<bool>,
     ) -> Result<Self, Error> {
@@ -538,9 +568,9 @@ where
                 sequences: DashSet::with_capacity(300_000), // With an average length of 30 amino acids this should grow to about 72MB in memory
             }));
         }
-        // if let Some(taxonomy_ids) = taxonomy_ids {
-        //     filter_function.push(Box::new(TaxonomyFilterFunction { taxonomy_ids }));
-        // }
+        if let Some(taxonomy_ids) = taxonomy_ids {
+            filter_function.push(Box::new(TaxonomyFilterFunction { taxonomy_ids }));
+        }
         // if let Some(proteome_ids) = proteome_ids {
         //     filter_function.push(Box::new(ProteomeFilterFunction { proteome_ids }));
         // }
