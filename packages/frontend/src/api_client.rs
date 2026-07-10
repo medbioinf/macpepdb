@@ -337,7 +337,7 @@ impl<'a> Client<'a> {
     }
 
     pub async fn hydrophobicity_korkhin(&self, sequence: &str) -> Result<f64, ApiClientError> {
-        self.get(&format!("/api/chemistry/hydrophobicity/korkhin/{sequence}"))
+        self.get(&format!("/api/chemistry/hydrophobicity/krokhin/{sequence}"))
             .await
     }
 }
