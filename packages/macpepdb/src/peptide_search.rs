@@ -270,7 +270,7 @@ where
 
     fn to_sql(&self, filters: &mut Vec<String>, params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {
         filters.push(format!(
-            "unique_taxonomy_ids && Array[${}] OR non_unique_taxonomy_ids && Array[${}]",
+            "(unique_taxonomy_ids && Array[${}] OR non_unique_taxonomy_ids && Array[${}])",
             params.len() + 1,
             params.len() + 2
         ));
@@ -284,7 +284,7 @@ where
 
     fn to_sql_literal(&self, filters: &mut Vec<String>) {
         filters.push(format!(
-            "unique_taxonomy_ids && Array[{ids}] OR non_unique_taxonomy_ids && Array[{ids}]",
+            "(unique_taxonomy_ids && Array[{ids}] OR non_unique_taxonomy_ids && Array[{ids}])",
             ids = self.taxonomy_ids.iter().join(",")
         ));
     }
