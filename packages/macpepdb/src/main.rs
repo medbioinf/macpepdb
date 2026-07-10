@@ -27,6 +27,7 @@ use macpepdb::{
     sequence::{IsBitSequence, IsSimpleSequence, PeptideSequence},
     stats_table::StatsTable,
     taxonomy_table::TaxonomyTable,
+    web::server_state::MatomoInfo,
 };
 use macpepdb_tui::{MetricConfig, Tui, TuiHandle};
 use postgres_types::ToSql;
@@ -71,6 +72,10 @@ enum Error {
     GlobPattern(#[from] glob::PatternError),
     #[error("Glob error: {0}")]
     Glob(#[from] glob::GlobError),
+    #[error(
+        "Incomplete Matomo info, both matomo_url and matomo_site_id must be set to enable tracking."
+    )]
+    IncompleteMatomoInfo,
     #[error("Missing mass in partitioning, this indicates he peptide is not in the database.")]
     MissingMass,
     #[error("Missing mass count in stats table. Are you sure the database was build correctly?")]
@@ -159,6 +164,12 @@ enum TaxonomyCommand {
 enum Command {
     /// Web api
     Api {
+        /// Matomo tracking URL e.g. https://matomo.example.com/matomo.php
+        #[arg(long, requires = "matomo_site_id")]
+        matomo_url: Option<String>,
+        /// Matomo site ID
+        #[arg(long, requires = "matomo_url")]
+        matomo_site_id: Option<u32>,
         // Optional and default arguments
         #[arg(long, default_value_t = NonZeroUsize::new(16).unwrap())]
         concurrent_searches: NonZeroUsize,
@@ -391,10 +402,21 @@ async fn main() -> Result<(), Error> {
 
     match cli.command {
         Command::Api {
+            matomo_url,
+            matomo_site_id,
             concurrent_searches,
             search_type,
             socket,
         } => {
+            let mut matomo_info = None;
+            if matomo_url.is_some() ^ matomo_site_id.is_some() {
+                return Err(Error::IncompleteMatomoInfo);
+            }
+
+            if let (Some(url), Some(site_id)) = (matomo_url, matomo_site_id) {
+                matomo_info = Some(MatomoInfo::new(url, site_id));
+            }
+
             let client = Client::new(&cli.database_url).await.unwrap();
 
             macpepdb::web::server::start(
@@ -403,7 +425,7 @@ async fn main() -> Result<(), Error> {
                 false,
                 concurrent_searches,
                 search_type,
-                None,
+                matomo_info,
                 Box::pin(shutdown_signal()),
             )
             .await
