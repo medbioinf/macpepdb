@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -601,29 +602,27 @@ impl PeptideController {
                     // start json array
                     yield Ok("[".to_string());
                     // set delimiter to empty string for first element
-                    let mut delimiter = "".to_string();
-                    // create value to temporarily store peptidoform while it is consumed
-                    #[allow(unused)]
-                    let mut peptidoform_len: usize = 0;
+                    let mut delimiter: &'static str = "";
                     // stream peptides
                     for await peptidoforms in peptide_stream {
                         match peptidoforms {
                             Ok(peptidoforms) => {
-                                yield Ok(delimiter.to_owned());
-                                peptidoform_len = peptidoforms.len() - 1;
-                                for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
-                                    // convert to json and yield
+                                for peptidoform in peptidoforms.into_iter() {
+                                    // convert to json and yield delimiter + json in one chunk
                                     match serde_json::to_string(&PeptideResponse::from(&peptidoform)) {
-                                        Ok(json) => yield Ok(json),
+                                        Ok(json) => {
+                                            let mut chunk = String::with_capacity(delimiter.len() + json.len());
+                                            chunk.push_str(delimiter);
+                                            chunk.push_str(&json);
+                                            yield Ok(chunk);
+                                            delimiter = ",";
+                                        }
                                         Err(err) => {
                                             tracing::error!("{:?}", err);
                                             yield Err(format!("!!! {:?}", err));
                                             break;
                                         }
                                     };
-                                    if peptidoform_id < peptidoform_len {
-                                        yield Ok(",".to_string());
-                                    }
                                 }
                             }
                             Err(err) => {
@@ -632,7 +631,6 @@ impl PeptideController {
                                 break;
                             }
                         };
-                        delimiter = ",".to_string();
                     }
                     // end json array
                     yield Ok("]".to_string());
@@ -686,19 +684,16 @@ impl PeptideController {
                 StatusCode::OK,
                 headers,
                 Body::from_stream(stream! {
-                    #[allow(unused)]
-                    let mut peptidoform_len: usize = 0;
-                    let mut delimiter = "".to_string();
+                    let mut delimiter: &'static str = "";
                     for await peptidoforms in peptide_stream {
                         match peptidoforms {
                             Ok(peptidoforms) => {
-                                yield Ok(delimiter.to_owned());
-                                peptidoform_len = peptidoforms.len() - 1;
-                                for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
-                                    yield Ok(peptidoform.sequence().to_string()); // TODO: Could as_bytes() work instead of string allocation? Each byte + 65 should be the ascii char
-                                    if peptidoform_id < peptidoform_len {
-                                        yield Ok("\n".to_string());
-                                    }
+                                for peptidoform in peptidoforms.into_iter() {
+                                    let mut chunk = String::from(delimiter);
+                                    // sequence() is a &ModifiedSequence (Display only, no cheap &str/as_bytes for the general modified case)
+                                    write!(chunk, "{}", peptidoform.sequence()).unwrap();
+                                    yield Ok(chunk);
+                                    delimiter = "\n";
                                 }
                             }
                             Err(err) => {
@@ -707,7 +702,6 @@ impl PeptideController {
                                 break;
                             }
                         };
-                        delimiter = "\n".to_string();
                     }
                 }),
             ),
@@ -716,21 +710,22 @@ impl PeptideController {
                 headers,
                 Body::from_stream(stream! {
                     let mut peptidoform_ctr: usize = 0;
-                    #[allow(unused)]
-                    let mut peptidoform_len: usize = 0;
-                    let mut delimiter = "".to_string();
+                    let mut delimiter: &'static str = "";
                     for await peptidoforms in peptide_stream {
                         match peptidoforms {
                             Ok(peptidoforms) => {
-                                yield Ok(delimiter.to_owned());
-                                peptidoform_len = peptidoforms.len() - 1;
-                                for (peptidoform_id, peptidoform) in peptidoforms.into_iter().enumerate() {
-                                    yield Ok(format!(">mdb|{peptidoform_ctr}|{}\n", mass_to_float(peptidoform.mass())));
-                                    yield Ok(peptidoform.sequence().to_string()); // TODO: Could as_bytes() work instead of string allocation? Each byte + 65 should be the ascii char
+                                for peptidoform in peptidoforms.into_iter() {
+                                    let mut chunk = String::from(delimiter);
+                                    write!(
+                                        chunk,
+                                        ">mdb|{peptidoform_ctr}|{}\n{}",
+                                        mass_to_float(peptidoform.mass()),
+                                        peptidoform.sequence()
+                                    )
+                                    .unwrap();
                                     peptidoform_ctr += 1;
-                                    if peptidoform_id < peptidoform_len {
-                                        yield Ok("\n".to_string());
-                                    }
+                                    yield Ok(chunk);
+                                    delimiter = "\n";
                                 }
                             }
                             Err(err) => {
@@ -739,7 +734,6 @@ impl PeptideController {
                                 break;
                             }
                         };
-                        delimiter = "\n".to_string();
                     }
                 }),
             ),
