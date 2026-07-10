@@ -532,7 +532,7 @@ impl PeptideController {
                     payload.upper_mass_tolerance_ppm,
                     payload.max_variable_modifications,
                     true,
-                    None, // TODO: taxonomy_ids,
+                    taxonomy_ids,
                     proteome_ids.clone(),
                     payload.is_reviewed,
                     ptm_collection.clone(),

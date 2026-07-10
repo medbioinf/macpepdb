@@ -95,6 +95,8 @@ pub enum Error {
     MissingCondition(usize, usize),
     #[error("Database error in peptide search: {0}")]
     NextPeptide(Box<tokio_postgres::Error>),
+    #[error("Filter function is not SQL-able: {0}")]
+    NonSqlAbleFilter(String),
     #[error("Peptide error in peptide search: {0}")]
     Peptide(Box<crate::peptide::Error>),
     #[error("Peptide table error in peptide search: {0}")]
@@ -556,18 +558,19 @@ where
         Self { filter_functions }
     }
 
-    pub fn new_for_general_peptide_attributes(
-        distinct: bool,
+    /// Creates sql able filters for global attribues like review status and taxonomy affiliation
+    ///
+    /// # Arguments
+    /// * `taxonomy_ids` - Optional list of taxonomy IDs to filter by
+    /// * `_proteome_ids` - Optional list of proteome IDs to filter by (currently not used)
+    /// * `is_reviewed` - Optional boolean to filter by review status (true for SwissProt, false for TrEMBL)
+    ///
+    pub fn new_for_general_sql_able_peptide_attributes(
         taxonomy_ids: Option<Arc<Vec<i32>>>,
         _proteome_ids: Option<Arc<Vec<String>>>,
         is_reviewed: Option<bool>,
     ) -> Result<Self, Error> {
         let mut filter_function: Vec<Box<dyn FilterFunction<T>>> = Vec::new();
-        if distinct {
-            filter_function.push(Box::new(ThreadSafeDistinctFilterFunction {
-                sequences: DashSet::with_capacity(300_000), // With an average length of 30 amino acids this should grow to about 72MB in memory
-            }));
-        }
         if let Some(taxonomy_ids) = taxonomy_ids {
             filter_function.push(Box::new(TaxonomyFilterFunction { taxonomy_ids }));
         }
@@ -666,9 +669,16 @@ impl ConditionalPeptideStream {
     pub async fn new(
         client: Arc<Client>,
         mut condition: PeptideCondition,
+        sql_filters: Arc<FilterPipeline<Peptide>>,
         resolve_modification: bool,
         agg: Arc<SearchTimingAgg>,
     ) -> Result<Self, Error> {
+        for filter in sql_filters.iter() {
+            if !filter.is_sqlable() {
+                return Err(Error::NonSqlAbleFilter(format!("{filter}")));
+            }
+        }
+
         // Inline literals (no bind params): Citus prunes shards + columnar chunk groups
         // at plan time only for an inlined query — a parameterized distributed query
         // re-plans every execute (~11 ms) and cannot use a cached generic plan.
@@ -682,12 +692,20 @@ impl ConditionalPeptideStream {
             format!("{MASS_COL} >= {}", condition.lower_mass()),
             format!("{MASS_COL} <= {}", condition.upper_mass()),
         ];
+        // add peptide condition specific where clauses (this will precisly locate the peptides and reduce them most)
         for filter_fn in condition.filter_pipeline().iter() {
             filter_fn.to_sql_literal(&mut filters);
         }
+        // add global where clauses
         condition.remove_sqlable_filters();
 
+        for filter_fn in sql_filters.iter() {
+            filter_fn.to_sql_literal(&mut filters);
+        }
+
         let where_clause = format!("WHERE {}", filters.join(" AND "));
+
+        tracing::info!("{}", where_clause);
 
         let setup_start = std::time::Instant::now();
         let inner: BoxedPeptideRowStream = Box::pin(
@@ -744,7 +762,9 @@ impl Stream for ConditionalPeptideStream {
 
 pub struct FallibleMatchingPeptideStream {
     client: Arc<Client>,
+    // Should only contain non sql able filters
     filter_pipeline: Pin<Box<FilterPipeline<Peptidoform>>>,
+    sql_filters: Arc<FilterPipeline<Peptide>>,
     #[allow(clippy::box_collection)]
     conditions: Pin<Box<VecDeque<PeptideCondition>>>,
     resolve_modifications: bool,
@@ -766,11 +786,29 @@ pub struct FallibleMatchingPeptideStream {
 impl FallibleMatchingPeptideStream {
     pub async fn new(
         client: Arc<Client>,
-        filter_pipeline: FilterPipeline<Peptidoform>,
+        is_distinct: bool,
+        // Global SQL filters, e.g. review or taxonomy condition
+        sql_filters: FilterPipeline<Peptide>,
         mut conditions: VecDeque<PeptideCondition>,
         resolve_modifications: bool,
         concurrent_selects: NonZeroUsize,
     ) -> Result<Self, Error> {
+        for filter in sql_filters.iter() {
+            if !filter.is_sqlable() {
+                return Err(Error::NonSqlAbleFilter(format!("{filter}")));
+            }
+        }
+        let sql_filters = Arc::new(sql_filters);
+
+        // Build filter pipeline for non sqlable conditions
+        let mut filters: Vec<Box<dyn FilterFunction<Peptidoform>>> = Vec::new();
+        if is_distinct {
+            filters.push(Box::new(ThreadSafeDistinctFilterFunction {
+                sequences: DashSet::with_capacity(300_000), // With an average length of 30 amino acids this should grow to about 72MB in memory
+            }));
+        }
+        let filter_pipeline = FilterPipeline::new(filters);
+
         let total_conditions = conditions.len();
         let concurrent_selects = concurrent_selects.get();
         tracing::info!(
@@ -789,10 +827,12 @@ impl FallibleMatchingPeptideStream {
         for condition in conditions.drain(..initial) {
             let client_clone = client.clone();
             let agg_clone = agg.clone();
+            let sql_filters = sql_filters.clone();
             pending.push(Box::pin(async move {
                 ConditionalPeptideStream::new(
                     client_clone,
                     condition,
+                    sql_filters,
                     resolve_modifications,
                     agg_clone,
                 )
@@ -823,6 +863,7 @@ impl FallibleMatchingPeptideStream {
             streams,
             matching_peptide_metric,
             matching_peptide_counter,
+            sql_filters,
             filter_pipeline: Box::pin(filter_pipeline),
             conditions: Box::pin(conditions),
             started_at: std::time::Instant::now(),
@@ -871,8 +912,10 @@ impl Stream for FallibleMatchingPeptideStream {
                 let client = this.client.clone();
                 let resolve = this.resolve_modifications;
                 let agg = this.agg.clone();
+                let sql_filters = this.sql_filters.clone();
                 this.pending.push(Box::pin(async move {
-                    ConditionalPeptideStream::new(client, condition, resolve, agg).await
+                    ConditionalPeptideStream::new(client, condition, sql_filters, resolve, agg)
+                        .await
                 }));
                 added = true;
             }
@@ -1015,10 +1058,27 @@ pub struct UnionAllFallibleMatchingPeptideStream {
 impl UnionAllFallibleMatchingPeptideStream {
     pub async fn new(
         client: Arc<Client>,
-        filter_pipeline: FilterPipeline<Peptidoform>,
+        is_distinct: bool,
+        sql_filters: FilterPipeline<Peptide>,
         mut conditions: Vec<PeptideCondition>,
         resolve_modifications: bool,
     ) -> Result<Self, Error> {
+        for filter in sql_filters.iter() {
+            if !filter.is_sqlable() {
+                return Err(Error::NonSqlAbleFilter(format!("{filter}")));
+            }
+        }
+        let sql_filters = Arc::new(sql_filters);
+
+        // Build filter pipeline for non sqlable conditions
+        let mut filters: Vec<Box<dyn FilterFunction<Peptidoform>>> = Vec::new();
+        if is_distinct {
+            filters.push(Box::new(ThreadSafeDistinctFilterFunction {
+                sequences: DashSet::with_capacity(300_000), // With an average length of 30 amino acids this should grow to about 72MB in memory
+            }));
+        }
+        let filter_pipeline = FilterPipeline::new(filters);
+
         // One UNION ALL branch per condition (a mass range over its partition set), with
         // all values inlined as literals — no bind params. Inlining lets Citus prune
         // shards + columnar chunk groups at plan time; a parameterized distributed query
@@ -1027,7 +1087,7 @@ impl UnionAllFallibleMatchingPeptideStream {
             .iter_mut()
             .enumerate()
             .map(|(condition_idx, condition)| {
-                let mut filters = vec![
+                let mut where_clause = vec![
                     format!(
                         "{PARTITION_COL} = ANY(ARRAY[{}]::bigint[])",
                         condition.partitions().iter().join(",")
@@ -1035,13 +1095,22 @@ impl UnionAllFallibleMatchingPeptideStream {
                     format!("{MASS_COL} >= {}", condition.lower_mass()),
                     format!("{MASS_COL} <= {}", condition.upper_mass()),
                 ];
+                // add peptide condition specific where clauses (this will precisly locate the peptides and reduce them most)
                 for filter_fn in condition.filter_pipeline().iter() {
-                    filter_fn.to_sql_literal(&mut filters);
+                    filter_fn.to_sql_literal(&mut where_clause);
                 }
                 condition.remove_sqlable_filters();
 
+                for filter_fn in sql_filters.iter() {
+                    filter_fn.to_sql_literal(&mut where_clause);
+                }
+
+                for filter in where_clause.iter() {
+                    tracing::info!("{filter}");
+                }
+
                 format!(
-                    "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {SEARCH_COLUMNS} FROM {TABLE_NAME} WHERE {}", filters.join(" AND ")
+                    "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {SEARCH_COLUMNS} FROM {TABLE_NAME} WHERE {}", where_clause.join(" AND ")
                 )
             })
             .join(" UNION ALL ");
@@ -1218,7 +1287,7 @@ impl Search for MultiTaskSearch {
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
         max_variable_modifications: usize,
-        distinct: bool,
+        is_distinct: bool,
         taxonomy_ids: Option<Vec<i32>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
@@ -1274,8 +1343,8 @@ impl Search for MultiTaskSearch {
 
             FallibleMatchingPeptideStream::new(
                 client,
-                FilterPipeline::new_for_general_peptide_attributes(
-                    distinct,
+                is_distinct,
+                FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
                     proteome_ids,
                     is_reviewed,
@@ -1295,8 +1364,8 @@ impl Search for MultiTaskSearch {
 
             FallibleMatchingPeptideStream::new(
                 client,
-                FilterPipeline::new_for_general_peptide_attributes(
-                    distinct,
+                is_distinct,
+                FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
                     proteome_ids,
                     is_reviewed,
@@ -1323,7 +1392,7 @@ impl Search for UnionAllSearch {
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
         max_variable_modifications: usize,
-        distinct: bool,
+        is_distinct: bool,
         taxonomy_ids: Option<Vec<i32>>,
         proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
@@ -1379,8 +1448,8 @@ impl Search for UnionAllSearch {
 
             UnionAllFallibleMatchingPeptideStream::new(
                 client,
-                FilterPipeline::new_for_general_peptide_attributes(
-                    distinct,
+                is_distinct,
+                FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
                     proteome_ids,
                     is_reviewed,
@@ -1399,8 +1468,8 @@ impl Search for UnionAllSearch {
 
             UnionAllFallibleMatchingPeptideStream::new(
                 client,
-                FilterPipeline::new_for_general_peptide_attributes(
-                    distinct,
+                is_distinct,
+                FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
                     proteome_ids,
                     is_reviewed,
