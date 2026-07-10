@@ -40,6 +40,20 @@ pub fn Peptide(props: PeptideProps) -> Element {
             Ok(client.get_peptide(peptide_sequence.read().as_str()).await?)
         });
 
+    let hydrophobicity = use_resource(move || async move {
+        let app_config = app_config.read_unchecked();
+        let macpepdb_base_url = match app_config.as_ref() {
+            Some(config) => config.get_macpepdb_base_url(),
+            None => return Err(GeneralError::ConfigurationNotLoaded),
+        };
+
+        let client = Client::new(macpepdb_base_url)?;
+
+        Ok(client
+            .hydrophobicity_korkhin(peptide_sequence.read().as_str())
+            .await?)
+    });
+
     use_future(move || async move {
         track_page_visit(vec![(
             peptide_sequence.to_string(),
@@ -127,6 +141,25 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                     }
                                 }
                             }
+                            tr {
+                                td { "Hydrophobicity (Krokhin et al.)" }
+                                td {
+                                    match &*hydrophobicity.read_unchecked() {
+                                        Some(Ok(hydrophobicity)) => rsx! {
+                                            "{hydrophobicity:.3}"
+                                        },
+                                        Some(Err(err)) => rsx! {
+                                            div { class: "alert alert-danger", "Error getting hydrophobicity: {err}" }
+                                        },
+                                        None => rsx! {
+                                            if hydrophobicity.pending() {
+                                                Spinner {}
+                                            }
+                                        },
+                                    }
+                                }
+                            }
+
                         }
                     }
                 },

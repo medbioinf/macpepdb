@@ -18,6 +18,7 @@ use crate::web::server_state::ServerState;
 static CONTROLLER_PATH: &str = "/api/chemistry";
 static SHOW_AMINO_ACID_PATH: &str = "/amino-acids/{code}";
 static AMINO_ACIDS_PATH: &str = "/amino-acids";
+static HYDROPHOBICITY_KROKHIN_PATH: &str = "/hydrophobicity/krokhin/{sequence}";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -54,7 +55,11 @@ impl ChemistryController {
     pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
         let router: Router<Arc<ServerState>> = Router::new()
             .route(AMINO_ACIDS_PATH, get(Self::amino_acids))
-            .route(SHOW_AMINO_ACID_PATH, get(Self::amino_acid));
+            .route(SHOW_AMINO_ACID_PATH, get(Self::amino_acid))
+            .route(
+                HYDROPHOBICITY_KROKHIN_PATH,
+                get(Self::hydrophobicity_krokhin),
+            );
 
         router.with_state(state)
     }
@@ -120,5 +125,28 @@ impl ChemistryController {
         let amino_acid_values = AminoAcid::all().iter().map(|aa| (*aa).into()).collect();
 
         Ok(Json(amino_acid_values))
+    }
+
+    /// Returns hydrophobicity score of a peptide sequence using methodb by Krokhin et al. (2006)
+    ///
+    /// # Arguments
+    /// * `sequence` - Amino acid seqeunce
+    ///
+    /// # API
+    /// ## Request
+    /// * Path: `/api/hydrophobicity/krokhin/{sequence}`
+    /// * Method: `GET`
+    ///
+    /// ## Response
+    /// ```json
+    /// [
+    ///     TODO
+    /// ]
+    /// ```
+    ///
+    pub async fn hydrophobicity_krokhin(Path(sequence): Path<String>) -> Result<Json<f64>, Error> {
+        Ok(Json(peptide_hydrophobicity::krokhin::score_sequence(
+            sequence.as_str(),
+        )))
     }
 }

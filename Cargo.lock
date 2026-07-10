@@ -3524,6 +3524,7 @@ dependencies = [
  "mimalloc",
  "num-traits",
  "pastey",
+ "peptide_hydrophobicity",
  "postcard",
  "postgres-types",
  "rand 0.9.4",
@@ -4174,6 +4175,10 @@ dependencies = [
  "password-hash",
  "sha2 0.10.9",
 ]
+
+[[package]]
+name = "peptide_hydrophobicity"
+version = "0.1.0"
 
 [[package]]
 name = "percent-encoding"

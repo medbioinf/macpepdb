@@ -335,4 +335,9 @@ impl<'a> Client<'a> {
         let endpoint = format!("/api/proteins/{accession}");
         self.get(&endpoint).await
     }
+
+    pub async fn hydrophobicity_korkhin(&self, sequence: &str) -> Result<f64, ApiClientError> {
+        self.get(&format!("/api/chemistry/hydrophobicity/korkhin/{sequence}"))
+            .await
+    }
 }
