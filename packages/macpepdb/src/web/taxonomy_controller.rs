@@ -8,7 +8,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use futures::TryStreamExt;
-use http::StatusCode;
+use http::{HeaderMap, HeaderValue, StatusCode, header};
 use macpepdb_web_common::requests::taxonomy::SearchRequestBody;
 use macpepdb_web_common::responses::taxonomy::TaxonomyResponse;
 use postgres_types::ToSql;
@@ -151,7 +151,7 @@ impl TaxonomyController {
     pub async fn sub_species(
         State(state): State<Arc<ServerState>>,
         Path(id): Path<i32>,
-    ) -> Result<impl IntoResponse, Error> {
+    ) -> Result<(StatusCode, HeaderMap, Body), Error> {
         let taxonomy_stream = TaxonomyTable::new(state.db_client())
             .select_sub_species(id)
             .await?;
@@ -187,7 +187,13 @@ impl TaxonomyController {
             yield Ok("]".to_string());
         };
 
-        Ok(Body::from_stream(stream))
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+
+        Ok((StatusCode::OK, headers, Body::from_stream(stream)))
     }
 
     /// Searches a taxonomies by their names
@@ -232,7 +238,7 @@ impl TaxonomyController {
     pub async fn search_taxonomies(
         State(state): State<Arc<ServerState>>,
         Json(payload): Json<SearchRequestBody>,
-    ) -> Result<impl IntoResponse, Error> {
+    ) -> Result<(StatusCode, HeaderMap, Body), Error> {
         let (where_clause, params): (String, Vec<Box<dyn ToSql + Sync + Send>>) =
             if let Ok(id) = payload.search_query.parse::<i32>() {
                 (
@@ -281,6 +287,12 @@ impl TaxonomyController {
             yield Ok("]".to_string());
         };
 
-        Ok(Body::from_stream(stream))
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=utf-8"),
+        );
+
+        Ok((StatusCode::OK, headers, Body::from_stream(stream)))
     }
 }
