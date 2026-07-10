@@ -1100,7 +1100,7 @@ mod tests {
 
         // Three frames' worth of pairs, with masses spanning the 32-bit boundary.
         let pairs: Vec<MassPidPair> = (0..2500)
-            .map(|i| MassPidPair::new((i as i64) * 1_000_003 + (1i64 << 33), (i % 7) as i32 - 3))
+            .map(|i| MassPidPair::new((i as i64) * 1_000_003 + (1i64 << 33), (i % 7) - 3))
             .collect();
         for chunk in pairs.chunks(1000) {
             let frame = compress_frame(chunk).unwrap();
