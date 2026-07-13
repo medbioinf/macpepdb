@@ -168,35 +168,6 @@ fn parse_note_operation(note: &str) -> NoteOperation {
     }
 }
 
-/// Extracts every isoform label mentioned in a `/note` explanation, e.g. `(in isoform 3)` ->
-/// `["3"]`, `(in isoform 33 kDa)` -> `["33 kDa"]` and the comma/`and`-separated list
-/// `(in isoform 4, isoform 5 and isoform 6)` -> `["4", "5", "6"]`. Explanations that don't
-/// mention an isoform (e.g. `(in HTX12; ...)`, `(in Ref. 2)`) yield an empty vec.
-fn extract_isoform_labels(note: &str) -> Vec<String> {
-    let (_, explanation) = split_note(note);
-    let Some(mut remaining) = explanation else {
-        return Vec::new();
-    };
-    const MARKER: &str = "isoform ";
-    let mut labels = Vec::new();
-    while let Some(marker_idx) = remaining.find(MARKER) {
-        let after = &remaining[marker_idx + MARKER.len()..];
-        let stop_delim = after.find([';', ')']).unwrap_or(after.len());
-        let next_marker = after.find(MARKER).unwrap_or(after.len());
-        let end = stop_delim.min(next_marker);
-        let label = after[..end]
-            .trim()
-            .trim_end_matches(" and")
-            .trim_end_matches(',')
-            .trim();
-        if !label.is_empty() {
-            labels.push(label.to_string());
-        }
-        remaining = &after[end..];
-    }
-    labels
-}
-
 /// A single UniProt feature-table entry, e.g. a `VAR_SEQ` or `VARIANT` block.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Feature {
@@ -333,44 +304,6 @@ pub fn parse(text: &str) -> Result<Vec<Feature>, Error> {
     Ok(FeatureTable::try_from(text)?.into_features())
 }
 
-/// Determines which isoform(s) (if any) a feature is associated with: an explicit
-/// `<ISOFORM_ACCESSION>:` location prefix takes precedence (label = the accession's suffix
-/// after its last `-`, e.g. `P15005-2` -> `"2"`); otherwise falls back to every isoform
-/// mentioned in a `/note`, e.g. `"in isoform 4, isoform 5 and isoform 6"` -> `["4", "5", "6"]`.
-/// Returns an empty vec if neither mechanism applies.
-fn isoform_labels(feature: &Feature) -> Vec<String> {
-    if let Some(accession) = feature.location().isoform_accession() {
-        let label = match accession.rsplit_once('-') {
-            Some((_, suffix)) => suffix.to_string(),
-            None => accession.to_string(),
-        };
-        return vec![label];
-    }
-    feature
-        .note()
-        .map(extract_isoform_labels)
-        .unwrap_or_default()
-}
-
-/// Groups features by the isoform(s) they are associated with — either via an explicit
-/// `<ISOFORM_ACCESSION>:` location prefix (e.g. `P15005-2:1`) or a `/note` mention of
-/// `"in isoform ..."` (possibly a comma/`and`-separated list naming several isoforms) —
-/// preserving the order in which each label was first seen. A feature naming several isoforms
-/// is added to every one of their groups. Features referencing no isoform by either mechanism
-/// (e.g. `VARIANT`/`CONFLICT` entries describing strains or references) are omitted.
-pub fn group_by_isoform(features: &[Feature]) -> Vec<(String, Vec<&Feature>)> {
-    let mut groups: Vec<(String, Vec<&Feature>)> = Vec::new();
-    for feature in features {
-        for label in isoform_labels(feature) {
-            match groups.iter_mut().find(|(existing, _)| existing == &label) {
-                Some((_, group)) => group.push(feature),
-                None => groups.push((label, vec![feature])),
-            }
-        }
-    }
-    groups
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,61 +381,6 @@ mod tests {
     }
 
     #[test]
-    fn test_group_by_isoform() {
-        let features = load_fixture();
-        let groups = group_by_isoform(&features);
-
-        assert_eq!(groups.len(), 2);
-        assert_eq!(groups[0].0, "3");
-        assert_eq!(groups[0].1.len(), 3);
-        assert!(groups[0].1.iter().all(|f| f.key() == "VAR_SEQ"));
-
-        assert_eq!(groups[1].0, "2");
-        assert_eq!(groups[1].1.len(), 4);
-        let keys: Vec<&str> = groups[1].1.iter().map(|f| f.key()).collect();
-        assert_eq!(keys.iter().filter(|k| **k == "VAR_SEQ").count(), 3);
-        assert_eq!(keys.iter().filter(|k| **k == "INIT_MET").count(), 1);
-    }
-
-    #[test]
-    fn test_group_by_isoform_uses_location_prefix_without_note_mention() {
-        let table = "INIT_MET        P15005-2:1\n                /note=\"Removed\"\n";
-        let features = parse(table).unwrap();
-        let groups = group_by_isoform(&features);
-        assert_eq!(groups, vec![("2".to_string(), vec![&features[0]])]);
-    }
-
-    #[test]
-    fn test_group_by_isoform_supports_non_numeric_label() {
-        let table = "VAR_SEQ         1..3\n                /note=\"Missing (in isoform 33 kDa)\"\n";
-        let features = parse(table).unwrap();
-        let groups = group_by_isoform(&features);
-        assert_eq!(groups, vec![("33 kDa".to_string(), vec![&features[0]])]);
-    }
-
-    #[test]
-    fn test_group_by_isoform_supports_comma_separated_isoform_list() {
-        let table = "VAR_SEQ         1..3\n                /note=\"Missing (in isoform 4, isoform 5 and isoform 6)\"\n";
-        let features = parse(table).unwrap();
-        let groups = group_by_isoform(&features);
-        assert_eq!(
-            groups,
-            vec![
-                ("4".to_string(), vec![&features[0]]),
-                ("5".to_string(), vec![&features[0]]),
-                ("6".to_string(), vec![&features[0]]),
-            ]
-        );
-    }
-
-    #[test]
-    fn test_group_by_isoform_returns_no_groups_without_isoform_references() {
-        let table = "VARIANT         10\n                /note=\"Missing (in Ref. 3)\"\n";
-        let features = parse(table).unwrap();
-        assert!(group_by_isoform(&features).is_empty());
-    }
-
-    #[test]
     fn test_note_operation_variants() {
         assert_eq!(
             parse_note_operation("Missing (in isoform 2)"),
@@ -518,31 +396,6 @@ mod tests {
         assert_eq!(
             parse_note_operation("Removed"),
             NoteOperation::Other("Removed".to_string())
-        );
-    }
-
-    #[test]
-    fn test_extract_isoform_labels_with_non_numeric_id() {
-        assert_eq!(
-            extract_isoform_labels("Missing (in isoform 33 kDa)"),
-            vec!["33 kDa".to_string()]
-        );
-        assert_eq!(
-            extract_isoform_labels("Missing (in HTX12; uncertain significance)"),
-            Vec::<String>::new()
-        );
-        assert_eq!(extract_isoform_labels("Removed"), Vec::<String>::new());
-    }
-
-    #[test]
-    fn test_extract_isoform_labels_with_comma_separated_list() {
-        assert_eq!(
-            extract_isoform_labels("Missing (in isoform 4, isoform 5 and isoform 6)"),
-            vec!["4".to_string(), "5".to_string(), "6".to_string()]
-        );
-        assert_eq!(
-            extract_isoform_labels("Missing (in isoform 2 and isoform 3)"),
-            vec!["2".to_string(), "3".to_string()]
         );
     }
 

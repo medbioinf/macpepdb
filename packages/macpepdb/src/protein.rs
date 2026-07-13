@@ -5,8 +5,9 @@ use macpepdb_web_common::responses::{peptide::PeptideResponse, protein::ProteinR
 use serde::Serialize;
 use thiserror::Error;
 use tokio_postgres::Row;
-use uniprot_reader::feature_table::{
-    Feature, FeatureTable, Index, NoteOperation, Position, group_by_isoform,
+use uniprot_reader::{
+    comment::parse_alternative_products,
+    feature_table::{Feature, FeatureTable, Index, NoteOperation, Position},
 };
 
 use crate::{
@@ -24,6 +25,8 @@ pub enum Error {
     EmptyTaxonomyIdCapture(String),
     #[error("Unable find `{NCBI_TAXONOMY_ID_ATTRIBUTE_NAME}` in OX line `{0}`")]
     MissingTaxonomyIdStart(String),
+    #[error("Missing isoform ID in protein `{0}`, and isoform '{1}'")]
+    MissingIsoformId(String, String),
     #[error("Sequence error in protein: {0}")]
     Sequence(#[from] crate::sequence::Error),
     #[error("Unable to parse taxonomy ID as intege: {0}")]
@@ -475,13 +478,19 @@ impl TryFrom<&uniprot_reader::entry::Entry> for Variants {
         let canonical_protein: Protein = Protein::try_from(entry)?;
 
         let feature_table = FeatureTable::try_from(entry.feature_table())?;
-        let isoform_groups = group_by_isoform(feature_table.features());
+        let var_seq_by_id: std::collections::HashMap<&str, &Feature> = feature_table
+            .features()
+            .iter()
+            .filter(|feature| feature.key() == "VAR_SEQ")
+            .filter_map(|feature| feature.id().map(|id| (id, feature)))
+            .collect();
 
-        let mut variants = Vec::with_capacity(isoform_groups.len() + 1);
-        for (label, group) in isoform_groups.iter() {
-            let edits = group
+        let mut variants = Vec::new();
+        for isoform in parse_alternative_products(entry.comment_string()) {
+            let edits = isoform
+                .feature_ids()
                 .iter()
-                .filter(|feature| feature.key() == "VAR_SEQ")
+                .filter_map(|feature_id| var_seq_by_id.get(feature_id.as_str()).copied())
                 .filter_map(|feature| VarSeqEdit::new(feature).transpose())
                 .collect::<Result<Vec<_>, Error>>()?;
 
@@ -493,9 +502,16 @@ impl TryFrom<&uniprot_reader::entry::Entry> for Variants {
                 Self::apply_var_seq_edits(canonical_protein.sequence().data(), edits)?;
 
             variants.push(Protein::new(
-                format!("{}-{}", canonical_protein.accession(), label),
+                isoform
+                    .iso_ids()
+                    .first()
+                    .ok_or(Error::MissingIsoformId(
+                        canonical_protein.accession().to_string(),
+                        isoform.name().to_string(),
+                    ))?
+                    .to_string(),
                 None,
-                Sequence::new(sequence_data)?,
+                Sequence::new(sequence_data.clone())?,
                 canonical_protein.taxonomy_id(),
                 canonical_protein.is_reviewed(),
                 canonical_protein.genes().clone(),
@@ -640,6 +656,12 @@ mod tests {
             "ID   TEST_HUMAN              Reviewed;         10 AA.\n",
             "AC   P99999;\n",
             "OX   NCBI_TaxID=9606;\n",
+            "CC   -!- ALTERNATIVE PRODUCTS:\n",
+            "CC       Event=Alternative splicing; Named isoforms=2;\n",
+            "CC       Name=1;\n",
+            "CC         IsoId=P99999-1; Sequence=Displayed;\n",
+            "CC       Name=2;\n",
+            "CC         IsoId=P99999-2; Sequence=VSP_000001;\n",
             "FT   VAR_SEQ         3..5\n",
             "FT                   /note=\"Missing (in isoform 2)\"\n",
             "FT                   /id=\"VSP_000001\"\n",
