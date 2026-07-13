@@ -1,9 +1,10 @@
-use std::{rc::Rc, time::Duration};
+use std::{collections::HashMap, fmt::Write, rc::Rc, time::Duration};
 
 use ::web_sys::window;
 use async_std::task::sleep;
 use dioxus::prelude::*;
 use dioxus_logger::tracing::info;
+use wasm_bindgen::{JsCast, JsValue};
 
 use crate::{
     api_client::Client,
@@ -82,11 +83,35 @@ fn parse_ptm_position(value: &str) -> PtmPosition {
     }
 }
 
+/// Saves `contents` as a file download in the browser via a `Blob` + temporary `<a download>`
+/// element, since there is no server response to attach a `Content-Disposition` header to.
+fn trigger_tsv_download(filename: &str, contents: &str) {
+    let blob_parts = js_sys::Array::of1(&JsValue::from_str(contents));
+    let blob_options = web_sys::BlobPropertyBag::new();
+    blob_options.set_type("text/tab-separated-values;charset=utf-8");
+    let blob =
+        web_sys::Blob::new_with_str_sequence_and_options(&blob_parts, &blob_options).unwrap();
+    let url = web_sys::Url::create_object_url_with_blob(&blob).unwrap();
+
+    let document = window().unwrap().document().unwrap();
+    let anchor = document
+        .create_element("a")
+        .unwrap()
+        .dyn_into::<web_sys::HtmlAnchorElement>()
+        .unwrap();
+    anchor.set_href(&url);
+    anchor.set_download(filename);
+    anchor.click();
+
+    web_sys::Url::revoke_object_url(&url).unwrap();
+}
+
 pub fn MassSearch() -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
 
     // ui state
     let mut are_filters_visible = use_signal(|| false);
+    let mut is_downloading: Signal<bool> = use_signal(|| false);
 
     // mass filter
     let mut selected_mass_unit = use_signal(|| MassUnit::Thompson);
@@ -206,35 +231,75 @@ pub fn MassSearch() -> Element {
         }
     });
 
-    // Coroutine to intiate download with the last search parameters
+    // Action to convert the peptides from the last search into a TSV (resolving protein IDs to
+    // accessions) and save it as a browser download.
     //
     let mut download = use_action(move || async move {
+        is_downloading.set(true);
+        let peptides = match peptides.value() {
+            Some(Ok(peptides)) => peptides.cloned(),
+            // The download button is only shown once `peptides.value()` is `Some(Ok(_))`.
+            _ => return Ok(()),
+        };
+
         let app_config = app_config.read_unchecked();
         let macpepdb_base_url = match app_config.as_ref() {
             Some(config) => config.get_macpepdb_base_url(),
             None => return Err(GeneralError::ConfigurationNotLoaded),
         };
+        let client = Client::new(macpepdb_base_url)?;
 
-        let selected_taxonomy_bound = selected_taxonomy.read_unchecked();
-        let selected_taxonomy = match selected_taxonomy_bound.as_ref() {
-            Some(Ok(taxonomy)) => taxonomy,
-            Some(Err(_)) => &None,
-            None => &None,
+        let mut protein_ids: Vec<i32> = peptides
+            .iter()
+            .flat_map(|peptide| peptide.protein_ids.iter().copied())
+            .collect();
+        protein_ids.sort_unstable();
+        protein_ids.dedup();
+        let accessions_by_id: HashMap<i32, String> = if protein_ids.is_empty() {
+            HashMap::new()
+        } else {
+            client.resolve_protein_ids(protein_ids).await?
         };
 
-        let url = Client::new(macpepdb_base_url)?.peptide_search_download_url(
-            selected_mass_unit.read().clone(),
-            *thompson.read(),
-            *charge.read(),
-            *dalton.read(),
-            *lower_mass_tolerance.read(),
-            *upper_mass_tolerance.read(),
-            selected_taxonomy,
-            *max_var_modifications.read(),
-            &ptms.read(),
-            *is_reviewed.read(),
+        let mut tsv = String::from(
+            "mass\tsequence\tproteins\tis_swiss_prot\tis_trembl\tunique_taxonomy_ids\tnon_unique_taxonomy_ids\n",
         );
-        window().unwrap().location().assign(&url).unwrap();
+        for peptide in peptides.iter() {
+            let proteins = peptide
+                .protein_ids
+                .iter()
+                .filter_map(|id| accessions_by_id.get(id))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(",");
+            let unique_taxonomy_ids = peptide
+                .unique_taxonomy_ids
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            let non_unique_taxonomy_ids = peptide
+                .non_unique_taxonomy_ids
+                .iter()
+                .map(i32::to_string)
+                .collect::<Vec<_>>()
+                .join(",");
+            writeln!(
+                tsv,
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                peptide.mass,
+                peptide.sequence,
+                proteins,
+                peptide.is_swiss_prot,
+                peptide.is_trembl,
+                unique_taxonomy_ids,
+                non_unique_taxonomy_ids,
+            )
+            .unwrap();
+        }
+
+        trigger_tsv_download("macpepdb_peptides.tsv", &tsv);
+        is_downloading.set(false);
 
         Ok(())
     });
@@ -585,6 +650,7 @@ pub fn MassSearch() -> Element {
                 button {
                     class: "btn btn-primary",
                     r#type: "button",
+                    disabled: peptides.pending() || *is_downloading.read(),
                     onclick: move |_| { peptides.call() },
                     i { class: "fa-solid fa-search me-2" }
                     "Search"
@@ -593,10 +659,15 @@ pub fn MassSearch() -> Element {
                     button {
                         class: "btn btn-primary",
                         r#type: "button",
+                        disabled: *is_downloading.read(),
                         onclick: move |_| {
                             download.call();
                         },
-                        i { class: "fa-solid fa-download me-2" }
+                        if !*is_downloading.read() {
+                            i { class: "fa-solid fa-download me-2" }
+                        } else {
+                            i { class: "fa-solid fa-spinner fa-spin me-2" }
+                        }
                         "Download"
                     }
                 }

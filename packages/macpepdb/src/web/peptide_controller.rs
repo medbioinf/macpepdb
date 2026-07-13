@@ -636,50 +636,6 @@ impl PeptideController {
                     yield Ok("]".to_string());
                 }),
             ),
-            // "text/tab-separated-values" => (
-            //     StatusCode::OK,
-            //     headers,
-            //     Body::from_stream(stream! {
-            //         let mut has_headers = true;
-            //         for await peptide in peptide_stream {
-            //             // handle error on underlaying stream
-            //             if let Err(err) = peptide {
-            //                 tracing::error!("{:?}", err);
-            //                 yield Err(format!("!!! {:?}", err));
-            //                 break;
-            //             }
-            //             let peptide = match peptide {
-            //                 Ok(peptide) => peptide,
-            //                 Err(err) => {
-            //                     tracing::error!("{:?}", err);
-            //                     yield Err(format!("!!! {:?}", err));
-            //                     break;
-            //                 }
-            //             };
-            //             let peptide = TsvPeptide::from(peptide);
-            //             let mut writer = csv::WriterBuilder::new().has_headers(has_headers).delimiter(b'\t').from_writer(vec![]);
-            //             match writer.serialize(peptide) {
-            //                 Ok(_) => (),
-            //                 Err(err) => {
-            //                     tracing::error!("{:?}", err);
-            //                     yield Err(format!("!!! {:?}", err));
-            //                     break;
-            //                 }
-            //             };
-            //             match writer.into_inner() {
-            //                 Ok(csv) => yield Ok(csv),
-            //                 Err(err) => {
-            //                     tracing::error!("{:?}", err);
-            //                     yield Err(format!("!!! {:?}", err));
-            //                     break;
-            //                 }
-            //             };
-            //             has_headers = false;
-            //         }
-            //         yield Ok(vec![b'\n']);
-            //     }),
-            // ),
-            // Output format makes no difference, the steam controls if only canonical peptides (peptidoform without modificiation) of modified peptides getting returned
             "text/plain" => (
                 StatusCode::OK,
                 headers,

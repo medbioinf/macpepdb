@@ -6,7 +6,7 @@ use axum::Router;
 use axum::body::Body;
 use axum::extract::{Json, Path, State};
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use fallible_iterator::FallibleIterator;
 use futures::TryStreamExt;
 use http::{HeaderMap, StatusCode};
@@ -28,6 +28,7 @@ static CONTROLLER_PATH: &str = "/api/proteins";
 
 static SEARCH_PATH: &str = "/search/{attribute}";
 static PROTEIN_PATH: &str = "/{accession}";
+static ID_RESOLVE_PATH: &str = "/resolve-ids";
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -86,7 +87,8 @@ impl ProteinController {
     pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
         let router: Router<Arc<ServerState>> = Router::new()
             .route(SEARCH_PATH, get(Self::search))
-            .route(PROTEIN_PATH, get(Self::show));
+            .route(PROTEIN_PATH, get(Self::show))
+            .route(ID_RESOLVE_PATH, post(Self::resolve_ids));
 
         router.with_state(state)
     }
@@ -334,5 +336,18 @@ impl ProteinController {
                 yield Ok("]".to_string());
             }),
         ))
+    }
+
+    pub async fn resolve_ids(
+        State(state): State<Arc<ServerState>>,
+        Json(ids): Json<Vec<i32>>,
+    ) -> Result<Json<Vec<(i32, String)>>, Error> {
+        let accessions = ProteinTable::new(state.db_client())
+            .resolve_ids(ids)
+            .await?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        Ok(Json(accessions))
     }
 }

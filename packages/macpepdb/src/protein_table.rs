@@ -67,6 +67,9 @@ static SELECT_BY_ID_RANGE_STATEMENT: LazyLock<String> = LazyLock::new(|| {
 static SELECT_ID_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT id FROM {TABLE_NAME}"));
 
+static ID_ACCESSION_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT id, accession FROM {TABLE_NAME}"));
+
 static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!("SELECT id, accession, sequence, taxonomy_id, flags, genes FROM {TABLE_NAME}")
 });
@@ -277,6 +280,26 @@ impl ProteinTable {
             .map(|row_res| {
                 let row = row_res.map_err(Error::from)?;
                 row.try_get::<_, i32>(0).map_err(Error::from)
+            })
+            .boxed())
+    }
+
+    pub async fn resolve_ids(
+        &self,
+        ids: Vec<i32>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<(i32, String), Error>> + Send>>, Error> {
+        let statement = format!("{} WHERE id = ANY($1)", ID_ACCESSION_STATEMENT.as_str());
+
+        let stream = self
+            .client
+            .query_stream(statement.as_str(), vec![Box::new(ids)])
+            .await?;
+        Ok(stream
+            .map(|row_res| {
+                let row = row_res.map_err(Error::from)?;
+                let id = row.try_get::<_, i32>(0)?;
+                let accession = row.try_get::<_, String>(1)?;
+                Ok((id, accession))
             })
             .boxed())
     }

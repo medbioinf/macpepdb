@@ -3560,7 +3560,6 @@ name = "macpepdb-frontend"
 version = "0.1.0"
 dependencies = [
  "async-std",
- "base64 0.22.1",
  "chrono",
  "dioxus",
  "dioxus-logger 0.6.2",
@@ -3576,6 +3575,7 @@ dependencies = [
  "toml",
  "urlencoding",
  "uuid",
+ "wasm-bindgen",
  "web-sys",
  "xxhash-rust",
 ]

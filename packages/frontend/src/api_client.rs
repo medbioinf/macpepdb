@@ -1,4 +1,5 @@
-use base64::{prelude::BASE64_STANDARD, Engine};
+use std::collections::HashMap;
+
 use macpepdb_web_common::{
     requests::{
         peptide::{SearchRequestBody, SearchRequestMass},
@@ -12,7 +13,6 @@ use macpepdb_web_common::{
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use serde::{de::DeserializeOwned, Serialize};
-use urlencoding::encode as urlencode;
 
 use crate::{entities::mass_unit::MassUnit, errors::api_client_error::ApiClientError};
 
@@ -217,66 +217,6 @@ impl<'a> Client<'a> {
         .await
     }
 
-    /// Encode input string to base64 URL-safe format
-    ///
-    /// # Arguments
-    /// * `input` - Input string to encode
-    ///
-    fn base64_urlsafe_encode(input: &str) -> String {
-        urlencode(&BASE64_STANDARD.encode(input.as_bytes())).into_owned()
-    }
-
-    /// Returns a URL to download the peptides matching the search criteria as CSV.
-    /// The URL can be used using a GET request to download the search results directly using
-    /// window() in a browser environment or any HTTP client
-    ///
-    /// # Arguments
-    /// * `selected_mass_unit` - Selected mass unit
-    /// * `thompson` - Mass in Thompson
-    /// * `charge` - Charge state
-    /// * `dalton` - Mass in Dalton
-    /// * `lower_mass_tolerance` - Lower mass tolerance in ppm
-    /// * `upper_mass_tolerance` - Upper mass tolerance in ppm
-    /// * `taxonomy` - Optional taxonomy filter
-    /// * `max_variable_modifications` - Maximum number of variable modifications
-    /// * `ptms` - List of post-translational modifications
-    /// * `is_reviewed` - Optional filter for reviewed peptides
-    ///
-    #[allow(clippy::too_many_arguments)]
-    pub fn peptide_search_download_url(
-        &self,
-        selected_mass_unit: MassUnit,
-        thompson: f64,
-        charge: u8,
-        dalton: f64,
-        lower_mass_tolerance: i64,
-        upper_mass_tolerance: i64,
-        taxonomy: &Option<TaxonomyResponse>,
-        max_variable_modifications: i16,
-        ptms: &[PostTranslationalModificationRequest],
-        is_reviewed: Option<bool>,
-    ) -> String {
-        let body = Self::build_search_peptide_body(
-            selected_mass_unit,
-            thompson,
-            charge,
-            dalton,
-            lower_mass_tolerance,
-            upper_mass_tolerance,
-            taxonomy,
-            max_variable_modifications,
-            ptms,
-            is_reviewed,
-        );
-
-        format!(
-            "{}/api/peptides/search/{}/{}?is_download=true",
-            self.base_url,
-            Self::base64_urlsafe_encode(serde_json::to_string(&body).unwrap().as_str()),
-            urlencode("text/tab-separated-values")
-        )
-    }
-
     /// Search taxonomies by name or ID.
     ///
     /// # Arguments
@@ -339,5 +279,19 @@ impl<'a> Client<'a> {
     pub async fn hydrophobicity_korkhin(&self, sequence: &str) -> Result<f64, ApiClientError> {
         self.get(&format!("/api/chemistry/hydrophobicity/krokhin/{sequence}"))
             .await
+    }
+
+    /// Resolves a list of protein IDs to their corresponding accessions.
+    ///
+    /// # Arguments
+    /// * `ids` - A vector of protein IDs to resolve.
+    ///
+    pub async fn resolve_protein_ids(
+        &self,
+        ids: Vec<i32>,
+    ) -> Result<HashMap<i32, String>, ApiClientError> {
+        let endpoint = "/api/proteins/resolve-ids";
+        let pairs: Vec<(i32, String)> = self.post(endpoint, ids, None).await?;
+        Ok(pairs.into_iter().collect())
     }
 }

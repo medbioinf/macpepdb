@@ -333,6 +333,9 @@ impl TryFrom<CompactSequence> for Peptide {
 pub struct Peptidoform {
     sequence: ModifiedSequence,
     mass: i64,
+    protein_ids: ProteinIds,
+    unique_taxonomy_ids: Vec<i32>,
+    non_unique_taxonomy_ids: Vec<i32>,
     /// Like peptides
     flags: i8,
     #[serde(skip)]
@@ -343,6 +346,9 @@ impl Peptidoform {
     pub fn new(
         sequence: ModifiedSequence,
         mass: i64,
+        protein_ids: ProteinIds,
+        unique_taxonomy_ids: Vec<i32>,
+        non_unique_taxonomy_ids: Vec<i32>,
         is_swiss_prot: bool,
         is_trembl: bool,
     ) -> Self {
@@ -357,6 +363,9 @@ impl Peptidoform {
         Self {
             sequence,
             mass,
+            protein_ids,
+            unique_taxonomy_ids,
+            non_unique_taxonomy_ids,
             flags,
             amino_acid_counts: OnceLock::new(),
         }
@@ -394,6 +403,10 @@ impl Peptidoform {
         let amino_acid = AminoAcid::by_bit_code(&code);
         self.amino_acid_count(amino_acid)
     }
+
+    fn protein_ids(&self) -> &ProteinIds {
+        &self.protein_ids
+    }
 }
 
 impl From<Peptide> for Peptidoform {
@@ -401,7 +414,10 @@ impl From<Peptide> for Peptidoform {
         Self {
             mass: peptide.mass(),
             flags: peptide.flags(),
-            sequence: peptide.into_sequence().into(),
+            protein_ids: peptide.protein_ids,
+            unique_taxonomy_ids: peptide.unique_taxonomy_ids,
+            non_unique_taxonomy_ids: peptide.non_unique_taxonomy_ids,
+            sequence: peptide.sequence.into(),
             amino_acid_counts: OnceLock::new(),
         }
     }
@@ -457,11 +473,11 @@ impl IsPeptide for Peptidoform {
     }
 
     fn unique_taxonomy_ids(&self) -> &[i32] {
-        &[]
+        &self.unique_taxonomy_ids
     }
 
     fn non_unique_taxonomy_ids(&self) -> &[i32] {
-        &[]
+        &self.non_unique_taxonomy_ids
     }
 }
 
@@ -500,8 +516,8 @@ impl Peptide {
             mass: row.try_get("mass")?,
             sequence: row.try_get("sequence")?,
             protein_ids: row.try_get("protein_ids")?,
-            unique_taxonomy_ids: Vec::new(),
-            non_unique_taxonomy_ids: Vec::new(),
+            unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
+            non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
             flags: row.try_get("flags")?,
             amino_acid_counts: OnceLock::new(),
         })
@@ -530,9 +546,9 @@ impl From<&Peptidoform> for PeptideResponse {
             partition: None,
             mass: crate::mass::to_float(peptidoform.mass),
             sequence: peptidoform.sequence.to_string(),
-            protein_ids: Vec::new(),
-            unique_taxonomy_ids: Vec::new(),
-            non_unique_taxonomy_ids: Vec::new(),
+            protein_ids: peptidoform.protein_ids().as_vec(),
+            unique_taxonomy_ids: peptidoform.unique_taxonomy_ids().to_vec(),
+            non_unique_taxonomy_ids: peptidoform.non_unique_taxonomy_ids().to_vec(),
             is_swiss_prot: peptidoform.is_swiss_prot(),
             is_trembl: peptidoform.is_trembl(),
             proteins: None,

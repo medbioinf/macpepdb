@@ -80,7 +80,8 @@ pub static MATCHING_PEPTIDE_METRIC: &str = "peptide_search:matching_peptides";
 
 const CONDITION_REF_COL: &str = "condition_ref";
 
-const SEARCH_COLUMNS: &str = "mass, sequence, protein_ids, flags";
+const SEARCH_COLUMNS: &str =
+    "mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
 
 /// Inlined-literal `SELECT` of `SEARCH_COLUMNS` used by the mass-search read path
 /// ([`PeptideTable::select_inline`]); a `where_clause` is appended per query.
@@ -1812,6 +1813,9 @@ impl PeptideConditionBuilder {
             peptidoforms.insert(Peptidoform::new(
                 modified_sequence,
                 mass,
+                peptide.protein_ids().clone(),
+                peptide.unique_taxonomy_ids().to_vec(),
+                peptide.non_unique_taxonomy_ids().to_vec(),
                 peptide.is_swiss_prot(),
                 peptide.is_trembl(),
             ));
