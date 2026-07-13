@@ -478,7 +478,7 @@ impl TryFrom<&uniprot_reader::entry::Entry> for Variants {
         let isoform_groups = group_by_isoform(feature_table.features());
 
         let mut variants = Vec::with_capacity(isoform_groups.len() + 1);
-        for (isoform_idx, (_label, group)) in isoform_groups.iter().enumerate() {
+        for (label, group) in isoform_groups.iter() {
             let edits = group
                 .iter()
                 .filter(|feature| feature.key() == "VAR_SEQ")
@@ -493,7 +493,7 @@ impl TryFrom<&uniprot_reader::entry::Entry> for Variants {
                 Self::apply_var_seq_edits(canonical_protein.sequence().data(), edits)?;
 
             variants.push(Protein::new(
-                format!("{}-{}", canonical_protein.accession(), isoform_idx + 2),
+                format!("{}-{}", canonical_protein.accession(), label),
                 None,
                 Sequence::new(sequence_data)?,
                 canonical_protein.taxonomy_id(),
