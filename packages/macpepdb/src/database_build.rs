@@ -306,6 +306,7 @@ impl IsProteinAccess for InMemoryProteinAccess {
 
 pub struct DatabaseBuild<'a> {
     client: Arc<Client>,
+    comment: Option<String>,
     protein_file_paths: &'a [PathBuf],
     protease: Arc<Protease>,
     batch_size_limit: NonZeroUsize,
@@ -325,6 +326,7 @@ impl<'a> DatabaseBuild<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: Arc<Client>,
+        comment: Option<String>,
         protein_file_paths: &'a [PathBuf],
         protease: Protease,
         batch_size_limit: NonZeroUsize,
@@ -341,6 +343,7 @@ impl<'a> DatabaseBuild<'a> {
     ) -> Self {
         Self {
             client,
+            comment,
             protein_file_paths,
             batch_size_limit,
             concurrent_batch_size,
@@ -464,8 +467,11 @@ impl<'a> DatabaseBuild<'a> {
             tui.remove_metric(crate::peptide_table::PROGRESS_METRIC);
             tui.remove_metric(crate::peptide_table::INSERTED_PEPTIDES_METRIC);
         }
-        let configuration =
-            RuntimeConfiguration::new(mass_to_partitions_map, self.protease.as_ref().clone());
+        let configuration = RuntimeConfiguration::new(
+            self.comment.clone(),
+            mass_to_partitions_map,
+            self.protease.as_ref().clone(),
+        );
 
         BlobTable::insert(
             self.client.as_ref(),

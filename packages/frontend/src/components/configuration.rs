@@ -40,6 +40,12 @@ pub fn Configuration() -> Element {
                                 }
                             }
                             tbody {
+                                if let Some(comment) = config.comment.as_ref() {
+                                    tr {
+                                        td { "Comment" }
+                                        td { "{comment}" }
+                                    }
+                                }
                                 tr {
                                     td { "Protease" }
                                     td { "{config.protease.name}" }

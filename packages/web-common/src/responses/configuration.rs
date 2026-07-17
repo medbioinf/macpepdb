@@ -15,6 +15,7 @@ pub struct ProteaseResponse {
 /// Wire shape for `GET /api/configuration`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RuntimeConfigurationResponse {
+    pub comment: Option<String>,
     pub protease: ProteaseResponse,
 }
 
@@ -25,6 +26,7 @@ mod tests {
     #[test]
     fn runtime_configuration_response_round_trips() {
         let configuration = RuntimeConfigurationResponse {
+            comment: Some("Test".to_string()),
             protease: ProteaseResponse {
                 name: "trypsin".to_string(),
                 semi_specific: false,

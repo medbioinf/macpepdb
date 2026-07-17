@@ -179,6 +179,9 @@ enum Command {
     /// Build the database
     Build {
         // Optional and default arguments
+        /// Comment about the build, will be stored in the configuration
+        #[arg(long)]
+        comment: Option<String>,
         /// Concurrent number of inserts for non-partitioned batches to insert
         #[arg(long, default_value_t = NonZeroUsize::new(100).unwrap())]
         concurrent_batch_size: NonZeroUsize,
@@ -432,6 +435,7 @@ async fn main() -> Result<(), Error> {
             .unwrap();
         }
         Command::Build {
+            comment,
             concurrent_batch_size,
             batch_size_limit,
             keep_unknown,
@@ -473,6 +477,7 @@ async fn main() -> Result<(), Error> {
 
             let configuration = DatabaseBuild::new(
                 client,
+                comment,
                 &protein_file_paths,
                 protease,
                 batch_size_limit,

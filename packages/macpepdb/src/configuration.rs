@@ -6,6 +6,7 @@ use crate::{blob_table::IsBlob, database_build::MassPartitionMap, protease::Prot
 ///
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RuntimeConfiguration {
+    comment: Option<String>,
     mass_partitioning: MassPartitionMap,
     protease: Protease,
 }
@@ -13,8 +14,13 @@ pub struct RuntimeConfiguration {
 impl RuntimeConfiguration {
     pub const BLOB_KEY: &str = "configuration";
 
-    pub fn new(mass_partitioning: MassPartitionMap, protease: Protease) -> Self {
+    pub fn new(
+        comment: Option<String>,
+        mass_partitioning: MassPartitionMap,
+        protease: Protease,
+    ) -> Self {
         Self {
+            comment,
             mass_partitioning,
             protease,
         }
@@ -26,6 +32,10 @@ impl RuntimeConfiguration {
 
     pub fn protease(&self) -> &Protease {
         &self.protease
+    }
+
+    pub fn comment(&self) -> Option<&String> {
+        self.comment.as_ref()
     }
 }
 
@@ -40,6 +50,7 @@ impl From<&RuntimeConfiguration>
 {
     fn from(configuration: &RuntimeConfiguration) -> Self {
         Self {
+            comment: configuration.comment.clone(),
             protease: (&configuration.protease).into(),
         }
     }
