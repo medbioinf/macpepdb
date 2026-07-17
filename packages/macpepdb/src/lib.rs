@@ -26,7 +26,6 @@ pub mod taxonomy;
 pub mod taxonomy_rank;
 pub mod taxonomy_rank_table;
 pub mod taxonomy_table;
-pub mod temp;
 pub mod tools;
 pub mod web;
 

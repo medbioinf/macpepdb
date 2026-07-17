@@ -106,7 +106,6 @@ enum Error {
 #[derive(Subcommand)]
 enum ConfigCommand {
     Show,
-    Fix,
 }
 
 #[derive(Subcommand)]
@@ -509,9 +508,6 @@ async fn main() -> Result<(), Error> {
                         .unwrap()
                         .unwrap();
                 println!("{}", serde_json::to_string_pretty(&configuration).unwrap());
-            }
-            ConfigCommand::Fix => {
-                macpepdb::temp::convert_old_runtime_config_to_new(&cli.database_url).await
             }
         },
         Command::Search {
