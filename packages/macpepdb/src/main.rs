@@ -215,6 +215,10 @@ enum Command {
         /// which lowers peak memory further at the cost of slower digestion.
         #[arg(long, default_value_t = 0.8)]
         proteins_memory_limit: f64,
+        /// If set, isoforms get resolved from alternate products. Only necessray if the isoforms are not already exists as separate entries.
+        /// MaCPepDB does not check for duplicates among proteins. Please check yourself
+        #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+        resolve_isoforms: bool,
         /// If set protein inserstion will be skipped
         #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         skip_proteins: bool,
@@ -439,6 +443,7 @@ async fn main() -> Result<(), Error> {
             protease,
             protein_file_paths,
             proteins_memory_limit,
+            resolve_isoforms,
             skip_proteins,
             skip_protein_associations,
             skip_taxonomies,
@@ -478,6 +483,7 @@ async fn main() -> Result<(), Error> {
                 skip_taxonomies,
                 threads,
                 taxonomies,
+                resolve_isoforms,
                 scratch_dir,
                 tui.as_ref(),
             )

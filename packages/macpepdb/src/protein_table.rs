@@ -309,6 +309,7 @@ impl ProteinTable {
         protein_file_paths: impl Iterator<Item = &PathBuf>,
         concurrent_batch_size: NonZeroUsize,
         num_insertion_threads: NonZeroUsize,
+        resolve_isoforms: bool,
     ) -> Result<(usize, usize), Error> {
         let proteins_file_path_queue: ProteinFilePathBuildQueue =
             Arc::new(ArrayQueue::new(num_insertion_threads.get() * 3));
@@ -370,16 +371,23 @@ impl ProteinTable {
                         let mut entry_reader = ProteinReader::new(&mut buf_reader);
 
                         while let Some(entry) = entry_reader.next().await {
-                            let variants = Variants::try_from(
-                                entry
-                                    .map_err(|err| {
-                                        Error::ProteinReader(protein_file_path.clone(), err)
-                                    })?
-                                    .entry(),
-                            )
-                            .map_err(|e| Error::Protein(Box::new(e)))?;
+                            let entry = entry.map_err(|err| {
+                                Error::ProteinReader(protein_file_path.clone(), err)
+                            })?;
 
-                            for mut protein in variants.into_iter() {
+                            let variants: std::vec::IntoIter<Protein> = if !resolve_isoforms {
+                                vec![
+                                    Protein::try_from(entry.entry())
+                                        .map_err(|e| Error::Protein(Box::new(e)))?,
+                                ]
+                                .into_iter()
+                            } else {
+                                Variants::try_from(entry.entry())
+                                    .map_err(|e| Error::Protein(Box::new(e)))?
+                                    .into_iter()
+                            };
+
+                            for mut protein in variants {
                                 let pid = protein_id.fetch_add(1, Ordering::SeqCst);
                                 *protein.id_mut() = Some(pid);
                                 buffer.push(protein);

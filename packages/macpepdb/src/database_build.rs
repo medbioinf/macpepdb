@@ -316,6 +316,7 @@ pub struct DatabaseBuild<'a> {
     skip_taxonomies: bool,
     num_threads: NonZeroUsize,
     taxonomy_dump_file_path: Option<PathBuf>,
+    resolve_isoforms: bool,
     scratch_dir: PathBuf,
     tui: Option<&'a TuiHandle>,
 }
@@ -334,6 +335,7 @@ impl<'a> DatabaseBuild<'a> {
         skip_taxonomies: bool,
         num_threads: NonZeroUsize,
         taxonomy_dump_file_path: Option<PathBuf>,
+        resolve_isoforms: bool,
         scratch_dir: PathBuf,
         tui: Option<&'a TuiHandle>,
     ) -> Self {
@@ -349,6 +351,7 @@ impl<'a> DatabaseBuild<'a> {
             num_threads,
             tui,
             taxonomy_dump_file_path,
+            resolve_isoforms,
             scratch_dir,
             protease: Arc::new(protease),
         }
@@ -499,6 +502,7 @@ impl<'a> DatabaseBuild<'a> {
                 self.protein_file_paths.iter(),
                 self.concurrent_batch_size,
                 self.num_threads,
+                self.resolve_isoforms,
             )
             .await?;
         tracing::info!(
