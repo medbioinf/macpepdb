@@ -218,8 +218,8 @@ enum Command {
         /// which lowers peak memory further at the cost of slower digestion.
         #[arg(long, default_value_t = 0.8)]
         proteins_memory_limit: f64,
-        /// If set, isoforms get resolved from alternate products. Only necessray if the isoforms are not already exists as separate entries.
-        /// MaCPepDB does not check for duplicates among proteins. Please check yourself
+        /// If set, isoforms get resolved from alternate products. Only necessary if the isoforms are not already exists as separate entries.
+        /// MaCPepDB does not check for duplicates among proteins.
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         resolve_isoforms: bool,
         /// If set protein inserstion will be skipped
