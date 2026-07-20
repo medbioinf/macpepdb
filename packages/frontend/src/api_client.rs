@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use macpepdb_web_common::{
     requests::{
@@ -291,7 +291,7 @@ impl<'a> Client<'a> {
         ids: Vec<i32>,
     ) -> Result<HashMap<i32, String>, ApiClientError> {
         let endpoint = "/api/proteins/resolve-ids";
-        let pairs: Vec<(i32, String)> = self.post(endpoint, ids, None).await?;
+        let pairs: HashSet<(i32, String)> = self.post(endpoint, ids, None).await?;
         Ok(pairs.into_iter().collect())
     }
 }

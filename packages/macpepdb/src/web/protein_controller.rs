@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::fmt::Write;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -47,12 +47,15 @@ pub enum Error {
     ProteinTable(Box<crate::protein_table::Error>),
     #[error("Search term too short. Minimum length is 3 characters.")]
     SearchTermTooShort,
+    #[error("Unabe to build response: {0}")]
+    Response(Box<http::Error>),
 }
 
 into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
 into_thiserror_boxed!(crate::protease::Error, Error, Protease);
 into_thiserror_boxed!(crate::protein::Error, Error, Protein);
 into_thiserror_boxed!(crate::protein_table::Error, Error, ProteinTable);
+into_thiserror_boxed!(http::Error, Error, Response);
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -347,13 +350,51 @@ impl ProteinController {
     pub async fn resolve_ids(
         State(state): State<Arc<ServerState>>,
         Json(ids): Json<Vec<i32>>,
-    ) -> Result<Json<Vec<(i32, String)>>, Error> {
-        let accessions = ProteinTable::new(state.db_client())
-            .resolve_ids(ids)
-            .await?
-            .try_collect::<Vec<_>>()
-            .await?;
+    ) -> Result<Response, Error> {
+        let stream = stream! {
+            let mut delimiter = "";
+            yield Ok("{".to_string());
+            for id_chunk in ids.chunks(10000) {
+                let accession_stream = match ProteinTable::new(state.db_client())
+                    .resolve_ids(id_chunk.to_vec())
+                    .await {
+                        Ok(accessions) => accessions,
+                        Err(err) => {
+                            yield Err(format!("!!! {:?}", err));
+                            break;
+                        }
+                    };
 
-        Ok(Json(accessions))
+                let accessions = match accession_stream.try_collect::<Vec<_>>().await {
+                    Ok(accessions) => accessions,
+                    Err(err) => {
+                        yield Err(format!("!!! {:?}", err));
+                        break;
+                    }
+                };
+
+                let mut chunk = String::with_capacity(accessions.len() * 25);
+                for accession in accessions {
+                    write!(
+                        chunk,
+                        "{}\"{}\":\"{}\"",
+                        delimiter,
+                        accession.0,
+                        accession.1
+                    ).unwrap();
+                    delimiter = ",";
+                }
+                yield Ok(chunk);
+            }
+
+            yield Ok("}".to_string());
+        };
+
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from_stream(stream))?;
+
+        Ok(response)
     }
 }
