@@ -1,10 +1,11 @@
+use std::collections::HashSet;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use async_stream::stream;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{Json, Path, State};
+use axum::extract::{DefaultBodyLimit, Json, Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use fallible_iterator::FallibleIterator;
@@ -29,6 +30,8 @@ static CONTROLLER_PATH: &str = "/api/proteins";
 static SEARCH_PATH: &str = "/search/{attribute}";
 static PROTEIN_PATH: &str = "/{accession}";
 static ID_RESOLVE_PATH: &str = "/resolve-ids";
+
+static RESOLVE_ID_BODY_SIZE_LIMIT: usize = 10485760; // 10 MiB
 
 #[derive(Debug, Error)]
 pub enum Error {
@@ -88,7 +91,10 @@ impl ProteinController {
         let router: Router<Arc<ServerState>> = Router::new()
             .route(SEARCH_PATH, get(Self::search))
             .route(PROTEIN_PATH, get(Self::show))
-            .route(ID_RESOLVE_PATH, post(Self::resolve_ids));
+            .route(
+                ID_RESOLVE_PATH,
+                post(Self::resolve_ids).layer(DefaultBodyLimit::max(RESOLVE_ID_BODY_SIZE_LIMIT)),
+            );
 
         router.with_state(state)
     }
