@@ -2,6 +2,9 @@
 name = "macpepdb"
 version = "0.1.0"
 edition = "2024"
+description = "Mass-indexed peptide database: digests UniProt protein files with a protease and answers mass-based peptide searches over a CLI and HTTP API"
+license = "BSD-3-Clause"
+repository = "https://github.com/medbioinf/macpepdb"
 
 [dependencies]
 async-compression = { workspace = true, features = ["gzip", "tokio"] }

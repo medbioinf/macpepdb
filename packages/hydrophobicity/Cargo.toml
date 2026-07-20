@@ -2,6 +2,9 @@
 name = "peptide_hydrophobicity"
 version = "0.1.0"
 edition = "2024"
+description = "Peptide hydrophobicity prediction (Krokhin et al)"
+license = "BSD-3-Clause"
+repository = "https://github.com/medbioinf/macpepdb"
 
 [dependencies]
 

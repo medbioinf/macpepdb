@@ -9,7 +9,7 @@ services:
     environment: &AUTH
       POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
-      PGUSER: postgres"
+      PGUSER: "postgres"
       PGPASSWORD: "postgres"
       POSTGRES_HOST_AUTH_METHOD: "trust"
   worker1: &worker

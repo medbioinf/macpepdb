@@ -2,6 +2,9 @@
 name = "uniprot_reader"
 version = "0.1.0"
 edition = "2024"
+description = "Streaming/async parser and indexer for UniProt text dumps (.txt, .txt.gz)"
+license = "BSD-3-Clause"
+repository = "https://github.com/medbioinf/macpepdb"
 
 [dependencies]
 futures = { workspace = true, optional = true }

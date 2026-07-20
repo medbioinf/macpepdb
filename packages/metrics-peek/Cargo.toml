@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A metrics::Recorder implementation that calls a user-supplied callback immediately or on a periodic interval (in milliseconds)"
 license = "MIT"
+repository = "https://github.com/medbioinf/macpepdb"
 
 [dependencies]
 metrics = { workspace = true }

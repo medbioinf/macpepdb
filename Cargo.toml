@@ -79,10 +79,10 @@ zerocopy = "0.8.48"
 zstd = "0.13.2"
 
 # workspace
-macpepdb = { path = "packages/macpepdb" }
+macpepdb = { path = "packages/macpepdb", version = "0.1.0" }
 macpepdb-frontend = { path = "packages/frontend" }
-macpepdb_web_common = { path = "packages/web-common" }
-metrics-peek = { path = "packages/metrics-peek" }
-macpepdb_tui = { path = "packages/tui" }
-peptide_hydrophobicity = { path = "packages/hydrophobicity" }
-uniprot_reader = { path = "packages/uniprot_reader" }
+macpepdb_web_common = { path = "packages/web-common", version = "0.1.0" }
+metrics-peek = { path = "packages/metrics-peek", version = "0.1.0" }
+macpepdb_tui = { path = "packages/tui", version = "0.1.0" }
+peptide_hydrophobicity = { path = "packages/hydrophobicity", version = "0.1.0" }
+uniprot_reader = { path = "packages/uniprot_reader", version = "0.1.0" }
