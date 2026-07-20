@@ -1,95 +1,88 @@
-[package]
-name = "macpepdb"
-version = "1.1.1"
-authors = ["Dirk Winkelhardt <dirk.winkelhardt@rub.de>"] 
-edition = "2021"
-readme = "README.md"
-description = "Large peptide database for mass spectrometry"
-repository = "https://github.com/medbioinf/macpepdb"
-homepage = "https://github.com/medbioinf/macpepdb"
-documentation = "https://github.com/medbioinf/macpepdb"
-license-file = "LICENSE"
-
-build = "build.rs"
-
-exclude = [
-    "*docker-compose.*",
-    "/docker",
-    "/.github",
-    "/test_files",
-    "Makefile",
-    "rust-toolchain.toml",
-    ".dockerignore",
-    "/.vscode",
+[workspace]
+resolver = "3"
+members = [
+    "packages/frontend",
+    "packages/hydrophobicity",
+    "packages/macpepdb",
+    "packages/web-common",
+    "packages/metrics-peek",
+    "packages/uniprot_reader",
+    "packages/tui",
 ]
 
-[lib]
-name = "macpepdb"
-path = "src/lib.rs"
-
-[[bin]]
-name = "macpepdb"
-path = "src/bin.rs"
-
-# [[bin]]
-# name = "macpepdb_performance"
-# path = "src/bin_performance.rs"
-
-[dependencies]
-anyhow = "~1.0.69"
+[workspace.dependencies]
+async-compression = "0.4.42"
+async-std = "1.13.2"
 async-stream = "0.3.6"
-axum = { version = "0.8.5", features = ["json", "http2", "matched-path"] }
-axum-streams = { version = "0.23.1", features = ["json", "csv", "text"] }
+axum = "0.8.9"
 base64 = "0.22.1"
-chrono = "0.4.23"
-clap = { version = "4.3.0", features = ["derive"] }
-crossbeam-queue = "0.3.11"
-csv = "1.2.2"
-# dihardts_cstools = "~2.2.0"
-dihardts_cstools = { git = "https://github.com/di-hardt/cstools.git", branch = "dev" }
+bytemuck = "1.25"
+bytes = "1.9"
+chrono = "0.4"
+clap = "~4.6.0"
+console-subscriber = "0.5.0"
+crossbeam = "~0.8.4"
+crossterm = "0.28"
+csv = "1.4.0"
+dashmap = "6.1"
+deadpool-postgres = "~0.14.1"
 dihardts_omicstools = "~3.1.0"
-fallible-iterator = "0.3.0"
-fancy-regex = "0.11.0"
-flate2 = "1.0.28"
-futures = "0.3.31"
-glob = "0.3.1"
-http = "1.0.0"
-indicatif = "0.17.6"
-indicium = "0.6.0"
-itertools = "0.14.0"
-lazy_static = "1.4.0"
-metrics = "0.24.2"
-metrics-exporter-prometheus = { version = "0.17.2", features = ["http-listener"] }
-parking_lot = "0.12.5"
-prometheus-parse = "0.2.5"
-rand = "0.8.5"
-reqwest = { version = "0.12.24", features = ["json", "stream"] }
-rustyms = "0.10.0"
-scylla = { version = "1.3.1", features = ["metrics"] }
-serde = "1.0.160"
-serde_json = "1.0.95"
-sysinfo = "0.28.2"
-thiserror = "2.0.12"
-tokio = { version = "1.47.1", features = ["full"] }
-tokio-util = "0.7.16"
-tower-http = { version = "0.6.6", features = ["cors", "trace"] }
-tracing = "0.1.37"
-tracing-appender = "0.2.3"
-tracing-indicatif = "0.3.4"
-tracing-loki = "0.2.6"
-tracing-subscriber =  { version = "0.3.17", features = ["env-filter"]}
-tracing-test = "0.2.4"
-urlencoding = "2.1.3"
-xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
-
-[dev-dependencies]
-lipsum = "0.9.0"
-openssl = "0.10.60"
-reqwest = { version = "0.11.22" }
-serial_test = "3.2.0"
-
-[build-dependencies]
-dihardts_omicstools = "~3.1.0"
-
-[target.'cfg(not(target_env = "msvc"))'.dependencies]
+dioxus = "0.7.1"
+dioxus-logger = "0.6.2"
+fallible-iterator = "~0.3.0"
+flate2 = "1"
+futures = "~0.3.32"
+futures-util = "0.3.32"
+glob = "0.3.3"
+gloo-timers = { version = "0.3", features = ["futures"] }
+http = "1.4.0"
+itertools = "~0.14.0"
+js-sys = "0.3"
+memchr = "2.8.0"
+metrics = "0.24"
+metrics-exporter-prometheus = {version = "0.18.1", default-features = false}
+metrics-util = "0.20"
+mimalloc = "0.1.50"
+num-traits = "~0.2.19"
+parking_lot = "0.12"
+pastey = "~0.2.1"
+plotly = "0.14"
+postcard = "~1.1.3"
+postgres-types = "~0.2.8"
+rand = "0.9"
+ratatui = "0.29"
+reqwest = "0.13.3"
+serde = "~1.0.228"
+serde_json = "~1.0.149"
+static_assertions = "1.1.0"
+sysinfo = "0.39.2"
+tcmalloc2 = "0.3.2"
+tempfile = "3.14"
+thiserror = "~2.0.18"
 tikv-jemallocator = "0.6"
+tinyvec = { version = "1.11", features = ["alloc"] }
+tokio = "1.51"
+tokio-postgres = "~0.7.12"
+toml = "0.8.8"
+tower-http = "0.6.8"
+tracing = "0.1"
+tracing-appender = "0.2"
+tracing-loki = "0.2"
+tracing-subscriber = "0.3"
+url = "2.5"
+urlencoding = "2.1.3"
+uuid = "1.23.1"
+wasm-bindgen = "0.2"
+web-sys = "0.3.77"
+xxhash-rust = "0.8.15"
+zerocopy = "0.8.48"
+zstd = "0.13.2"
+
+# workspace
+macpepdb = { path = "packages/macpepdb" }
+macpepdb-frontend = { path = "packages/frontend" }
+macpepdb_web_common = { path = "packages/web-common" }
+metrics-peek = { path = "packages/metrics-peek" }
+macpepdb_tui = { path = "packages/tui" }
+peptide_hydrophobicity = { path = "packages/hydrophobicity" }
+uniprot_reader = { path = "packages/uniprot_reader" }

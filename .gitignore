@@ -1,18 +1,20 @@
-# IDEs
-.idea/
-.vscode/settings.json
-
-
-# OS X
-.DS_Store
-._*
-
-# Rust / Cargo
+# Rust
 /target
 
-# Tests
-taxdmp_for_unit_tests.zip
+# Dioxus
+packages/frontend/dist
+packages/frontend/public/index.css*
 
-/experiment
-performance.csv
-logs
+# OS
+.DS_Store
+
+# Dev
+*.py
+*.index
+
+# Protein files on root level
+/*.txt
+
+# IDEs
+.zed/
+.vscode/

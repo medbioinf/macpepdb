@@ -1,0 +1,68 @@
+VARIANT         29
+                /note="M -> V (in strain: Clinical isolate 149 and O2:K1:H+
+                / MT78)"
+VAR_SEQ         108
+                /note="V -> VPPV (in isoform 3)"
+                /id="VSP_061523"
+VAR_SEQ         202..301
+                /note="Missing (in isoform 3)"
+                /id="VSP_061524"
+VAR_SEQ         202..259
+                /note="Missing (in isoform 2)"
+                /id="VSP_061525"
+VAR_SEQ         493..495
+                /note="SEC -> VSR (in isoform 3)"
+                /id="VSP_061526"
+VARIANT         31
+                /note="S -> F (in HTX12; uncertain significance;
+                dbSNP:rs553352307)"
+                /evidence="ECO:0000269|PubMed:34903892"
+                /id="VAR_086199"
+VARIANT         191..788
+                /note="Missing (in HTX12)"
+                /evidence="ECO:0000269|PubMed:34903892"
+                /id="VAR_086200"
+VARIANT         324
+                /note="C -> S (in HTX12; uncertain significance)"
+                /evidence="ECO:0000269|PubMed:34903892"
+                /id="VAR_086201"
+VARIANT         346..788
+                /note="Missing (in HTX12)"
+                /evidence="ECO:0000269|PubMed:34903892"
+                /id="VAR_086202"
+VARIANT         384
+                /note="S -> L (in HTX12; uncertain significance;
+                dbSNP:rs183023758)"
+                /evidence="ECO:0000269|PubMed:34903892"
+                /id="VAR_086203"
+VARIANT         389
+                /note="R -> I (in HTX12; uncertain significance;
+                dbSNP:rs2140282332)"
+                /evidence="ECO:0000269|PubMed:34903892"
+                /id="VAR_086204"
+VARIANT         456
+                /note="Missing (in HTX12; uncertain significance)"
+                /evidence="ECO:0000269|PubMed:34903892"
+                /id="VAR_086205"
+VARIANT         469
+                /note="L -> P (in HTX12; uncertain significance)"
+                /evidence="ECO:0000269|PubMed:34903892"
+                /id="VAR_086206"
+CONFLICT        1..6
+                /note="MLLLLL -> MLLLP (in Ref. 2)"
+                /evidence="ECO:0000305"
+CONFLICT        339
+                /note="L -> Q (in Ref. 2)"
+                /evidence="ECO:0000305"
+INIT_MET        P15005-2:1
+                /note="Removed"
+                /evidence="ECO:0000269|PubMed:1312983"
+VAR_SEQ         <202..259
+                /note="Missing (in isoform 2)"
+                /id="VSP_061525"
+VAR_SEQ         202..>259
+                /note="Missing (in isoform 2)"
+                /id="VSP_061525"
+VARIANT         ?
+                /note="S -> F (in HTX12; uncertain significance;
+                dbSNP:rs553352307)"

@@ -1,0 +1,179 @@
+use std::sync::LazyLock;
+
+use pastey::paste;
+use serde::Serialize;
+use thiserror::Error;
+
+use crate::mass_to_int;
+
+const BIT_CODE_LEN: usize = 5;
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Invalid amino acid code: {0}")]
+    InvalidAminoAcidCode(char),
+    #[error("Invalid amino acid bit code: {0:b}")]
+    InvalidAminoAcidBitCode(u8),
+}
+
+#[derive(Debug, Serialize)]
+pub struct AminoAcid {
+    code: char,
+    mono_mass: i64,
+    #[serde(skip)]
+    bit_code: AminoAcidBitCode,
+    is_canonical: bool,
+    name: &'static str,
+}
+
+impl AminoAcid {
+    pub const BIT_CODE_LEN: usize = BIT_CODE_LEN;
+
+    pub fn code(&self) -> char {
+        self.code
+    }
+
+    pub fn mono_mass(&self) -> i64 {
+        self.mono_mass
+    }
+
+    pub fn bit_code(&self) -> &AminoAcidBitCode {
+        &self.bit_code
+    }
+
+    pub fn is_canonical(&self) -> bool {
+        self.is_canonical
+    }
+
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// Returns the index in the counts array of a peptide.
+    ///
+    pub fn counts_idx(&self) -> usize {
+        (self.code as u8 - b'A') as usize
+    }
+}
+
+impl From<&AminoAcid> for macpepdb_web_common::responses::amino_acid::AminoAcidResponse {
+    fn from(amino_acid: &AminoAcid) -> Self {
+        Self {
+            code: amino_acid.code,
+            mono_mass: crate::mass::to_float(amino_acid.mono_mass),
+            is_canonical: amino_acid.is_canonical,
+            name: amino_acid.name.to_string(),
+        }
+    }
+}
+
+macro_rules! create_const_amino_acids {
+    ([$(($name:literal; $one_letter_code:literal; $mass:literal; $bit_code:literal; $is_canonical:literal)),* $(,)?]) => {
+        paste! {
+
+            #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, zerocopy::IntoBytes, zerocopy::KnownLayout, zerocopy::Immutable)]
+            #[repr(u8)]
+            pub enum AminoAcidBitCode {
+                $(
+                    [< $one_letter_code:upper >] = $bit_code,
+                )+
+            }
+
+            impl TryFrom<u8> for AminoAcidBitCode {
+                type Error = Error;
+
+                fn try_from(value: u8) -> Result<Self, Self::Error> {
+                    match value {
+                        $(
+                            $bit_code => Ok(AminoAcidBitCode::[< $one_letter_code:upper >]),
+                        )+
+                        _ => Err(Error::InvalidAminoAcidBitCode(value)),
+                    }
+                }
+            }
+
+             $(
+                pub const [< $name:replace(" ", "_"):snake:upper >]: AminoAcid = AminoAcid {
+                    code: $one_letter_code,
+                    mono_mass: mass_to_int!{$mass},
+                    bit_code: AminoAcidBitCode::[< $one_letter_code:upper>],
+                    is_canonical: $is_canonical,
+                    name: $name,
+                };
+             )+
+
+             static ALL: &[&'static AminoAcid] = &[
+                 $(
+                     &[< $name:replace(" ", "_"):snake:upper >],
+                 )+
+             ];
+
+             static CANONICAL: LazyLock<&'static [&'static AminoAcid]> = LazyLock::new(|| {
+                 ALL.iter().filter(|aa| aa.is_canonical).cloned().collect::<Vec<_>>().leak()
+             });
+
+
+             static NON_CANONICAL: LazyLock<&'static [&'static AminoAcid]> = LazyLock::new(|| {
+                 ALL.iter().filter(|aa| !aa.is_canonical).cloned().collect::<Vec<_>>().leak()
+             });
+
+
+             impl AminoAcid {
+                 /// Returns a canonical or non-canonical amino acid by one letter code
+                 ///
+                 /// # Arguments
+                 /// * `code` - One letter code
+                 ///
+                 pub fn by_code(code: char) -> Result<&'static AminoAcid, Error> {
+                     match code.to_ascii_uppercase() {
+                         $(
+                             $one_letter_code => Ok(&[< $name:replace(" ", "_"):snake:upper >]),
+                         )+
+                         _ => Err(Error::InvalidAminoAcidCode(code)),
+                     }
+                 }
+
+                 /// Returns a canonical or non-canonical amino acid by MaCPepDB's 5 bit code
+                 ///
+                 /// # Arguments
+                 /// * `bit_code` - 5 bit code
+                 ///
+                 pub fn by_bit_code(code: &AminoAcidBitCode) -> &'static AminoAcid {
+                     match code {
+                         $(
+                             AminoAcidBitCode::[< $one_letter_code:snake:upper >] => &[< $name:replace(" ", "_"):snake:upper >],
+                         )+
+                     }
+                 }
+
+                 pub fn all() -> &'static [&'static AminoAcid] {
+                     ALL
+                 }
+
+                 pub fn canonical() ->  &'static [&'static AminoAcid] {
+                     CANONICAL.as_ref()
+                 }
+
+                pub fn non_canonical() -> &'static [&'static AminoAcid] {
+                    NON_CANONICAL.as_ref()
+                }
+            }
+
+            impl From<&AminoAcidBitCode> for &'static AminoAcid {
+                fn from(bit_code: &AminoAcidBitCode) -> Self {
+                    match bit_code {
+                        $(
+                            AminoAcidBitCode::[< $one_letter_code:upper >] => &[< $name:replace(" ", "_"):snake:upper >],
+                        )+
+                    }
+                }
+            }
+        }
+    };
+}
+
+// This file is generated by build.rs
+// Do not edit manually!
+// It builds the internal amino acids with integer mass
+// and the get_internal_amino_acid_by_one_letter_code function
+include!(concat!(env!("OUT_DIR"), "/amino_acid.rs"));

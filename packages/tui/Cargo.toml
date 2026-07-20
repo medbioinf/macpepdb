@@ -1,0 +1,16 @@
+[package]
+name = "macpepdb_tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+chrono = { workspace = true, features = ["clock"] }
+crossterm = { workspace = true, features = ["event-stream"] }
+futures = { workspace = true }
+metrics =  { workspace = true }
+parking_lot = { workspace = true }
+ratatui = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }

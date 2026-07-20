@@ -1,0 +1,25 @@
+[application]
+
+# App name
+name = "MaCPepDB"
+
+[web.app]
+
+# HTML title tag content
+title = "MaCPepDB"
+
+# include `assets` in web platform
+[web.resource]
+
+# Additional CSS style files
+style = []
+
+# Additional JavaScript files
+script = []
+
+[web.resource.dev]
+
+# Javascript code file
+# serve: [dev-server] only
+script = []
+

@@ -1,0 +1,10 @@
+[package]
+name = "macpepdb_web_common"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde = { workspace = true, features = ["derive", "rc"] }
+
+[dev-dependencies]
+serde_json = { workspace = true }

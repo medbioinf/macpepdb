@@ -1,0 +1,6 @@
+macpepdb_base_url = "http://134.147.59.87"
+# Enable Matomo tracking by setting the URL and site ID below
+# Do not forget to add the matomo_url to the CORS allowed origins when serving
+# the frontend.
+# matomo_url = "https://matomo.example.org/matomo.php"
+# matomo_site_id = 1

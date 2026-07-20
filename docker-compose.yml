@@ -1,0 +1,44 @@
+services:
+  master:
+    container_name: "citus-master"
+    image: "citusdata/citus:14"
+    ports:
+      - "5432:5432"
+    labels:
+      - "com.citusdata.role=Master"
+    environment: &AUTH
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+      PGUSER: postgres"
+      PGPASSWORD: "postgres"
+      POSTGRES_HOST_AUTH_METHOD: "trust"
+  worker1: &worker
+    image: "citusdata/citus:14"
+    labels:
+      - "com.citusdata.role=Worker"
+    depends_on:
+      - manager
+    environment: *AUTH
+    command:
+      - "/citus-overrides/wait-for-manager.sh"
+      - "-c"
+      - "config_file=/citus-overrides/postgresql.conf"
+    volumes:
+      - healthcheck-volume:/healthcheck
+      - ./docker/compose/citus/overrides:/citus-overrides
+  worker2:
+    <<: *worker
+  manager:
+    # seems to never been updated. Thanks to author of https://github.com/citusdata/membership-manager/pull/13
+    container_name: "citus-manager"
+    build:
+      context: ./docker/compose/citus-manager
+      tags:
+        - local/citus-membership-manager:latest
+    volumes:
+      - "${DOCKER_SOCK:-/var/run/docker.sock}:/var/run/docker.sock"
+      - healthcheck-volume:/healthcheck
+    depends_on: [master]
+    environment: *AUTH
+volumes:
+  healthcheck-volume:

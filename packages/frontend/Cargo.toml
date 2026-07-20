@@ -1,0 +1,50 @@
+[package]
+name = "macpepdb-frontend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+async-std = { workspace = true }
+chrono = { workspace = true }
+dioxus = { workspace = true, features = ["router", "logger"] }
+dioxus-logger = { workspace = true }
+futures = { workspace = true }
+gloo-timers = { workspace = true }
+js-sys = { workspace = true }
+macpepdb_web_common = { workspace = true }
+plotly = { workspace = true }
+reqwest = { workspace = true, features = ["json", "http2"] }
+serde = { workspace = true, features = ["rc"] }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+urlencoding = { workspace = true }
+uuid = { workspace = true, features = ["js", "v4"] }
+wasm-bindgen = { workspace = true }
+web-sys = { workspace = true, features = [
+    "Blob",
+    "BlobPropertyBag",
+    "Clipboard",
+    "Element",
+    "HtmlAnchorElement",
+    "Navigator",
+    "Url",
+] }
+xxhash-rust = { workspace = true, features = ["xxh3"] }
+
+[dev-dependencies]
+toml = { workspace = true }
+
+[features]
+default = ["web"]
+web = ["dioxus/web"]
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

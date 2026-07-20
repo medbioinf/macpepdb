@@ -2,12 +2,13 @@
 *
 
 # Allow the following files and directories
+!/assets/**/*
 !/build.rs
 !/Cargo.toml
 !/Cargo.lock
-!/logo.txt
+!/Dioxus.toml
+!/LICENSE
 !/README.md
-!/rust-toolchain.toml
-!/src/**/*
+!/packages/**/*
 !/test_files/**/*
-!/template_files/**/*
+!/docker/**/*
