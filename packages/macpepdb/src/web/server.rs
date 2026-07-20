@@ -23,6 +23,7 @@ use crate::web::protein_controller::ProteinController;
 use crate::web::server_state::{MatomoInfo, ServerState};
 use crate::web::taxonomy_controller::TaxonomyController;
 
+/// Errors that can occur while starting or running the web server.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Blob error in web server: {0}")]

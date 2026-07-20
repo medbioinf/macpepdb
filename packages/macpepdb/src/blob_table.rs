@@ -23,6 +23,7 @@ static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
 static DELETE_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("DELETE FROM {TABLE_NAME} WHERE key = $1 AND part > $2"));
 
+/// Errors occurring while storing or retrieving a blob in the `blobs` table.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("The given data exceeds the maximum blob size {MAX_BLOB_SIZE} with {0}")]
@@ -37,7 +38,10 @@ pub enum Error {
     Serialize,
 }
 
+/// Marker trait for types that can be stored as a serialized blob via [`BlobTable`].
+/// Implementors must be `postcard`-(de)serializable and provide the storage key.
 pub trait IsBlob: Send + Sync + Serialize + for<'a> Deserialize<'a> {
+    /// Returns the key under which this blob's parts are stored in the `blobs` table.
     fn key(&self) -> &str;
 }
 
@@ -57,6 +61,11 @@ impl BlobPart {
         })
     }
 
+    /// Upserts a batch of blob parts sequentially into the `blobs` table.
+    ///
+    /// # Arguments
+    /// * `client` - The database client to use for the query
+    /// * `values` - The blob parts to upsert
     pub async fn upsert_batch(client: &Client, values: Vec<Self>) -> Result<(), Error> {
         // Blobs are tiny (the config), so insert parts sequentially — the bound
         // param array is a borrowed temporary that must live across each await.
@@ -71,13 +80,14 @@ impl BlobPart {
         Ok(())
     }
 
+    /// Selects all parts stored for `key`, ordered by part index.
     pub async fn select_by_key(client: &Client, key: &str) -> Result<Vec<Self>, Error> {
         let rows = client.query(SELECT_STATEMENT.as_str(), &[&key]).await?;
         rows.iter().map(Self::from_row).collect()
     }
 
     /// Deletes leftover parts above `part` (used to truncate a previously larger blob).
-    pub async fn delete_above(client: &Client, key: &str, part: i16) -> Result<(), Error> {
+    pub async fn delete_leftovers(client: &Client, key: &str, part: i16) -> Result<(), Error> {
         client
             .execute(DELETE_STATEMENT.as_str(), &[&key, &part])
             .await?;
@@ -85,9 +95,19 @@ impl BlobPart {
     }
 }
 
+/// Reads and writes arbitrary serializable values (e.g. the `Configuration` blob) as chunked
+/// rows in the `blobs` table, since a single value may exceed a practical row/column size.
 pub struct BlobTable;
 
 impl BlobTable {
+    /// Serializes `blob` with `postcard`, splits the encoded bytes into `MAX_BLOB_PART_SIZE`-byte
+    /// parts, and upserts them into the `blobs` table, deleting any parts left over from a
+    /// previously larger version of the same key.
+    ///
+    /// # Arguments
+    /// * `client` - The database client to use for the query
+    /// * `blob` - The blob to serialize and store
+    /// * `concurrent_batch_size` - Number of parts grouped into each write batch
     pub async fn insert<T: IsBlob>(
         client: &Client,
         blob: &T,
@@ -118,7 +138,7 @@ impl BlobTable {
             })
             .collect::<Vec<_>>();
 
-        BlobPart::delete_above(client, blob.key(), part_ctr).await?;
+        BlobPart::delete_leftovers(client, blob.key(), part_ctr).await?;
 
         for blob_part_batch in &blob_parts.into_iter().chunks(concurrent_batch_size.get()) {
             BlobPart::upsert_batch(client, blob_part_batch.collect()).await?;
@@ -127,6 +147,12 @@ impl BlobTable {
         Ok(())
     }
 
+    /// Reads and reassembles all parts stored for `key` and deserializes them into `T` with
+    /// `postcard`. Returns `None` if no parts are stored under `key`.
+    ///
+    /// # Arguments
+    /// * `client` - The database client to use for the query
+    /// * `key` - The key under which the blob is stored
     pub async fn select<T: IsBlob>(client: &Client, key: &str) -> Result<Option<T>, Error> {
         let mut blob_parts = BlobPart::select_by_key(client, key).await?;
 

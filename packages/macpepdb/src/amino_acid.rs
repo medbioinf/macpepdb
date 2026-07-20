@@ -8,6 +8,7 @@ use crate::mass_to_int;
 
 const BIT_CODE_LEN: usize = 5;
 
+/// Errors which might occur while looking up an amino acid by code or bit code
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Invalid amino acid code: {0}")]
@@ -16,6 +17,8 @@ pub enum Error {
     InvalidAminoAcidBitCode(u8),
 }
 
+/// A canonical or non-canonical amino acid, with its one-letter code, mono-isotopic mass
+/// (integer form, see `mass::to_int`), and MaCPepDB's 5-bit code.
 #[derive(Debug, Serialize)]
 pub struct AminoAcid {
     code: char,
@@ -27,24 +30,30 @@ pub struct AminoAcid {
 }
 
 impl AminoAcid {
+    /// Number of bits used to encode an amino acid in `AminoAcidBitCode`.
     pub const BIT_CODE_LEN: usize = BIT_CODE_LEN;
 
+    /// Returns the one-letter code.
     pub fn code(&self) -> char {
         self.code
     }
 
+    /// Returns the mono-isotopic mass in integer form (see `mass::to_int`).
     pub fn mono_mass(&self) -> i64 {
         self.mono_mass
     }
 
+    /// Returns MaCPepDB's 5-bit code.
     pub fn bit_code(&self) -> &AminoAcidBitCode {
         &self.bit_code
     }
 
+    /// Returns whether this is one of the 20 canonical amino acids.
     pub fn is_canonical(&self) -> bool {
         self.is_canonical
     }
 
+    /// Returns the full name.
     pub fn name(&self) -> &'static str {
         self.name
     }
@@ -71,6 +80,8 @@ macro_rules! create_const_amino_acids {
     ([$(($name:literal; $one_letter_code:literal; $mass:literal; $bit_code:literal; $is_canonical:literal)),* $(,)?]) => {
         paste! {
 
+            /// MaCPepDB's 5-bit encoding of an amino acid, used to pack sequences compactly
+            /// (see `CompactSequence`) instead of storing full one-letter-code bytes.
             #[derive(Copy, Clone, Debug, Eq, Hash, PartialEq, PartialOrd, Ord, zerocopy::IntoBytes, zerocopy::KnownLayout, zerocopy::Immutable)]
             #[repr(u8)]
             pub enum AminoAcidBitCode {
@@ -146,14 +157,17 @@ macro_rules! create_const_amino_acids {
                      }
                  }
 
+                 /// Returns all amino acids, canonical and non-canonical.
                  pub fn all() -> &'static [&'static AminoAcid] {
                      ALL
                  }
 
+                 /// Returns the 20 canonical amino acids.
                  pub fn canonical() ->  &'static [&'static AminoAcid] {
                      CANONICAL.as_ref()
                  }
 
+                /// Returns the non-canonical amino acids.
                 pub fn non_canonical() -> &'static [&'static AminoAcid] {
                     NON_CANONICAL.as_ref()
                 }

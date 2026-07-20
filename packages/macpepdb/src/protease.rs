@@ -17,6 +17,7 @@ use crate::{
     sequence::{IsBitSequence, PeptideSequence as Sequence},
 };
 
+/// Errors which might occur while creating or applying a protease
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Protease creation failed: {0}")]
@@ -55,10 +56,13 @@ pub trait IsProtease: Send + Sync {
     fn count_missed_cleavages(&self, sequence: &[AminoAcidBitCode]) -> usize;
 }
 
+/// Trypsin, cleaving after lysine (K) or arginine (R) unless followed by proline (P).
 pub struct Trypsin;
 
 impl Trypsin {
+    /// The name used to look up this protease by, e.g. via `Protease::by_name`.
     pub const NAME: &'static str = "trypsin";
+    /// The name used to look up the semi-specific variant of this protease by.
     pub const SEMI_NAME: &'static str = "semi-trypsin";
 }
 
@@ -127,9 +131,12 @@ impl IsProtease for Trypsin {
     }
 }
 
+/// A protease with no cleavage specificity: every position between two residues is a
+/// potential cleavage site.
 pub struct Unspecific;
 
 impl Unspecific {
+    /// The name used to look up this protease by, e.g. via `Protease::by_name`.
     pub const NAME: &'static str = "unspecific";
 }
 
@@ -149,6 +156,9 @@ impl IsProtease for Unspecific {
     }
 }
 
+/// Iterator over fully-specific peptides generated from a protease's full digest, sliding a
+/// window of consecutive fragments (0..=`max_missed_cleavages` of them) over the digest and
+/// filtering by length, unknown-residue content and mass range using precomputed prefix sums.
 pub struct MissedCleavageIterator<
     'a,
     T: Sized,
@@ -172,6 +182,15 @@ where
     T: Sized,
     F: Fn(&[&[AminoAcidBitCode]], i64) -> Result<Option<T>, Error>,
 {
+    /// Creates a new iterator, precomputing prefix sums (length, mass, unknown-residue count)
+    /// over `full_digest` so each window's totals can be derived in O(1).
+    ///
+    /// # Arguments
+    /// * `keep_unknown` - Whether fragments containing an unknown residue are kept
+    /// * `mass_range` - If given, only windows whose mass falls in this range are yielded
+    /// * `full_digest` - The protease's zero-missed-cleavage digest of the sequence
+    /// * `conversion_fn` - Turns an accepted window of fragments (and its mass) into `T`,
+    ///   or returns `Ok(None)` to skip it without stopping iteration
     pub fn new(
         min_length: NonZeroUsize,
         max_length: NonZeroUsize,
@@ -341,6 +360,14 @@ where
     T: Sized,
     F: Fn(&[AminoAcidBitCode], i64) -> Result<Option<T>, Error>,
 {
+    /// Creates a new iterator over the semi-specific sub-sequences of `full_digest`.
+    ///
+    /// # Arguments
+    /// * `keep_unknown` - Whether sub-sequences containing an unknown residue are kept
+    /// * `mass_range` - If given, only sub-sequences whose mass falls in this range are yielded
+    /// * `full_digest` - The protease's zero-missed-cleavage digest of the sequence
+    /// * `conversion_fn` - Turns an accepted sub-sequence (and its mass) into `T`, or returns
+    ///   `Ok(None)` to skip it without stopping iteration
     pub fn new(
         min_length: NonZeroUsize,
         max_length: NonZeroUsize,
@@ -495,6 +522,9 @@ where
     }
 }
 
+/// A named cleavage rule (e.g. trypsin) combined with the length/missed-cleavage constraints
+/// used to digest proteins into peptides. Persisted as part of the `Configuration` blob so a
+/// build's digestion parameters can be recovered later.
 #[derive(Deserialize, Serialize)]
 pub struct Protease {
     #[serde(with = "is_protease_serde")]
@@ -587,6 +617,16 @@ impl Protease {
         }
     }
 
+    /// Looks up a protease by name and applies the given length/missed-cleavage constraints,
+    /// falling back to `Sequence::MIN_LENGTH`/`MAX_LENGTH` when not given. A `semi-` prefix
+    /// (e.g. `semi-trypsin`) selects the semi-specific variant of the named protease.
+    ///
+    /// # Arguments
+    /// * `name` - The protease name, optionally prefixed with `semi-`
+    /// * `min_length` - Minimum peptide length (inclusive)
+    /// * `max_length` - Maximum peptide length (inclusive)
+    /// * `max_missed_cleavages` - Maximum number of missed cleavages
+    /// * `keep_unknown` - Whether peptides containing unknown residues are kept
     pub fn by_name(
         name: &str,
         min_length: Option<NonZeroUsize>,
@@ -633,6 +673,7 @@ impl Protease {
         }
     }
 
+    /// Returns the protease's name, prefixed with `semi-` if it is semi-specific.
     pub fn name(&self) -> String {
         if self.semi_specific {
             format!("semi-{}", self.inner.name())
@@ -641,14 +682,17 @@ impl Protease {
         }
     }
 
+    /// Returns the minimum peptide length.
     pub fn min_length(&self) -> NonZeroUsize {
         self.min_length
     }
 
+    /// Returns the maximum peptide length.
     pub fn max_length(&self) -> NonZeroUsize {
         self.max_length
     }
 
+    /// Returns the maximum number of missed cleavages.
     pub fn max_missed_cleavages(&self) -> usize {
         self.max_missed_cleavages
     }
@@ -717,6 +761,7 @@ impl PartialEq for Protease {
     }
 }
 
+/// Serde serialization/deserialization for `Box<dyn IsProtease>`, using the protease's name
 mod is_protease_serde {
     use super::*;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};

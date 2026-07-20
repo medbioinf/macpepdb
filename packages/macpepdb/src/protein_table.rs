@@ -25,7 +25,9 @@ use crate::{
 
 static TABLE_NAME: &str = "proteins";
 
+/// Name of the `proteins.accession` column.
 pub static ACCESSION_COL: &str = "accession";
+/// Name of the `proteins.genes` column.
 pub static GENES_COL: &str = "genes";
 
 static INSERT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
@@ -74,8 +76,11 @@ static SELECT_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!("SELECT id, accession, sequence, taxonomy_id, flags, genes FROM {TABLE_NAME}")
 });
 
+/// Metric name for the counter tracking how many proteins have been inserted during
+/// [`ProteinTable::build`].
 pub static INSERTED_PROTEINS_METRIC: &str = "protein_table::build::inserted_proteins";
 
+/// Errors occurring while reading, writing, or building the `proteins` table.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Client error in protein: {0}")]
@@ -107,15 +112,18 @@ into_thiserror_boxed!(crate::protein::Error, Error, Protein);
 type ProteinBuildQueue = Arc<ArrayQueue<Option<Vec<Protein>>>>;
 type ProteinFilePathBuildQueue = Arc<ArrayQueue<Option<PathBuf>>>;
 
+/// Handle for reading, writing, and building the `proteins` table (distributed by `id`).
 pub struct ProteinTable {
     client: Arc<Client>,
 }
 
 impl ProteinTable {
+    /// Creates a new `ProteinTable` bound to `client`.
     pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
 
+    /// Inserts a single protein row.
     pub async fn insert(&self, protein: &Protein) -> Result<(), Error> {
         let id = protein.id();
         let accession = protein.accession();
@@ -210,6 +218,7 @@ impl ProteinTable {
         }))
     }
 
+    /// Streams the proteins whose id lies in `[start, end)` (`WHERE id >= $1 AND id < $2`).
     pub async fn select_by_id_range(
         &self,
         start: i32,
@@ -227,6 +236,13 @@ impl ProteinTable {
         }))
     }
 
+    /// Streams proteins whose accession or genes fuzzy-match the given terms
+    /// (`accession ILIKE '%..%'` OR-ed with a genes-array text match). At least one of
+    /// `accession`/`gene` must be given.
+    ///
+    /// # Arguments
+    /// * `accession` - Optional substring to match against `accession` (case-insensitive)
+    /// * `gene` - Optional substring to match against the protein's genes (case-insensitive)
     pub async fn search(
         &self,
         accession: Option<&String>,
@@ -261,6 +277,7 @@ impl ProteinTable {
         self.select(&where_clause, params).await
     }
 
+    /// Returns the total protein count recorded in the `stats` table (see [`StatsTable`]).
     pub async fn count(&self) -> Result<usize, Error> {
         StatsTable::new(self.client.clone())
             .select_protein_count()
@@ -269,6 +286,7 @@ impl ProteinTable {
             .ok_or(Error::CountNotFound)
     }
 
+    /// Streams every protein id in the table (`SELECT id FROM proteins`).
     pub async fn select_ids(
         &self,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<i32, Error>> + Send>>, Error> {
@@ -284,6 +302,7 @@ impl ProteinTable {
             .boxed())
     }
 
+    /// Resolves each id in `ids` to its `(id, accession)` pair (`WHERE id = ANY($1)`).
     pub async fn resolve_ids(
         &self,
         ids: Vec<i32>,
@@ -304,6 +323,18 @@ impl ProteinTable {
             .boxed())
     }
 
+    /// Builds the `proteins` table from one or more UniProt text dump files (`.txt`/`.txt.gz`):
+    /// a pool of reader tasks streams and parses the files into batches on a bounded queue, and
+    /// a pool of insertion tasks drains that queue and COPYs each batch into the table. Protein
+    /// ids are assigned sequentially as entries are read. Returns `(protein count, total size in
+    /// bytes)`.
+    ///
+    /// # Arguments
+    /// * `protein_file_paths` - Paths to the UniProt files to digest (gzip auto-detected by extension)
+    /// * `concurrent_batch_size` - Number of proteins buffered per batch handed to an insertion task
+    /// * `num_insertion_threads` - Number of concurrent reader tasks and of concurrent insertion tasks
+    /// * `resolve_isoforms` - If `true`, expand each entry into its documented sequence variants
+    ///   (isoforms) instead of inserting only the canonical sequence
     pub async fn build(
         &self,
         protein_file_paths: impl Iterator<Item = &PathBuf>,

@@ -76,6 +76,8 @@ use crate::{mass::to_float as mass_to_float, peptide::Peptide};
 
 use super::client::Client;
 
+/// Base name for the metric counting matching peptides emitted by a search; each search
+/// instance appends a unique suffix to it to get its own counter.
 pub static MATCHING_PEPTIDE_METRIC: &str = "peptide_search:matching_peptides";
 
 const CONDITION_REF_COL: &str = "condition_ref";
@@ -88,6 +90,7 @@ const SEARCH_COLUMNS: &str =
 pub static SEARCH_SELECT_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {SEARCH_COLUMNS} FROM {TABLE_NAME}"));
 
+/// Errors occurring while building or running a peptide search.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Client error in peptide search: {0}")]
@@ -114,6 +117,8 @@ into_thiserror_boxed!(crate::client::Error, Error, Client);
 into_thiserror_boxed!(crate::peptide::Error, Error, Peptide);
 into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
 
+/// Selects which search strategy runs the query: one condition per concurrent DB task
+/// (`MultiTask`) or a single `UNION ALL` query covering all conditions (`UnionAll`).
 #[derive(Clone, Copy, ValueEnum)]
 pub enum PeptideSearchType {
     MultiTask,
@@ -547,6 +552,8 @@ impl Display for NoOccurrencesFilterFunction {
     }
 }
 
+/// Ordered set of [`FilterFunction`]s applied to a peptide/peptidoform; a peptide is kept
+/// only if it passes every filter in the pipeline.
 pub struct FilterPipeline<T: IsPeptide> {
     filter_functions: Vec<Box<dyn FilterFunction<T>>>,
 }
@@ -555,6 +562,7 @@ impl<T> FilterPipeline<T>
 where
     T: IsPeptide + 'static,
 {
+    /// Creates a new pipeline from the given filter functions.
     pub fn new(filter_functions: Vec<Box<dyn FilterFunction<T>>>) -> Self {
         Self { filter_functions }
     }
@@ -588,6 +596,7 @@ where
         Ok(Self::new(filter_function))
     }
 
+    /// Returns true if the peptide passes every filter function in the pipeline.
     pub fn is_match(&self, peptide: &T) -> Result<bool, Error> {
         for filter in self.filter_functions.iter() {
             if !filter.is_match(peptide)? {
@@ -601,18 +610,24 @@ where
         Ok(true)
     }
 
+    /// Returns the number of filter functions in the pipeline.
     pub fn len(&self) -> usize {
         self.filter_functions.len()
     }
 
+    /// Returns true if the pipeline has no filter functions.
     pub fn is_empty(&self) -> bool {
         self.filter_functions.is_empty()
     }
 
+    /// Returns an iterator over the filter functions in the pipeline.
     pub fn iter(&self) -> impl Iterator<Item = &Box<dyn FilterFunction<T>>> {
         self.filter_functions.iter()
     }
 
+    /// Drops every filter function that is already handled as a SQL `WHERE` condition
+    /// (see [`FilterFunction::is_sqlable`]), leaving only the ones that must still be
+    /// checked in-process.
     pub fn remove_sqlable_filters(&mut self) {
         self.filter_functions
             .retain(|filter_fn| !filter_fn.is_sqlable());
@@ -647,9 +662,12 @@ where
     }
 }
 
+/// A stream of batches of matching [`Peptidoform`]s produced by a running search, common
+/// to both the `MultiTask` and `UnionAll` strategies so callers can handle them uniformly.
 pub trait IsFallibleMatchingPeptideStream:
     Stream<Item = Result<Vec<Peptidoform>, Error>> + Send
 {
+    /// Name of the `metrics` counter this stream's matching-peptide count is reported under.
     fn matching_peptide_metric(&self) -> &str;
 }
 
@@ -667,6 +685,8 @@ struct ConditionalPeptideStream {
 }
 
 impl ConditionalPeptideStream {
+    /// Opens the DB query for a single [`PeptideCondition`] and wraps the resulting row
+    /// stream, recording open/scan timings into `agg` as the stream is consumed.
     pub async fn new(
         client: Arc<Client>,
         mut condition: PeptideCondition,
@@ -761,6 +781,9 @@ impl Stream for ConditionalPeptideStream {
     }
 }
 
+/// `MultiTask` search strategy: runs one concurrent DB query per [`PeptideCondition`]
+/// (bounded by `concurrent_selects`) and merges their rows into a single stream, applying
+/// the non-SQL-able filters (e.g. distinctness) as results arrive.
 pub struct FallibleMatchingPeptideStream {
     client: Arc<Client>,
     // Should only contain non sql able filters
@@ -785,6 +808,9 @@ pub struct FallibleMatchingPeptideStream {
 }
 
 impl FallibleMatchingPeptideStream {
+    /// Builds the stream and kicks off the first batch of `ConditionalPeptideStream`
+    /// creations (up to `concurrent_selects`) without blocking; remaining conditions are
+    /// opened lazily as earlier ones complete (see the `Stream` impl below).
     pub async fn new(
         client: Arc<Client>,
         is_distinct: bool,
@@ -1017,10 +1043,13 @@ struct PeptideWithConditionRef {
 }
 
 impl PeptideWithConditionRef {
+    /// Index into the `UnionAll` conditions list that this row's `condition_ref` column
+    /// points to, used to look up which [`PeptideCondition`] produced/should filter it.
     pub fn condition_ref(&self) -> usize {
         self.condition_ref
     }
 
+    /// The peptide read from the row, without the condition reference.
     pub fn inner_peptide(&self) -> &Peptide {
         &self.inner_peptide
     }
@@ -1046,6 +1075,9 @@ impl From<PeptideWithConditionRef> for Peptide {
     }
 }
 
+/// `UnionAll` search strategy: combines every [`PeptideCondition`] into a single
+/// `UNION ALL` query with all filters inlined as literals (so Citus can prune shards
+/// and columnar chunk groups at plan time) and streams the merged rows back.
 pub struct UnionAllFallibleMatchingPeptideStream {
     filter_pipeline: Pin<Box<FilterPipeline<Peptidoform>>>,
     conditions: Pin<Vec<PeptideCondition>>,
@@ -1057,6 +1089,8 @@ pub struct UnionAllFallibleMatchingPeptideStream {
 }
 
 impl UnionAllFallibleMatchingPeptideStream {
+    /// Builds and dispatches the single `UNION ALL` statement covering all `conditions`
+    /// and opens the resulting row stream.
     pub async fn new(
         client: Arc<Client>,
         is_distinct: bool,
@@ -1540,6 +1574,7 @@ impl PeptideConditionBuilder {
         true
     }
 
+    /// Adds a variable PTM to the PeptideCondition.
     pub fn add_variable_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = ptm.mass_delta();
         if mass_delta_int > self.query_mass {
@@ -1551,6 +1586,8 @@ impl PeptideConditionBuilder {
         true
     }
 
+    /// Sets the N-terminal PTM. Fails (returns false) if one is already set or the PTM's
+    /// mass delta exceeds the remaining query mass.
     pub fn set_n_terminal_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = ptm.mass_delta();
         if self.n_terminal_ptm.is_some() || mass_delta_int > self.query_mass {
@@ -1562,6 +1599,8 @@ impl PeptideConditionBuilder {
         true
     }
 
+    /// Sets the C-terminal PTM. Fails (returns false) if one is already set or the PTM's
+    /// mass delta exceeds the remaining query mass.
     pub fn set_c_terminal_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = ptm.mass_delta();
         if self.c_terminal_ptm.is_some() || mass_delta_int > self.query_mass {
@@ -1573,6 +1612,8 @@ impl PeptideConditionBuilder {
         true
     }
 
+    /// Sets the N-terminal bond PTM. Fails (returns false) if one is already set or the
+    /// PTM's mass delta exceeds the remaining query mass.
     pub fn set_n_bond_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = ptm.mass_delta();
         if self.n_bond_ptm.is_some() || mass_delta_int > self.query_mass {
@@ -1584,6 +1625,8 @@ impl PeptideConditionBuilder {
         true
     }
 
+    /// Sets the C-terminal bond PTM. Fails (returns false) if one is already set or the
+    /// PTM's mass delta exceeds the remaining query mass.
     pub fn set_c_bond_ptm(&mut self, ptm: Arc<PostTranslationalModification>) -> bool {
         let mass_delta_int = ptm.mass_delta();
         // if ptm is positive but larger than the remaining mass or  smaller than the minimum mass, skip it
@@ -1597,6 +1640,7 @@ impl PeptideConditionBuilder {
         true
     }
 
+    /// Marks an amino acid as excluded, e.g. so peptides containing it can be filtered out.
     pub fn add_excluded_amino_acid(&mut self, amino_acid: &AminoAcid) {
         self.excluded_amino_acids.insert(*amino_acid.bit_code());
     }
@@ -2104,6 +2148,15 @@ impl PeptideConditionBuilder {
         FilterPipeline::new(filter_functions)
     }
 
+    /// Computes the ppm tolerance window around the (PTM-reduced) query mass and emits one
+    /// [`PeptideCondition`] per distinct partition overlapping that window, each scoped to
+    /// a single partition so its DB query stays a single-shard range scan.
+    ///
+    /// # Arguments
+    /// * `partitioning` - Mass-to-partition map from the stored [`crate::configuration::RuntimeConfiguration`]
+    /// * `lower_tolerance_ppm` - Lower mass tolerance in ppm
+    /// * `upper_tolerance_ppm` - Upper mass tolerance in ppm
+    ///
     pub fn finalize(
         &self,
         partitioning: &MassPartitionMap,
@@ -2215,6 +2268,8 @@ impl Drop for PeptideConditionBuilder {
     }
 }
 
+/// A single, DB-queryable condition scoped to one partition: a mass range plus the
+/// filter functions produced from its originating [`PeptideConditionBuilder`]'s PTMs.
 pub struct PeptideCondition {
     /// All distinct partitions overlapping `[lower_mass, upper_mass]`.
     partitions: Vec<i64>,
@@ -2229,22 +2284,30 @@ pub struct PeptideCondition {
 }
 
 impl PeptideCondition {
+    /// Returns true if the peptide passes this condition's filter pipeline (any error is
+    /// treated as a non-match).
     pub fn is_match(&mut self, peptide: &Peptide) -> bool {
         self.filter_pipeline.is_match(peptide).unwrap_or(false)
     }
 
+    /// Partitions this condition's mass range overlaps (populated by `finalize` with
+    /// exactly one partition).
     pub fn partitions(&self) -> &Vec<i64> {
         &self.partitions
     }
 
+    /// Inclusive lower bound of the ppm tolerance mass window (integer-scaled mass).
     pub fn lower_mass(&self) -> i64 {
         self.lower_mass
     }
 
+    /// Inclusive upper bound of the ppm tolerance mass window (integer-scaled mass).
     pub fn upper_mass(&self) -> i64 {
         self.upper_mass
     }
 
+    /// Drops the filters already covered by SQL `WHERE` clauses, leaving only the ones
+    /// that must still be checked in-process on returned rows.
     pub fn remove_sqlable_filters(&mut self) {
         self.filter_pipeline.remove_sqlable_filters()
     }

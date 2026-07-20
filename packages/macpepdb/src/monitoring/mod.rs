@@ -30,6 +30,7 @@ static DEFAULT_FILTER: &[(&str, Level)] = &[
     ("tokio_postgres", Level::ERROR),
 ];
 
+/// Errors returned while setting up tracing/metrics monitoring.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Unable to parse filter directive: {0}")]
@@ -107,6 +108,9 @@ impl Display for TracingLogRotation {
     }
 }
 
+/// Owns the handles/guards of all active tracing and metrics targets (log file
+/// writer, Loki task, Prometheus scrape endpoint), keeping them alive for the
+/// program's lifetime.
 #[derive(Default)]
 pub struct Monitoring {
     loki_handler: Option<JoinHandle<()>>,
@@ -115,6 +119,19 @@ pub struct Monitoring {
 }
 
 impl Monitoring {
+    /// Wires up the given tracing and metrics targets as the global `tracing`
+    /// subscriber and `metrics` recorder, then returns a `Monitoring` holding
+    /// whatever handles/guards need to stay alive.
+    ///
+    /// # Arguments
+    /// * `verbosity` - Repeat-count of the CLI `-v` flag; maps to a base log level via
+    ///   [`Monitoring::verbosity_to_log_level`] (or forces trace-everything past 10, see
+    ///   [`Monitoring::is_all_trace`]).
+    /// * `tracing_targets` - The tracing outputs to enable (terminal, TUI, file, Loki,
+    ///   tokio-console); `Terminal` and `Tui` are mutually exclusive.
+    /// * `metric_targets` - The metrics outputs to enable (Prometheus, TUI, periodic
+    ///   tracing log), fanned out to a single global recorder.
+    /// * `tracing_filters` - Per-target level overrides merged over `DEFAULT_FILTER`.
     pub async fn new(
         verbosity: u8,
         tracing_targets: impl Iterator<Item = TracingTarget>,
@@ -269,6 +286,7 @@ impl Monitoring {
         Ok(monitoring)
     }
 
+    /// Maps a `-v` repeat-count to a base `tracing` log level (0 = error, 4+ = trace).
     pub fn verbosity_to_log_level(verbosity: u8) -> Level {
         match verbosity {
             0 => Level::ERROR,
@@ -279,6 +297,7 @@ impl Monitoring {
         }
     }
 
+    /// Whether the verbosity level is high enough to force every filter to `TRACE`.
     pub fn is_all_trace(verbosity: u8) -> bool {
         verbosity >= 10
     }

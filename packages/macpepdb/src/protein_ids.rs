@@ -1,6 +1,7 @@
 use postgres_types::{FromSql, IsNull, ToSql, Type, to_sql_checked};
 use thiserror::Error;
 
+/// Errors returned while decoding a [`ProteinIds`] varint blob.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Truncated varint while decoding protein_ids")]
@@ -67,22 +68,27 @@ fn uvarint_len(mut value: u64) -> usize {
 pub struct ProteinIds(Vec<i32>);
 
 impl ProteinIds {
+    /// Borrows the protein IDs as-is, in their original (unsorted, undeduplicated) order.
     pub fn as_slice(&self) -> &[i32] {
         &self.0
     }
 
+    /// Number of protein IDs (including duplicates, before encoding).
     pub fn len(&self) -> usize {
         self.0.len()
     }
 
+    /// Whether there are no protein IDs.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
+    /// Consumes `self`, returning the protein IDs in their original order.
     pub fn into_vec(self) -> Vec<i32> {
         self.0
     }
 
+    /// Clones the protein IDs into a new `Vec`, in their original order.
     pub fn as_vec(&self) -> Vec<i32> {
         self.0.clone()
     }
@@ -131,6 +137,8 @@ impl ProteinIds {
         Ok(Self(ids))
     }
 
+    /// The byte length [`ProteinIds::encode`] would produce, without allocating the
+    /// encoded blob.
     pub fn encoded_len(&self) -> usize {
         if self.0.is_empty() {
             return 0;

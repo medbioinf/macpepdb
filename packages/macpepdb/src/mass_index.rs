@@ -91,6 +91,7 @@ const _: () = {
 };
 
 impl MassPidPair {
+    /// Packed on-disk/in-memory size of a single pair in bytes (12, see struct docs).
     pub const SIZE: usize = std::mem::size_of::<Self>();
 
     #[inline]
@@ -120,6 +121,7 @@ impl PartialEq for MassPidPair {
     }
 }
 
+/// Errors occurring while building or reading the mass index.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("IO error in mass index: {0}")]
@@ -427,6 +429,7 @@ pub struct MassIndex {
 }
 
 impl MassIndex {
+    /// Returns true if the index has no distinct masses.
     pub fn is_empty(&self) -> bool {
         self.masses.is_empty()
     }
@@ -436,6 +439,7 @@ impl MassIndex {
         self.masses.len()
     }
 
+    /// Total number of `(mass, protein_id)` associations across all masses.
     pub fn num_protein_associations(&self) -> usize {
         self.indptr.last().copied().unwrap_or(0) as usize
     }
@@ -481,6 +485,13 @@ impl MassIndex {
     ///    buckets sized to fit `memory_budget_bytes` when sorted.
     /// 3. Finalize buckets in ascending mass order: sort, dedup, append ids to the on-disk store,
     ///    and accumulate the global `masses`/`indptr` metadata. Oversized buckets sub-spill.
+    ///
+    /// # Arguments
+    /// * `protein_access` - The protein access layer to read the database from.
+    /// * `protease` - The protease to use for digestion.
+    /// * `num_threads` - The number of threads to use for digestion and sorting.
+    /// * `scratch_dir` - The directory to use for temporary files. A subdirectory
+    /// * `memory_budget_bytes` - The maximum amount of memory to use for sorting each bucket. This is used to determine the number of buckets to create.
     pub async fn build(
         protein_access: Arc<Box<dyn IsProteinAccess>>,
         protease: Arc<Protease>,

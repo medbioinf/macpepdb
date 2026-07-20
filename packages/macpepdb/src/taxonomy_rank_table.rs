@@ -5,11 +5,16 @@ use thiserror::Error;
 
 use crate::{client::Client, taxonomy_rank::TaxonomyRank};
 
+/// Metric name for the counter tracking how many taxonomy ranks have been inserted during
+/// [`TaxonomyRankTable::build`].
 pub static INSERTED_RANKS_METRIC: &str = "taxonomy_rank_table::build::inserted_ranks";
 
+/// Name of the `taxonomy_ranks` table.
 pub static TABLE_NAME: &str = "taxonomy_ranks";
 
+/// Name of the `taxonomy_ranks.id` column.
 pub static ID_COL: &str = "id";
+/// Name of the `taxonomy_ranks.name` column.
 pub static NAME_COL: &str = "name";
 
 static COPY_TYPES: [Type; 2] = [
@@ -24,6 +29,7 @@ static COPY_STATEMENT: LazyLock<String> = LazyLock::new(|| {
 // static SELECT_STATEMENT: LazyLock<String> =
 //     LazyLock::new(|| format!("SELECT {ID_COL}, {NAME_COL} FROM {TABLE_NAME}"));
 
+/// Errors occurring while reading, writing, or building the `taxonomy_ranks` table.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Client error in taxonomy rank table: {0}")]
@@ -35,11 +41,13 @@ pub enum Error {
 into_thiserror_boxed!(crate::client::Error, Error, Client);
 into_thiserror_boxed!(crate::taxonomy_rank::Error, Error, Taxonomy);
 
+/// Handle for reading, writing, and building the `taxonomy_ranks` table.
 pub struct TaxonomyRankTable {
     client: Arc<Client>,
 }
 
 impl TaxonomyRankTable {
+    /// Creates a new `TaxonomyRankTable` bound to `client`.
     pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
@@ -67,6 +75,7 @@ impl TaxonomyRankTable {
         Ok(ranks.len())
     }
 
+    /// Builds the `taxonomy_ranks` table by bulk-inserting `ranks` via a single binary COPY.
     pub async fn build(&self, ranks: Vec<TaxonomyRank>) -> Result<(), Error> {
         let counter = metrics::counter!(INSERTED_RANKS_METRIC);
         let count = self.insert_batch(&ranks).await?;

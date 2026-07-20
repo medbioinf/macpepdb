@@ -1,26 +1,34 @@
 const SIGN_BIT64: u64 = 1u64 << 63;
 const SIGN_BIT32: u32 = 1u32 << 31;
 
+/// Converts a `u64` to `i64` by flipping the sign bit, preserving numeric ordering. Used to
+/// store unsigned values in PostgreSQL columns, which has no unsigned integer types.
 pub fn u64_to_i64(v: u64) -> i64 {
     (v ^ SIGN_BIT64) as i64
 }
 
+/// Reverses [`u64_to_i64`].
 pub fn i64_to_u64(v: i64) -> u64 {
     v as u64 ^ SIGN_BIT64
 }
 
+/// Converts a `usize` to `i64` (via [`u64_to_i64`]) for storage in a PostgreSQL `bigint` column.
 pub fn usize_to_i64(v: usize) -> i64 {
     u64_to_i64(v as u64)
 }
 
+/// Reverses [`usize_to_i64`].
 pub fn i64_to_usize(v: i64) -> usize {
     i64_to_u64(v) as usize
 }
 
+/// Converts a `u32` to `i32` by flipping the sign bit, preserving numeric ordering. Used to
+/// store unsigned values in PostgreSQL columns, which has no unsigned integer types.
 pub fn u32_to_i32(v: u32) -> i32 {
     (v ^ SIGN_BIT32) as i32
 }
 
+/// Reverses [`u32_to_i32`].
 pub fn i32_to_u32(v: i32) -> u32 {
     v as u32 ^ SIGN_BIT32
 }

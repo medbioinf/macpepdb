@@ -19,6 +19,7 @@ static NCBI_TAXONOMY_ID_ATTRIBUTE_NAME: &str = "NCBI_TaxID=";
 
 const IS_REVIEWED_BIT: usize = 0;
 
+/// Errors which might occur while parsing, converting or validating a protein
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Taxonomy ID capture `{0}` does not contain ID group")]
@@ -60,6 +61,7 @@ pub enum Error {
     },
 }
 
+/// A protein (or isoform) with its accession, sequence, taxonomy and review status.
 #[derive(Clone, Debug, Serialize)]
 pub struct Protein {
     accession: String,
@@ -72,6 +74,7 @@ pub struct Protein {
 }
 
 impl Protein {
+    /// Creates a new protein.
     pub fn new(
         accession: String,
         id: Option<i32>,
@@ -95,18 +98,22 @@ impl Protein {
         }
     }
 
+    /// Returns the accession.
     pub fn accession(&self) -> &str {
         &self.accession
     }
 
+    /// Returns the sequence.
     pub fn sequence(&self) -> &Sequence {
         &self.sequence
     }
 
+    /// Returns whether the protein is reviewed (SwissProt) or not (TrEMBL).
     pub fn is_reviewed(&self) -> bool {
         (self.flags & (1 << IS_REVIEWED_BIT)) != 0
     }
 
+    /// Returns the database ID, if the protein has already been persisted.
     pub fn id(&self) -> Option<i32> {
         self.id
     }
@@ -115,22 +122,27 @@ impl Protein {
         &mut self.id
     }
 
+    /// Returns the NCBI taxonomy ID.
     pub fn taxonomy_id(&self) -> i32 {
         self.taxonomy_id
     }
 
+    /// Returns the bit flags (e.g. review status).
     pub fn flags(&self) -> i8 {
         self.flags
     }
 
+    /// Returns a reference to the bit flags (e.g. review status).
     pub fn flags_as_ref(&self) -> &i8 {
         &self.flags
     }
 
+    /// Returns the gene names.
     pub fn genes(&self) -> &Vec<String> {
         &self.genes
     }
 
+    /// Estimates the in-memory size of the protein, in bytes.
     pub fn size(&self) -> usize {
         std::mem::size_of::<Self>()
             + std::mem::size_of::<String>()
@@ -166,6 +178,7 @@ impl Protein {
         }
     }
 
+    /// Builds a wire response with the protein's own attributes only (no peptides attached).
     pub fn to_shallow_response(&self) -> ProteinResponse<String> {
         ProteinResponse {
             accession: self.accession.clone(),
@@ -182,6 +195,10 @@ impl Protein {
 /// Splits a UniProt gene-name group value (the part after `=`) on commas that are
 /// outside `{...}` evidence annotations, stripping the annotations and trimming each
 /// gene name. Works in a single pass with no intermediate allocations.
+///
+/// # Arguments
+/// * `s` - The gene-name group value to split and clean.
+///
 fn split_genes_stripping_evidence(s: &str) -> impl Iterator<Item = String> + '_ {
     let mut chars = s.chars();
     let mut depth = 0usize;
@@ -308,6 +325,10 @@ impl TryFrom<Row> for Protein {
     }
 }
 
+/// Extracts the NCBI taxonomy ID from a UniProt organism taxonomy cross-reference string.
+///
+/// # Arguments
+/// * `organism_taxonomy_cross_reference` - The UniProt organism taxonomy cross-reference string.
 fn taxonomy_id_from_organism_taxonomy_cross_reference(
     organism_taxonomy_cross_reference: &str,
 ) -> Result<i32, Error> {
@@ -394,14 +415,17 @@ pub struct Variants {
 }
 
 impl Variants {
+    /// Returns `true` if there are no proteins (canonical or isoform) in this collection.
     pub fn is_empty(&self) -> bool {
         self.proteins.is_empty()
     }
 
+    /// Returns the number of proteins (canonical and isoforms) in this collection.
     pub fn len(&self) -> usize {
         self.proteins.len()
     }
 
+    /// Returns the canonical protein and its isoforms.
     pub fn proteins(&self) -> &[Protein] {
         &self.proteins
     }

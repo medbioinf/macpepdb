@@ -24,9 +24,11 @@ use crate::{
 
 const PROGRESS_REPORT_EVERY: u64 = 8192;
 
+/// Progress of loading all proteins into memory ahead of the mass-index/peptide build stages.
 pub static IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS: &str =
     "database::build::load_proteins_into_memory";
 
+/// Errors occurring while running the protein/mass-index/peptide build pipeline.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Blob table error in database build: {0}")]
@@ -75,6 +77,10 @@ into_thiserror_boxed!(crate::taxonomy_table::Error, Error, TaxonomyTable);
 into_thiserror_boxed!(crate::taxonomy_rank::Error, Error, TaxonomyRank);
 into_thiserror_boxed!(crate::taxonomy_rank_table::Error, Error, TaxonomyRankTable);
 
+/// Maps a peptide mass to the partition(s) that hold peptides of that mass. Split into a dense,
+/// sorted array for the common case of one partition per mass (`single`) and a sparse map for
+/// masses that overflow into several partitions (`overflow`), so range queries over `single` can
+/// binary-search instead of scanning every mass.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MassPartitionMap {
     /// Masses partition array
@@ -84,6 +90,11 @@ pub struct MassPartitionMap {
 }
 
 impl MassPartitionMap {
+    /// Returns the `(mass, partition)` pairs for every mass in `[lower_mass, upper_mass]`.
+    ///
+    /// # Arguments
+    /// * `lower_mass` - Lower bound of the mass range (inclusive)
+    /// * `upper_mass` - Upper bound of the mass range (inclusive)
     pub fn partitions_by_mass_range(
         &self,
         lower_mass: i64,
@@ -101,6 +112,10 @@ impl MassPartitionMap {
         )
     }
 
+    /// Returns the `(mass, partition)` pairs for a single, exact `mass`.
+    ///
+    /// # Arguments
+    /// * `mass` - The exact mass to look up partitions for
     pub fn partition_by_mass(&self, mass: i64) -> impl Iterator<Item = (i64, i64)> {
         let start = self.single.partition_point(|(m, _)| *m < mass);
         let end = self.single.partition_point(|(m, _)| *m <= mass);
@@ -143,18 +158,31 @@ impl From<HashMap<i64, Vec<i64>>> for MassPartitionMap {
 type BoxedPeptideStreamFuture<'a> =
     BoxFuture<'a, Result<BoxStream<'a, Result<Arc<Protein>, Error>>, Error>>;
 
+/// Abstracts how the build pipeline reads back proteins for digestion, so the mass-index and
+/// peptide stages don't need to care whether proteins were kept in memory (`InMemoryProteinAccess`)
+/// or are re-read from the database (`DatabaseProteinAccess`).
 pub trait IsProteinAccess: Send + Sync {
+    /// Streams the proteins matching the given `ids`, in no particular order.
+    ///
+    /// # Arguments
+    /// * `ids` - Protein IDs to fetch
     fn by_ids<'a>(&'a self, ids: &'a [i32]) -> BoxedPeptideStreamFuture<'a>;
+    /// Streams every protein.
     fn all<'a>(&'a self) -> BoxedPeptideStreamFuture<'a>;
+    /// Returns the total number of proteins.
     fn count<'a>(&'a self) -> BoxFuture<'a, Result<usize, Error>>;
+    /// Returns the IDs of every protein.
     fn ids<'a>(&'a self) -> BoxFuture<'a, Result<Vec<i32>, Error>>;
 }
 
+/// Reads proteins back from the `proteins` table on demand. Used when the protein set is too
+/// large to fit within `--proteins-memory-limit`.
 pub struct DatabaseProteinAccess {
     protein_table: ProteinTable,
 }
 
 impl DatabaseProteinAccess {
+    /// Creates a new instance backed by the given database client.
     pub fn new(client: Arc<Client>) -> Self {
         Self {
             protein_table: ProteinTable::new(client),
@@ -204,11 +232,19 @@ impl IsProteinAccess for DatabaseProteinAccess {
     }
 }
 
+/// Holds every protein in memory, keyed by ID, behind an `Arc` for cheap cloning. Used when
+/// the whole protein set fits within `--proteins-memory-limit`; greatly speeds up digestion but
+/// competes with the mass index for RAM.
 pub struct InMemoryProteinAccess {
     proteins: HashMap<i32, Arc<Protein>>,
 }
 
 impl InMemoryProteinAccess {
+    /// Loads all proteins from the database into memory, in parallel chunks of the ID range.
+    ///
+    /// # Arguments
+    /// * `client` - Database client
+    ///
     pub async fn new(client: Arc<Client>) -> Result<Self, Error> {
         let progress_counter_metric = Arc::new(counter!(IN_MEMORY_PROTEIN_ACCESS_BUILD_PROGRESS));
         let protein_count = ProteinTable::new(client.clone()).count().await?;
@@ -304,6 +340,8 @@ impl IsProteinAccess for InMemoryProteinAccess {
     }
 }
 
+/// Drives the three-stage build pipeline (proteins, mass index, peptides) plus the optional
+/// taxonomy tree, and produces the `RuntimeConfiguration` to persist afterwards.
 pub struct DatabaseBuild<'a> {
     client: Arc<Client>,
     comment: Option<String>,
@@ -323,6 +361,25 @@ pub struct DatabaseBuild<'a> {
 }
 
 impl<'a> DatabaseBuild<'a> {
+    /// Creates a new build, ready to run via [`DatabaseBuild::start`].
+    ///
+    /// # Arguments
+    /// * `client` - Database client
+    /// * `comment` - Optional comment stored in the resulting configuration
+    /// * `protein_file_paths` - UniProt protein files to digest
+    /// * `protease` - Protease to digest proteins with
+    /// * `batch_size_limit` - Max size (KB) of a batch insert
+    /// * `concurrent_batch_size` - Number of concurrent inserts for non-partitioned batches
+    /// * `proteins_memory_limit` - Fraction of free RAM allowed for keeping proteins in memory;
+    ///   above this, proteins are re-read from the database instead
+    /// * `skip_proteins` - Skip inserting proteins (assumes they already exist in the database)
+    /// * `skip_protein_associations` - Skip collecting protein associations per peptide
+    /// * `skip_taxonomies` - Skip collecting taxonomies per peptide
+    /// * `num_threads` - Number of concurrent worker threads
+    /// * `taxonomy_dump_file_path` - Optional NCBI taxonomy dump to build the taxonomy tree from
+    /// * `resolve_isoforms` - Whether to resolve isoforms from alternate products
+    /// * `scratch_dir` - Directory for the mass-index build's scratch files
+    /// * `tui` - Optional TUI handle to report progress metrics to
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         client: Arc<Client>,
@@ -360,6 +417,9 @@ impl<'a> DatabaseBuild<'a> {
         }
     }
 
+    /// Runs the full build: inserts (or reuses) proteins, builds the mass index, digests
+    /// peptides and upserts them, persists the resulting configuration as a blob, and builds
+    /// the taxonomy tree if a dump file was given.
     pub async fn start(&self) -> Result<RuntimeConfiguration, Error> {
         // 1. set insert proteins or get access to them
         let (protein_ctr, proteins_size) = if !self.skip_proteins {
@@ -601,6 +661,8 @@ impl<'a> DatabaseBuild<'a> {
         (sys.available_memory() as f64 * self.proteins_memory_limit) as usize
     }
 
+    /// Reads the configured NCBI taxonomy dump (if any) and builds the taxonomy ranks and
+    /// taxonomies tables from it; a no-op if no dump file was configured.
     pub async fn build_taxonomy_tree(&self) -> Result<(), Error> {
         if let Some(taxonomy_dump_file_path) = &self.taxonomy_dump_file_path {
             let taxonomy_tree = TaxonomyReader::new(taxonomy_dump_file_path)

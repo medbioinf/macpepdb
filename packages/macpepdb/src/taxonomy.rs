@@ -23,6 +23,8 @@ pub enum Error {
 
 into_thiserror_boxed!(tokio_postgres::Error, Error, Row);
 
+/// An NCBI taxonomy node as stored in and read from the database (ID, parent ID, scientific
+/// name, and rank).
 #[derive(Clone, Deserialize, Serialize)]
 pub struct Taxonomy {
     id: i32,
@@ -33,6 +35,8 @@ pub struct Taxonomy {
 }
 
 impl Taxonomy {
+    /// Creates a new taxonomy record. `rank_name` may be `None` when the caller hasn't joined
+    /// the rank name in (see [`Taxonomy::rank_name`]).
     pub fn new(
         id: i32,
         parent_id: i32,
@@ -49,34 +53,42 @@ impl Taxonomy {
         }
     }
 
+    /// Returns the taxonomy ID.
     pub fn id(&self) -> i32 {
         self.id
     }
 
+    /// Returns a reference to the taxonomy ID.
     pub fn id_as_ref(&self) -> &i32 {
         &self.id
     }
 
+    /// Returns the ID of the parent taxonomy node.
     pub fn parent_id(&self) -> i32 {
         self.parent_id
     }
 
+    /// Returns a reference to the ID of the parent taxonomy node.
     pub fn parent_id_as_ref(&self) -> &i32 {
         &self.parent_id
     }
 
+    /// Returns the scientific name.
     pub fn scientific_name(&self) -> &String {
         &self.scientific_name
     }
 
+    /// Returns the ID of the taxonomic rank (see `TaxonomyRank`).
     pub fn rank_id(&self) -> i16 {
         self.rank_id
     }
 
+    /// Returns a reference to the ID of the taxonomic rank.
     pub fn rank_id_as_ref(&self) -> &i16 {
         &self.rank_id
     }
 
+    /// Returns the taxonomic rank's name, if it was fetched/joined in alongside this row.
     pub fn rank_name(&self) -> Option<&str> {
         self.rank_name.as_deref()
     }

@@ -20,6 +20,7 @@ static SHOW_AMINO_ACID_PATH: &str = "/amino-acids/{code}";
 static AMINO_ACIDS_PATH: &str = "/amino-acids";
 static HYDROPHOBICITY_KROKHIN_PATH: &str = "/hydrophobicity/krokhin/{sequence}";
 
+/// Errors that can occur while handling chemistry endpoints.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Amino acid error: {0}")]
@@ -49,9 +50,11 @@ impl IntoResponse for Error {
     }
 }
 
+/// Controller providing chemistry related endpoints (amino acids, hydrophobicity) under `/api/chemistry`.
 pub struct ChemistryController;
 
 impl ChemistryController {
+    /// Builds the axum router for the chemistry endpoints, mounted onto the given server state.
     pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
         let router: Router<Arc<ServerState>> = Router::new()
             .route(AMINO_ACIDS_PATH, get(Self::amino_acids))
@@ -64,6 +67,7 @@ impl ChemistryController {
         router.with_state(state)
     }
 
+    /// Returns the base path this controller is mounted on (`/api/chemistry`).
     pub fn controller_path() -> &'static str {
         CONTROLLER_PATH
     }

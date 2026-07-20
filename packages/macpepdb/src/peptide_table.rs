@@ -25,6 +25,7 @@ use crate::{
     stats_table::StatsTable,
 };
 
+/// Name of the columnar, `partition`-distributed table holding peptides.
 pub const TABLE_NAME: &str = "peptides";
 
 /// Rows per columnar stripe. The build COPYs exactly this many rows per partition so
@@ -48,12 +49,16 @@ const MAX_PARTITION_BYTES: usize = 256 * 1024 * 1024;
 /// tail but more partitions. A few × `STRIPE_ROW_LIMIT` keeps both comfortably in range.
 const TARGET_ASSOCIATIONS_PER_CLAIM: u64 = 16 * STRIPE_ROW_LIMIT as u64;
 
+/// Name of the `peptides.partition` column (the Citus distribution column).
 pub const PARTITION_COL: &str = "partition";
 
+/// Name of the `peptides.mass` column (integer-scaled monoisotopic mass).
 pub const MASS_COL: &str = "mass";
 
+/// Name of the `peptides.flags` column.
 pub const FLAGS_COLUMN: &str = "flags";
 
+/// Comma-separated list of all `peptides` columns, in the order used by `SELECT`/`COPY`.
 pub const COLUMNS: &str = "partition, mass, sequence, amino_acid_counts, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
 
 static COPY_STATEMENT: LazyLock<String> =
@@ -77,9 +82,14 @@ static COPY_TYPES: LazyLock<[Type; 8]> = LazyLock::new(|| {
 static SELECT_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {COLUMNS} FROM {TABLE_NAME}"));
 
+/// Metric name for the gauge tracking protein-association digestion progress during
+/// [`PeptideTable::build_concurrently`].
 pub static PROGRESS_METRIC: &str = "peptides_table::build::progress";
+/// Metric name for the counter tracking how many peptides have been inserted during
+/// [`PeptideTable::build_concurrently`].
 pub static INSERTED_PEPTIDES_METRIC: &str = "peptides_table::build::inserted_peptides";
 
+/// Errors occurring while reading, writing, or building the `peptides` table.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Client error in peptide table: {0}")]
@@ -187,11 +197,13 @@ impl TryFrom<(CompactSequence, PeptideMetadata, bool)> for Peptide {
     }
 }
 
+/// Handle for reading, writing, and building the columnar, mass-partitioned `peptides` table.
 pub struct PeptideTable {
     client: Arc<Client>,
 }
 
 impl PeptideTable {
+    /// Creates a new `PeptideTable` bound to `client`.
     pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
@@ -270,6 +282,7 @@ impl PeptideTable {
         }))
     }
 
+    /// Returns the total peptide count recorded in the `stats` table (see [`StatsTable`]).
     pub async fn count(&self) -> Result<usize, Error> {
         StatsTable::new(self.client.clone())
             .select_peptide_count()
@@ -278,6 +291,19 @@ impl PeptideTable {
             .ok_or(Error::CountNotFound)
     }
 
+    /// Builds the `peptides` table from a previously built [`MassIndex`]: `num_threads` workers
+    /// each claim disjoint, contiguous, work-balanced chunks of the mass-sorted index, re-digest
+    /// the proteins for every mass in their chunk, and batch-insert the resulting peptides one
+    /// columnar stripe (partition) at a time. Returns the number of peptides inserted and the
+    /// resulting `mass -> partitions` map (to be persisted in the `Configuration`).
+    ///
+    /// # Arguments
+    /// * `protein_access` - Source of protein data by id (in-memory or DB-backed)
+    /// * `skip_protein_associations` - If `true`, don't store which proteins a peptide came from
+    /// * `skip_taxonomies` - If `true`, don't store unique/non-unique taxonomy id associations
+    /// * `protease` - Protease used to (re-)digest proteins per mass
+    /// * `num_threads` - Number of concurrent digest-and-insert worker tasks
+    /// * `mass_index` - The mass -> protein-associations index built in the previous build stage
     #[allow(clippy::too_many_arguments)]
     pub async fn build_concurrently(
         &self,

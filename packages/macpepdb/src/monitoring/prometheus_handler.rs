@@ -13,6 +13,7 @@ use tower_http::cors::CorsLayer;
 
 static UPDATE_INTERVAL: Duration = Duration::from_millis(1000);
 
+/// Errors returned while starting the Prometheus scrape endpoint.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Unable to open socket for prometheus scrape endoint: {0}")]
@@ -21,12 +22,21 @@ pub enum Error {
     Serve(std::io::Error),
 }
 
+/// Runs the `/metrics` HTTP scrape endpoint and a periodic upkeep task for a
+/// Prometheus recorder, keeping both background tasks alive for as long as this
+/// handler is held.
 pub struct PrometheusHandler {
     _exporter: JoinHandle<Result<(), Error>>,
     _upkeeper: JoinHandle<()>,
 }
 
 impl PrometheusHandler {
+    /// Starts the scrape endpoint and upkeep task.
+    ///
+    /// # Arguments
+    /// * `recorder_handle` - Handle to the Prometheus recorder whose metrics are rendered.
+    /// * `socket_addr` - Address the scrape endpoint (`GET /metrics`) listens on.
+    /// * `shutdown_signal` - Future that, once ready, gracefully shuts down the scrape server.
     pub async fn new(
         recorder_handle: PrometheusHandle,
         socket_addr: SocketAddr,

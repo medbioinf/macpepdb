@@ -1,6 +1,7 @@
 /// Constant factor for float conversion to integer.
 pub const MASS_CONVERT_FACTOR: f64 = 1_000_000_000.0;
 
+/// Mass of a proton in Dalton, used to convert between m/z and neutral mass.
 pub const PROTON_MASS_DA: f64 = 1.007276466621;
 
 /// Converts a mass (Dalton) into the internal integer representation.
@@ -32,6 +33,12 @@ pub fn to_float(mass: i64) -> f64 {
     mass as f64 / MASS_CONVERT_FACTOR
 }
 
+/// Converts an m/z value at a given charge into the corresponding neutral mass in Dalton.
+///
+/// # Arguments
+///
+/// * `mz` - Mass-to-charge ratio
+/// * `charge` - Charge state
 pub fn mass_to_charge_to_dalton(mz: f64, charge: u8) -> f64 {
     let charge = charge as f64;
     mz * charge - PROTON_MASS_DA * charge

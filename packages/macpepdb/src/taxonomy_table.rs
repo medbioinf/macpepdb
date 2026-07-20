@@ -17,16 +17,24 @@ use crate::{
     },
 };
 
+/// Metric name for the counter tracking how many taxonomies have been inserted during
+/// [`TaxonomyTable::build`].
 pub static INSERTED_TAXONOMIES_METRIC: &str = "taxonomy_table::build::inserted_taxonomies";
 
+/// Name of the `taxonomies` table.
 pub static TABLE_NAME: &str = "taxonomies";
 
+/// Name of the `taxonomies.id` column.
 pub static ID_COL: &str = "id";
+/// Name of the `taxonomies.parent_id` column.
 pub static PARENT_ID_COL: &str = "parent_id";
+/// Name of the `taxonomies.scientific_name` column.
 pub static SCIENTIFIC_NAME_COL: &str = "scientific_name";
+/// Name of the `taxonomies.rank_id` column.
 pub static RANK_ID_COL: &str = "rank_id";
 
-// Alias for the rank name colum when joining with the taxonomy rank table to avoid ambiguity in the SELECT statement.
+/// Alias for the rank name column when joining with the taxonomy rank table, to avoid
+/// ambiguity in the SELECT statement.
 pub static RANK_NAME_ALIAS_COL: &str = "rank_name";
 
 static COPY_TYPES: [Type; 4] = [
@@ -48,6 +56,10 @@ static SELECT_WITH_RANK_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+/// Recursive CTE query to select all species-rank descendants of a given taxonomy ID, walking the
+/// `parent_id` tree downward. The rank name is not joined in, since the recursive
+/// query already filters on the species rank ID, so the rank name is filled in manually in
+/// [`TaxonomyTable::select_sub_species`].
 static SELECT_SUB_TAXONOMIES_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
         "WITH RECURSIVE subtaxonomies AS (
@@ -61,6 +73,7 @@ static SELECT_SUB_TAXONOMIES_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+/// Errors occurring while reading, writing, or building the `taxonomies` table.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Client error in taxonomy rank table: {0}")]
@@ -75,11 +88,13 @@ into_thiserror_boxed!(crate::client::Error, Error, Client);
 into_thiserror_boxed!(tokio_postgres::Error, Error, Row);
 into_thiserror_boxed!(crate::taxonomy::Error, Error, Taxonomy);
 
+/// Handle for reading, writing, and building the `taxonomies` table.
 pub struct TaxonomyTable {
     client: Arc<Client>,
 }
 
 impl TaxonomyTable {
+    /// Creates a new `TaxonomyTable` bound to `client`.
     pub fn new(client: Arc<Client>) -> Self {
         Self { client }
     }
@@ -117,6 +132,8 @@ impl TaxonomyTable {
         Ok(taxonomies.len())
     }
 
+    /// Streams taxonomies matching `where_clause` (e.g. `WHERE id = $1`), binding `params`
+    /// positionally. Each row is joined against `taxonomy_ranks` to include the rank name.
     pub async fn select_with_rank(
         &self,
         where_clause: &str,
@@ -131,6 +148,12 @@ impl TaxonomyTable {
         }))
     }
 
+    /// Streams the species-rank descendants of `taxonomy_id` by walking the `parent_id` tree
+    /// downward with a recursive CTE. The rank name is filled in manually as `"species"` rather
+    /// than joined, since the recursive query already filters on the species rank id.
+    ///
+    /// # Arguments
+    /// * `taxonomy_id` - Id of the ancestor taxonomy whose species-level descendants to find
     pub async fn select_sub_species(
         &self,
         taxonomy_id: i32,
@@ -154,6 +177,9 @@ impl TaxonomyTable {
         }))
     }
 
+    /// Builds the `taxonomies` table by inserting `taxonomies` in a single transaction, in
+    /// 20,000-row chunks. The `parent_id` foreign key check is deferred to commit time so rows
+    /// can be inserted in any order regardless of parent/child ordering.
     pub async fn build(&self, taxonomies: Vec<Taxonomy>) -> Result<(), Error> {
         let counter = metrics::counter!(INSERTED_TAXONOMIES_METRIC);
 

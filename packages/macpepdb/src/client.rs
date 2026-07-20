@@ -29,6 +29,7 @@ const DEFAULT_POOL_SIZE: usize = 16;
 /// unbounded, so this surfaces a persistently failing cluster without spamming.
 const RETRY_WARN_INTERVAL: u32 = 20;
 
+/// Errors returned by [`Client`] and its connection/pool setup.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Invalid database URL: {0}")]
@@ -192,6 +193,10 @@ pub struct OwnedBinaryCopy {
 impl OwnedBinaryCopy {
     /// Write one row. `values` must match the column types passed to
     /// [`Client::copy_in_binary`], in order.
+    ///
+    /// # Arguments
+    /// * `values` - The values to write
+    ///
     pub async fn write(&mut self, values: &[&(dyn ToSql + Sync)]) -> Result<(), Error> {
         self.writer
             .as_mut()
@@ -207,11 +212,18 @@ impl OwnedBinaryCopy {
     }
 }
 
+/// PostgreSQL/Citus client backed by a deadpool connection pool, with a congestion
+/// gate and retry-on-transient-error wrapping all writes.
 pub struct Client {
+    /// Connection pool
     pool: Pool,
+    /// Database name
     database: String,
+    /// Original connection URL
     url: String,
+    /// Number of nodes
     num_nodes: usize,
+    /// Concurrency gate for writes, with jittered backoff on transient errors.
     congestion: CongestionController,
 }
 
@@ -250,18 +262,22 @@ impl Client {
         })
     }
 
+    /// Name of the database this client is connected to.
     pub fn database(&self) -> &str {
         &self.database
     }
 
+    /// The database URL this client was created from.
     pub fn url(&self) -> &str {
         &self.url
     }
 
+    /// Number of distinct hosts parsed from the connection URL.
     pub fn num_nodes(&self) -> usize {
         self.num_nodes
     }
 
+    /// The congestion gate guarding writes through [`Client::run_congested`].
     pub fn congestion(&self) -> &CongestionController {
         &self.congestion
     }
@@ -274,6 +290,10 @@ impl Client {
     /// Runs `op` under the congestion gate: acquires a slot, executes, and on a
     /// transient error retries with jittered backoff (writes are idempotent here).
     /// Deterministic errors are propagated immediately.
+    ///
+    /// # Arguments
+    /// * `op` - The operation to run under the congestion gate. Must return a `Result<T, Error>`.
+    ///
     pub async fn run_congested<T, F, Fut>(&self, mut op: F) -> Result<T, Error>
     where
         F: FnMut() -> Fut,
@@ -300,6 +320,11 @@ impl Client {
 
     /// Prepares (cached) and executes a statement, returning the affected row count.
     /// Retries transient failures via the congestion gate.
+    ///
+    /// # Arguments
+    /// * `sql` - The SQL statement to execute
+    /// * `params` - The parameters to bind to the statement
+    ///
     pub async fn execute(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64, Error> {
         self.run_congested(|| async {
             let conn = self.get().await?;
@@ -311,6 +336,11 @@ impl Client {
 
     /// Prepares (cached) and runs a query, collecting all rows. For small result
     /// sets (single-peptide lookups, blob parts, stats). Retries transient failures.
+    ///
+    /// # Arguments
+    /// * `sql` - The SQL statement to execute
+    /// * `params` - The parameters to bind to the statement
+    ///
     pub async fn query(
         &self,
         sql: &str,
@@ -327,6 +357,11 @@ impl Client {
     /// Opens a streaming query, holding a connection (and concurrency permit) for the
     /// lifetime of the returned stream. Used for large search result sets. Not
     /// retried — a failed read surfaces to the caller.
+    ///
+    /// # Arguments
+    /// * `sql` - The SQL statement to execute
+    /// * `params` - The parameters to bind to the statement
+    ///
     pub async fn query_stream(
         &self,
         sql: &str,
@@ -385,6 +420,10 @@ impl Client {
     /// inlined-literal query plans in ~0.2 ms because the coordinator can prune shards
     /// and columnar chunk groups at plan time. Since the SQL is unique per call, caching
     /// it would also grow the per-connection statement cache without bound.
+    ///
+    /// # Arguments
+    /// * `sql` - The SQL statement to execute without placeholders
+    ///
     pub async fn query_stream_inline(&self, sql: &str) -> Result<OwnedRowStream, Error> {
         let t0 = std::time::Instant::now();
         let permit = self.congestion.acquire().await;
@@ -419,6 +458,11 @@ impl Client {
     /// writes rows and calls [`OwnedBinaryCopy::finish`]. Wrap the whole
     /// build-row-write-finish in [`Client::run_congested`] for retry on transient
     /// failures (COPY is one transaction, so a failed attempt rolls back cleanly).
+    ///
+    /// # Arguments
+    /// * `copy_sql` - The `COPY ... FROM STDIN (FORMAT binary)` SQL statement
+    /// * `column_types` - The column types in order, used to validate the written rows
+    ///
     pub async fn copy_in_binary(
         &self,
         copy_sql: &str,
@@ -434,8 +478,11 @@ impl Client {
     }
 }
 
+/// Gauge name for the [`CongestionController`]'s fixed concurrency window size.
 pub static CONGESTION_WINDOW_METRIC: &str = "client::congestion::window";
+/// Gauge name for the [`CongestionController`]'s current number of in-flight operations.
 pub static CONGESTION_IN_FLIGHT_METRIC: &str = "client::congestion::in_flight";
+/// Counter name for the [`CongestionController`]'s transient-error retries.
 pub static CONGESTION_RETRY_METRIC: &str = "client::congestion::retries";
 
 /// A fixed-size concurrency gate plus jittered backoff. Unlike the Cassandra-era
@@ -459,6 +506,11 @@ struct ControllerInner {
 }
 
 impl CongestionController {
+    /// Creates a controller with a fixed concurrency window of `window` slots.
+    ///
+    /// # Arguments
+    /// * `window` - The maximum number of concurrent operations allowed. Must be at least
+    ///
     pub fn new(window: usize) -> Self {
         let limit = window.max(1);
         let window_gauge = metrics::gauge!(CONGESTION_WINDOW_METRIC);
@@ -478,6 +530,8 @@ impl CongestionController {
         }
     }
 
+    /// Blocks until a concurrency slot is free, then returns an RAII permit that
+    /// releases the slot on drop.
     pub async fn acquire(&self) -> CongestionPermit {
         let permit = self
             .inner
@@ -501,10 +555,12 @@ impl CongestionController {
         }
     }
 
+    /// The fixed concurrency window size (the number of slots the gate was created with).
     pub fn window(&self) -> usize {
         self.inner.limit
     }
 
+    /// The number of concurrency slots currently checked out.
     pub fn in_flight(&self) -> usize {
         *self
             .inner

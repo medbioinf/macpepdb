@@ -23,6 +23,7 @@ static TAXONOMY_PATH: &str = "/{id}";
 static SUB_SPECIES_PATH: &str = "/{id}/sub";
 static SEARCH_TAXONOMIES_PATH: &str = "/search";
 
+/// Errors that can occur while handling taxonomy endpoints.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Taxonomy error: {0}")]
@@ -66,9 +67,11 @@ impl IntoResponse for Error {
     }
 }
 
+/// Controller providing taxonomy lookup and search endpoints under `/api/taxonomies`.
 pub struct TaxonomyController;
 
 impl TaxonomyController {
+    /// Builds the axum router for the taxonomy endpoints, mounted onto the given server state.
     pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
         let router: Router<Arc<ServerState>> = Router::new()
             .route(TAXONOMY_PATH, get(Self::taxonomy))
@@ -78,6 +81,7 @@ impl TaxonomyController {
         router.with_state(state)
     }
 
+    /// Returns the base path this controller is mounted on (`/api/taxonomies`).
     pub fn controller_path() -> &'static str {
         CONTROLLER_PATH
     }
@@ -93,7 +97,7 @@ impl TaxonomyController {
     /// * Method: `GET`
     ///
     /// ## Response
-    /// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](crate::web::peptide_controller::get_peptide).
+    /// Peptides are formatted as mentioned in the [`show`-endpoint](crate::web::peptide_controller::PeptideController::show).
     /// ```json
     /// {
     ///    "id": 9606,

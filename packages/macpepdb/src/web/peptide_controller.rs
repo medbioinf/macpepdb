@@ -39,6 +39,7 @@ static SEARCH_POST_PATH: &str = "/search";
 static EXISTS_PATH: &str = "/{sequence}/exists";
 static SHOW_PATH: &str = "/{sequence}";
 
+/// Errors that can occur while handling peptide endpoints.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Peptide error: {0}")]
@@ -95,9 +96,11 @@ impl IntoResponse for Error {
 }
 
 // TODO: Adjust all controller methods to return error instread ok Ok(body) with error message.
+/// Controller providing peptide lookup and mass search endpoints under `/api/peptides`.
 pub struct PeptideController;
 
 impl PeptideController {
+    /// Builds the axum router for the peptide endpoints, mounted onto the given server state.
     pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
         let router: Router<Arc<ServerState>> = Router::new()
             .route(SEARCH_POST_PATH, post(Self::search_by_post_request))
@@ -108,6 +111,7 @@ impl PeptideController {
         router.with_state(state)
     }
 
+    /// Returns the base path this controller is mounted on (`/api/peptides`).
     pub fn controller_path() -> &'static str {
         CONTROLLER_PATH
     }
@@ -295,7 +299,7 @@ impl PeptideController {
     ///    ...
     /// ]
     /// ```
-    /// Peptides are formatted as mentioned in the [`get_peptide`-endpoint](get_peptide) + attribute `additional_sequences` if `resolve_modifications` is true.
+    /// Peptides are formatted as mentioned in the [`show`-endpoint](PeptideController::show) + attribute `additional_sequences` if `resolve_modifications` is true.
     ///
     /// ### `text/tsv`
     /// ```tsv
@@ -361,8 +365,8 @@ impl PeptideController {
     /// # API
     /// ## Request
     /// * Path: `/api/peptides/search/:playload/:accept`
-    ///     * `:accept`: Allowed are the same values like in [post_search] Accept-header, but urlsafe encoded
-    ///     * `:payload`: The payload as urlsafe base64 encoded JSON string, see [post_search]
+    ///     * `:accept`: Allowed are the same values like in [`PeptideController::search_by_post_request`] Accept-header, but urlsafe encoded
+    ///     * `:payload`: The payload as urlsafe base64 encoded JSON string, see [`PeptideController::search_by_post_request`]
     /// * Method: `GET`
     ///
     ///

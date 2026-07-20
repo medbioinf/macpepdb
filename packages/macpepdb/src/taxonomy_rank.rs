@@ -3,6 +3,8 @@ use tokio_postgres::Row;
 
 use crate::taxonomy_rank_table::{ID_COL, NAME_COL};
 
+/// Rank name for the "species" rank, used to manually tag taxonomy nodes as species-level
+/// without a join (see recursive taxonomy tree queries).
 pub static SPECIES: &str = "species";
 
 #[derive(Debug, Error)]
@@ -15,24 +17,29 @@ pub enum Error {
 
 into_thiserror_boxed!(tokio_postgres::Error, Error, Row);
 
+/// A taxonomic rank (e.g. species, genus, family) as stored in and read from the database.
 pub struct TaxonomyRank {
     id: i16,
     name: String,
 }
 
 impl TaxonomyRank {
+    /// Creates a new taxonomy rank record.
     pub fn new(id: i16, name: String) -> Self {
         TaxonomyRank { id, name }
     }
 
+    /// Returns the rank ID.
     pub fn id(&self) -> i16 {
         self.id
     }
 
+    /// Returns a reference to the rank ID.
     pub fn id_as_ref(&self) -> &i16 {
         &self.id
     }
 
+    /// Returns the rank's name (e.g. `"species"`, `"genus"`).
     pub fn name(&self) -> &String {
         &self.name
     }

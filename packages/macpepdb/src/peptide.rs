@@ -17,9 +17,15 @@ use crate::{
     },
 };
 
+/// Number of slots in a peptide's amino-acid count array, one per letter `A..=Z`
+/// (amino acid bit codes are indexed by `char - 'A'`).
 pub const MAX_AMINO_ACID_BIT_CODE: usize = (b'Z' - b'A' + 1) as usize;
 
+/// Bit index in a `Peptide`/`Peptidoform`'s flags marking it as originating from at least
+/// one reviewed (SwissProt) protein.
 pub const IS_SWISS_PROT_BIT: usize = 0;
+/// Bit index in a `Peptide`/`Peptidoform`'s flags marking it as originating from at least
+/// one unreviewed (TrEMBL) protein.
 pub const IS_TREMBL_BIT: usize = 1;
 
 #[derive(Debug, Error)]
@@ -36,35 +42,51 @@ pub enum Error {
     AminoAcid(#[from] crate::amino_acid::Error),
 }
 
+/// Trait defining the behavior shared by [`Peptide`] and [`Peptidoform`]
+///
 pub trait IsPeptide: Send + Sync {
+    /// Concrete sequence representation backing this peptide kind.
     type Sequence: IsSimpleSequence;
 
+    /// Returns the sequence.
     fn sequence(&self) -> &Self::Sequence;
+    /// Returns the mono-isotopic mass in integer form (see `mass::to_int`).
     fn mass(&self) -> i64;
+    /// Returns whether the peptide originates from at least one reviewed (SwissProt) protein.
     fn is_swiss_prot(&self) -> bool;
+    /// Returns whether the peptide originates from at least one unreviewed (TrEMBL) protein.
     fn is_trembl(&self) -> bool;
 
+    /// Returns the per-amino-acid occurrence counts, indexed by amino acid bit code.
     fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE];
 
+    /// Returns how often `amino_acid` occurs in the sequence.
     fn amino_acid_count(&self, amino_acid: &'static AminoAcid) -> u8 {
         self.amino_acid_counts()[amino_acid.counts_idx()]
     }
 
+    /// Returns how often the amino acid with the given one-letter `code` occurs in the sequence.
     fn amino_acid_count_by_code(&self, code: char) -> Result<u8, Error> {
         let amino_acid = AminoAcid::by_code(code)?;
         Ok(self.amino_acid_count(amino_acid))
     }
 
+    /// Returns how often the amino acid with the given bit `code` occurs in the sequence.
     fn amino_acid_count_by_bit_code(&self, code: AminoAcidBitCode) -> u8 {
         let amino_acid = AminoAcid::by_bit_code(&code);
         self.amino_acid_count(amino_acid)
     }
 
+    /// Returns the IDs of taxa in which this peptide occurs in exactly one protein (i.e. it
+    /// uniquely identifies that taxon).
     fn unique_taxonomy_ids(&self) -> &[i32];
 
+    /// Returns the IDs of taxa in which this peptide occurs in more than one protein.
     fn non_unique_taxonomy_ids(&self) -> &[i32];
 }
 
+/// A peptide as stored in and read from the database: an unmodified amino acid sequence plus
+/// the protein/taxonomy associations and review-status flags accumulated during the build.
 #[derive(Serialize)]
 pub struct Peptide {
     partition: Option<i64>,
@@ -80,6 +102,16 @@ pub struct Peptide {
 }
 
 impl Peptide {
+    /// Builds a new peptide from its sequence and the protein/taxonomy associations gathered
+    /// during digestion. `mass` and the review-status flags are derived automatically.
+    ///
+    /// # Arguments
+    /// * `sequence` - The peptide's amino acid sequence
+    /// * `protein_ids` - IDs of the proteins the peptide was cleaved from
+    /// * `unique_taxonomy_ids` - IDs of taxa in which the peptide occurs in exactly one protein
+    /// * `non_unique_taxonomy_ids` - IDs of taxa in which the peptide occurs in more than one protein
+    /// * `is_swiss_prot` - Whether at least one source protein is reviewed (SwissProt)
+    /// * `is_trembl` - Whether at least one source protein is unreviewed (TrEMBL)
     pub fn new(
         sequence: Sequence,
         protein_ids: Vec<i32>,
@@ -109,6 +141,7 @@ impl Peptide {
         }
     }
 
+    /// Returns the mass partition the peptide was assigned to, or `None` if not yet persisted.
     pub fn partition(&self) -> Option<i64> {
         self.partition
     }
@@ -117,26 +150,33 @@ impl Peptide {
         self.partition = Some(partition);
     }
 
+    /// Returns the review-status bit flags.
     pub fn flags(&self) -> i8 {
         self.flags
     }
 
+    /// Returns a reference to the review-status bit flags.
     pub fn flags_as_ref(&self) -> &i8 {
         &self.flags
     }
 
+    /// Returns the sequence length in amino acids.
     pub fn len(&self) -> usize {
         self.sequence.len()
     }
 
+    /// Returns whether the sequence is empty.
     pub fn is_empty(&self) -> bool {
         self.sequence.is_empty()
     }
 
+    /// Consumes the peptide and returns its sequence.
     pub fn into_sequence(self) -> Sequence {
         self.sequence
     }
 
+    /// Computes a peptide's mono-isotopic mass (water plus the mass of every residue) from its
+    /// sequence.
     pub fn to_peptide_mass(sequence: &Sequence) -> i64 {
         sequence
             .amino_acids()
@@ -145,6 +185,8 @@ impl Peptide {
             })
     }
 
+    /// Computes a peptide's mono-isotopic mass directly from an iterator of amino acid bit
+    /// codes, without building a `Sequence` first.
     pub fn peptide_mass_from_amino_acid_bits<'a>(
         amino_acids: impl Iterator<Item = &'a AminoAcidBitCode>,
     ) -> i64 {
@@ -153,18 +195,23 @@ impl Peptide {
         })
     }
 
+    /// Returns the IDs of taxa in which this peptide occurs in exactly one protein.
     pub fn unique_taxonomy_ids(&self) -> &[i32] {
         &self.unique_taxonomy_ids
     }
 
+    /// Returns the IDs of taxa in which this peptide occurs in more than one protein.
     pub fn non_unique_taxonomy_ids(&self) -> &[i32] {
         &self.non_unique_taxonomy_ids
     }
 
+    /// Returns the IDs of the proteins this peptide was cleaved from.
     pub fn protein_ids(&self) -> &ProteinIds {
         &self.protein_ids
     }
 
+    /// Estimates the peptide's serialized row size in bytes; used to bound in-memory buffer
+    /// size before flushing a partition (see `PeptideTable::insert_batch`).
     pub fn cql_size(&self) -> usize {
         const ROW_OVERHEAD: usize = 32;
         // A non-frozen list<int> stores each element as its own cell.
@@ -329,6 +376,8 @@ impl TryFrom<CompactSequence> for Peptide {
     }
 }
 
+/// A peptide with (possibly) applied post-translational modifications, e.g. a search result
+/// or the ProForma-rendered form of a [`Peptide`].
 #[derive(Serialize)]
 pub struct Peptidoform {
     sequence: ModifiedSequence,
@@ -343,6 +392,17 @@ pub struct Peptidoform {
 }
 
 impl Peptidoform {
+    /// Builds a new peptidoform from an already-modified sequence, its precomputed mass, and
+    /// the protein/taxonomy associations carried over from the originating peptide.
+    ///
+    /// # Arguments
+    /// * `sequence` - The (possibly PTM-modified) sequence
+    /// * `mass` - The peptidoform's mono-isotopic mass, including any modifications
+    /// * `protein_ids` - IDs of the proteins the peptidoform was cleaved from
+    /// * `unique_taxonomy_ids` - IDs of taxa in which the peptide occurs in exactly one protein
+    /// * `non_unique_taxonomy_ids` - IDs of taxa in which the peptide occurs in more than one protein
+    /// * `is_swiss_prot` - Whether at least one source protein is reviewed (SwissProt)
+    /// * `is_trembl` - Whether at least one source protein is unreviewed (TrEMBL)
     pub fn new(
         sequence: ModifiedSequence,
         mass: i64,
@@ -371,14 +431,17 @@ impl Peptidoform {
         }
     }
 
+    /// Returns the peptidoform's (possibly modified) sequence.
     pub fn sequence(&self) -> &ModifiedSequence {
         &self.sequence
     }
 
+    /// Returns the peptidoform's mono-isotopic mass, including any modifications.
     pub fn mass(&self) -> i64 {
         self.mass
     }
 
+    /// Returns the per-amino-acid occurrence counts, indexed by amino acid bit code.
     pub fn amino_acid_counts(&self) -> &[u8; MAX_AMINO_ACID_BIT_CODE] {
         self.amino_acid_counts.get_or_init(|| {
             let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
@@ -394,11 +457,13 @@ impl Peptidoform {
         })
     }
 
+    /// Returns how often `amino_acid` occurs in the sequence.
     pub fn amino_acid_count(&self, amino_acid: &'static AminoAcid) -> u8 {
         let idx = (amino_acid.code() as u8 - b'A') as usize;
         self.amino_acid_counts()[idx]
     }
 
+    /// Returns how often the amino acid with the given bit `code` occurs in the sequence.
     pub fn amino_acid_count_by_bit_code(&self, code: AminoAcidBitCode) -> u8 {
         let amino_acid = AminoAcid::by_bit_code(&code);
         self.amino_acid_count(amino_acid)
@@ -510,6 +575,8 @@ impl TryFrom<Row> for Peptide {
 }
 
 impl Peptide {
+    /// Builds a `Peptide` from a search-result row (`SEARCH_SELECT_STATEMENT`), which omits
+    /// the `partition` column.
     pub fn try_from_search_row(row: &Row) -> Result<Self, Error> {
         Ok(Self {
             partition: None,

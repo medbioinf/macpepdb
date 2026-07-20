@@ -1,7 +1,5 @@
-// std imports
 use std::{collections::HashSet, fmt::Display, hash::Hash};
 
-// 3rd party imports
 use dihardts_omicstools::proteomics::{
     peptide::Terminus,
     post_translational_modifications::{
@@ -28,6 +26,8 @@ pub enum Error {
     AminoAcid(#[from] crate::amino_acid::Error),
 }
 
+/// A single post-translational modification: which amino acid it applies to, its mass
+/// delta, whether it is static/variable, and where it may occur (residue, terminus, bond).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PostTranslationalModification {
     name: String,
@@ -42,6 +42,7 @@ pub struct PostTranslationalModification {
 }
 
 impl PostTranslationalModification {
+    /// Creates a new PTM. `total_mono_mass` is derived as `mass_delta + amino_acid.mono_mass()`.
     pub fn new(
         name: impl Into<String>,
         amino_acid: &'static AminoAcid,
@@ -59,26 +60,33 @@ impl PostTranslationalModification {
         }
     }
 
+    /// Name of the modification.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// Amino acid this modification applies to.
     pub fn amino_acid(&self) -> &'static AminoAcid {
         self.amino_acid
     }
 
+    /// Integer-scaled mono-isotopic mass delta this modification adds to the amino acid.
     pub fn mass_delta(&self) -> i64 {
         self.mass_delta
     }
 
+    /// Integer-scaled mono-isotopic mass of the modified amino acid (`amino_acid` +
+    /// `mass_delta`).
     pub fn total_mono_mass(&self) -> i64 {
         self.total_mono_mass
     }
 
+    /// Whether the modification is static or variable.
     pub fn mod_type(&self) -> ModificationType {
         self.mod_type.clone()
     }
 
+    /// Where the modification may occur (residue, terminus, or bond).
     pub fn position(&self) -> Position {
         self.position.clone()
     }
@@ -318,30 +326,37 @@ where
         })
     }
 
+    /// Returns the static PTMs in the collection.
     pub fn get_static_ptms(&self) -> &Vec<P> {
         &self.static_ptms
     }
 
+    /// Returns the variable PTMs in the collection.
     pub fn get_variable_ptms(&self) -> &Vec<P> {
         &self.variable_ptms
     }
 
+    /// Returns the N-terminal PTMs in the collection.
     pub fn get_n_terminal_ptms(&self) -> &Vec<P> {
         &self.n_terminal_ptms
     }
 
+    /// Returns the C-terminal PTMs in the collection.
     pub fn get_c_terminal_ptms(&self) -> &Vec<P> {
         &self.c_terminal_ptms
     }
 
+    /// Returns the N-terminal bond PTMs in the collection.
     pub fn get_n_bond_ptms(&self) -> &Vec<P> {
         &self.n_bond_ptms
     }
 
+    /// Returns the C-terminal bond PTMs in the collection.
     pub fn get_c_bond_ptms(&self) -> &Vec<P> {
         &self.c_bond_ptms
     }
 
+    /// Total number of PTMs across all categories in the collection.
     pub fn len(&self) -> usize {
         self.static_ptms.len()
             + self.variable_ptms.len()
@@ -351,10 +366,13 @@ where
             + self.c_bond_ptms.len()
     }
 
+    /// Returns true if the collection contains no PTMs.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// Returns all PTMs in the collection, in the order: static, variable, N-terminal,
+    /// C-terminal, N-bond, C-bond.
     pub fn all(&self) -> Vec<&P> {
         let mut all_ptms: Vec<&P> = Vec::with_capacity(self.len());
 
@@ -443,6 +461,7 @@ mod amino_acid_serde {
     use super::*;
     use serde::{Deserialize, Deserializer, Serializer};
 
+    /// Serializes the amino acid as its single-letter code.
     pub fn serialize<S>(amino_acid: &&'static AminoAcid, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -450,6 +469,7 @@ mod amino_acid_serde {
         serializer.serialize_char(amino_acid.code())
     }
 
+    /// Deserializes an amino acid from its single-letter code.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<&'static AminoAcid, D::Error>
     where
         D: Deserializer<'de>,
@@ -463,6 +483,7 @@ mod mass_delta_serde {
     use super::*;
     use serde::{Deserialize, Deserializer, Serializer};
 
+    /// Serializes the integer-scaled mass delta as a floating-point Dalton value.
     pub fn serialize<S>(mass_delta: &i64, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -470,6 +491,7 @@ mod mass_delta_serde {
         serializer.serialize_f64(mass_to_float(*mass_delta))
     }
 
+    /// Deserializes a floating-point Dalton value into the integer-scaled mass form.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<i64, D::Error>
     where
         D: Deserializer<'de>,

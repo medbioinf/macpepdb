@@ -13,15 +13,23 @@ use macpepdb_web_common::responses::configuration::RuntimeConfigurationResponse;
 static CONTROLLER_PATH: &str = "/api/configuration";
 static SHOW_PATH: &str = "/";
 
+/// Controller exposing the build-time `Configuration` (protease, mass
+/// partitioning, ...) under `/api/configuration`.
 pub struct ConfigurationController;
 
 impl ConfigurationController {
+    /// Builds the router for this controller's routes, nested under
+    /// [`Self::controller_path`].
+    ///
+    /// # Arguments
+    /// * `state` - The state of the server.
     pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
         let router: Router<Arc<ServerState>> = Router::new().route(SHOW_PATH, get(Self::show));
 
         router.with_state(state)
     }
 
+    /// Returns the base path this controller's routes are nested under.
     pub fn controller_path() -> &'static str {
         CONTROLLER_PATH
     }

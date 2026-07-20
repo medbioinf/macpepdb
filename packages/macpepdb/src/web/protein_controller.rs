@@ -33,6 +33,7 @@ static ID_RESOLVE_PATH: &str = "/resolve-ids";
 
 static RESOLVE_ID_BODY_SIZE_LIMIT: usize = 10485760; // 10 MiB
 
+/// Errors that can occur while handling protein endpoints.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Peptide table error: {0}")]
@@ -87,9 +88,11 @@ impl IntoResponse for Error {
     }
 }
 
+/// Controller providing protein lookup, search and ID resolution endpoints under `/api/proteins`.
 pub struct ProteinController;
 
 impl ProteinController {
+    /// Builds the axum router for the protein endpoints, mounted onto the given server state.
     pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
         let router: Router<Arc<ServerState>> = Router::new()
             .route(SEARCH_PATH, get(Self::search))
@@ -102,6 +105,7 @@ impl ProteinController {
         router.with_state(state)
     }
 
+    /// Returns the base path this controller is mounted on (`/api/proteins`).
     pub fn controller_path() -> &'static str {
         CONTROLLER_PATH
     }
@@ -347,6 +351,31 @@ impl ProteinController {
         ))
     }
 
+    /// Resolves protein database IDs to their accessions, streaming the result in
+    /// chunks of 10000 IDs per query to keep memory usage bounded for large requests.
+    ///
+    /// # Arguments
+    /// * `state` - Server state
+    /// * `ids` - Protein database IDs to resolve
+    ///
+    /// # API
+    /// ## Request
+    /// * Path: `/api/proteins/resolve-ids`
+    /// * Method: `POST`
+    /// * Body:
+    ///     ```json
+    ///     [1, 2, 3]
+    ///     ```
+    ///
+    /// ## Response
+    /// ```json
+    /// {
+    ///     "1": "Q9WTP6",
+    ///     "2": "P12345",
+    ///     "3": "P54321"
+    /// }
+    /// ```
+    ///
     pub async fn resolve_ids(
         State(state): State<Arc<ServerState>>,
         Json(ids): Json<Vec<i32>>,
