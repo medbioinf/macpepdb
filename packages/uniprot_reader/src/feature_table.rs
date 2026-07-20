@@ -3,6 +3,7 @@ use std::fmt;
 
 use thiserror::Error;
 
+/// Errors produced while parsing a UniProt `FT` feature-table block.
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("Expected a feature key/location line but found indented line: `{0}`")]
@@ -61,6 +62,7 @@ impl fmt::Display for Index {
     }
 }
 
+/// A feature's span, e.g. `202..301`, given as a single index when start and end coincide.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
     start: Index,
@@ -84,10 +86,12 @@ impl Position {
         }
     }
 
+    /// The start index of the span.
     pub fn start(&self) -> Index {
         self.start
     }
 
+    /// The end index of the span.
     pub fn end(&self) -> Index {
         self.end
     }
@@ -123,10 +127,12 @@ impl Location {
         })
     }
 
+    /// The isoform this location is qualified for (e.g. `P15005-2`), if any.
     pub fn isoform_accession(&self) -> Option<&str> {
         self.isoform_accession.as_deref()
     }
 
+    /// The location's start/end span.
     pub fn position(&self) -> Position {
         self.position
     }
@@ -177,26 +183,32 @@ pub struct Feature {
 }
 
 impl Feature {
+    /// The feature key, e.g. `VAR_SEQ` or `VARIANT`.
     pub fn key(&self) -> &str {
         &self.key
     }
 
+    /// The feature's location on the sequence.
     pub fn location(&self) -> &Location {
         &self.location
     }
 
+    /// Looks up a qualifier value by name (without the leading `/`), e.g. `"note"` or `"id"`.
     pub fn qualifier(&self, name: &str) -> Option<&str> {
         self.qualifiers.get(name).map(String::as_str)
     }
 
+    /// The `/id` qualifier, if present (e.g. a `VSP_...` accession).
     pub fn id(&self) -> Option<&str> {
         self.qualifier("id")
     }
 
+    /// The `/note` qualifier's raw text, if present.
     pub fn note(&self) -> Option<&str> {
         self.qualifier("note")
     }
 
+    /// The `/note` qualifier parsed into a [`NoteOperation`], if present.
     pub fn note_operation(&self) -> Option<NoteOperation> {
         self.note().map(parse_note_operation)
     }
@@ -222,16 +234,19 @@ fn parse_qualifier_start(line: &str) -> Result<(String, String, bool), Error> {
     }
 }
 
+/// The parsed `FT` block of a UniProt entry, i.e. all of its features.
 #[derive(Debug)]
 pub struct FeatureTable {
     features: Vec<Feature>,
 }
 
 impl FeatureTable {
+    /// The parsed features, in the order they appear in the feature table.
     pub fn features(&self) -> &[Feature] {
         &self.features
     }
 
+    /// Consumes the table, returning its features.
     pub fn into_features(self) -> Vec<Feature> {
         self.features
     }
@@ -300,6 +315,7 @@ impl TryFrom<&str> for FeatureTable {
     }
 }
 
+/// Parses a UniProt `FT` block's text into its list of features.
 pub fn parse(text: &str) -> Result<Vec<Feature>, Error> {
     Ok(FeatureTable::try_from(text)?.into_features())
 }

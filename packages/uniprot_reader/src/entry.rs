@@ -2,6 +2,7 @@ use std::fmt::Display;
 
 use thiserror::Error;
 
+/// Errors produced while parsing a raw UniProt text block into an [`Entry`].
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Invalid entry format, Entry needs to start with `ID` and stops with `//`")]
@@ -10,6 +11,11 @@ pub enum Error {
     UnknownLineType(String),
 }
 
+/// A single UniProt text-format entry, i.e. one protein record spanning from its `ID` line
+/// to the terminating `//`. Each field holds the raw, unwrapped text of one UniProt
+/// line-type block (identified by its two-letter code), possibly joined from several
+/// continuation lines; splitting these blocks into structured values (accession, taxonomy
+/// id, sequence, features, ...) is left to downstream consumers.
 #[derive(Debug, Default)]
 pub struct Entry {
     /// ID
@@ -65,102 +71,128 @@ pub struct Entry {
 }
 
 impl Entry {
+    /// The `ID` line: entry name plus review/data-class status (e.g. `Reviewed`).
     pub fn identification(&self) -> &str {
         &self.identification
     }
 
+    /// The `AC` line(s): primary accession followed by any secondary accessions.
     pub fn accession(&self) -> &str {
         &self.accession
     }
 
+    /// The `DT` line(s): entry creation/last-modified dates and entry version.
     pub fn date(&self) -> &str {
         &self.date
     }
 
+    /// The `DE` line(s): the protein name(s) (recommended, alternative, EC numbers, ...).
     pub fn description(&self) -> &str {
         &self.description
     }
 
+    /// The `GN` line(s): gene name and its synonyms/ordered-locus/ORF names.
     pub fn gene_name(&self) -> &str {
         &self.gene_name
     }
 
+    /// The `OS` line(s): the organism species name.
     pub fn organism_species(&self) -> &str {
         &self.organism_species
     }
 
+    /// The `OG` line(s): the organelle the gene product is encoded on, if any.
     pub fn organelle(&self) -> &str {
         &self.organelle
     }
 
+    /// The `OC` line(s): the organism's taxonomic classification lineage.
     pub fn organsim_classification(&self) -> &str {
         &self.organsim_classification
     }
 
+    /// The `OX` line: the organism's taxonomy cross-reference, e.g. `NCBI_TaxID=83333;`.
     pub fn organism_taxonomy_cross_reference(&self) -> &str {
         &self.organism_taxonomy_cross_reference
     }
 
+    /// The `OH` line(s): the natural host organism(s), used mainly for viral entries.
     pub fn organims_host(&self) -> &str {
         &self.organims_host
     }
 
+    /// The `RN` line(s): reference number(s) of the citations listed below.
     pub fn reference_number(&self) -> &str {
         &self.reference_number
     }
 
+    /// The `RP` line(s): the scope of the work described by each citation.
     pub fn reference_position(&self) -> &str {
         &self.reference_position
     }
 
+    /// The `RC` line(s): comments on a citation (e.g. strain, tissue).
     pub fn reference_comment(&self) -> &str {
         &self.reference_comment
     }
 
+    /// The `RX` line(s): a citation's cross-references (e.g. `MEDLINE`, `PubMed`, `DOI`).
     pub fn reference_cross_reference(&self) -> &str {
         &self.reference_cross_reference
     }
 
+    /// The `RG` line(s): the consortium/group name associated with a citation.
     pub fn reference_group(&self) -> &str {
         &self.reference_group
     }
 
+    /// The `RA` line(s): the author name(s) of a citation.
     pub fn reference_author(&self) -> &str {
         &self.reference_author
     }
 
+    /// The `RT` line(s): a citation's title.
     pub fn reference_title(&self) -> &str {
         &self.reference_title
     }
 
+    /// The `RL` line(s): a citation's location (journal, volume, pages, year, ...).
     pub fn reference_location(&self) -> &str {
         &self.reference_location
     }
 
+    /// The `CC` line(s): free-text comments (function, subcellular location, ...).
     pub fn comment_string(&self) -> &str {
         &self.comment_string
     }
 
+    /// The `DR` line(s): cross-references to other databases (e.g. `EMBL`, `PDB`, `GO`).
     pub fn database_cross_reference(&self) -> &str {
         &self.database_cross_reference
     }
 
+    /// The `PE` line: the protein existence evidence level.
     pub fn protein_existence(&self) -> &str {
         &self.protein_existence
     }
 
+    /// The `KW` line(s): the entry's controlled-vocabulary keywords.
     pub fn keyword(&self) -> &str {
         &self.keyword
     }
 
+    /// The `FT` line(s): the raw feature table text, as parsed further by [`crate::feature_table`].
     pub fn feature_table(&self) -> &str {
         &self.feature_table
     }
 
+    /// The `SQ` line: the sequence header (length, molecular weight, CRC64 checksum).
     pub fn sequence_header(&self) -> &str {
         &self.sequence_header
     }
 
+    /// The raw amino acid sequence, concatenated from the blocked sequence lines
+    /// (whitespace stripped).
     pub fn sequence(&self) -> &str {
         &self.sequence
     }

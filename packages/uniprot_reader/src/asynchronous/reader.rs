@@ -12,6 +12,10 @@ use crate::{
     reader::{Error, Item},
 };
 
+/// Async, [`futures::Stream`]-based counterpart of [`crate::reader::Reader`]: parses one
+/// [`Item`] (offset + [`Entry`]) at a time from an [`AsyncBufRead`] source, driving the
+/// underlying reader with `poll_fill_buf`/`consume` instead of blocking reads so it can be
+/// awaited alongside other async I/O (e.g. reading a gzip-decoded stream).
 pub struct AsyncReader<'a, R: AsyncBufRead + Unpin + Send> {
     inner: &'a mut R,
     line_buffer: Vec<u8>,
@@ -24,6 +28,7 @@ impl<'a, R> AsyncReader<'a, R>
 where
     R: AsyncBufRead + Unpin + Send,
 {
+    /// Wraps an [`AsyncBufRead`] source to be consumed entry-by-entry via the [`Stream`] impl.
     pub fn new(content: &'a mut R) -> Self {
         Self {
             inner: content,

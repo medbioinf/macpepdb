@@ -10,6 +10,7 @@ use crate::{
     indexer::Offset,
 };
 
+/// One parsed UniProt entry together with the byte offset it occupied in the source stream.
 pub struct Item {
     offset: Offset,
     entry: Entry,
@@ -20,10 +21,12 @@ impl Item {
         Self { offset, entry }
     }
 
+    /// The byte range this entry spans in the source stream.
     pub fn offset(&self) -> &Offset {
         &self.offset
     }
 
+    /// The parsed entry.
     pub fn entry(&self) -> &Entry {
         &self.entry
     }
@@ -40,6 +43,7 @@ impl Display for Item {
     }
 }
 
+/// Errors returned by [`Reader`] and [`IndexedReader`].
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("IO error: {0}")]
@@ -48,6 +52,8 @@ pub enum Error {
     Entry(#[from] EntryError),
 }
 
+/// Streams `Entry`s out of a UniProt text dump, splitting the underlying reader on the `//`
+/// entry terminator line and tracking each entry's byte offset as it goes.
 pub struct Reader<'a, R: BufRead> {
     inner: &'a mut R,
     line_buffer: Vec<u8>,
@@ -58,6 +64,7 @@ impl<'a, R> Reader<'a, R>
 where
     R: BufRead,
 {
+    /// Wraps a buffered reader positioned at the start of a UniProt text dump.
     pub fn new(content: &'a mut R) -> Self {
         Self {
             inner: content,
@@ -105,6 +112,9 @@ where
     }
 }
 
+/// Random-access reader that seeks to a previously recorded [`Offset`] and parses just that
+/// one entry, instead of streaming through the whole file like [`Reader`]. Meant to be paired
+/// with an index built by [`crate::indexer::Indexer`] so entries can be read in parallel.
 pub struct IndexedReader<R: BufRead + Seek> {
     inner: R,
 }
@@ -113,10 +123,15 @@ impl<R> IndexedReader<R>
 where
     R: BufRead + Seek,
 {
+    /// Wraps a seekable reader over a UniProt text dump.
     pub fn new(content: R) -> Self {
         Self { inner: content }
     }
 
+    /// Seeks to `offset` and parses the entry found there.
+    ///
+    /// # Arguments
+    /// * `offset` - The byte range of the entry, as recorded by [`crate::indexer::Indexer`].
     pub fn read(&mut self, offset: &Offset) -> Result<Entry, Error> {
         self.inner.seek(SeekFrom::Start(offset.start()))?;
         let mut buffer = vec![0; (offset.end() - offset.start() + 1) as usize];

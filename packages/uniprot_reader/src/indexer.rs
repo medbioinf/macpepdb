@@ -2,6 +2,7 @@ use std::{fmt::Display, io::BufRead};
 
 use thiserror::Error;
 
+/// The inclusive byte range `[start, end]` of a single entry within a UniProt text dump.
 #[derive(Debug, Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Offset {
@@ -10,14 +11,17 @@ pub struct Offset {
 }
 
 impl Offset {
+    /// Creates an offset spanning bytes `start` through `end`, inclusive.
     pub fn new(start: u64, end: u64) -> Self {
         Self { start, end }
     }
 
+    /// The byte position where the entry starts.
     pub fn start(&self) -> u64 {
         self.start
     }
 
+    /// The byte position of the entry's last byte (inclusive).
     pub fn end(&self) -> u64 {
         self.end
     }
@@ -29,6 +33,7 @@ impl Display for Offset {
     }
 }
 
+/// Errors returned by [`Indexer`].
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("IO error: {0}")]
@@ -37,6 +42,9 @@ pub enum Error {
     UnknownLineType(String),
 }
 
+/// Scans a UniProt text dump for the `//` entry terminator lines and yields each entry's byte
+/// [`Offset`] without parsing its content, so an index can be built cheaply and later used with
+/// [`crate::reader::IndexedReader`] for random/parallel access.
 pub struct Indexer<'a, R: BufRead> {
     inner: &'a mut R,
     line_buffer: Vec<u8>,
@@ -47,6 +55,7 @@ impl<'a, R> Indexer<'a, R>
 where
     R: BufRead,
 {
+    /// Wraps a buffered reader positioned at the start of a UniProt text dump.
     pub fn new(content: &'a mut R) -> Self {
         Self {
             inner: content,

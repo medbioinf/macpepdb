@@ -10,14 +10,17 @@ pub struct Isoform {
 }
 
 impl Isoform {
+    /// The curator-assigned display label (`Name=`). Free text, not an accession.
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    /// The isoform's accessions (`IsoId=`), e.g. `P12345-2`.
     pub fn iso_ids(&self) -> &[String] {
         &self.iso_ids
     }
 
+    /// The `VSP_...` feature ids (`Sequence=`) needed to reconstruct this isoform from VAR_SEQ.
     pub fn feature_ids(&self) -> &[String] {
         &self.feature_ids
     }
