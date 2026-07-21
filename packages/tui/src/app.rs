@@ -351,7 +351,8 @@ fn render_metric_row(f: &mut Frame, metric: &MetricConfig, state: &TuiState, are
                         .add_modifier(Modifier::BOLD),
                 )
                 .unfilled_style(Style::default().fg(Color::DarkGray))
-                .line_set(symbols::line::THICK);
+                .filled_symbol(symbols::line::THICK_HORIZONTAL)
+                .unfilled_symbol(symbols::line::THICK_HORIZONTAL);
             f.render_widget(gauge, sub[1]);
         }
     }
