@@ -3,9 +3,9 @@ mod prometheus_handler;
 use std::{collections::HashMap, fmt::Display, net::SocketAddr, path::PathBuf, pin::Pin, process};
 
 use clap::ValueEnum;
+use macpepdb_metrics_peek::MetricsPeek;
 use macpepdb_tui::{TuiLayer, TuiRecorder};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
-use macpepdb_metrics_peek::MetricsPeek;
 use metrics_util::layers::{Fanout, FanoutBuilder};
 use thiserror::Error;
 use tokio::task::JoinHandle;

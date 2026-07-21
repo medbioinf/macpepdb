@@ -1,14 +1,14 @@
 use std::fmt::Display;
 
 use itertools::Itertools;
-use macpepdb_web_common::responses::{peptide::PeptideResponse, protein::ProteinResponse};
-use serde::Serialize;
-use thiserror::Error;
-use tokio_postgres::Row;
 use macpepdb_uniprot_reader::{
     comment::parse_alternative_products,
     feature_table::{Feature, FeatureTable, Index, NoteOperation, Position},
 };
+use macpepdb_web_common::responses::{peptide::PeptideResponse, protein::ProteinResponse};
+use serde::Serialize;
+use thiserror::Error;
+use tokio_postgres::Row;
 
 use crate::{
     amino_acid::{AminoAcid, AminoAcidBitCode},
@@ -694,7 +694,8 @@ mod tests {
             "//\n",
         );
 
-        let entry = macpepdb_uniprot_reader::entry::Entry::try_from(RAW_ENTRY.as_bytes().to_vec()).unwrap();
+        let entry =
+            macpepdb_uniprot_reader::entry::Entry::try_from(RAW_ENTRY.as_bytes().to_vec()).unwrap();
         let proteins: Vec<Protein> = Variants::try_from(&entry).unwrap().into_iter().collect();
 
         assert_eq!(proteins.len(), 2);

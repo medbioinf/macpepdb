@@ -12,10 +12,10 @@ use std::{
 use async_compression::tokio::bufread::GzipDecoder;
 use crossbeam::queue::ArrayQueue;
 use futures::{Stream, StreamExt};
+use macpepdb_uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
 use postgres_types::{ToSql, Type};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, BufReader};
-use macpepdb_uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
 
 use crate::{
     client::Client,
