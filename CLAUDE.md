@@ -11,12 +11,13 @@ a CLI and an HTTP API.
 
 ## Workspace layout
 
-Cargo workspace (Rust edition 2024) with four members under `packages/`:
+Cargo workspace (Rust edition 2024) under `packages/`, including:
 
 - **`macpepdb`** — the main library + binary. All domain logic, the build pipeline, search, and the web API.
-- **`uniprot_reader`** — streaming/async parser + indexer for UniProt text dumps (`.txt`, `.txt.gz`).
+- **`uniprot_reader`** (`macpepdb_uniprot_reader`) — streaming/async parser + indexer for UniProt text dumps (`.txt`, `.txt.gz`).
 - **`tui`** (`macpepdb_tui`) — `ratatui` dashboard that subscribes to `tracing` events and `metrics` recorders; see [packages/tui/README.md](packages/tui/README.md).
-- **`metrics-peek`** — a `metrics::Recorder` that forwards values to a callback (immediate or periodic).
+- **`metrics-peek`** (`macpepdb_metrics_peek`) — a `metrics::Recorder` that forwards values to a callback (immediate or periodic).
+- **`hydrophobicity`** (`macpepdb_peptide_hydrophobicity`) — peptide hydrophobicity prediction (Krokhin et al).
 
 ## Common commands
 

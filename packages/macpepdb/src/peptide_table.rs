@@ -120,7 +120,7 @@ pub enum Error {
     #[error("Stats table error in peptide table: {0}")]
     StatsTable(Box<crate::stats_table::Error>),
     #[error("UnipotReader error in peptide table: {0}")]
-    UnprotReader(#[from] uniprot_reader::reader::Error),
+    UnprotReader(#[from] macpepdb_uniprot_reader::reader::Error),
 }
 
 into_thiserror_boxed!(crate::mass_index::Error, Error, MassIndex);

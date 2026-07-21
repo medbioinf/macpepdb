@@ -5,6 +5,7 @@ edition = "2024"
 description = "Mass-indexed peptide database: digests UniProt protein files with a protease and answers mass-based peptide searches over a CLI and HTTP API"
 license = "BSD-3-Clause"
 repository = "https://github.com/medbioinf/macpepdb"
+keywords = ["proteomics", "peptides", "macpepdb"]
 
 [dependencies]
 async-compression = { workspace = true, features = ["gzip", "tokio"] }
@@ -28,12 +29,12 @@ macpepdb_web_common = { workspace = true }
 memchr = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-metrics-peek = { workspace = true }
+macpepdb_metrics_peek = { workspace = true }
 metrics-util = { workspace = true }
 mimalloc = { workspace = true, optional = true }
 num-traits = { workspace = true }
 pastey = { workspace = true }
-peptide_hydrophobicity = { workspace = true }
+macpepdb_peptide_hydrophobicity = { workspace = true }
 postcard = { workspace = true, features = ["alloc"] }
 rand = { workspace = true }
 reqwest = { workspace = true }
@@ -54,7 +55,7 @@ tracing = { workspace = true }
 tracing-appender = { workspace = true }
 tracing-loki = { workspace = true }
 tracing-subscriber = { workspace = true }
-uniprot_reader = { workspace = true, features = ["async", "serde"] }
+macpepdb_uniprot_reader = { workspace = true, features = ["async", "serde"] }
 url = { workspace = true }
 urlencoding = { workspace = true }
 uuid = { workspace = true, features = ["v1", "v7"] }

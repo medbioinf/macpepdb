@@ -1,4 +1,4 @@
-//! # metrics-recorder
+//! # macpepdb_metrics_peek
 //!
 //! A [`metrics::Recorder`] implementation that forwards every metric update to
 //! a user-supplied callback, either **immediately** on each change or **periodically**
@@ -13,7 +13,7 @@
 //! ## Quick-start
 //!
 //! ```rust,ignore
-//! use metrics_peek::{MetricsPeek, LogMode};
+//! use macpepdb_metrics_peek::{MetricsPeek, LogMode};
 //!
 //! let recorder = MetricsPeek::new(
 //!     LogMode::Periodic(500),                  // flush every 500 ms

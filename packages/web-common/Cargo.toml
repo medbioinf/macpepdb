@@ -5,6 +5,8 @@ edition = "2024"
 description = "Shared web API types for macpepdb's backend and frontend"
 license = "BSD-3-Clause"
 repository = "https://github.com/medbioinf/macpepdb"
+readme = "README.md"
+keywords = ["macpepdb"]
 
 [dependencies]
 serde = { workspace = true, features = ["derive", "rc"] }

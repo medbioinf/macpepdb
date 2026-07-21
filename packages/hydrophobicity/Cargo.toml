@@ -1,10 +1,12 @@
 [package]
-name = "peptide_hydrophobicity"
+name = "macpepdb_peptide_hydrophobicity"
 version = "0.1.0"
 edition = "2024"
 description = "Peptide hydrophobicity prediction (Krokhin et al)"
 license = "BSD-3-Clause"
 repository = "https://github.com/medbioinf/macpepdb"
+readme = "README.md"
+keywords = ["proteomics", "peptides", "hydrophobicity", "macpepdb"]
 
 [dependencies]
 

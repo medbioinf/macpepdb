@@ -3514,17 +3514,18 @@ dependencies = [
  "glob",
  "http 1.4.2",
  "itertools 0.14.0",
+ "macpepdb_metrics_peek",
+ "macpepdb_peptide_hydrophobicity",
  "macpepdb_tui",
+ "macpepdb_uniprot_reader",
  "macpepdb_web_common",
  "memchr",
  "metrics",
  "metrics-exporter-prometheus",
- "metrics-peek",
  "metrics-util",
  "mimalloc",
  "num-traits",
  "pastey",
- "peptide_hydrophobicity",
  "postcard",
  "postgres-types",
  "rand 0.9.4",
@@ -3546,7 +3547,6 @@ dependencies = [
  "tracing-appender",
  "tracing-loki",
  "tracing-subscriber",
- "uniprot_reader",
  "url",
  "urlencoding",
  "uuid",
@@ -3581,6 +3581,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "macpepdb_metrics_peek"
+version = "0.1.0"
+dependencies = [
+ "metrics",
+]
+
+[[package]]
+name = "macpepdb_peptide_hydrophobicity"
+version = "0.1.0"
+
+[[package]]
 name = "macpepdb_tui"
 version = "0.1.0"
 dependencies = [
@@ -3594,6 +3605,18 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "macpepdb_uniprot_reader"
+version = "0.1.0"
+dependencies = [
+ "async-compression",
+ "flate2",
+ "futures",
+ "serde",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -3751,13 +3774,6 @@ dependencies = [
  "metrics-util",
  "quanta",
  "thiserror 2.0.18",
-]
-
-[[package]]
-name = "metrics-peek"
-version = "0.1.0"
-dependencies = [
- "metrics",
 ]
 
 [[package]]
@@ -4175,10 +4191,6 @@ dependencies = [
  "password-hash",
  "sha2 0.10.9",
 ]
-
-[[package]]
-name = "peptide_hydrophobicity"
-version = "0.1.0"
 
 [[package]]
 name = "percent-encoding"
@@ -6456,18 +6468,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "uniprot_reader"
-version = "0.1.0"
-dependencies = [
- "async-compression",
- "flate2",
- "futures",
- "serde",
- "thiserror 2.0.18",
- "tokio",
-]
 
 [[package]]
 name = "unsafe-libyaml"

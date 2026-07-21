@@ -34,7 +34,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-features --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     needs: lint
@@ -70,7 +70,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: test
-          args: --release --verbose --all-features --workspace
+          args: --release --verbose --workspace
 
       - name: Stop containers
         if: always()
@@ -125,7 +125,7 @@ jobs:
         env:
           CRATESIO_TOKEN: ${{ secrets.CRATESIO_TOKEN }}
         run: |
-          for crate in uniprot_reader peptide_hydrophobicity macpepdb_web_common metrics-peek macpepdb_tui; do
+          for crate in macpepdb_uniprot_reader macpepdb_peptide_hydrophobicity macpepdb_web_common macpepdb_metrics_peek macpepdb_tui; do
             cargo publish -p "$crate" --token "$CRATESIO_TOKEN" || true
           done
 

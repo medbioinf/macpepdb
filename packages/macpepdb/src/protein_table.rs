@@ -15,7 +15,7 @@ use futures::{Stream, StreamExt};
 use postgres_types::{ToSql, Type};
 use thiserror::Error;
 use tokio::io::{AsyncBufRead, BufReader};
-use uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
+use macpepdb_uniprot_reader::asynchronous::reader::AsyncReader as ProteinReader;
 
 use crate::{
     client::Client,
@@ -99,7 +99,7 @@ pub enum Error {
     #[error("Protein error in protein table: {0}")]
     Protein(Box<crate::protein::Error>),
     #[error("Protein reader error in protein table on file {0}: {1}")]
-    ProteinReader(PathBuf, uniprot_reader::reader::Error),
+    ProteinReader(PathBuf, macpepdb_uniprot_reader::reader::Error),
     #[error("Stats table error in protein table: {0}")]
     StatsTable(Box<crate::stats_table::Error>),
     #[error("Unable to join insertion task: {0}")]

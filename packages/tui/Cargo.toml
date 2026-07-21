@@ -5,6 +5,8 @@ edition = "2024"
 description = "ratatui dashboard that subscribes to tracing events and metrics recorders for macpepdb"
 license = "BSD-3-Clause"
 repository = "https://github.com/medbioinf/macpepdb"
+readme = "README.md"
+keywords = ["macpepdb"]
 
 [dependencies]
 chrono = { workspace = true, features = ["clock"] }

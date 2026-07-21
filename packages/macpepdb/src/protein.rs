@@ -5,7 +5,7 @@ use macpepdb_web_common::responses::{peptide::PeptideResponse, protein::ProteinR
 use serde::Serialize;
 use thiserror::Error;
 use tokio_postgres::Row;
-use uniprot_reader::{
+use macpepdb_uniprot_reader::{
     comment::parse_alternative_products,
     feature_table::{Feature, FeatureTable, Index, NoteOperation, Position},
 };
@@ -35,7 +35,7 @@ pub enum Error {
     #[error("Row decoding error in protein: {0}")]
     Row(#[from] tokio_postgres::Error),
     #[error("Feature table error in protein: {0}")]
-    FeatureTable(#[from] uniprot_reader::feature_table::Error),
+    FeatureTable(#[from] macpepdb_uniprot_reader::feature_table::Error),
     #[error("Isoform feature contain non-fixed position: {0}")]
     FeatureLocation(Position),
     #[error("VAR_SEQ `{id}` position {start}..{end} overlaps another edit for the same isoform")]
@@ -261,10 +261,10 @@ impl Display for Protein {
     }
 }
 
-impl TryFrom<&uniprot_reader::entry::Entry> for Protein {
+impl TryFrom<&macpepdb_uniprot_reader::entry::Entry> for Protein {
     type Error = Error;
 
-    fn try_from(entry: &uniprot_reader::entry::Entry) -> Result<Self, Error> {
+    fn try_from(entry: &macpepdb_uniprot_reader::entry::Entry) -> Result<Self, Error> {
         let accession = entry
             .accession()
             .find(';')
@@ -300,10 +300,10 @@ impl TryFrom<&uniprot_reader::entry::Entry> for Protein {
     }
 }
 
-impl TryFrom<(i32, &uniprot_reader::entry::Entry)> for Protein {
+impl TryFrom<(i32, &macpepdb_uniprot_reader::entry::Entry)> for Protein {
     type Error = Error;
 
-    fn try_from((id, entry): (i32, &uniprot_reader::entry::Entry)) -> Result<Self, Error> {
+    fn try_from((id, entry): (i32, &macpepdb_uniprot_reader::entry::Entry)) -> Result<Self, Error> {
         let mut protein = Self::try_from(entry)?;
         protein.id = Some(id);
         Ok(protein)
@@ -495,10 +495,10 @@ impl IntoIterator for Variants {
         self.proteins.into_iter()
     }
 }
-impl TryFrom<&uniprot_reader::entry::Entry> for Variants {
+impl TryFrom<&macpepdb_uniprot_reader::entry::Entry> for Variants {
     type Error = Error;
 
-    fn try_from(entry: &uniprot_reader::entry::Entry) -> Result<Self, Error> {
+    fn try_from(entry: &macpepdb_uniprot_reader::entry::Entry) -> Result<Self, Error> {
         let canonical_protein: Protein = Protein::try_from(entry)?;
 
         let feature_table = FeatureTable::try_from(entry.feature_table())?;
@@ -694,7 +694,7 @@ mod tests {
             "//\n",
         );
 
-        let entry = uniprot_reader::entry::Entry::try_from(RAW_ENTRY.as_bytes().to_vec()).unwrap();
+        let entry = macpepdb_uniprot_reader::entry::Entry::try_from(RAW_ENTRY.as_bytes().to_vec()).unwrap();
         let proteins: Vec<Protein> = Variants::try_from(&entry).unwrap().into_iter().collect();
 
         assert_eq!(proteins.len(), 2);
@@ -735,7 +735,7 @@ mod tests {
 
         let mut byte_reader =
             std::io::BufReader::new(std::fs::File::open(a0a1b0gtw7_path).unwrap());
-        let entry_reader = uniprot_reader::reader::Reader::new(&mut byte_reader);
+        let entry_reader = macpepdb_uniprot_reader::reader::Reader::new(&mut byte_reader);
         let entry = entry_reader.into_iter().next().unwrap().unwrap();
 
         let variants = Variants::try_from(entry.entry()).unwrap();

@@ -1013,7 +1013,7 @@ mod tests {
 
     use fallible_iterator::FallibleIterator;
     use futures::StreamExt;
-    use uniprot_reader::asynchronous::reader::AsyncReader;
+    use macpepdb_uniprot_reader::asynchronous::reader::AsyncReader;
 
     use crate::{
         database_build::{InMemoryProteinAccess, IsProteinAccess},

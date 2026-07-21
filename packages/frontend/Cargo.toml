@@ -2,6 +2,7 @@
 name = "macpepdb-frontend"
 version = "0.1.0"
 edition = "2021"
+keywords = ["macpepdb"]
 
 [dependencies]
 async-std = { workspace = true }

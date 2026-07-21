@@ -149,7 +149,7 @@ impl ChemistryController {
     /// ```
     ///
     pub async fn hydrophobicity_krokhin(Path(sequence): Path<String>) -> Result<Json<f64>, Error> {
-        Ok(Json(peptide_hydrophobicity::krokhin::score_sequence(
+        Ok(Json(macpepdb_peptide_hydrophobicity::krokhin::score_sequence(
             sequence.as_str(),
         )))
     }

@@ -1,4 +1,4 @@
-//! # uniprot_reader
+//! # macpepdb_uniprot_reader
 //!
 //! Streaming parser and indexer for UniProt text dumps (`.txt`, `.txt.gz`), used by the
 //! `macpepdb` crate's build pipeline to read protein records.

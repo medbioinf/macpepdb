@@ -1,10 +1,12 @@
 [package]
-name = "uniprot_reader"
+name = "macpepdb_uniprot_reader"
 version = "0.1.0"
 edition = "2024"
-description = "Streaming/async parser and indexer for UniProt text dumps (.txt, .txt.gz)"
+description = "Streaming/async parser for UniProt text dumps (.txt, .txt.gz)"
 license = "BSD-3-Clause"
 repository = "https://github.com/medbioinf/macpepdb"
+readme = "README.md"
+keywords = ["proteomics", "peptides", "uniprot", "macpepdb"]
 
 [dependencies]
 futures = { workspace = true, optional = true }

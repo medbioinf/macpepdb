@@ -5,7 +5,7 @@ use std::{collections::HashMap, fmt::Display, net::SocketAddr, path::PathBuf, pi
 use clap::ValueEnum;
 use macpepdb_tui::{TuiLayer, TuiRecorder};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusRecorder};
-use metrics_peek::MetricsPeek;
+use macpepdb_metrics_peek::MetricsPeek;
 use metrics_util::layers::{Fanout, FanoutBuilder};
 use thiserror::Error;
 use tokio::task::JoinHandle;
@@ -256,9 +256,9 @@ impl Monitoring {
                 }
                 MetricTarget::Tracing(milliseconds) => {
                     let log_mode = if milliseconds == 0 {
-                        metrics_peek::LogMode::Immediate
+                        macpepdb_metrics_peek::LogMode::Immediate
                     } else {
-                        metrics_peek::LogMode::Periodic(milliseconds)
+                        macpepdb_metrics_peek::LogMode::Periodic(milliseconds)
                     };
 
                     peek_recorder = Some(MetricsPeek::new(
