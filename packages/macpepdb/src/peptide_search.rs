@@ -58,6 +58,7 @@ use futures::stream::{FuturesUnordered, SelectAll, Stream, StreamExt};
 use itertools::Itertools;
 use metrics::{Counter, counter};
 use postgres_types::ToSql;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio_postgres::Row;
 
@@ -95,6 +96,8 @@ pub static SEARCH_SELECT_STATEMENT: LazyLock<String> =
 pub enum Error {
     #[error("Client error in peptide search: {0}")]
     Client(Box<crate::client::Error>),
+    #[error("Invalid peptide search type `{0}`")]
+    InvalidPeptideSearchType(String),
     #[error("Missing condition for condition reference index {0} of {1}")]
     MissingCondition(usize, usize),
     #[error("Database error in peptide search: {0}")]
@@ -119,7 +122,8 @@ into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
 
 /// Selects which search strategy runs the query: one condition per concurrent DB task
 /// (`MultiTask`) or a single `UNION ALL` query covering all conditions (`UnionAll`).
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, ValueEnum)]
+#[serde(try_from = "String", into = "String")]
 pub enum PeptideSearchType {
     MultiTask,
     UnionAll,
@@ -130,6 +134,27 @@ impl Display for PeptideSearchType {
         match self {
             PeptideSearchType::MultiTask => write!(f, "multi-task"),
             PeptideSearchType::UnionAll => write!(f, "union-all"),
+        }
+    }
+}
+
+impl From<PeptideSearchType> for String {
+    fn from(search_type: PeptideSearchType) -> Self {
+        match search_type {
+            PeptideSearchType::MultiTask => "multi-task".to_string(),
+            PeptideSearchType::UnionAll => "union-all".to_string(),
+        }
+    }
+}
+
+impl TryFrom<String> for PeptideSearchType {
+    type Error = Error;
+
+    fn try_from(s: String) -> Result<Self, Self::Error> {
+        match s.as_str() {
+            "multi-task" => Ok(PeptideSearchType::MultiTask),
+            "union-all" => Ok(PeptideSearchType::UnionAll),
+            _ => Err(Error::InvalidPeptideSearchType(s)),
         }
     }
 }
