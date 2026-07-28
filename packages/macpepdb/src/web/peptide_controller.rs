@@ -33,9 +33,9 @@ use crate::web::server_state::ServerState;
 
 const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
 
-static CONTROLLER_PATH: &str = "/api/peptides";
+pub static CONTROLLER_PATH: &str = "/api/peptides";
 static SEARCH_GET_PATH: &str = "/search/{payload}/{accept}";
-static SEARCH_POST_PATH: &str = "/search";
+pub static SEARCH_POST_PATH: &str = "/search";
 static EXISTS_PATH: &str = "/{sequence}/exists";
 static SHOW_PATH: &str = "/{sequence}";
 

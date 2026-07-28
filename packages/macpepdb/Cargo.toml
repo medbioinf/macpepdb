@@ -37,7 +37,7 @@ pastey = { workspace = true }
 macpepdb_peptide_hydrophobicity = { workspace = true }
 postcard = { workspace = true, features = ["alloc"] }
 rand = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["stream", "json", "http2"] }
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json = { workspace = true }
 tokio-postgres = { workspace = true, features = ["array-impls"] }

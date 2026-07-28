@@ -62,6 +62,10 @@ pub mod peptide;
 pub mod peptide_search;
 /// The `peptides` columnar table: build-time batch upsert and search-time reads.
 pub mod peptide_table;
+/// Simple client to search peptidoforms in MaCPepDB in ProForma complient format
+pub mod peptidoform_search_client;
+/// Test to rate the max peptide search performance your database (and web API) can handle
+pub mod performance_test;
 /// Post-translational modification definitions, parsing, and PTM-set expansion.
 pub mod post_translational_modification;
 /// Protease cleavage rules (e.g. trypsin, semi trypsin, unspecific) and missed-cleavage iteration.

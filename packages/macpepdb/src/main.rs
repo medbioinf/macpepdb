@@ -20,6 +20,7 @@ use macpepdb::{
     peptide::{Peptide, Peptidoform},
     peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch},
     peptide_table::PeptideTable,
+    performance_test::PerformanceTest,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
     protease::{Protease, Trypsin},
     protein_table::ProteinTable,
@@ -110,6 +111,38 @@ enum ConfigCommand {
 
 #[derive(Subcommand)]
 enum PeptideCommand {
+    /// Simple test to measure the performance of the peptide search.
+    /// Test can be run agains database or API.
+    /// The test runs thread-many searches in parallel for masses in the given file with concurrent_searches-many PTM conditions per mass.
+    /// It reports the time taken for each search and the total time taken for all searches.
+    SearchPerformance {
+        // optional and default arguments
+        ///Lower mass tolerance in PPM
+        #[arg(long, default_value_t = 10)]
+        lower_mass_tolerance_ppm: i64,
+        /// Maximum variable modification considered per peptide
+        #[arg(short, long, default_value_t = 3)]
+        max_variable_modifications: usize,
+        /// PSM file to use for the performance test
+        #[arg(long)]
+        ptm_file_path: Option<PathBuf>,
+        /// Type of search to perform, multi-task search can be faster but also more memory intensive
+        #[arg(long, default_value_t = PeptideSearchType::MultiTask)]
+        r#type: PeptideSearchType,
+        /// Base URL for the web API, this overrides the global `--database-url` argument and is used to test the web API performance
+        #[arg(long)]
+        web_base_url: Option<String>,
+        /// Upper mass tolerance in PPM
+        #[arg(long, default_value_t = 10)]
+        upper_mass_tolerance_ppm: i64,
+        // positional arguments
+        /// Concurrent searches of conditions, used internally by each mass search. Only relevant if test is performed against the database.
+        concurrent_searches: NonZeroUsize,
+        /// Number to parallel masses to be searched
+        threads: NonZeroUsize,
+        /// Test file with Dalton or m/z + charge per line
+        masses_file_path: PathBuf,
+    },
     Show {
         /// Sequence to select
         sequence: String,
@@ -564,6 +597,56 @@ async fn main() -> Result<(), Error> {
             }
         }
         Command::Peptide { command } => match command {
+            PeptideCommand::SearchPerformance {
+                lower_mass_tolerance_ppm,
+                max_variable_modifications,
+                ptm_file_path,
+                r#type,
+                web_base_url,
+                upper_mass_tolerance_ppm,
+                concurrent_searches,
+                threads,
+                masses_file_path,
+            } => {
+                let ptm_file_path = ptm_file_path.map(|path| path.to_string_lossy().into_owned());
+
+                let perf_test = PerformanceTest::new(
+                    masses_file_path,
+                    lower_mass_tolerance_ppm,
+                    upper_mass_tolerance_ppm,
+                    max_variable_modifications,
+                    concurrent_searches,
+                    &cli.database_url,
+                    ptm_file_path,
+                    web_base_url,
+                    r#type,
+                )
+                .await
+                .unwrap();
+
+                if let Some(tui) = tui.as_ref() {
+                    tui.add_metric(MetricConfig::progress(
+                        macpepdb::performance_test::PROGRESS_METRIC,
+                        "Masses",
+                        perf_test.masses().len() as f64,
+                    ));
+                    tui.add_metric(MetricConfig::rate(
+                        macpepdb::performance_test::PROGRESS_METRIC,
+                        "Masses rate",
+                    ));
+                    tui.add_metric(MetricConfig::counter(
+                        macpepdb::performance_test::ERROR_METRIC,
+                        "Errors",
+                    ));
+                }
+
+                perf_test.run(threads).await.unwrap();
+
+                if let Some(mut tui) = tui {
+                    tracing::info!("Press Ctrl+C or q to exit.");
+                    tui.wait().await;
+                }
+            }
             PeptideCommand::Show { sequence } => {
                 let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
                 let config: RuntimeConfiguration =

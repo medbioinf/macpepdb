@@ -1,0 +1,247 @@
+use std::{num::NonZeroUsize, pin::Pin, sync::Arc};
+
+use dihardts_omicstools::proteomics::peptide::Terminus;
+use dihardts_omicstools::proteomics::post_translational_modifications::{
+    ModificationType as PtmType, Position as PtmPosition,
+};
+use futures::{AsyncBufReadExt, Stream, StreamExt, TryStreamExt};
+use http::StatusCode;
+use macpepdb_web_common::requests::{
+    peptide::{SearchRequestBody, SearchRequestMass},
+    ptm::{
+        PostTranslationalModificationRequest, PtmPosition as RequestPtmPosition,
+        PtmType as RequestPtmType,
+    },
+};
+use reqwest::Client as WebClient;
+use thiserror::Error;
+
+use crate::{
+    blob_table::BlobTable,
+    client::Client as DbClient,
+    configuration::RuntimeConfiguration,
+    mass::to_float as mass_to_float,
+    peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch},
+    post_translational_modification::{PTMCollection, PostTranslationalModification},
+};
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("Blob table error in performance test: {0}")]
+    BlobTable(Box<crate::blob_table::Error>),
+    #[error("Database client error in performance test: {0}")]
+    DbClient(Box<crate::client::Error>),
+    #[error(
+        "Client url can either start with http:// or https:// for web API or postgresql:// for database"
+    )]
+    InvalidClientUrl,
+    #[error("Missing runtime configuration in database")]
+    MissingRuntimeConfig,
+    #[error("Unable to get next chunk from HTTP response stream: {0}")]
+    NextHttpPeptidoform(Box<std::io::Error>),
+    #[error("Peptide search error in performance test: {0}")]
+    PeptideSearch(Box<crate::peptide_search::Error>),
+    #[error("HTTP request error while performing peptide search: {0}")]
+    Request(Box<reqwest::Error>),
+    #[error("Unsuccessful search request: status code {0}, content type {1}, response text {2}")]
+    UnsuccessfullSearchRequest(StatusCode, String, String),
+}
+
+into_thiserror_boxed!(crate::blob_table::Error, Error, BlobTable);
+into_thiserror_boxed!(crate::client::Error, Error, DbClient);
+into_thiserror_boxed!(std::io::Error, Error, NextHttpPeptidoform);
+into_thiserror_boxed!(crate::peptide_search::Error, Error, PeptideSearch);
+into_thiserror_boxed!(reqwest::Error, Error, Request);
+
+/// Client which searches peptidoforms matching the given conditions
+/// reuturning them in as ProForma compliant strings
+pub enum PeptidoformSearchClient {
+    WebApi(Arc<WebClient>, String),
+    Database(Arc<DbClient>, Arc<RuntimeConfiguration>, PeptideSearchType),
+}
+
+impl PeptidoformSearchClient {
+    pub async fn try_from_url(url: &str, search_type: PeptideSearchType) -> Result<Self, Error> {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            let web_client = Arc::new(WebClient::new());
+            let search_url = format!(
+                "{}{}{}",
+                url.trim_end_matches('/'),
+                crate::web::peptide_controller::CONTROLLER_PATH,
+                crate::web::peptide_controller::SEARCH_POST_PATH
+            );
+            Ok(PeptidoformSearchClient::WebApi(web_client, search_url))
+        } else if url.starts_with("postgresql://") {
+            let db_client = DbClient::new(url).await.map(Arc::new)?;
+            let config = BlobTable::select::<RuntimeConfiguration>(
+                db_client.as_ref(),
+                RuntimeConfiguration::BLOB_KEY,
+            )
+            .await?
+            .ok_or(Error::MissingRuntimeConfig)
+            .map(Arc::new)?;
+
+            Ok(PeptidoformSearchClient::Database(
+                db_client,
+                config,
+                search_type,
+            ))
+        } else {
+            Err(Error::InvalidClientUrl)
+        }
+    }
+
+    pub async fn search(
+        &self,
+        mass: i64,
+        lower_mass_tolerance_ppm: i64,
+        upper_mass_tolerance_ppm: i64,
+        max_variable_modifications: usize,
+        ptms: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
+        concurrent_searches: NonZeroUsize,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, Error>>>>, Error> {
+        match self {
+            PeptidoformSearchClient::WebApi(web_client, search_url) => {
+                let mass = mass_to_float(mass);
+                let modifications = ptms
+                    .all()
+                    .iter()
+                    .map(|ptm| PostTranslationalModificationRequest {
+                        name: ptm.name().to_string(),
+                        amino_acid: ptm.amino_acid().code(),
+                        mass_delta: mass_to_float(ptm.mass_delta()),
+                        mod_type: match ptm.mod_type() {
+                            PtmType::Static => RequestPtmType::Static,
+                            PtmType::Variable => RequestPtmType::Variable,
+                        },
+                        position: match ptm.position() {
+                            PtmPosition::Anywhere => RequestPtmPosition::Anywhere,
+                            PtmPosition::Terminus(Terminus::N) => RequestPtmPosition::NTerminus,
+                            PtmPosition::Terminus(Terminus::C) => RequestPtmPosition::CTerminus,
+                            PtmPosition::Bond(Terminus::N) => RequestPtmPosition::NBond,
+                            PtmPosition::Bond(Terminus::C) => RequestPtmPosition::CBond,
+                        },
+                    })
+                    .collect::<Vec<_>>();
+
+                let request = SearchRequestBody {
+                    mass: SearchRequestMass::Dalton(mass),
+                    lower_mass_tolerance_ppm,
+                    upper_mass_tolerance_ppm,
+                    max_variable_modifications,
+                    modifications,
+                    taxonomy_id: None,
+                    proteome_id: None,
+                    is_reviewed: None,
+                    resolve_modifications: None,
+                };
+
+                let response = web_client
+                    .post(search_url)
+                    .header("Accept", "text/plain")
+                    .header("Host", "192.168.124.217")
+                    .json(&request)
+                    .send()
+                    .await
+                    .map_err(|e| Error::Request(Box::new(e)))?;
+
+                if !response.status().is_success() {
+                    let status_code = response.status();
+                    let content_type = response
+                        .headers()
+                        .get("content-type")
+                        .and_then(|ct| ct.to_str().ok())
+                        .unwrap_or("unknown content type")
+                        .to_string();
+                    let response_text = response
+                        .text()
+                        .await
+                        .unwrap_or("text is not decodable".to_string());
+                    return Err(Error::UnsuccessfullSearchRequest(
+                        status_code,
+                        content_type,
+                        response_text,
+                    ));
+                }
+
+                let peptidoform_stream = response
+                    .bytes_stream()
+                    .map_err(std::io::Error::other)
+                    .into_async_read()
+                    .lines()
+                    .map(|line| {
+                        line.map_err(std::io::Error::other).and_then(|line| {
+                            let line = line.trim();
+                            if !line.starts_with("!!!") {
+                                Ok(line.to_string())
+                            } else {
+                                Err(std::io::Error::other(line.to_string()))
+                            }
+                        })
+                    })
+                    .map_err(Error::from);
+
+                Ok(Box::pin(peptidoform_stream))
+            }
+            PeptidoformSearchClient::Database(db_client, configuration, search_type) => {
+                let db_client = db_client.clone();
+                let configuration = configuration.clone();
+                let ptms = ptms.clone();
+                let peptide_stream = match search_type {
+                    PeptideSearchType::UnionAll => {
+                        UnionAllSearch::search(
+                            db_client,
+                            configuration,
+                            mass,
+                            lower_mass_tolerance_ppm,
+                            upper_mass_tolerance_ppm,
+                            max_variable_modifications,
+                            true,
+                            None,
+                            None,
+                            None,
+                            ptms,
+                            true,
+                            concurrent_searches,
+                        )
+                        .await?
+                    }
+                    PeptideSearchType::MultiTask => {
+                        MultiTaskSearch::search(
+                            db_client,
+                            configuration,
+                            mass,
+                            lower_mass_tolerance_ppm,
+                            upper_mass_tolerance_ppm,
+                            max_variable_modifications,
+                            true,
+                            None,
+                            None,
+                            None,
+                            ptms,
+                            true,
+                            concurrent_searches,
+                        )
+                        .await?
+                    }
+                };
+
+                let peptide_stream =
+                    peptide_stream.flat_map(|peptidoform_result| match peptidoform_result {
+                        Ok(peptidoforms) => Box::pin(futures::stream::iter(
+                            peptidoforms
+                                .into_iter()
+                                .map(|peptidoform| Ok(peptidoform.sequence().to_string())),
+                        ))
+                            as Pin<Box<dyn Stream<Item = Result<String, Error>>>>,
+                        Err(e) => Box::pin(futures::stream::once(async move {
+                            Err(Error::PeptideSearch(Box::new(e)))
+                        }))
+                            as Pin<Box<dyn Stream<Item = Result<String, Error>>>>,
+                    });
+
+                Ok(Box::pin(peptide_stream))
+            }
+        }
+    }
+}
