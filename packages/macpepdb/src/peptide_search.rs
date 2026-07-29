@@ -751,8 +751,6 @@ impl ConditionalPeptideStream {
 
         let where_clause = format!("WHERE {}", filters.join(" AND "));
 
-        tracing::info!("{}", where_clause);
-
         let setup_start = std::time::Instant::now();
         let inner: BoxedPeptideRowStream = Box::pin(
             PeptideTable::new(client)
@@ -1165,9 +1163,6 @@ impl UnionAllFallibleMatchingPeptideStream {
                     filter_fn.to_sql_literal(&mut where_clause);
                 }
 
-                for filter in where_clause.iter() {
-                    tracing::info!("{filter}");
-                }
 
                 format!(
                     "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {SEARCH_COLUMNS} FROM {TABLE_NAME} WHERE {}", where_clause.join(" AND ")
