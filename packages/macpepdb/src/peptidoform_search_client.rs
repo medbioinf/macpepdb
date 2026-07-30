@@ -139,7 +139,6 @@ impl PeptidoformSearchClient {
                 let response = web_client
                     .post(search_url)
                     .header("Accept", "text/plain")
-                    .header("Host", "192.168.124.217")
                     .json(&request)
                     .send()
                     .await
