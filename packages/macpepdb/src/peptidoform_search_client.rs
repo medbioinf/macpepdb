@@ -190,6 +190,10 @@ impl PeptidoformSearchClient {
                             }
                         })
                     })
+                    // drop the server's guaranteed leading blank line (sent so a zero-hit
+                    // search never streams a fully empty body) so it isn't mistaken for a
+                    // real (empty-sequence) result
+                    .filter(|line| futures::future::ready(!matches!(line, Ok(s) if s.is_empty())))
                     .map_err(Error::from);
 
                 Ok(Box::pin(peptidoform_stream))

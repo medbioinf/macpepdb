@@ -238,7 +238,11 @@ impl PeptideController {
     #[allow(clippy::tabs_in_doc_comments)]
     /// Returns a stream of peptides matching the given parameters.
     /// If the taxonomy ID is given and has sub taxonomies, the sub taxonomies are also searched.
-    /// Important: Peptides only contain the accession of the proteins of origin.
+    ///
+    /// **Important:**
+    /// * Peptides only contain the accession of the proteins of origin.
+    /// * text/plain and text/fasta will always send an empty line at the start of a stream. In case not peptides were found the stream
+    ///   to the client is not empty and cannot trigger an error in client libraries.
     ///
     /// # Arguments
     /// * `state` - Server state
@@ -644,6 +648,10 @@ impl PeptideController {
                 StatusCode::OK,
                 headers,
                 Body::from_stream(stream! {
+                    // guarantee at least one non-empty chunk even on zero hits, so the
+                    // streamed body is never fully empty (empty h2c bodies can trip the
+                    // client's decoder)
+                    yield Ok("\n".to_string());
                     let mut delimiter: &'static str = "";
                     for await peptidoforms in peptide_stream {
                         match peptidoforms {
@@ -669,6 +677,10 @@ impl PeptideController {
                 StatusCode::OK,
                 headers,
                 Body::from_stream(stream! {
+                    // guarantee at least one non-empty chunk even on zero hits, so the
+                    // streamed body is never fully empty (empty h2c bodies can trip the
+                    // client's decoder)
+                    yield Ok("\n".to_string());
                     let mut peptidoform_ctr: usize = 0;
                     let mut delimiter: &'static str = "";
                     for await peptidoforms in peptide_stream {
