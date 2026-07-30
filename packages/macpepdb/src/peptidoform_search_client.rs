@@ -77,7 +77,8 @@ impl PeptidoformSearchClient {
                 .build()
                 .map_err(|e| Error::WebClientBuild(Box::new(e)))?;
             let search_url = format!(
-                "http://192.168.124.217:8080{}{}",
+                "{}{}{}",
+                url,
                 crate::web::peptide_controller::CONTROLLER_PATH,
                 crate::web::peptide_controller::SEARCH_POST_PATH
             );
