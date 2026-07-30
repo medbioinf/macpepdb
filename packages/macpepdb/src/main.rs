@@ -202,6 +202,11 @@ enum Command {
         // Optional and default arguments
         #[arg(long, default_value_t = NonZeroUsize::new(16).unwrap())]
         concurrent_searches: NonZeroUsize,
+        /// Max number of concurrent HTTP/2 streams (i.e. in-flight requests) allowed per
+        /// connection. Bounds how many searches a single client/proxy connection can
+        /// multiplex at once; without this, HTTP/2 has no default limit (RFC 7540 §6.5.2).
+        #[arg(long, default_value_t = NonZeroUsize::new(32).unwrap())]
+        max_concurrent_streams_per_connection: NonZeroUsize,
         /// Type of search to perform, multi-task search can be faster but also more memory intensive
         #[arg(long, default_value_t = PeptideSearchType::MultiTask)]
         search_type: PeptideSearchType,
@@ -441,6 +446,7 @@ async fn main() -> Result<(), Error> {
             matomo_url,
             matomo_site_id,
             concurrent_searches,
+            max_concurrent_streams_per_connection,
             search_type,
             socket,
         } => {
@@ -460,6 +466,7 @@ async fn main() -> Result<(), Error> {
                 socket,
                 false,
                 concurrent_searches,
+                max_concurrent_streams_per_connection,
                 search_type,
                 matomo_info,
                 Box::pin(shutdown_signal()),

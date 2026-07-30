@@ -6,7 +6,11 @@ use std::sync::Arc;
 
 use axum::{Router, middleware};
 use http::Method;
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::server::conn::auto;
+use hyper_util::service::TowerToHyperService;
 use thiserror::Error;
+use tower::Service;
 use tower_http::cors::{Any, CorsLayer};
 
 use crate::blob_table::BlobTable;
@@ -57,12 +61,16 @@ impl From<crate::client::Error> for Error {
 /// * `with_taxonomy_search` - If taxonomy search index should be built
 /// * `num_search_threads` - Number of concurrent search threads (and connections)
 /// * `matomo_info` - Optional Matomo tracking information
+/// * `max_concurrent_streams_per_connection` - Max HTTP/2 streams (in-flight requests)
+///   allowed per connection; HTTP/2 has no default limit otherwise (RFC 7540 §6.5.2)
 ///
+#[allow(clippy::too_many_arguments)]
 pub async fn start(
     client: Client,
     socket: SocketAddr,
     _with_taxonomy_search: bool,
     concurrent_searches: NonZeroUsize,
+    max_concurrent_streams_per_connection: NonZeroUsize,
     search_type: PeptideSearchType,
     matomo_info: Option<MatomoInfo>,
     shutdown_signal: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
@@ -143,13 +151,53 @@ pub async fn start(
         socket.ip(),
         socket.port()
     );
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .with_graceful_shutdown(shutdown_signal)
-    .await
-    .unwrap();
+
+    // `axum::serve` doesn't expose HTTP/2 tuning, so the connection handler is built manually
+    // here to bound concurrent streams per connection. Without this, HTTP/2 has no default
+    // limit on concurrent requests per connection (RFC 7540 §6.5.2), so a handful of
+    // multiplexed client/proxy connections can drive an unbounded number of concurrent
+    // searches (each holding its own dedup set and DB query fan-out).
+    let mut h2_builder = auto::Builder::new(TokioExecutor::new());
+    h2_builder
+        .http2()
+        .max_concurrent_streams(Some(max_concurrent_streams_per_connection.get() as u32));
+    let h2_builder = Arc::new(h2_builder);
+
+    let mut make_service = app.into_make_service_with_connect_info::<SocketAddr>();
+    let mut connections = tokio::task::JoinSet::new();
+    let mut shutdown_signal = shutdown_signal;
+
+    loop {
+        tokio::select! {
+            accepted = listener.accept() => {
+                let (stream, remote_addr) = match accepted {
+                    Ok(accepted) => accepted,
+                    Err(err) => {
+                        tracing::warn!("Failed to accept connection: {err}");
+                        continue;
+                    }
+                };
+                let tower_service = make_service.call(remote_addr).await.unwrap();
+                let hyper_service = TowerToHyperService::new(tower_service);
+                let h2_builder = h2_builder.clone();
+                connections.spawn(async move {
+                    let io = TokioIo::new(stream);
+                    if let Err(err) = h2_builder.serve_connection_with_upgrades(io, hyper_service).await {
+                        tracing::debug!("Connection closed with error: {err}");
+                    }
+                });
+            }
+            _ = &mut shutdown_signal => {
+                tracing::info!("Shutdown signal received, stopping listener...");
+                break;
+            }
+        }
+    }
+
+    tracing::info!("Draining {} in-flight connection(s)...", connections.len());
+    while connections.join_next().await.is_some() {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
 
     Ok(())
 }

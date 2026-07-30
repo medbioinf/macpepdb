@@ -23,6 +23,8 @@ fallible-iterator = { workspace = true }
 futures = { workspace = true }
 glob = { workspace = true }
 http = { workspace = true }
+hyper = { workspace = true, features = ["server", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["tokio", "server", "server-auto", "service"] }
 itertools = { workspace = true }
 macpepdb_tui = { workspace = true }
 macpepdb_web_common = { workspace = true }
@@ -50,6 +52,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tinyvec = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tower = { workspace = true }
 tower-http = { workspace = true, features = ["cors"] }
 tracing = { workspace = true }
 tracing-appender = { workspace = true }
