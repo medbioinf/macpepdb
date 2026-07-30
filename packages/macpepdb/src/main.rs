@@ -312,7 +312,7 @@ enum Command {
         #[arg(long, default_value_t = NonZeroUsize::new(16).unwrap())]
         threads: NonZeroUsize,
         /// Type of search to perform, multi-task search can be faster but also more memory intensive
-        #[arg(long, default_value_t = PeptideSearchType::UnionAll)]
+        #[arg(long, default_value_t = PeptideSearchType::MultiTask)]
         r#type: PeptideSearchType,
         /// Upper mass tolerance in PPM
         #[arg(short, long, default_value_t = 10)]

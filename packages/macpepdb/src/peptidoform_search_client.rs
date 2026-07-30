@@ -1,3 +1,4 @@
+use std::time::Duration;
 use std::{num::NonZeroUsize, pin::Pin, sync::Arc};
 
 use dihardts_omicstools::proteomics::peptide::Terminus;
@@ -41,6 +42,8 @@ pub enum Error {
     NextHttpPeptidoform(Box<std::io::Error>),
     #[error("Peptide search error in performance test: {0}")]
     PeptideSearch(Box<crate::peptide_search::Error>),
+    #[error("Error building web client: {0}")]
+    WebClientBuild(Box<reqwest::Error>),
     #[error("HTTP request error while performing peptide search: {0}")]
     Request(Box<reqwest::Error>),
     #[error("Unsuccessful search request: status code {0}, content type {1}, response text {2}")]
@@ -51,22 +54,30 @@ into_thiserror_boxed!(crate::blob_table::Error, Error, BlobTable);
 into_thiserror_boxed!(crate::client::Error, Error, DbClient);
 into_thiserror_boxed!(std::io::Error, Error, NextHttpPeptidoform);
 into_thiserror_boxed!(crate::peptide_search::Error, Error, PeptideSearch);
-into_thiserror_boxed!(reqwest::Error, Error, Request);
 
 /// Client which searches peptidoforms matching the given conditions
 /// reuturning them in as ProForma compliant strings
 pub enum PeptidoformSearchClient {
-    WebApi(Arc<WebClient>, String),
+    WebApi(WebClient, String),
     Database(Arc<DbClient>, Arc<RuntimeConfiguration>, PeptideSearchType),
 }
 
 impl PeptidoformSearchClient {
     pub async fn try_from_url(url: &str, search_type: PeptideSearchType) -> Result<Self, Error> {
         if url.starts_with("http://") || url.starts_with("https://") {
-            let web_client = Arc::new(WebClient::new());
+            let mut web_client_builder = WebClient::builder().timeout(Duration::from_secs(60));
+            if url.starts_with("http://") {
+                web_client_builder = web_client_builder
+                    .http2_prior_knowledge() // force h2 without TLS ALPN (plaintext h2c) — rare, needs server support
+                    .http2_keep_alive_interval(Duration::from_secs(20))
+                    .http2_keep_alive_timeout(Duration::from_secs(10))
+                    .http2_keep_alive_while_idle(true)
+            }
+            let web_client = web_client_builder
+                .build()
+                .map_err(|e| Error::WebClientBuild(Box::new(e)))?;
             let search_url = format!(
-                "{}{}{}",
-                url.trim_end_matches('/'),
+                "http://192.168.124.217:8080{}{}",
                 crate::web::peptide_controller::CONTROLLER_PATH,
                 crate::web::peptide_controller::SEARCH_POST_PATH
             );
