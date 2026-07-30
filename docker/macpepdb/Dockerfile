@@ -3,8 +3,7 @@ FROM rust:1.95 AS build-stage
 WORKDIR /usr/src/macpepdb
 COPY . .
 
-RUN cargo build -r
-
+RUN cargo build -r --package macpepdb
 
 
 FROM debian:trixie-slim
