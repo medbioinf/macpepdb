@@ -184,9 +184,8 @@ impl PerformanceTest {
                             let mut num_peptidoforms = 0;
                             while let Some(peptidoform_result) = peptidoform_stream.next().await {
                                 match peptidoform_result {
-                                    Ok(peptidoform) => {
+                                    Ok(_peptidoform) => {
                                         num_peptidoforms += 1;
-                                        tracing::info!("{}", peptidoform);
                                     }
                                     Err(e) => {
                                         warn!(
