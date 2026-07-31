@@ -18,8 +18,8 @@ use crate::client::Client;
 use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::server_state::ServerState;
 
-static CONTROLLER_PATH: &str = "/api/admin";
-static REBUILD_CLIENT_PATH: &str = "/client";
+pub static CONTROLLER_PATH: &str = "/api/admin";
+pub static REBUILD_CLIENT_PATH: &str = "/client";
 
 /// Body of `POST /api/admin/client`. Kept local to this module rather than in the shared,
 /// published `macpepdb_web_common` crate, since it's only meaningful behind `admin-api`.

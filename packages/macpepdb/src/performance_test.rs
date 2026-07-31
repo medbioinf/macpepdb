@@ -37,6 +37,10 @@ pub enum Error {
     PeptidoformSearchClient(Box<crate::peptidoform_search_client::Error>),
     #[error("Error while reading PTM collection: {0}")]
     Ptm(Box<crate::post_translational_modification::Error>),
+
+    #[cfg(feature = "admin-api")]
+    #[error("Error while sending request to admin API: {0}")]
+    AdminApiRequest(Box<reqwest::Error>),
 }
 
 into_thiserror_boxed!(
@@ -57,6 +61,8 @@ pub struct PerformanceTest {
 }
 
 impl PerformanceTest {
+    /// Creates a new `PerformanceTest` instance.
+    /// If feature `admin-api` is enabled and a web base URL is provided, it will attempt to rebuild the database client via the admin API.
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
         masses_file_path: PathBuf,
@@ -124,6 +130,38 @@ impl PerformanceTest {
             })
             .map(|result| result.map(mass_to_int))
             .collect::<Result<Vec<_>, Error>>()?;
+
+        #[cfg(feature = "admin-api")]
+        if let Some(web_base_url) = web_base_url {
+            match peptidoform_search_client {
+                PeptidoformSearchClient::WebApi(ref client, _) => {
+                    let admin_url = format!(
+                        "{}{}{}",
+                        web_base_url.trim_end_matches('/'),
+                        crate::web::admin_controller::CONTROLLER_PATH,
+                        crate::web::admin_controller::REBUILD_CLIENT_PATH
+                    );
+                    let request_body = serde_json::json!({
+                        "database_url": database_url,
+                        "concurrent_searches": concurrent_searches.get(),
+                    });
+
+                    let _ = client
+                        .post(&admin_url)
+                        .json(&request_body)
+                        .send()
+                        .await
+                        .map_err(|e| Error::AdminApiRequest(Box::new(e)))?
+                        .error_for_status()
+                        .map_err(|e| Error::AdminApiRequest(Box::new(e)))?;
+
+                    info!("Successfully rebuilt DB client via admin endpoint");
+                }
+                PeptidoformSearchClient::Database(_, _, _) => {
+                    warn!("Client is database but web url is set. Should not occure");
+                }
+            }
+        }
 
         Ok(Self {
             masses,

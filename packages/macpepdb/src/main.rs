@@ -115,6 +115,7 @@ enum PeptideCommand {
     /// Test can be run agains database or API.
     /// The test runs thread-many searches in parallel for masses in the given file with concurrent_searches-many PTM conditions per mass.
     /// It reports the time taken for each search and the total time taken for all searches.
+    /// If this test is run with feature `admin-api` and a web_base_url is provided, the test will try to rebuilt the APIs DB client.
     SearchPerformance {
         // optional and default arguments
         ///Lower mass tolerance in PPM
