@@ -464,7 +464,6 @@ async fn main() -> Result<(), Error> {
             macpepdb::web::server::start(
                 client,
                 socket,
-                false,
                 concurrent_searches,
                 max_concurrent_streams_per_connection,
                 search_type,

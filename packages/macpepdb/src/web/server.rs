@@ -56,19 +56,17 @@ impl From<crate::client::Error> for Error {
 ///
 /// # Arguments
 /// * `database_nodes` - List of database nodes
-/// * `interface` - Interface to listen on
-/// * `port` - Port to listen on
-/// * `with_taxonomy_search` - If taxonomy search index should be built
-/// * `num_search_threads` - Number of concurrent search threads (and connections)
-/// * `matomo_info` - Optional Matomo tracking information
+/// * `socket`- Socket to use for the server
 /// * `max_concurrent_streams_per_connection` - Max HTTP/2 streams (in-flight requests)
 ///   allowed per connection; HTTP/2 has no default limit otherwise (RFC 7540 §6.5.2)
+/// * `search_type` - Type of peptide search to use
+/// * `matomo_info` - Optional Matomo tracking information
+/// * `shutdown_signal` - Future that resolves when the server should shut down
 ///
 #[allow(clippy::too_many_arguments)]
 pub async fn start(
     client: Client,
     socket: SocketAddr,
-    _with_taxonomy_search: bool,
     concurrent_searches: NonZeroUsize,
     max_concurrent_streams_per_connection: NonZeroUsize,
     search_type: PeptideSearchType,
