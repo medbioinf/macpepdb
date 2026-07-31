@@ -8,9 +8,6 @@ use macpepdb_web_common::responses::configuration::RuntimeConfigurationResponse;
 
 /// Component for rendering MaCPepDB configuration
 ///
-// TODO: `mass_partitioning.overflow` (masses split across more than one partition) is not
-// plotted below, only the (much larger) `single` list is - matching the level of detail the old
-// `partition_limits: Vec<f64>` plot had.
 pub fn Configuration() -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
     let macpepdb_configuration: Resource<Result<RuntimeConfigurationResponse, GeneralError>> =

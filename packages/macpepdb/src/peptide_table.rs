@@ -15,7 +15,7 @@ use thiserror::Error;
 
 use crate::{
     client::Client,
-    database_build::IsProteinAccess,
+    database_build::{IsProteinAccess, PartitionRange},
     mass_index::MassIndex,
     peptide::{IsPeptide, Peptide},
     peptide_search::SEARCH_SELECT_STATEMENT,
@@ -314,7 +314,7 @@ impl PeptideTable {
         _batch_size_limit: NonZeroUsize,
         num_threads: NonZeroUsize,
         mass_index: Arc<MassIndex>,
-    ) -> Result<(usize, HashMap<i64, Vec<i64>>), Error> {
+    ) -> Result<(usize, Vec<PartitionRange>), Error> {
         let progress_metric = Arc::new(metrics::gauge!(PROGRESS_METRIC));
         let inserted_peptides_metric = Arc::new(metrics::counter!(INSERTED_PEPTIDES_METRIC));
         let next_partition_guard = Arc::new(NextPartitionGuard::new());
@@ -344,14 +344,18 @@ impl PeptideTable {
 
                 tokio::spawn(async move {
                     let peptide_table = PeptideTable::new(client.clone());
-                    let mut mass_partition_map: HashMap<i64, Vec<i64>> = HashMap::new();
+                    let mut partition_ranges: Vec<PartitionRange> = Vec::new();
                     let mut peptide_buffer: Vec<Peptide> = Vec::new();
                     let mut partition_bytes: usize = 0;
                     // Acquired lazily on the first push into an empty buffer so workers that
                     // draw short/empty claims never burn (and never reuse) a partition id.
                     let mut partition: Option<i64> = None;
-                    // Track which masses have peptides in the current buffer.
-                    let mut buffer_masses: HashSet<i64> = HashSet::new();
+                    // Lowest and highest mass with peptides in the current buffer. Masses arrive
+                    // ascending within a claim and the buffer never crosses a claim boundary, so
+                    // this pair fully describes the partition's mass span — recording the span
+                    // instead of every mass is what keeps `MassPartitionMap` one entry per
+                    // partition rather than one per mass.
+                    let mut buffer_mass_range: Option<(i64, i64)> = None;
 
                     loop {
                         // Claim a work-balanced contiguous chunk: the mass range starting at
@@ -412,16 +416,16 @@ impl PeptideTable {
                                 {
                                     let p =
                                         partition.expect("partition id set with non-empty buffer");
-                                    for &m in &buffer_masses {
-                                        mass_partition_map.entry(m).or_default().push(p);
-                                    }
+                                    let (lo, hi) = buffer_mass_range
+                                        .expect("mass range set with non-empty buffer");
+                                    partition_ranges.push(PartitionRange::new(lo, hi, p));
                                     let inserted =
                                         peptide_table.insert_batch(&peptide_buffer).await?;
                                     peptide_buffer.clear();
                                     peptide_ctr.fetch_add(inserted, Ordering::SeqCst);
                                     inserted_peptides_metric.increment(inserted as u64);
                                     partition_bytes = 0;
-                                    buffer_masses.clear();
+                                    buffer_mass_range = None;
                                     partition = None;
                                 }
 
@@ -430,7 +434,11 @@ impl PeptideTable {
                                 partition_bytes += peptide.cql_size();
                                 peptide.set_partition(p);
                                 peptide_buffer.push(peptide);
-                                buffer_masses.insert(mass);
+                                // Ascending within a claim, so `lo` sticks and `mass` extends `hi`.
+                                buffer_mass_range = Some(match buffer_mass_range {
+                                    Some((lo, _)) => (lo, mass),
+                                    None => (mass, mass),
+                                });
                             }
 
                             progress_metric.increment(protein_ids_len as f64);
@@ -440,39 +448,45 @@ impl PeptideTable {
                         // claim is a non-adjacent mass range (another worker took the chunk in
                         // between), so carrying over would merge non-contiguous masses into one
                         // partition and reintroduce overlap. Mirrors the mid-loop flush above
-                        // (resets bytes/masses/partition), unlike the old final-exit flush.
+                        // (resets bytes/range/partition), unlike the old final-exit flush.
+                        //
+                        // `MassPartitionMap` records only each partition's `[lo, hi]` span, so this
+                        // flush is what keeps that span honest: drop it and a partition would cover
+                        // non-adjacent masses, and search would silently miss hits in the gap.
                         if !peptide_buffer.is_empty() {
                             let p = partition.expect("partition id set with non-empty buffer");
-                            for &m in &buffer_masses {
-                                mass_partition_map.entry(m).or_default().push(p);
-                            }
+                            let (lo, hi) =
+                                buffer_mass_range.expect("mass range set with non-empty buffer");
+                            partition_ranges.push(PartitionRange::new(lo, hi, p));
                             let inserted = peptide_table.insert_batch(&peptide_buffer).await?;
                             peptide_buffer.clear();
                             peptide_ctr.fetch_add(inserted, Ordering::SeqCst);
                             inserted_peptides_metric.increment(inserted as u64);
                             partition_bytes = 0;
-                            buffer_masses.clear();
+                            buffer_mass_range = None;
                             partition = None;
                         }
                     }
 
-                    Ok::<_, Error>(mass_partition_map)
+                    Ok::<_, Error>(partition_ranges)
                 })
             })
             .collect::<Vec<_>>();
 
-        let mut final_mass_to_partitions_map: HashMap<i64, Vec<i64>> = HashMap::new();
+        // One range per partition, so this stays tiny (~peptide_count / STRIPE_ROW_LIMIT entries)
+        // no matter how many distinct masses the build saw. `MassPartitionMap::new` sorts it.
+        let mut final_partition_ranges: Vec<PartitionRange> = Vec::new();
 
         for thread in digest_and_insertion_threads {
             match thread.await.map_err(|err| Error::Join(err.to_string()))? {
-                Ok(map) => final_mass_to_partitions_map.extend(map),
+                Ok(ranges) => final_partition_ranges.extend(ranges),
                 Err(err) => return Err(err),
             }
         }
 
         Ok((
             peptide_ctr.load(std::sync::atomic::Ordering::SeqCst),
-            final_mass_to_partitions_map,
+            final_partition_ranges,
         ))
     }
 

@@ -212,7 +212,6 @@ impl PeptideController {
             .configuration_as_ref()
             .mass_partitioning()
             .partition_by_mass(mass)
-            .map(|(_, partition)| partition)
             .collect();
 
         if partitions.is_empty() {

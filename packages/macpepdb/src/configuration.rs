@@ -13,7 +13,12 @@ pub struct RuntimeConfiguration {
 
 impl RuntimeConfiguration {
     /// Key the configuration is stored under in the `blobs` table.
-    pub const BLOB_KEY: &str = "configuration";
+    ///
+    /// Bumped from `configuration` when [`MassPartitionMap`] switched from one entry per mass to one
+    /// mass range per partition. `postcard` is positional and not self-describing, so a v1 blob
+    /// cannot be decoded into the current struct — the old key is left in place for
+    /// [`crate::configuration_v1`] / `config migrate` to read and convert.
+    pub const BLOB_KEY: &str = "configuration_v2";
 
     /// Creates a new configuration from the outcome of a build.
     pub fn new(

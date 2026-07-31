@@ -2198,16 +2198,11 @@ impl PeptideConditionBuilder {
         // `partition = $p AND mass BETWEEN lo AND hi` shape (Task Count 1, columnar
         // chunk-group pruned) while still collapsing the per-mass fan-out: the count is
         // the number of distinct partitions in the window, not distinct masses.
-        let mut partitions: Vec<i64> = partitioning
+        //
+        // The map stores one mass range per partition, so this already yields each overlapping
+        // partition exactly once — no dedup needed.
+        partitioning
             .partitions_by_mass_range(lower_mass, upper_mass)
-            .map(|(_mass, partition)| partition)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
-        partitions.sort_unstable();
-
-        partitions
-            .into_iter()
             .map(|partition| PeptideCondition {
                 partitions: vec![partition],
                 lower_mass,

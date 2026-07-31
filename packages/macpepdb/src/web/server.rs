@@ -36,7 +36,10 @@ pub enum Error {
     Blob(Box<crate::blob_table::Error>),
     #[error("Client error in web server: {0}")]
     Client(Box<crate::client::Error>),
-    #[error("Missing configuration, are you sure the database is build correctly and finished?")]
+    #[error(
+        "Missing configuration, are you sure the database is build correctly and finished? A database \
+         built before the mass partitioning switched to per-partition ranges needs `config migrate`."
+    )]
     MissingConfiguration,
     #[error("Error binding TCP listener: {0}")]
     TcpListener(std::io::Error),

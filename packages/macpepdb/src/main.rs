@@ -13,7 +13,8 @@ use macpepdb::{
     blob_table::BlobTable,
     client::Client,
     configuration::RuntimeConfiguration,
-    database_build::DatabaseBuild,
+    configuration_v1::RuntimeConfigurationV1,
+    database_build::{DatabaseBuild, MassPartitionMap},
     mass::to_float as mass_to_float,
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
@@ -60,12 +61,22 @@ use tcmalloc2::TcMalloc;
 #[global_allocator]
 static GLOBAL: TcMalloc = TcMalloc;
 
+/// Blob parts written per batch by `config migrate`. The migrated configuration is ~1 MB, i.e. a
+/// couple of parts, so this only needs to be non-zero.
+const MIGRATE_CONCURRENT_BATCH_SIZE: NonZeroUsize = NonZeroUsize::new(16).unwrap();
+
+/// Panic message for the paths that cannot return an error when the configuration is absent.
+const MISSING_CONFIG_HINT: &str = "no runtime configuration in the blobs table; a database built \
+     before the mass partitioning switched to per-partition ranges needs `config migrate`";
+
 #[derive(Debug, Error)]
 enum Error {
     #[error("Blob table error: {0}")]
     BlobTable(Box<macpepdb::blob_table::Error>),
     #[error("Client error: {0}")]
     Client(#[from] macpepdb::client::Error),
+    #[error("Configuration verification failed: {0}")]
+    ConfigVerification(String),
     #[error("Database build error: {0}")]
     DatabaseBuild(Box<macpepdb::database_build::Error>),
     #[error("Glob pattern error: {0}")]
@@ -81,7 +92,9 @@ enum Error {
     #[error("Missing mass count in stats table. Are you sure the database was build correctly?")]
     MissingMassCount,
     #[error(
-        "Missing runtime configuration in blob table. Are you sure the database was build correctly?"
+        "Missing runtime configuration in blob table. Are you sure the database was build correctly? \
+         A database built before the mass partitioning switched to per-partition ranges needs \
+         `config migrate`."
     )]
     MissingRuntimeConfiguration,
     #[error("Missing protein search attribute. Please provide either accession or gene.")]
@@ -107,6 +120,17 @@ enum Error {
 #[derive(Subcommand)]
 enum ConfigCommand {
     Show,
+    /// Convert a pre-range configuration blob to the current format, without rebuilding.
+    ///
+    /// Reads the v1 blob (one entry per mass), folds each partition's masses down to a single
+    /// `[lo, hi]` range, and writes the result under the current key. The v1 blob is left in place
+    /// so this stays repeatable and `config verify` can cross-check it afterwards.
+    Migrate,
+    /// Check the current configuration against the v1 blob it was migrated from.
+    ///
+    /// Confirms the range form resolves to the same partitions as the per-mass form for every stored
+    /// mass, and that the ranges tile the mass line as stage 3 is supposed to guarantee.
+    Verify,
 }
 
 #[derive(Subcommand)]
@@ -557,8 +581,134 @@ async fn main() -> Result<(), Error> {
                     BlobTable::select(&client, RuntimeConfiguration::BLOB_KEY)
                         .await
                         .unwrap()
-                        .unwrap();
+                        .expect(MISSING_CONFIG_HINT);
                 println!("{}", serde_json::to_string_pretty(&configuration).unwrap());
+            }
+            ConfigCommand::Migrate => {
+                let client = Client::new(&cli.database_url).await?;
+
+                let existing: Option<RuntimeConfiguration> =
+                    BlobTable::select(&client, RuntimeConfiguration::BLOB_KEY)
+                        .await
+                        .map_err(|err| Error::BlobTable(Box::new(err)))?;
+
+                if let Some(existing) = existing {
+                    println!(
+                        "`{}` is already present ({} partition ranges) — nothing to migrate.",
+                        RuntimeConfiguration::BLOB_KEY,
+                        existing.mass_partitioning().len()
+                    );
+                } else {
+                    let v1: RuntimeConfigurationV1 =
+                        BlobTable::select(&client, RuntimeConfigurationV1::BLOB_KEY)
+                            .await
+                            .map_err(|err| Error::BlobTable(Box::new(err)))?
+                            .ok_or(Error::MissingRuntimeConfiguration)?;
+
+                    let mass_count = v1.mass_partitioning().mass_count();
+                    let mass_partitioning = MassPartitionMap::from_mass_partition_pairs(
+                        v1.mass_partitioning().mass_partition_pairs(),
+                    );
+                    let partition_count = mass_partitioning.len();
+
+                    let configuration = RuntimeConfiguration::new(
+                        v1.comment().cloned(),
+                        mass_partitioning,
+                        v1.protease().clone(),
+                    );
+
+                    BlobTable::insert(&client, &configuration, MIGRATE_CONCURRENT_BATCH_SIZE)
+                        .await
+                        .map_err(|err| Error::BlobTable(Box::new(err)))?;
+
+                    println!(
+                        "Migrated `{}` -> `{}`: {mass_count} masses folded into {partition_count} partition ranges.",
+                        RuntimeConfigurationV1::BLOB_KEY,
+                        RuntimeConfiguration::BLOB_KEY,
+                    );
+                    println!(
+                        "The v1 blob was left in place. Run `config verify` to cross-check it, then restart the API."
+                    );
+                }
+            }
+            ConfigCommand::Verify => {
+                let client = Client::new(&cli.database_url).await?;
+
+                let configuration: RuntimeConfiguration =
+                    BlobTable::select(&client, RuntimeConfiguration::BLOB_KEY)
+                        .await
+                        .map_err(|err| Error::BlobTable(Box::new(err)))?
+                        .ok_or(Error::MissingRuntimeConfiguration)?;
+                let partitioning = configuration.mass_partitioning();
+
+                // Structural invariant: stage 3 must leave the ranges tiling the mass line, so
+                // consecutive ranges may touch at a shared boundary mass but never overlap.
+                let mut overlaps: usize = 0;
+                for pair in partitioning.ranges().windows(2) {
+                    if pair[1].lo() < pair[0].hi() {
+                        if overlaps == 0 {
+                            eprintln!(
+                                "overlap: partition {} spans [{}, {}] but partition {} starts at {}",
+                                pair[0].partition(),
+                                pair[0].lo(),
+                                pair[0].hi(),
+                                pair[1].partition(),
+                                pair[1].lo(),
+                            );
+                        }
+                        overlaps += 1;
+                    }
+                }
+
+                // Equivalence against the per-mass map this was migrated from. Checked pair by pair
+                // rather than by rebuilding a mass -> partitions map, so verifying a full-scale
+                // database costs no more memory than the v1 blob itself.
+                let v1: Option<RuntimeConfigurationV1> =
+                    BlobTable::select(&client, RuntimeConfigurationV1::BLOB_KEY)
+                        .await
+                        .map_err(|err| Error::BlobTable(Box::new(err)))?;
+
+                let mut checked: usize = 0;
+                let mut missing: usize = 0;
+
+                if let Some(v1) = v1.as_ref() {
+                    for (mass, partition) in v1.mass_partitioning().mass_partition_pairs() {
+                        checked += 1;
+                        // The range form may name extra partitions for a mass that falls inside one
+                        // of their gaps — harmless, callers still qualify on `mass`. Missing a
+                        // partition that genuinely holds the mass would silently lose search hits.
+                        if !partitioning.partition_by_mass(mass).any(|p| p == partition) {
+                            if missing == 0 {
+                                eprintln!(
+                                    "mass {mass} is stored in partition {partition}, but the range map yields {:?}",
+                                    partitioning.partition_by_mass(mass).collect::<Vec<_>>()
+                                );
+                            }
+                            missing += 1;
+                        }
+                    }
+                }
+
+                println!("{} partition ranges", partitioning.len());
+                match v1.as_ref() {
+                    Some(v1) => println!(
+                        "cross-checked {checked} (mass, partition) associations over {} masses from `{}`",
+                        v1.mass_partitioning().mass_count(),
+                        RuntimeConfigurationV1::BLOB_KEY,
+                    ),
+                    None => println!(
+                        "no `{}` blob present — skipped the per-mass cross-check, verified the tiling invariant only",
+                        RuntimeConfigurationV1::BLOB_KEY,
+                    ),
+                }
+
+                if overlaps > 0 || missing > 0 {
+                    return Err(Error::ConfigVerification(format!(
+                        "{overlaps} overlapping range(s), {missing} missing association(s)"
+                    )));
+                }
+
+                println!("OK");
             }
         },
         Command::Search {
@@ -668,11 +818,8 @@ async fn main() -> Result<(), Error> {
                 let mass =
                     Peptide::peptide_mass_from_amino_acid_bits(sequence.amino_acid_bit_codes());
 
-                let partitions: Vec<i64> = config
-                    .mass_partitioning()
-                    .partition_by_mass(mass)
-                    .map(|(_, partition)| partition)
-                    .collect();
+                let partitions: Vec<i64> =
+                    config.mass_partitioning().partition_by_mass(mass).collect();
 
                 if partitions.is_empty() {
                     return Err(Error::MissingMass);
@@ -992,7 +1139,7 @@ async fn peptide_search(
         BlobTable::select(client.as_ref(), RuntimeConfiguration::BLOB_KEY)
             .await
             .unwrap()
-            .unwrap(),
+            .expect(MISSING_CONFIG_HINT),
     );
 
     let taxonomy_ids = if taxonomy_ids.is_empty() {

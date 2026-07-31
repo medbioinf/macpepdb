@@ -36,7 +36,10 @@ pub enum Error {
         "Client url can either start with http:// or https:// for web API or postgresql:// for database"
     )]
     InvalidClientUrl,
-    #[error("Missing runtime configuration in database")]
+    #[error(
+        "Missing runtime configuration in database. A database built before the mass partitioning \
+         switched to per-partition ranges needs `config migrate`."
+    )]
     MissingRuntimeConfig,
     #[error("Unable to get next chunk from HTTP response stream: {0}")]
     NextHttpPeptidoform(Box<std::io::Error>),

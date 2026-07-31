@@ -136,7 +136,6 @@ impl ProteinController {
                 .configuration()
                 .mass_partitioning()
                 .partition_by_mass(peptide.mass())
-                .map(|(_, partition)| partition)
                 .collect();
 
             params.push(Box::new(partitions));

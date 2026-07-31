@@ -1,10 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    num::NonZeroUsize,
-    path::PathBuf,
-    sync::Arc,
-    time::Instant,
-};
+use std::{collections::HashMap, num::NonZeroUsize, path::PathBuf, sync::Arc, time::Instant};
 
 use dihardts_omicstools::biology::io::taxonomy_reader::TaxonomyReader;
 use futures::{FutureExt, StreamExt, TryStreamExt, future::BoxFuture, stream::BoxStream};
@@ -77,20 +71,72 @@ into_thiserror_boxed!(crate::taxonomy_table::Error, Error, TaxonomyTable);
 into_thiserror_boxed!(crate::taxonomy_rank::Error, Error, TaxonomyRank);
 into_thiserror_boxed!(crate::taxonomy_rank_table::Error, Error, TaxonomyRankTable);
 
-/// Maps a peptide mass to the partition(s) that hold peptides of that mass. Split into a dense,
-/// sorted array for the common case of one partition per mass (`single`) and a sparse map for
-/// masses that overflow into several partitions (`overflow`), so range queries over `single` can
-/// binary-search instead of scanning every mass.
+/// The closed mass range `[lo, hi]` covered by one partition.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct PartitionRange {
+    lo: i64,
+    hi: i64,
+    partition: i64,
+}
+
+impl PartitionRange {
+    /// Creates a range for `partition` spanning the masses `[lo, hi]` inclusive.
+    pub fn new(lo: i64, hi: i64, partition: i64) -> Self {
+        Self { lo, hi, partition }
+    }
+
+    pub fn lo(&self) -> i64 {
+        self.lo
+    }
+
+    pub fn hi(&self) -> i64 {
+        self.hi
+    }
+
+    pub fn partition(&self) -> i64 {
+        self.partition
+    }
+}
+
+/// Maps a peptide mass to the partition(s) that hold peptides of that mass, stored as one closed
+/// mass range per partition rather than one entry per mass.
+///
+/// Stage 3 digests contiguous, globally-ascending mass claims and flushes its buffer at every claim
+/// boundary ([`PeptideTable::build_concurrently`]), so each partition covers exactly one contiguous
+/// mass range and two partitions overlap only at a shared boundary mass — a mass whose peptides
+/// spilled past one columnar stripe. Recording ranges instead of masses collapses the map from one
+/// entry per distinct mass (hundreds of millions at full TrEMBL scale) to one per partition
+/// (`peptide_count / STRIPE_ROW_LIMIT`), which is what keeps it cheap to accumulate during the build
+/// and cheap to load on every `api` / `search` start.
+///
+/// That contiguous-tiling invariant is therefore **load-bearing**: if stage 3 stopped flushing at
+/// claim boundaries, one partition would cover non-adjacent masses and the lookups below would
+/// silently return the wrong partitions — losing search hits rather than erroring. `config verify`
+/// checks it against a stored per-mass map.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct MassPartitionMap {
-    /// Masses partition array
-    single: Vec<(i64, i64)>,
-    /// Remaining
-    overflow: BTreeMap<i64, Vec<i64>>,
+    /// One closed mass range per partition, sorted by `(lo, hi)`.
+    ranges: Vec<PartitionRange>,
 }
 
 impl MassPartitionMap {
-    /// Returns the `(mass, partition)` pairs for every mass in `[lower_mass, upper_mass]`.
+    /// Builds the map from the per-partition ranges collected by stage 3.
+    pub fn new(mut ranges: Vec<PartitionRange>) -> Self {
+        ranges.sort_unstable_by_key(|range| (range.lo, range.hi));
+        // Ranges are disjoint apart from shared endpoints, so sorting by `lo` also leaves `hi`
+        // non-decreasing — which is what makes the binary search in the lookups below valid.
+        debug_assert!(
+            ranges.windows(2).all(|pair| pair[0].hi <= pair[1].hi),
+            "partition mass ranges must tile the mass line ascending and overlap only at a shared \
+             boundary mass; stage 3 must keep flushing its buffer at every claim boundary"
+        );
+        Self { ranges }
+    }
+
+    /// Returns the partitions holding any mass in `[lower_mass, upper_mass]`, without duplicates.
+    ///
+    /// Ordered by ascending mass range, which is not the same as ascending partition id — ids are
+    /// handed out by a shared counter as workers flush, so they carry no mass ordering.
     ///
     /// # Arguments
     /// * `lower_mass` - Lower bound of the mass range (inclusive)
@@ -99,59 +145,76 @@ impl MassPartitionMap {
         &self,
         lower_mass: i64,
         upper_mass: i64,
-    ) -> impl Iterator<Item = (i64, i64)> {
-        let start = self.single.partition_point(|(m, _)| *m < lower_mass);
-        let end = self.single.partition_point(|(m, _)| *m <= upper_mass);
+    ) -> impl Iterator<Item = i64> {
+        let start = self.ranges.partition_point(|range| range.hi < lower_mass);
 
-        self.single[start..end].iter().cloned().chain(
-            self.overflow
-                .range(lower_mass..=upper_mass)
-                .flat_map(|(&mass, partitions)| {
-                    partitions.iter().map(move |partition| (mass, *partition))
-                }),
-        )
+        self.ranges[start..]
+            .iter()
+            .take_while(move |range| range.lo <= upper_mass)
+            .map(|range| range.partition)
     }
 
-    /// Returns the `(mass, partition)` pairs for a single, exact `mass`.
+    /// Returns the partitions that may hold peptides of exactly `mass`.
+    ///
+    /// Because ranges span the gaps between stored masses, this can name a partition for a mass
+    /// that was never stored. Callers already qualify their query with `mass = ...`, so the result
+    /// is still correct — it just costs one pruned query that returns nothing.
     ///
     /// # Arguments
     /// * `mass` - The exact mass to look up partitions for
-    pub fn partition_by_mass(&self, mass: i64) -> impl Iterator<Item = (i64, i64)> {
-        let start = self.single.partition_point(|(m, _)| *m < mass);
-        let end = self.single.partition_point(|(m, _)| *m <= mass);
+    pub fn partition_by_mass(&self, mass: i64) -> impl Iterator<Item = i64> {
+        self.partitions_by_mass_range(mass, mass)
+    }
 
-        self.single[start..end].iter().cloned().chain(
-            self.overflow
-                .get(&mass)
-                .map(|partitions| partitions.iter().map(move |partition| (mass, *partition)))
+    /// Number of partitions in the map.
+    pub fn len(&self) -> usize {
+        self.ranges.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.ranges.is_empty()
+    }
+
+    /// The stored ranges, ascending by `(lo, hi)`.
+    pub fn ranges(&self) -> &[PartitionRange] {
+        &self.ranges
+    }
+
+    /// Folds `(mass, partition)` pairs into one range per partition by taking each partition's
+    /// minimum and maximum mass.
+    ///
+    /// This reconstructs the range form from the historical per-mass shape — used by
+    /// `config migrate` to convert a stored v1 configuration without re-running the build, and by
+    /// tests that find it easier to spell out a map mass-by-mass.
+    pub fn from_mass_partition_pairs(pairs: impl Iterator<Item = (i64, i64)>) -> Self {
+        let mut bounds: HashMap<i64, (i64, i64)> = HashMap::new();
+
+        for (mass, partition) in pairs {
+            bounds
+                .entry(partition)
+                .and_modify(|(lo, hi)| {
+                    *lo = (*lo).min(mass);
+                    *hi = (*hi).max(mass);
+                })
+                .or_insert((mass, mass));
+        }
+
+        Self::new(
+            bounds
                 .into_iter()
-                .flatten(),
+                .map(|(partition, (lo, hi))| PartitionRange { lo, hi, partition })
+                .collect(),
         )
     }
 }
 
+#[cfg(test)]
 impl From<HashMap<i64, Vec<i64>>> for MassPartitionMap {
     fn from(map: HashMap<i64, Vec<i64>>) -> Self {
-        let capacity = map
-            .iter()
-            .filter(|(_, partitions)| partitions.len() == 1)
-            .count();
-
-        let mut single = Vec::with_capacity(capacity);
-        let mut overflow = BTreeMap::new();
-
-        for (mass, mut partitions_vec) in map {
-            if partitions_vec.len() == 1 {
-                single.push((mass, partitions_vec[0]));
-            } else {
-                partitions_vec.shrink_to_fit();
-                overflow.insert(mass, partitions_vec);
-            }
-        }
-
-        single.sort_unstable_by_key(|(m, _)| *m);
-
-        Self { single, overflow }
+        Self::from_mass_partition_pairs(
+            map.into_iter()
+                .flat_map(|(mass, partitions)| partitions.into_iter().map(move |p| (mass, p))),
+        )
     }
 }
 
@@ -636,7 +699,7 @@ impl<'a> DatabaseBuild<'a> {
         mass_index: MassIndex,
     ) -> Result<MassPartitionMap, Error> {
         let now = std::time::Instant::now();
-        let (peptide_ctr, mass_to_partitions_map) = PeptideTable::new(self.client.clone())
+        let (peptide_ctr, partition_ranges) = PeptideTable::new(self.client.clone())
             .build_concurrently(
                 protein_access,
                 self.skip_protein_associations,
@@ -652,7 +715,7 @@ impl<'a> DatabaseBuild<'a> {
             .upsert_peptide_count(peptide_ctr)
             .await?;
 
-        Ok(MassPartitionMap::from(mass_to_partitions_map))
+        Ok(MassPartitionMap::new(partition_ranges))
     }
 
     fn allowed_usable_memory(&self) -> usize {
@@ -716,5 +779,144 @@ impl<'a> DatabaseBuild<'a> {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Four partitions tiling `[100, 300]` and `[400, 500]`, with mass 200 split across three of
+    /// them (a mass whose peptides overflowed one columnar stripe) and a gap between 300 and 400.
+    fn partitioning() -> MassPartitionMap {
+        MassPartitionMap::new(vec![
+            // Deliberately unsorted — `new` is responsible for ordering.
+            PartitionRange::new(400, 500, 13),
+            PartitionRange::new(200, 300, 12),
+            PartitionRange::new(100, 200, 10),
+            PartitionRange::new(200, 200, 11),
+        ])
+    }
+
+    fn partitions_for(map: &MassPartitionMap, mass: i64) -> Vec<i64> {
+        let mut partitions: Vec<i64> = map.partition_by_mass(mass).collect();
+        partitions.sort_unstable();
+        partitions
+    }
+
+    fn partitions_in(map: &MassPartitionMap, lower: i64, upper: i64) -> Vec<i64> {
+        let mut partitions: Vec<i64> = map.partitions_by_mass_range(lower, upper).collect();
+        partitions.sort_unstable();
+        partitions
+    }
+
+    #[test]
+    fn test_new_sorts_ranges_ascending() {
+        let map = partitioning();
+        let los: Vec<i64> = map.ranges().iter().map(|range| range.lo()).collect();
+        let his: Vec<i64> = map.ranges().iter().map(|range| range.hi()).collect();
+
+        assert_eq!(los, vec![100, 200, 200, 400]);
+        // `hi` must come out non-decreasing — the lookups binary-search on it.
+        assert_eq!(his, vec![200, 200, 300, 500]);
+    }
+
+    #[test]
+    fn test_mass_in_a_single_partition() {
+        assert_eq!(partitions_for(&partitioning(), 150), vec![10]);
+    }
+
+    #[test]
+    fn test_mass_split_across_three_partitions() {
+        // 200 is the shared boundary mass of 10, 11 and 12 — all three must be named.
+        assert_eq!(partitions_for(&partitioning(), 200), vec![10, 11, 12]);
+    }
+
+    #[test]
+    fn test_mass_inside_a_range_gap_names_the_spanning_partition() {
+        // 250 need never have been stored; it sits inside partition 12's span, so it is named. The
+        // caller still qualifies on `mass`, so the extra query just returns nothing.
+        assert_eq!(partitions_for(&partitioning(), 250), vec![12]);
+    }
+
+    #[test]
+    fn test_mass_between_two_partitions_names_nothing() {
+        // 350 is outside every span, unlike 250 above.
+        assert!(partitions_for(&partitioning(), 350).is_empty());
+    }
+
+    #[test]
+    fn test_range_query_spanning_everything() {
+        assert_eq!(
+            partitions_in(&partitioning(), 150, 450),
+            vec![10, 11, 12, 13]
+        );
+    }
+
+    #[test]
+    fn test_range_query_straddling_a_shared_boundary_mass() {
+        assert_eq!(partitions_in(&partitioning(), 199, 201), vec![10, 11, 12]);
+    }
+
+    #[test]
+    fn test_range_query_inside_the_gap_between_partitions() {
+        assert!(partitions_in(&partitioning(), 310, 390).is_empty());
+    }
+
+    #[test]
+    fn test_range_queries_outside_the_map() {
+        let map = partitioning();
+        assert!(partitions_in(&map, 0, 50).is_empty());
+        assert!(partitions_in(&map, 600, 700).is_empty());
+        // Touching the very first and very last mass still resolves.
+        assert_eq!(partitions_in(&map, 0, 100), vec![10]);
+        assert_eq!(partitions_in(&map, 500, 700), vec![13]);
+    }
+
+    #[test]
+    fn test_empty_map() {
+        let map = MassPartitionMap::new(Vec::new());
+        assert!(map.is_empty());
+        assert_eq!(map.len(), 0);
+        assert!(partitions_for(&map, 200).is_empty());
+        assert!(partitions_in(&map, 0, i64::MAX).is_empty());
+    }
+
+    #[test]
+    fn test_from_mass_partition_pairs_folds_to_one_range_per_partition() {
+        // The historical per-mass shape: 200 lives in both partitions.
+        let map = MassPartitionMap::from(HashMap::from_iter(vec![
+            (100_i64, vec![1_i64]),
+            (200, vec![1, 2]),
+            (300, vec![2]),
+        ]));
+
+        assert_eq!(map.len(), 2, "one range per partition, not one per mass");
+        assert_eq!(partitions_for(&map, 100), vec![1]);
+        assert_eq!(partitions_for(&map, 200), vec![1, 2]);
+        assert_eq!(partitions_for(&map, 300), vec![2]);
+    }
+
+    #[test]
+    fn test_from_mass_partition_pairs_preserves_every_association() {
+        // What `config verify` asserts against a migrated database, in miniature: every stored
+        // (mass, partition) pair must still resolve through the folded range form.
+        let per_mass: HashMap<i64, Vec<i64>> = HashMap::from_iter(vec![
+            (10_i64, vec![1_i64]),
+            (20, vec![1]),
+            (30, vec![1, 2]),
+            (40, vec![2]),
+            (90, vec![3]),
+        ]);
+        let map = MassPartitionMap::from(per_mass.clone());
+
+        for (mass, partitions) in per_mass {
+            for partition in partitions {
+                assert!(
+                    map.partition_by_mass(mass).any(|p| p == partition),
+                    "mass {mass} lost its association with partition {partition}"
+                );
+            }
+        }
     }
 }

@@ -38,6 +38,8 @@ extern crate static_assertions;
 pub mod amino_acid;
 /// The persisted build configuration: protease, mass partitioning, and free-form comment.
 pub mod configuration;
+/// The retired v1 configuration layout, readable only so `config migrate` can convert old databases.
+pub mod configuration_v1;
 /// Integer mass conversion (`mass_to_int!`/`to_float`) and the `MASS_CONVERT_FACTOR` scale.
 #[macro_use]
 pub mod mass;
