@@ -17,6 +17,8 @@ use crate::blob_table::BlobTable;
 use crate::client::Client;
 use crate::configuration::RuntimeConfiguration;
 use crate::peptide_search::PeptideSearchType;
+#[cfg(feature = "admin-api")]
+use crate::web::admin_controller::AdminController;
 use crate::web::chemistry_controller::ChemistryController;
 use crate::web::configuration_controller::ConfigurationController;
 use crate::web::error_controller::page_not_found;
@@ -102,6 +104,7 @@ pub async fn start(
 
     tracing::debug!("Create router...");
     // Build our application with route
+    #[allow(unused_mut)]
     let mut app = Router::new()
         // Peptide routes
         .nest(
@@ -127,7 +130,23 @@ pub async fn start(
         .nest(
             ChemistryController::controller_path(),
             ChemistryController::routes(server_state.clone()),
-        )
+        );
+
+    #[cfg(feature = "admin-api")]
+    {
+        tracing::warn!(
+            "admin-api feature enabled: exposing DB client rebuild endpoint at {}{} \
+             — never expose this build to the internet",
+            AdminController::controller_path(),
+            "/client"
+        );
+        app = app.nest(
+            AdminController::controller_path(),
+            AdminController::routes(server_state.clone()),
+        );
+    }
+
+    let mut app = app
         .with_state(server_state.clone())
         .fallback(page_not_found)
         .layer(cors);

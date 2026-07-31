@@ -76,6 +76,9 @@ dihardts_omicstools = { workspace = true }
 
 [features]
 default = ["mimalloc"]
+# Exposes a runtime DB-client-rebuild endpoint (`/api/admin/client`). Lets a caller repoint the
+# server at an arbitrary PostgreSQL URL — never enable on an internet-facing build.
+admin-api = []
 jemalloc = ["dep:tikv-jemallocator"]
 mimalloc = ["dep:mimalloc"]
 tcmalloc = ["dep:tcmalloc2"]

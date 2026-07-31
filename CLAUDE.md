@@ -142,4 +142,7 @@ Routes: `GET/POST /api/peptides/search`, `GET /api/peptides/{sequence}` (and exi
 
 `default = ["mimalloc"]`. Mutually pick one allocator: `mimalloc`, `jemalloc`, or `tcmalloc`
 (`tcmalloc` needs `libstdc++`, `libclang`, `libunwind`). The `tokio-console` feature additionally
-requires building with `RUSTFLAGS="--cfg tokio_unstable"`.
+requires building with `RUSTFLAGS="--cfg tokio_unstable"`. The `admin-api` feature (not in
+`default`) adds `POST /api/admin/client`, letting a caller rebuild the DB client from a new
+PostgreSQL URL and change `concurrent_searches` at runtime — never enable it on an
+internet-facing build.

@@ -2,6 +2,10 @@ use std::sync::LazyLock;
 
 use http::{HeaderMap, HeaderValue, header};
 
+/// Route handlers for `/api/admin` (runtime DB client rebuild). Only compiled with the
+/// `admin-api` feature — must never be enabled on an internet-facing build.
+#[cfg(feature = "admin-api")]
+pub mod admin_controller;
 /// Route handlers for `/api/chemistry` (amino acid info, hydrophobicity).
 pub mod chemistry_controller;
 /// Route handlers for `/api/configuration`.

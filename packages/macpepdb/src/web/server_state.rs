@@ -1,5 +1,8 @@
 // std imports
-use std::{num::NonZeroUsize, sync::Arc};
+use std::{
+    num::NonZeroUsize,
+    sync::{Arc, RwLock},
+};
 
 // internal imports
 use crate::{
@@ -38,10 +41,10 @@ impl MatomoInfo {
 /// the build-time configuration, and the search/tracking settings the
 /// server was started with.
 pub struct ServerState {
-    db_client: Arc<Client>,
+    db_client: RwLock<Arc<Client>>,
     configuration: Arc<RuntimeConfiguration>,
     matomo_info: Option<MatomoInfo>,
-    concurrent_searches: NonZeroUsize,
+    concurrent_searches: RwLock<NonZeroUsize>,
     search_type: PeptideSearchType,
 }
 
@@ -62,10 +65,10 @@ impl ServerState {
         search_type: PeptideSearchType,
     ) -> Self {
         Self {
-            concurrent_searches,
+            concurrent_searches: RwLock::new(concurrent_searches),
             search_type,
             matomo_info,
-            db_client: Arc::new(db_client),
+            db_client: RwLock::new(Arc::new(db_client)),
             configuration: Arc::new(configuration),
         }
     }
@@ -73,13 +76,17 @@ impl ServerState {
     /// Returns a new Arc of the db client
     ///
     pub fn db_client(&self) -> Arc<Client> {
-        self.db_client.clone()
+        self.db_client.read().unwrap().clone()
     }
 
-    /// Returns a reference to the db client
-    ///
-    pub fn db_client_as_ref(&self) -> &Client {
-        self.db_client.as_ref()
+    /// Replaces the db client and concurrent-search limit in place, so every
+    /// handler picks up the new values on its next call. Does not reload the RuntimeConfiguration, so do not change the databse.
+    /// Gated behind the admin-api` feature since this lets a caller repoint the server at an
+    /// arbitrary PostgreSQL URL.
+    #[cfg(feature = "admin-api")]
+    pub fn rebuild_db_client(&self, new_client: Client, concurrent_searches: NonZeroUsize) {
+        *self.db_client.write().unwrap() = Arc::new(new_client);
+        *self.concurrent_searches.write().unwrap() = concurrent_searches;
     }
 
     /// Returns a new ARC of the configuration
@@ -97,7 +104,7 @@ impl ServerState {
     /// Returns the number of concurrent searches allowed
     ///
     pub fn concurrent_searches(&self) -> NonZeroUsize {
-        self.concurrent_searches
+        *self.concurrent_searches.read().unwrap()
     }
 
     /// Returns a reference to the matomo info if it exists
