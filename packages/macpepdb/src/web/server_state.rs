@@ -42,7 +42,7 @@ impl MatomoInfo {
 /// server was started with.
 pub struct ServerState {
     db_client: RwLock<Arc<Client>>,
-    configuration: Arc<RuntimeConfiguration>,
+    configuration: RwLock<Arc<RuntimeConfiguration>>,
     matomo_info: Option<MatomoInfo>,
     concurrent_searches: RwLock<NonZeroUsize>,
     search_type: PeptideSearchType,
@@ -69,7 +69,7 @@ impl ServerState {
             search_type,
             matomo_info,
             db_client: RwLock::new(Arc::new(db_client)),
-            configuration: Arc::new(configuration),
+            configuration: RwLock::new(Arc::new(configuration)),
         }
     }
 
@@ -79,26 +79,28 @@ impl ServerState {
         self.db_client.read().unwrap().clone()
     }
 
-    /// Replaces the db client and concurrent-search limit in place, so every
-    /// handler picks up the new values on its next call. Does not reload the RuntimeConfiguration, so do not change the databse.
+    /// Replaces the db client, the runtime configuration and the concurrent-search limit in
+    /// place, so every handler picks up the new values on its next call. The configuration
+    /// has to be read from the new database by the caller, otherwise handlers would keep
+    /// resolving masses with the previous database's mass partitioning.
     /// Gated behind the admin-api` feature since this lets a caller repoint the server at an
     /// arbitrary PostgreSQL URL.
     #[cfg(feature = "admin-api")]
-    pub fn rebuild_db_client(&self, new_client: Client, concurrent_searches: NonZeroUsize) {
+    pub fn rebuild_db_client(
+        &self,
+        new_client: Client,
+        configuration: RuntimeConfiguration,
+        concurrent_searches: NonZeroUsize,
+    ) {
         *self.db_client.write().unwrap() = Arc::new(new_client);
+        *self.configuration.write().unwrap() = Arc::new(configuration);
         *self.concurrent_searches.write().unwrap() = concurrent_searches;
     }
 
     /// Returns a new ARC of the configuration
     ///
     pub fn configuration(&self) -> Arc<RuntimeConfiguration> {
-        self.configuration.clone()
-    }
-
-    /// Returns a reference to the configuration
-    ///
-    pub fn configuration_as_ref(&self) -> &RuntimeConfiguration {
-        self.configuration.as_ref()
+        self.configuration.read().unwrap().clone()
     }
 
     /// Returns the number of concurrent searches allowed

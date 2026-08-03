@@ -74,6 +74,6 @@ impl ConfigurationController {
     pub async fn show(
         State(server_state): State<Arc<ServerState>>,
     ) -> Json<RuntimeConfigurationResponse> {
-        Json(server_state.configuration_as_ref().into())
+        Json(server_state.configuration().as_ref().into())
     }
 }

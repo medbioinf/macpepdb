@@ -14,7 +14,9 @@ use serde::Deserialize;
 use thiserror::Error;
 
 // internal imports
+use crate::blob_table::BlobTable;
 use crate::client::Client;
+use crate::configuration::RuntimeConfiguration;
 use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::server_state::ServerState;
 
@@ -36,6 +38,14 @@ pub enum Error {
     InvalidConcurrentSearches,
     #[error("Client error: {0}")]
     Client(#[from] crate::client::Error),
+    #[error("Error reading the configuration from the new database: {0}")]
+    Blob(#[from] crate::blob_table::Error),
+    #[error(
+        "The new database has no configuration, are you sure it is built correctly and finished? \
+         A database built before the mass partitioning switched to per-partition ranges needs \
+         `config migrate`."
+    )]
+    MissingConfiguration,
 }
 
 impl IntoResponse for Error {
@@ -72,8 +82,9 @@ impl AdminController {
         CONTROLLER_PATH
     }
 
-    /// Rebuilds the server's db client from a new PostgreSQL URL and swaps the
-    /// concurrent-search limit, replacing both in place for every handler.
+    /// Rebuilds the server's db client from a new PostgreSQL URL, reloads the runtime
+    /// configuration from that database and swaps the concurrent-search limit, replacing all
+    /// three in place for every handler.
     ///
     /// # API
     /// ## Request
@@ -90,9 +101,9 @@ impl AdminController {
     /// ## Response
     /// * `204 No Content` on success.
     ///
-    /// Note: building a `Client` only configures a connection pool, it does not eagerly
-    /// connect — a `204` here does not guarantee the new URL is reachable, only that it
-    /// parsed. Connectivity is exercised by the next real query.
+    /// The configuration blob is read from the new database before anything is swapped, so a
+    /// `204` means the new URL was reachable and holds a usable configuration; on any error
+    /// the server keeps running against the previous client and configuration.
     async fn rebuild_client(
         State(server_state): State<Arc<ServerState>>,
         Json(payload): Json<RebuildClientRequest>,
@@ -100,7 +111,11 @@ impl AdminController {
         let concurrent_searches = NonZeroUsize::new(payload.concurrent_searches)
             .ok_or(Error::InvalidConcurrentSearches)?;
         let new_client = Client::new(&payload.database_url).await?;
-        server_state.rebuild_db_client(new_client, concurrent_searches);
+        let configuration: RuntimeConfiguration =
+            BlobTable::select(&new_client, RuntimeConfiguration::BLOB_KEY)
+                .await?
+                .ok_or(Error::MissingConfiguration)?;
+        server_state.rebuild_db_client(new_client, configuration, concurrent_searches);
         Ok(StatusCode::NO_CONTENT)
     }
 }

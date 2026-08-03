@@ -209,7 +209,7 @@ impl PeptideController {
     ) -> Result<Option<Peptide>, Error> {
         let mass = peptide.mass();
         let partitions: Vec<i64> = server_state
-            .configuration_as_ref()
+            .configuration()
             .mass_partitioning()
             .partition_by_mass(mass)
             .collect();
