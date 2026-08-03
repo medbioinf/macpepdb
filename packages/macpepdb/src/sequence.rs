@@ -514,6 +514,14 @@ impl ModifiedSequence {
         self.0.push(part);
     }
 
+    pub(crate) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub(crate) fn truncate(&mut self, len: usize) {
+        self.0.truncate(len);
+    }
+
     /// Creates an empty sequence with pre-allocated capacity for `capacity` parts.
     pub fn with_capacity(capacity: usize) -> Self {
         Self(Vec::with_capacity(capacity))

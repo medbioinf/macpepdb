@@ -1734,7 +1734,7 @@ impl PeptideConditionBuilder {
 
         self.inner_modify_peptide(
             peptide,
-            modified_sequence.clone(),
+            &mut modified_sequence,
             mass,
             static_modifications_map,
             variable_modifications_map,
@@ -1763,7 +1763,7 @@ impl PeptideConditionBuilder {
     fn inner_modify_peptide(
         &self,
         peptide: &Peptide,
-        mut modified_sequence: ModifiedSequence,
+        modified_sequence: &mut ModifiedSequence,
         mut mass: i64,
         static_modifications_map: &HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>>,
         variable_modifications_map: &HashMap<
@@ -1785,6 +1785,7 @@ impl PeptideConditionBuilder {
             return;
         }
 
+        let start_len = modified_sequence.len();
         let mut is_statically_modified = false;
         modified_sequence.push(ModifiedSequencePart::AminoAcid(
             peptide.sequence()[position],
@@ -1832,7 +1833,7 @@ impl PeptideConditionBuilder {
             // # Next with unmodified amino acid
             self.inner_modify_peptide(
                 peptide,
-                modified_sequence.clone(),
+                modified_sequence,
                 mass,
                 static_modifications_map,
                 variable_modifications_map,
@@ -1847,14 +1848,13 @@ impl PeptideConditionBuilder {
                     variable_modifications_map.get(&peptide.sequence()[position])
                 {
                     for modification in modifications.iter() {
-                        let mut next_modified_sequence = modified_sequence.clone();
-                        next_modified_sequence.push(ModifiedSequencePart::PositionModification(
+                        modified_sequence.push(ModifiedSequencePart::PositionModification(
                             modification.mass_delta(),
                         ));
                         let next_mass = mass + modification.mass_delta();
                         self.inner_modify_peptide(
                             peptide,
-                            next_modified_sequence,
+                            modified_sequence,
                             next_mass,
                             static_modifications_map,
                             variable_modifications_map,
@@ -1862,10 +1862,13 @@ impl PeptideConditionBuilder {
                             applied_vmods + 1,
                             peptidoforms,
                         );
+                        modified_sequence.truncate(start_len + 1);
                     }
                 }
             }
         }
+
+        modified_sequence.truncate(start_len);
     }
 
     /// Modifies the peptide sequence at the end by adding c-terminal to the proforma sequences.
@@ -1879,11 +1882,12 @@ impl PeptideConditionBuilder {
     fn end_modify_peptide(
         &self,
         peptide: &Peptide,
-        mut modified_sequence: ModifiedSequence,
+        modified_sequence: &mut ModifiedSequence,
         mut mass: i64,
         applied_vmods: usize,
         peptidoforms: &mut HashSet<Peptidoform>,
     ) {
+        let start_len = modified_sequence.len();
         if let Some(c_bond_ptm) = &self.c_bond_ptm {
             modified_sequence.push(ModifiedSequencePart::CTerminalModification(
                 c_bond_ptm.mass_delta(),
@@ -1894,7 +1898,7 @@ impl PeptideConditionBuilder {
         // this condition is not fully applied
         if applied_vmods == self.variable_ptms.len() {
             peptidoforms.insert(Peptidoform::new(
-                modified_sequence,
+                modified_sequence.clone(),
                 mass,
                 peptide.protein_ids().clone(),
                 peptide.unique_taxonomy_ids().to_vec(),
@@ -1903,6 +1907,7 @@ impl PeptideConditionBuilder {
                 peptide.is_trembl(),
             ));
         }
+        modified_sequence.truncate(start_len);
     }
 
     /// Creates a vector of PeptideConditions from a PTMCollection.
