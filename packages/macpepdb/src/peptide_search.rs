@@ -54,13 +54,14 @@ fn fetch_max(slot: &AtomicU64, v: u64) {
 
 use clap::ValueEnum;
 use dashmap::DashSet;
-use futures::future::BoxFuture;
-use futures::stream::{FuturesUnordered, SelectAll, Stream, StreamExt};
+use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;
 use metrics::{Counter, counter};
 use postgres_types::ToSql;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use tokio::sync::{Semaphore, mpsc};
+use tokio::task::JoinSet;
 use tokio_postgres::Row;
 
 use crate::amino_acid::{AminoAcid, AminoAcidBitCode, GLYCINE};
@@ -806,22 +807,20 @@ impl Stream for ConditionalPeptideStream {
 }
 
 /// `MultiTask` search strategy: runs one concurrent DB query per [`PeptideCondition`]
-/// (bounded by `concurrent_selects`) and merges their rows into a single stream, applying
-/// the non-SQL-able filters (e.g. distinctness) as results arrive.
+/// (bounded by `concurrent_selects`), each driven by its own spawned task so the
+/// per-row CPU work (decode, condition matching, PTM expansion) is parallelized across
+/// OS threads rather than polled cooperatively on a single task, and merges their rows
+/// into a single stream, applying the non-SQL-able filters (e.g. distinctness) as
+/// results arrive.
 pub struct FallibleMatchingPeptideStream {
-    client: Arc<Client>,
     // Should only contain non sql able filters
     filter_pipeline: Pin<Box<FilterPipeline<Peptidoform>>>,
-    sql_filters: Arc<FilterPipeline<Peptide>>,
-    #[allow(clippy::box_collection)]
-    conditions: Pin<Box<VecDeque<PeptideCondition>>>,
-    resolve_modifications: bool,
-    concurrent_selects: usize,
-    /// Active streams being polled in parallel.
-    streams: SelectAll<ConditionalPeptideStream>,
-    /// Futures that are currently opening new `ConditionalPeptideStream`s.
-    /// Completed futures are drained into `streams` inside `poll_next`.
-    pending: FuturesUnordered<BoxFuture<'static, Result<ConditionalPeptideStream, Error>>>,
+    /// Receives batches produced by the spawned per-condition tasks below.
+    rx: mpsc::UnboundedReceiver<Result<Vec<Peptidoform>, Error>>,
+    /// Owns the per-condition tasks; dropping it (e.g. the caller abandoning the
+    /// search) aborts any still-running tasks. Never read directly — held only for
+    /// this cancel-on-drop side effect.
+    _tasks: JoinSet<()>,
     matching_peptide_metric: String,
     matching_peptide_counter: Counter,
     // ── timing diagnostics ──
@@ -832,15 +831,17 @@ pub struct FallibleMatchingPeptideStream {
 }
 
 impl FallibleMatchingPeptideStream {
-    /// Builds the stream and kicks off the first batch of `ConditionalPeptideStream`
-    /// creations (up to `concurrent_selects`) without blocking; remaining conditions are
-    /// opened lazily as earlier ones complete (see the `Stream` impl below).
+    /// Builds the stream and spawns one task per [`PeptideCondition`], each gated by a
+    /// shared [`Semaphore`] (bound = `concurrent_selects`) so at most that many DB
+    /// queries/scans run at once — the same cap enforced today, but each task now runs
+    /// its row decode / condition matching / PTM expansion on its own OS thread instead
+    /// of all conditions being polled cooperatively on one task.
     pub async fn new(
         client: Arc<Client>,
         is_distinct: bool,
         // Global SQL filters, e.g. review or taxonomy condition
         sql_filters: FilterPipeline<Peptide>,
-        mut conditions: VecDeque<PeptideCondition>,
+        conditions: VecDeque<PeptideCondition>,
         resolve_modifications: bool,
         concurrent_selects: NonZeroUsize,
     ) -> Result<Self, Error> {
@@ -868,28 +869,47 @@ impl FallibleMatchingPeptideStream {
             concurrent_selects,
             "search started (MultiTask)"
         );
-        let streams = SelectAll::<ConditionalPeptideStream>::new();
-        let pending: FuturesUnordered<BoxFuture<'static, Result<ConditionalPeptideStream, Error>>> =
-            FuturesUnordered::new();
         let agg = Arc::new(SearchTimingAgg::default());
+        let semaphore = Arc::new(Semaphore::new(concurrent_selects));
+        let (tx, rx) = mpsc::unbounded_channel::<Result<Vec<Peptidoform>, Error>>();
 
-        // Kick off the initial batch of stream-creation futures without blocking.
-        let initial = concurrent_selects.min(conditions.len());
-        for condition in conditions.drain(..initial) {
-            let client_clone = client.clone();
-            let agg_clone = agg.clone();
+        let mut tasks = JoinSet::new();
+        for condition in conditions {
+            let client = client.clone();
             let sql_filters = sql_filters.clone();
-            pending.push(Box::pin(async move {
-                ConditionalPeptideStream::new(
-                    client_clone,
+            let agg = agg.clone();
+            let semaphore = semaphore.clone();
+            let tx = tx.clone();
+            tasks.spawn(async move {
+                let _permit = match semaphore.acquire().await {
+                    Ok(permit) => permit,
+                    Err(_) => return, // semaphore never closed in practice
+                };
+                match ConditionalPeptideStream::new(
+                    client,
                     condition,
                     sql_filters,
                     resolve_modifications,
-                    agg_clone,
+                    agg,
                 )
                 .await
-            }));
+                {
+                    Ok(mut stream) => {
+                        while let Some(item) = stream.next().await {
+                            if tx.send(item).is_err() {
+                                break; // receiver dropped — search abandoned
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        let _ = tx.send(Err(err));
+                    }
+                }
+            });
         }
+        // Drop our own sender so `rx` observes `None` once every spawned task's clone
+        // (and thus every task) has finished.
+        drop(tx);
 
         let matching_peptide_metric = format!(
             "{}:{}",
@@ -897,26 +917,21 @@ impl FallibleMatchingPeptideStream {
             // TODO: Think of a better way to generate the node ID
             uuid::Uuid::now_v1(&[
                 resolve_modifications as u8,
-                conditions.len() as u8,
+                total_conditions as u8,
                 filter_pipeline.len() as u8,
                 resolve_modifications as u8,
-                conditions.len() as u8,
+                total_conditions as u8,
                 filter_pipeline.len() as u8,
             ])
         );
         let matching_peptide_counter = counter!(matching_peptide_metric.clone());
 
         Ok(Self {
-            client,
-            resolve_modifications,
-            concurrent_selects,
-            pending,
-            streams,
+            rx,
+            _tasks: tasks,
             matching_peptide_metric,
             matching_peptide_counter,
-            sql_filters,
             filter_pipeline: Box::pin(filter_pipeline),
-            conditions: Box::pin(conditions),
             started_at: std::time::Instant::now(),
             total_conditions,
             done_logged: false,
@@ -936,51 +951,30 @@ impl Stream for FallibleMatchingPeptideStream {
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
-        loop {
-            // ── Step 1 ────────────────────────────────────────────────────────────
-            // Drain all pending stream-creation futures that are already resolved.
-            // This moves freshly-opened ConditionalPeptideStreams into the active
-            // SelectAll pool.  We stop as soon as the queue is either empty or
-            // still waiting (the waker is registered in both cases).
-            loop {
-                match this.pending.poll_next_unpin(cx) {
-                    Poll::Ready(Some(Ok(stream))) => this.streams.push(stream),
-                    Poll::Ready(Some(Err(err))) => return Poll::Ready(Some(Err(err))),
-                    // Empty or waiting — waker already registered by FuturesUnordered.
-                    Poll::Ready(None) | Poll::Pending => break,
+        // Every condition's spawned task streams its batches into `rx`; once all tasks
+        // finish, all sender clones drop and `rx` yields `None`.
+        match this.rx.poll_recv(cx) {
+            Poll::Ready(Some(Ok(peptides))) => {
+                let matching_peptides = peptides
+                    .into_iter()
+                    .filter_map(|peptide| match this.filter_pipeline.is_match(&peptide) {
+                        Ok(true) => Some(Ok(peptide)),
+                        Ok(false) => None, // skip non-matching peptide
+                        Err(err) => Some(Err(err)),
+                    })
+                    .collect::<Result<Vec<_>, Error>>();
+
+                match matching_peptides {
+                    Ok(peptides) => {
+                        this.matching_peptide_counter
+                            .increment(peptides.len() as u64);
+                        Poll::Ready(Some(Ok(peptides)))
+                    }
+                    Err(err) => Poll::Ready(Some(Err(err))),
                 }
             }
-
-            // ── Step 2 ────────────────────────────────────────────────────────────
-            // Refill the pending queue so that
-            //   active streams  +  in-flight creations  ==  concurrent_selects
-            // (as long as there are remaining conditions to open).
-            let mut added = false;
-            while this.streams.len() + this.pending.len() < this.concurrent_selects
-                && !this.conditions.is_empty()
-            {
-                let condition = this.conditions.pop_front().unwrap();
-                let client = this.client.clone();
-                let resolve = this.resolve_modifications;
-                let agg = this.agg.clone();
-                let sql_filters = this.sql_filters.clone();
-                this.pending.push(Box::pin(async move {
-                    ConditionalPeptideStream::new(client, condition, sql_filters, resolve, agg)
-                        .await
-                }));
-                added = true;
-            }
-
-            // If we just enqueued new futures, loop back so they get polled
-            // immediately (and their wakers registered) before we decide whether
-            // to wait.
-            if added {
-                continue;
-            }
-
-            // ── Step 3 ────────────────────────────────────────────────────────────
-            // All conditions consumed and everything drained — we are done.
-            if this.streams.is_empty() && this.pending.is_empty() && this.conditions.is_empty() {
+            Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
+            Poll::Ready(None) => {
                 if !this.done_logged {
                     this.done_logged = true;
                     let conds = this.agg.conditions.load(Ordering::Relaxed).max(1);
@@ -997,43 +991,9 @@ impl Stream for FallibleMatchingPeptideStream {
                         "search finished (MultiTask)"
                     );
                 }
-                return Poll::Ready(None);
+                Poll::Ready(None)
             }
-
-            // ── Step 4 ────────────────────────────────────────────────────────────
-            // No active streams yet; we are still waiting for the first batch of
-            // creation futures.  The waker was registered in step 1.
-            if this.streams.is_empty() {
-                return Poll::Pending;
-            }
-
-            // ── Step 5 ────────────────────────────────────────────────────────────
-            // Poll all active streams via SelectAll.
-            match this.streams.poll_next_unpin(cx) {
-                Poll::Ready(Some(Ok(peptides))) => {
-                    let matching_peptides = peptides
-                        .into_iter()
-                        .filter_map(|peptide| match this.filter_pipeline.is_match(&peptide) {
-                            Ok(true) => Some(Ok(peptide)),
-                            Ok(false) => None, // skip non-matching peptide
-                            Err(err) => Some(Err(err)),
-                        })
-                        .collect::<Result<Vec<_>, Error>>();
-
-                    match matching_peptides {
-                        Ok(peptides) => {
-                            this.matching_peptide_counter
-                                .increment(peptides.len() as u64);
-                            return Poll::Ready(Some(Ok(peptides)));
-                        }
-                        Err(err) => return Poll::Ready(Some(Err(err))),
-                    }
-                }
-                Poll::Ready(Some(Err(err))) => return Poll::Ready(Some(Err(err))),
-                // All active streams depleted — loop back to replenish from pending.
-                Poll::Ready(None) => continue,
-                Poll::Pending => return Poll::Pending,
-            }
+            Poll::Pending => Poll::Pending,
         }
     }
 }
