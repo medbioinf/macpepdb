@@ -1318,16 +1318,66 @@ pub trait Search {
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
     ) -> Result<Vec<PeptideCondition>, Error> {
-        Ok(peptide_conditions
+        // Different recursion paths through `from_ptm_collection` (e.g. two static PTMs
+        // that both land on the same amino-acid occurrence count via different orderings)
+        // can reach the exact same effective PTM multiset: same net query_mass, same
+        // filter_pipeline shape. Drop the duplicates here, before `finalize()` (partition
+        // lookup) and a DB round trip get paid for each one.
+        let mut seen_builders: HashSet<(i64, String)> = HashSet::new();
+        let conditions: Vec<PeptideCondition> = peptide_conditions
             .into_iter()
-            .flat_map(|conditions| {
-                conditions.finalize(
+            .filter(|condition| {
+                seen_builders.insert((
+                    condition.query_mass,
+                    condition.filter_pipeline().to_string(),
+                ))
+            })
+            .flat_map(|condition| {
+                condition.finalize(
                     mass_partitioning,
                     lower_mass_tolerance_ppm,
                     upper_mass_tolerance_ppm,
                 )
             })
-            .collect())
+            .collect();
+
+        Ok(Self::merge_overlapping_conditions(conditions))
+    }
+
+    /// Groups conditions by `(partitions, filter signature)` and merges, within each group,
+    /// mass windows that overlap or touch into a single condition covering their union —
+    /// collapsing what would otherwise be redundant DB round trips for conditions that are
+    /// SQL-identical apart from window bounds. Each absorbed condition's own PTM
+    /// composition is preserved (see [`PeptideCondition::absorb`]) so annotation stays
+    /// correct for rows that only belong to one of the original, narrower windows.
+    fn merge_overlapping_conditions(conditions: Vec<PeptideCondition>) -> Vec<PeptideCondition> {
+        let mut groups: HashMap<(Vec<i64>, String), Vec<PeptideCondition>> = HashMap::new();
+        for condition in conditions {
+            let key = (
+                condition.partitions.clone(),
+                condition.filter_pipeline.to_string(),
+            );
+            groups.entry(key).or_default().push(condition);
+        }
+
+        let mut merged = Vec::with_capacity(groups.len());
+        for (_, mut group) in groups {
+            group.sort_by_key(|condition| condition.lower_mass);
+            let mut group = group.into_iter();
+            let Some(mut current) = group.next() else {
+                continue;
+            };
+            for next in group {
+                if next.lower_mass <= current.upper_mass {
+                    current = current.absorb(next);
+                } else {
+                    merged.push(current);
+                    current = next;
+                }
+            }
+            merged.push(current);
+        }
+        merged
     }
 }
 
@@ -1691,24 +1741,39 @@ impl PeptideConditionBuilder {
                         .map(|ptm| (*ptm.amino_acid().bit_code(), ptm.clone()))
                         .collect();
 
-                // Map for fast access to variable modifications by amino acid
+                // Map for fast access to variable modifications by amino acid. Two distinct
+                // PTMs on the same amino acid with the same mass_delta would otherwise make
+                // the recursion below enumerate two branches that serialize to the same
+                // Peptidoform (ModifiedSequencePart only stores mass_delta + bit_code, never
+                // PTM identity) — dedup by mass_delta here, once per condition, so those
+                // branches never get generated instead of hashing them away per peptide.
                 let mut variable_map: HashMap<
                     AminoAcidBitCode,
                     Vec<Arc<PostTranslationalModification>>,
                 > = HashMap::new();
                 for ptm in self.variable_ptms.iter() {
-                    variable_map
+                    let mods = variable_map
                         .entry(*ptm.amino_acid().bit_code())
-                        .and_modify(|mods| mods.push(ptm.clone()))
-                        .or_insert_with(|| vec![ptm.clone()]);
+                        .or_default();
+                    if !mods
+                        .iter()
+                        .any(|existing: &Arc<PostTranslationalModification>| {
+                            existing.mass_delta() == ptm.mass_delta()
+                        })
+                    {
+                        mods.push(ptm.clone());
+                    }
                 }
 
                 (static_map, variable_map)
             });
 
-        // Results vector to store the modified sequences
-        #[allow(clippy::mutable_key_type)]
-        let mut peptidoforms: HashSet<Peptidoform> = HashSet::new();
+        // Results vector to store the modified sequences. No local dedup here: the
+        // variable-modification map built above is already deduped by mass_delta per amino
+        // acid, so no two recursion branches can ever produce the same Peptidoform: the
+        // global distinct filter (`ThreadSafeDistinctFilterFunction`) is the sole dedup
+        // point across conditions/partitions.
+        let mut peptidoforms: Vec<Peptidoform> = Vec::new();
 
         let mut modified_sequence = ModifiedSequence::with_capacity(peptide.len());
         let mut mass: i64 = WATER_MONO_MASS;
@@ -1744,7 +1809,7 @@ impl PeptideConditionBuilder {
         );
 
         // return results
-        peptidoforms.into_iter().collect::<Vec<_>>()
+        peptidoforms
     }
 
     /// Modifies the peptide sequence recursively by adding variable modifications at each necessary position.
@@ -1759,7 +1824,7 @@ impl PeptideConditionBuilder {
     /// * `max_variable_modifications` - The maximum number of variable modifications allowed
     /// * `proforma_sequences` - A mutable vector to store the resulting proforma sequences
     ///
-    #[allow(clippy::too_many_arguments, clippy::mutable_key_type)]
+    #[allow(clippy::too_many_arguments)]
     fn inner_modify_peptide(
         &self,
         peptide: &Peptide,
@@ -1772,7 +1837,7 @@ impl PeptideConditionBuilder {
         >,
         position: usize,
         applied_vmods: usize,
-        peptidoforms: &mut HashSet<Peptidoform>,
+        peptidoforms: &mut Vec<Peptidoform>,
     ) {
         if position >= peptide.len() {
             self.end_modify_peptide(
@@ -1878,14 +1943,13 @@ impl PeptideConditionBuilder {
     /// * `applied_vmods` - The number of variable modifications applied to the peptide
     /// * `proforma_sequences` - The vector of proforma sequences to add the modified peptide to
     ///
-    #[allow(clippy::mutable_key_type)]
     fn end_modify_peptide(
         &self,
         peptide: &Peptide,
         modified_sequence: &mut ModifiedSequence,
         mut mass: i64,
         applied_vmods: usize,
-        peptidoforms: &mut HashSet<Peptidoform>,
+        peptidoforms: &mut Vec<Peptidoform>,
     ) {
         let start_len = modified_sequence.len();
         if let Some(c_bond_ptm) = &self.c_bond_ptm {
@@ -1897,7 +1961,7 @@ impl PeptideConditionBuilder {
         // If the number of applied variable modifications not equals the number of variable PTMs,
         // this condition is not fully applied
         if applied_vmods == self.variable_ptms.len() {
-            peptidoforms.insert(Peptidoform::new(
+            peptidoforms.push(Peptidoform::new(
                 modified_sequence.clone(),
                 mass,
                 peptide.protein_ids_arc(),
@@ -2122,7 +2186,7 @@ impl PeptideConditionBuilder {
             self.static_ptms.len() + self.variable_ptms.len() + self.excluded_amino_acids.len() + 2, // N-terminal and C-terminal PTM
         );
 
-        for excluded_aa in self.excluded_amino_acids.iter() {
+        for excluded_aa in self.excluded_amino_acids.iter().sorted() {
             filter_functions.push(Box::new(NoOccurrencesFilterFunction {
                 amino_acid: *excluded_aa,
             }));
@@ -2233,6 +2297,7 @@ impl PeptideConditionBuilder {
                 upper_mass,
                 inner: self.clone(),
                 filter_pipeline: Self::filter_pipeline(self),
+                members: Vec::new(),
             })
             .collect()
     }
@@ -2320,13 +2385,40 @@ pub struct PeptideCondition {
     inner: PeptideConditionBuilder,
     /// Filter functions the peptide has to pass before it is returned
     filter_pipeline: FilterPipeline<Peptide>,
+    /// Populated only when this condition absorbed one or more other same-partition,
+    /// same-filter-signature conditions whose ppm windows overlapped this one's (see
+    /// [`Search::split_and_sort_peptide_conditions`]). Each entry is an absorbed
+    /// condition's own (narrower) `(lower_mass, upper_mass)` window plus its own PTM
+    /// composition — the merge only widens the shared SQL fetch, it never conflates which
+    /// PTM hypothesis actually explains a given row, so `modify_peptide` still picks the
+    /// member whose window contains the row's real mass. Empty for an unmerged condition.
+    members: Vec<(i64, i64, PeptideConditionBuilder)>,
 }
 
 impl PeptideCondition {
     /// Returns true if the peptide passes this condition's filter pipeline (any error is
-    /// treated as a non-match).
+    /// treated as a non-match). The filter pipeline is shared across all absorbed
+    /// `members` by construction (they were only merged because it's identical), so this
+    /// never needs to pick a specific member.
     pub fn is_match(&mut self, peptide: &Peptide) -> bool {
         self.filter_pipeline.is_match(peptide).unwrap_or(false)
+    }
+
+    /// Applies this condition's PTMs to `peptide`, returning every resulting [`Peptidoform`].
+    /// When this condition absorbed other conditions during merging, picks the member whose
+    /// own `(lower_mass, upper_mass)` window contains `peptide`'s mass, so the correct PTM
+    /// composition is used for annotation even though the SQL fetch used the widened union
+    /// range. Falls back to `inner` (this condition's own PTMs) when unmerged.
+    pub fn modify_peptide(&self, peptide: &Peptide) -> Vec<Peptidoform> {
+        if self.members.is_empty() {
+            return self.inner.modify_peptide(peptide);
+        }
+        let mass = peptide.mass();
+        self.members
+            .iter()
+            .find(|(lower, upper, _)| mass >= *lower && mass <= *upper)
+            .map(|(_, _, inner)| inner.modify_peptide(peptide))
+            .unwrap_or_default()
     }
 
     /// Partitions this condition's mass range overlaps (populated by `finalize` with
@@ -2349,6 +2441,23 @@ impl PeptideCondition {
     /// that must still be checked in-process on returned rows.
     pub fn remove_sqlable_filters(&mut self) {
         self.filter_pipeline.remove_sqlable_filters()
+    }
+
+    /// Absorbs `other` into `self`: widens `self`'s mass window to the union of both, and
+    /// records both conditions' own original windows + PTM compositions in `members` so
+    /// `modify_peptide` can still pick the right one per row. Only valid when `self` and
+    /// `other` share the same partitions and filter signature (checked by the caller via
+    /// grouping, not re-verified here).
+    fn absorb(mut self, other: PeptideCondition) -> Self {
+        if self.members.is_empty() {
+            self.members
+                .push((self.lower_mass, self.upper_mass, self.inner.clone()));
+        }
+        self.lower_mass = self.lower_mass.min(other.lower_mass);
+        self.upper_mass = self.upper_mass.max(other.upper_mass);
+        self.members
+            .push((other.lower_mass, other.upper_mass, other.inner));
+        self
     }
 }
 
@@ -2669,5 +2778,91 @@ mod tests {
                 "<[+57.021464]@C>[+10]-M[+16.99491]FCQLAKTCPVQLWVDM[+15.99491]STPPPGTRVR[+20.3]-[+40.3]",
             ]
         );
+    }
+
+    /// `split_and_sort_peptide_conditions` (the choke point both `Search` impls funnel
+    /// through) must: (1) drop conditions that reach the exact same `(query_mass, filter
+    /// signature)` via different `PeptideConditionBuilder`s, and (2) merge conditions whose
+    /// filter signature matches and whose ppm windows overlap on the same partition, while
+    /// still keeping each merged member's own window/PTM composition around.
+    #[test]
+    fn test_split_and_sort_peptide_conditions_dedup_and_merge() {
+        let target_mass = mass_to_int!(1000.0);
+
+        // (1) Exact duplicate: two builders applying the identical PTM reach the identical
+        // (query_mass, filter signature) pair and must collapse to one condition.
+        let carbamidomethylation_c = Arc::new(PostTranslationalModification::new(
+            "carba of C",
+            AminoAcid::by_code('C').unwrap(),
+            mass_to_int!(57.021464),
+            ModificationType::Static,
+            Position::Anywhere,
+        ));
+
+        let mut dup_a = PeptideConditionBuilder::new(target_mass);
+        assert!(dup_a.add_static_ptm(carbamidomethylation_c.clone()));
+        let mut dup_b = PeptideConditionBuilder::new(target_mass);
+        assert!(dup_b.add_static_ptm(carbamidomethylation_c.clone()));
+        assert_eq!(dup_a.query_mass, dup_b.query_mass);
+
+        let dedup_partitioning =
+            MassPartitionMap::from(HashMap::from_iter(vec![(dup_a.query_mass, vec![1_i64])]));
+        let deduped = <MultiTaskSearch as Search>::split_and_sort_peptide_conditions(
+            vec![dup_a, dup_b],
+            &dedup_partitioning,
+            0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            deduped.len(),
+            1,
+            "identical (query_mass, filter signature) conditions must dedup to one"
+        );
+        assert!(deduped[0].members.is_empty());
+
+        // (2) Two DIFFERENT static PTMs on the same residue with the same occurrence count
+        // (same filter signature) but near-isobaric masses (different query_mass). With a
+        // generous ppm tolerance their windows overlap on the same partition and must merge
+        // into one condition, without collapsing to a single arbitrary PTM composition.
+        let ptm_a = Arc::new(PostTranslationalModification::new(
+            "near-isobaric a",
+            AminoAcid::by_code('M').unwrap(),
+            mass_to_int!(10.0001),
+            ModificationType::Static,
+            Position::Anywhere,
+        ));
+        let ptm_b = Arc::new(PostTranslationalModification::new(
+            "near-isobaric b",
+            AminoAcid::by_code('M').unwrap(),
+            mass_to_int!(10.0002),
+            ModificationType::Static,
+            Position::Anywhere,
+        ));
+
+        let mut builder_a = PeptideConditionBuilder::new(target_mass);
+        assert!(builder_a.add_static_ptm(ptm_a.clone()));
+        let mut builder_b = PeptideConditionBuilder::new(target_mass);
+        assert!(builder_b.add_static_ptm(ptm_b.clone()));
+        assert_ne!(builder_a.query_mass, builder_b.query_mass);
+
+        let merge_partitioning = MassPartitionMap::from(HashMap::from_iter(vec![
+            (builder_a.query_mass, vec![1_i64]),
+            (builder_b.query_mass, vec![1_i64]),
+        ]));
+        let merged = <MultiTaskSearch as Search>::split_and_sort_peptide_conditions(
+            vec![builder_a, builder_b],
+            &merge_partitioning,
+            50,
+            50,
+        )
+        .unwrap();
+
+        assert_eq!(
+            merged.len(),
+            1,
+            "same-signature, overlapping-window conditions on the same partition must merge"
+        );
+        assert_eq!(merged[0].members.len(), 2);
     }
 }
