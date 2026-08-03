@@ -1,4 +1,8 @@
-use std::{fmt::Display, hash::Hash, sync::OnceLock};
+use std::{
+    fmt::Display,
+    hash::Hash,
+    sync::{Arc, OnceLock},
+};
 
 use itertools::Itertools;
 use macpepdb_web_common::responses::peptide::PeptideResponse;
@@ -92,9 +96,9 @@ pub struct Peptide {
     partition: Option<i64>,
     mass: i64,
     sequence: Sequence,
-    protein_ids: ProteinIds,
-    unique_taxonomy_ids: Vec<i32>,
-    non_unique_taxonomy_ids: Vec<i32>,
+    protein_ids: Arc<ProteinIds>,
+    unique_taxonomy_ids: Arc<Vec<i32>>,
+    non_unique_taxonomy_ids: Arc<Vec<i32>>,
     /// Bit flags for e.g. review status, see constants to see what is stored in which bit
     flags: i8,
     #[serde(skip)]
@@ -132,9 +136,9 @@ impl Peptide {
         Self {
             mass,
             sequence,
-            protein_ids: protein_ids.into(),
-            unique_taxonomy_ids,
-            non_unique_taxonomy_ids,
+            protein_ids: Arc::new(protein_ids.into()),
+            unique_taxonomy_ids: Arc::new(unique_taxonomy_ids),
+            non_unique_taxonomy_ids: Arc::new(non_unique_taxonomy_ids),
             partition: None,
             flags,
             amino_acid_counts: OnceLock::new(),
@@ -208,6 +212,22 @@ impl Peptide {
     /// Returns the IDs of the proteins this peptide was cleaved from.
     pub fn protein_ids(&self) -> &ProteinIds {
         &self.protein_ids
+    }
+
+    /// Returns a cheaply-clonable handle to the protein IDs (refcount bump, no deep copy) —
+    /// use this instead of `protein_ids().clone()` when building many owners of the same data.
+    pub(crate) fn protein_ids_arc(&self) -> Arc<ProteinIds> {
+        Arc::clone(&self.protein_ids)
+    }
+
+    /// Returns a cheaply-clonable handle to the unique taxonomy IDs (refcount bump, no deep copy).
+    pub(crate) fn unique_taxonomy_ids_arc(&self) -> Arc<Vec<i32>> {
+        Arc::clone(&self.unique_taxonomy_ids)
+    }
+
+    /// Returns a cheaply-clonable handle to the non-unique taxonomy IDs (refcount bump, no deep copy).
+    pub(crate) fn non_unique_taxonomy_ids_arc(&self) -> Arc<Vec<i32>> {
+        Arc::clone(&self.non_unique_taxonomy_ids)
     }
 
     /// Estimates the peptide's serialized row size in bytes; used to bound in-memory buffer
@@ -382,9 +402,9 @@ impl TryFrom<CompactSequence> for Peptide {
 pub struct Peptidoform {
     sequence: ModifiedSequence,
     mass: i64,
-    protein_ids: ProteinIds,
-    unique_taxonomy_ids: Vec<i32>,
-    non_unique_taxonomy_ids: Vec<i32>,
+    protein_ids: Arc<ProteinIds>,
+    unique_taxonomy_ids: Arc<Vec<i32>>,
+    non_unique_taxonomy_ids: Arc<Vec<i32>>,
     /// Like peptides
     flags: i8,
     #[serde(skip)]
@@ -406,9 +426,9 @@ impl Peptidoform {
     pub fn new(
         sequence: ModifiedSequence,
         mass: i64,
-        protein_ids: ProteinIds,
-        unique_taxonomy_ids: Vec<i32>,
-        non_unique_taxonomy_ids: Vec<i32>,
+        protein_ids: Arc<ProteinIds>,
+        unique_taxonomy_ids: Arc<Vec<i32>>,
+        non_unique_taxonomy_ids: Arc<Vec<i32>>,
         is_swiss_prot: bool,
         is_trembl: bool,
     ) -> Self {
@@ -566,9 +586,9 @@ impl TryFrom<Row> for Peptide {
                 once_lock.set(counts).unwrap();
                 once_lock
             })?,
-            protein_ids: row.try_get("protein_ids")?,
-            unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
-            non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
+            protein_ids: Arc::new(row.try_get("protein_ids")?),
+            unique_taxonomy_ids: Arc::new(row.try_get("unique_taxonomy_ids")?),
+            non_unique_taxonomy_ids: Arc::new(row.try_get("non_unique_taxonomy_ids")?),
             flags: row.try_get("flags")?,
         })
     }
@@ -582,9 +602,9 @@ impl Peptide {
             partition: None,
             mass: row.try_get("mass")?,
             sequence: row.try_get("sequence")?,
-            protein_ids: row.try_get("protein_ids")?,
-            unique_taxonomy_ids: row.try_get("unique_taxonomy_ids")?,
-            non_unique_taxonomy_ids: row.try_get("non_unique_taxonomy_ids")?,
+            protein_ids: Arc::new(row.try_get("protein_ids")?),
+            unique_taxonomy_ids: Arc::new(row.try_get("unique_taxonomy_ids")?),
+            non_unique_taxonomy_ids: Arc::new(row.try_get("non_unique_taxonomy_ids")?),
             flags: row.try_get("flags")?,
             amino_acid_counts: OnceLock::new(),
         })
@@ -598,8 +618,8 @@ impl From<&Peptide> for PeptideResponse {
             mass: crate::mass::to_float(peptide.mass),
             sequence: peptide.sequence.to_string(),
             protein_ids: peptide.protein_ids.as_slice().to_vec(),
-            unique_taxonomy_ids: peptide.unique_taxonomy_ids.clone(),
-            non_unique_taxonomy_ids: peptide.non_unique_taxonomy_ids.clone(),
+            unique_taxonomy_ids: peptide.unique_taxonomy_ids.to_vec(),
+            non_unique_taxonomy_ids: peptide.non_unique_taxonomy_ids.to_vec(),
             is_swiss_prot: peptide.is_swiss_prot(),
             is_trembl: peptide.is_trembl(),
             proteins: None,

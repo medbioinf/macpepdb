@@ -1900,9 +1900,9 @@ impl PeptideConditionBuilder {
             peptidoforms.insert(Peptidoform::new(
                 modified_sequence.clone(),
                 mass,
-                peptide.protein_ids().clone(),
-                peptide.unique_taxonomy_ids().to_vec(),
-                peptide.non_unique_taxonomy_ids().to_vec(),
+                peptide.protein_ids_arc(),
+                peptide.unique_taxonomy_ids_arc(),
+                peptide.non_unique_taxonomy_ids_arc(),
                 peptide.is_swiss_prot(),
                 peptide.is_trembl(),
             ));
