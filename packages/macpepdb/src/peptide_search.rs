@@ -5,6 +5,7 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::LazyLock;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context, Poll};
 
@@ -1558,7 +1559,16 @@ pub struct PeptideConditionBuilder {
     c_bond_ptm: Option<Arc<PostTranslationalModification>>,
     /// Excluded amino acids
     excluded_amino_acids: HashSet<AminoAcidBitCode>,
+    /// Lazily built, cached lookup maps for `modify_peptide` — depend only on `static_ptms` /
+    /// `variable_ptms`, which are fixed once the builder is finalized, so they're computed once
+    /// instead of on every row.
+    modification_maps: OnceLock<ModificationMaps>,
 }
+
+type ModificationMaps = (
+    HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>>,
+    HashMap<AminoAcidBitCode, Vec<Arc<PostTranslationalModification>>>,
+);
 
 impl PeptideConditionBuilder {
     /// Creates a new PeptideCondition with no PTMs.
@@ -1578,6 +1588,7 @@ impl PeptideConditionBuilder {
             n_bond_ptm: None,
             c_bond_ptm: None,
             excluded_amino_acids: HashSet::new(),
+            modification_maps: OnceLock::new(),
         }
     }
 
@@ -1672,23 +1683,28 @@ impl PeptideConditionBuilder {
     /// * `sequence` - The amino acid sequence to apply the condition to
     ///
     pub fn modify_peptide(&self, peptide: &Peptide) -> Vec<Peptidoform> {
-        let static_modifications_map: HashMap<AminoAcidBitCode, &PostTranslationalModification> =
-            self.static_ptms
-                .iter()
-                .map(|ptm| (*ptm.amino_acid().bit_code(), ptm.as_ref()))
-                .collect();
+        let (static_modifications_map, variable_modifications_map) =
+            self.modification_maps.get_or_init(|| {
+                let static_map: HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>> =
+                    self.static_ptms
+                        .iter()
+                        .map(|ptm| (*ptm.amino_acid().bit_code(), ptm.clone()))
+                        .collect();
 
-        // Map for fast access to variable modifications by amino acid
-        let mut variable_modifications_map: HashMap<
-            AminoAcidBitCode,
-            Vec<&PostTranslationalModification>,
-        > = HashMap::new();
-        for ptm in self.variable_ptms.iter() {
-            variable_modifications_map
-                .entry(*ptm.amino_acid().bit_code())
-                .and_modify(|mods| mods.push(ptm))
-                .or_insert(vec![ptm]);
-        }
+                // Map for fast access to variable modifications by amino acid
+                let mut variable_map: HashMap<
+                    AminoAcidBitCode,
+                    Vec<Arc<PostTranslationalModification>>,
+                > = HashMap::new();
+                for ptm in self.variable_ptms.iter() {
+                    variable_map
+                        .entry(*ptm.amino_acid().bit_code())
+                        .and_modify(|mods| mods.push(ptm.clone()))
+                        .or_insert_with(|| vec![ptm.clone()]);
+                }
+
+                (static_map, variable_map)
+            });
 
         // Results vector to store the modified sequences
         #[allow(clippy::mutable_key_type)]
@@ -1720,8 +1736,8 @@ impl PeptideConditionBuilder {
             peptide,
             modified_sequence.clone(),
             mass,
-            &static_modifications_map,
-            &variable_modifications_map,
+            static_modifications_map,
+            variable_modifications_map,
             0,
             0,
             &mut peptidoforms,
@@ -1749,8 +1765,11 @@ impl PeptideConditionBuilder {
         peptide: &Peptide,
         mut modified_sequence: ModifiedSequence,
         mut mass: i64,
-        static_modifications_map: &HashMap<AminoAcidBitCode, &PostTranslationalModification>,
-        variable_modifications_map: &HashMap<AminoAcidBitCode, Vec<&PostTranslationalModification>>,
+        static_modifications_map: &HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>>,
+        variable_modifications_map: &HashMap<
+            AminoAcidBitCode,
+            Vec<Arc<PostTranslationalModification>>,
+        >,
         position: usize,
         applied_vmods: usize,
         peptidoforms: &mut HashSet<Peptidoform>,
