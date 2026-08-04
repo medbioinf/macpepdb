@@ -72,6 +72,13 @@ jobs:
           command: test
           args: --release --verbose --workspace
 
+      - name: Live DB peptide search tests
+        id: test-live-db
+        uses: actions-rs/cargo@v1
+        with:
+          command: test
+          args: --release --verbose -p macpepdb --test live_db_peptide_search -- --ignored --nocapture
+
       - name: Stop containers
         if: always()
         run: docker compose down --remove-orphans
