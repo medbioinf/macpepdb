@@ -25,14 +25,18 @@ use futures::StreamExt;
 use postgres_types::ToSql;
 use tokio::sync::{Mutex, OnceCell};
 
+use macpepdb::amino_acid::{AminoAcid, GLYCINE};
 use macpepdb::client::Client;
 use macpepdb::configuration::RuntimeConfiguration;
 use macpepdb::database_build::DatabaseBuild;
 use macpepdb::peptide::{IsPeptide, Peptide};
-use macpepdb::peptide_search::{MultiTaskSearch, Search, UnionAllSearch};
+use macpepdb::peptide_search::{
+    MultiTaskSearch, PeptideCondition, PeptideConditionBuilder, Search, UnionAllSearch,
+};
 use macpepdb::peptide_table::PeptideTable;
 use macpepdb::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use macpepdb::protease::Protease;
+use macpepdb::sequence::ModifiedSequencePart;
 
 fn database_url() -> String {
     std::env::var("MACPEPDB_TEST_DATABASE_URL")
@@ -59,16 +63,22 @@ fn reset_schema(database: &str) {
         .arg(&db_sql_path)
         .status()
         .expect("run `psql` to reset the schema — is it on PATH and is the DB reachable?");
-    assert!(status.success(), "`psql -f {}` failed", db_sql_path.display());
+    assert!(
+        status.success(),
+        "`psql -f {}` failed",
+        db_sql_path.display()
+    );
 }
 
 /// Digests the checked-in E. coli K12 fixture (trypsin, length 6-50, up to 2 missed
 /// cleavages) and persists the resulting `RuntimeConfiguration` — mirrors the `build` CLI
 /// subcommand (`main.rs`), skipping taxonomy collection since these tests don't need it.
 async fn build_from_fixture(client: Arc<Client>) -> RuntimeConfiguration {
-    let protein_files = vec![repo_root()
-        .join("test_data")
-        .join("uniprot_2026_02_up000000625.txt.gz")];
+    let protein_files = vec![
+        repo_root()
+            .join("test_data")
+            .join("uniprot_2026_02_up000000625.txt.gz"),
+    ];
 
     let protease = Protease::by_name(
         "trypsin",
@@ -84,8 +94,8 @@ async fn build_from_fixture(client: Arc<Client>) -> RuntimeConfiguration {
         Some("live_db_peptide_search integration test".to_string()),
         &protein_files,
         protease,
-        NonZeroUsize::new(512).unwrap(),
-        NonZeroUsize::new(100).unwrap(),
+        NonZeroUsize::new(128).unwrap(),
+        NonZeroUsize::new(5).unwrap(),
         0.8,
         false,
         false,
@@ -192,8 +202,8 @@ fn expected_peptide_fixture() -> HashSet<String> {
     let path = repo_root()
         .join("test_data")
         .join("uniprot_2026_02_up000000625_peptides.txt.gz");
-    let file = std::fs::File::open(&path)
-        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
+    let file =
+        std::fs::File::open(&path).unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
     let reader = BufReader::new(flate2::read::GzDecoder::new(file));
     reader
         .lines()
@@ -203,7 +213,11 @@ fn expected_peptide_fixture() -> HashSet<String> {
 }
 
 /// Every `Peptidoform` a search returns must have a mass inside the ppm window it was
-/// searched with — regardless of which/how many PTMs were resolved onto it.
+/// searched with — regardless of which/how many PTMs were resolved onto it. Additionally, no
+/// peptide left out of the results may actually satisfy the query mass + PTM collection: this
+/// is checked independently of `MultiTaskSearch`'s partition-routing/streaming machinery by
+/// rebuilding the same `PeptideCondition`s and running every un-returned DB peptide through
+/// them directly.
 #[tokio::test]
 #[ignore]
 async fn test_peptidoforms_match_queried_mass() {
@@ -213,20 +227,22 @@ async fn test_peptidoforms_match_queried_mass() {
 
     let lower_ppm = 20;
     let upper_ppm = 20;
+    let max_variable_modifications = 2;
     let (lower_mass, upper_mass) = ppm_window(target_mass, lower_ppm, upper_ppm);
+    let ptm_collection = ptm_collection_from_fixture();
 
     let mut stream = MultiTaskSearch::search(
-        client,
-        configuration,
+        client.clone(),
+        configuration.clone(),
         target_mass,
         lower_ppm,
         upper_ppm,
-        2,
+        max_variable_modifications,
         true,
         None,
         None,
         None,
-        ptm_collection_from_fixture(),
+        ptm_collection.clone(),
         true,
         NonZeroUsize::new(4).unwrap(),
     )
@@ -250,6 +266,79 @@ async fn test_peptidoforms_match_queried_mass() {
             "peptidoform {} has mass {mass}, outside queried window [{lower_mass}, {upper_mass}]",
             peptidoform.sequence(),
         );
+    }
+
+    // Recall check: rebuild the same PTM conditions `MultiTaskSearch` would have used, and
+    // confirm no DB peptide left out of `peptidoforms` actually matches one of them.
+    let returned_sequences: HashSet<String> = peptidoforms
+        .iter()
+        .map(|peptidoform| {
+            peptidoform
+                .sequence()
+                .iter()
+                .filter_map(|part| match part {
+                    ModifiedSequencePart::AminoAcid(aa) => Some(AminoAcid::by_bit_code(aa).code()),
+                    _ => None,
+                })
+                .collect::<String>()
+        })
+        .collect();
+
+    // Same min/max mass bound formula as `MultiTaskSearch::search` (peptide_search.rs:1368-1395).
+    let min_mass = configuration.protease().min_length().get() as i64 * GLYCINE.mono_mass();
+    let largest_negative_static_ptm = ptm_collection
+        .get_static_ptms()
+        .iter()
+        .filter(|ptm| ptm.mass_delta().is_negative())
+        .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
+        .abs();
+    let largest_negative_variable_ptm = ptm_collection
+        .get_variable_ptms()
+        .iter()
+        .filter(|ptm| ptm.mass_delta().is_negative())
+        .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
+        .abs();
+    let amino_acid_average = AminoAcid::canonical()
+        .iter()
+        .map(|aa| aa.mono_mass())
+        .sum::<i64>()
+        / AminoAcid::canonical().len() as i64;
+    let possible_peptide_length = ((target_mass / amino_acid_average) as f64 * 1.3) as i64;
+    let max_mass = target_mass
+        + (largest_negative_static_ptm * possible_peptide_length)
+        + (largest_negative_variable_ptm * possible_peptide_length);
+
+    let mut conditions: Vec<PeptideCondition> = PeptideConditionBuilder::from_ptm_collection(
+        &ptm_collection,
+        target_mass,
+        min_mass,
+        max_mass,
+        max_variable_modifications,
+    )
+    .into_iter()
+    .flat_map(|builder| builder.finalize(configuration.mass_partitioning(), lower_ppm, upper_ppm))
+    .collect();
+
+    let table = PeptideTable::new(client.clone());
+    let mut all_peptides = table.select("", Vec::new()).await.unwrap();
+    while let Some(peptide) = all_peptides.next().await {
+        let peptide = peptide.unwrap();
+        if returned_sequences.contains(&peptide.sequence().to_string()) {
+            continue;
+        }
+        let mass = peptide.mass();
+        for condition in conditions.iter_mut() {
+            assert!(
+                !(mass >= condition.lower_mass()
+                    && mass <= condition.upper_mass()
+                    && condition.is_match(&peptide)),
+                "peptide {} (mass {mass}) was not returned by the search but matches a PTM \
+                 condition in window [{}, {}]",
+                peptide.sequence(),
+                condition.lower_mass(),
+                condition.upper_mass(),
+            );
+        }
     }
 }
 
