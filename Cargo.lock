@@ -3511,6 +3511,7 @@ dependencies = [
  "deadpool-postgres",
  "dihardts_omicstools",
  "fallible-iterator 0.3.0",
+ "flate2",
  "futures",
  "glob",
  "http 1.4.2",

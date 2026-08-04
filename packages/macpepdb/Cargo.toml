@@ -73,6 +73,9 @@ tikv-jemallocator = { workspace = true, optional = true }
 [build-dependencies]
 dihardts_omicstools = { workspace = true }
 
+[dev-dependencies]
+flate2 = { workspace = true }
+
 
 [features]
 default = ["mimalloc"]

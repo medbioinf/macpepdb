@@ -183,6 +183,25 @@ fn ptm_collection_from_fixture() -> Arc<PTMCollection<Arc<PostTranslationalModif
     Arc::new(PTMCollection::new(ptms).unwrap())
 }
 
+/// Reads the independently-generated reference peptide list (one sequence per line,
+/// gzip-compressed) — every peptide trypsin (length 6-50, ≤2 missed cleavages) should produce
+/// from the E. coli K12 fixture proteome. Used as ground truth independent of this codebase's
+/// own digestion/build logic.
+fn expected_peptide_fixture() -> HashSet<String> {
+    use std::io::{BufRead, BufReader};
+    let path = repo_root()
+        .join("test_data")
+        .join("uniprot_2026_02_up000000625_peptides.txt.gz");
+    let file = std::fs::File::open(&path)
+        .unwrap_or_else(|e| panic!("open {}: {e}", path.display()));
+    let reader = BufReader::new(flate2::read::GzDecoder::new(file));
+    reader
+        .lines()
+        .map(|line| line.expect("read line from peptide fixture"))
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
 /// Every `Peptidoform` a search returns must have a mass inside the ppm window it was
 /// searched with — regardless of which/how many PTMs were resolved onto it.
 #[tokio::test]
@@ -314,6 +333,34 @@ async fn test_search_recall_matches_every_peptide_in_mass_window() {
     assert_eq!(
         union_all_sequences, expected_sequences,
         "UnionAllSearch missed or over-returned peptides vs. a direct table scan"
+    );
+}
+
+/// Every peptide in the independently-generated reference list must exist in the DB after the
+/// build — an end-to-end check on the whole digestion/build pipeline, not just search recall
+/// within one mass window.
+#[tokio::test]
+#[ignore]
+async fn test_every_fixture_peptide_exists_in_database() {
+    let _guard = TEST_LOCK.lock().await;
+    let (client, _configuration) = setup().await;
+
+    let expected = expected_peptide_fixture();
+
+    let table = PeptideTable::new(client.clone());
+    let mut stream = table.select("", Vec::new()).await.unwrap();
+    let mut actual = HashSet::new();
+    while let Some(peptide) = stream.next().await {
+        actual.insert(peptide.unwrap().sequence().to_string());
+    }
+
+    let missing: Vec<&String> = expected.difference(&actual).collect();
+    assert!(
+        missing.is_empty(),
+        "{} of {} fixture peptides missing from DB, e.g. {:?}",
+        missing.len(),
+        expected.len(),
+        missing.iter().take(20).collect::<Vec<_>>()
     );
 }
 
