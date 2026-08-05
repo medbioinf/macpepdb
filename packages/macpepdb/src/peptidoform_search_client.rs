@@ -17,6 +17,7 @@ use macpepdb_web_common::requests::{
 use reqwest::Client as WebClient;
 use thiserror::Error;
 
+use crate::peptide_search::PeptidoformPassthroughTransformation;
 use crate::peptide_table::FULL_PEPTIDE_COLUMN_SELECTION;
 use crate::{
     blob_table::BlobTable,
@@ -202,7 +203,7 @@ impl PeptidoformSearchClient {
                 let db_client = db_client.clone();
                 let configuration = configuration.clone();
                 let ptms = ptms.clone();
-                let peptide_stream = PeptideSearch::search(
+                let peptide_stream = PeptideSearch::new(
                     db_client,
                     &FULL_PEPTIDE_COLUMN_SELECTION,
                     configuration,
@@ -218,6 +219,7 @@ impl PeptidoformSearchClient {
                     true,
                     concurrent_searches,
                 )
+                .search::<PeptidoformPassthroughTransformation>()
                 .await?;
 
                 let peptide_stream =

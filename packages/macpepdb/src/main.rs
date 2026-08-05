@@ -19,7 +19,7 @@ use macpepdb::{
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide::{Peptide, Peptidoform},
-    peptide_search::PeptideSearch,
+    peptide_search::{PeptideSearch, PeptidoformPassthroughTransformation},
     peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideTable},
     performance_test::PerformanceTest,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
@@ -1166,7 +1166,7 @@ async fn peptide_search(
             .unwrap(),
     );
 
-    let mut peptide_stream = PeptideSearch::search(
+    let mut peptide_stream = PeptideSearch::new(
         client,
         &FULL_PEPTIDE_COLUMN_SELECTION,
         configuration,
@@ -1182,6 +1182,7 @@ async fn peptide_search(
         !only_canonical,
         threads,
     )
+    .search::<PeptidoformPassthroughTransformation>()
     .await
     .unwrap();
 

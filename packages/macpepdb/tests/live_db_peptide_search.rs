@@ -29,7 +29,9 @@ use macpepdb::client::Client;
 use macpepdb::configuration::RuntimeConfiguration;
 use macpepdb::database_build::DatabaseBuild;
 use macpepdb::peptide::{IsPeptide, Peptide};
-use macpepdb::peptide_search::{PeptideCondition, PeptideConditionBuilder, PeptideSearch};
+use macpepdb::peptide_search::{
+    PeptideCondition, PeptideConditionBuilder, PeptideSearch, PeptidoformPassthroughTransformation,
+};
 use macpepdb::peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideTable};
 use macpepdb::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use macpepdb::protease::Protease;
@@ -227,7 +229,7 @@ async fn test_peptidoforms_match_queried_mass() {
     let (lower_mass, upper_mass) = ppm_window(target_mass, lower_ppm, upper_ppm);
     let ptm_collection = ptm_collection_from_fixture();
 
-    let mut stream = PeptideSearch::search(
+    let mut stream = PeptideSearch::new(
         client.clone(),
         &FULL_PEPTIDE_COLUMN_SELECTION,
         configuration.clone(),
@@ -243,6 +245,7 @@ async fn test_peptidoforms_match_queried_mass() {
         true,
         NonZeroUsize::new(4).unwrap(),
     )
+    .search::<PeptidoformPassthroughTransformation>()
     .await
     .unwrap();
 

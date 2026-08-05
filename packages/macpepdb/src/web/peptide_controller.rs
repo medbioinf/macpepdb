@@ -22,9 +22,9 @@ use thiserror::Error;
 use tokio_postgres::Row;
 use urlencoding::decode as urldecode;
 
-use crate::mass::{mass_to_charge_to_dalton, to_float as mass_to_float};
+use crate::mass::mass_to_charge_to_dalton;
 use crate::peptide::{IsPeptide, Peptide};
-use crate::peptide_search::PeptideSearch;
+use crate::peptide_search::{IsPeptidoformTransformation, PeptideSearch};
 use crate::peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideColumnSelection, PeptideTable};
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::protein_ids::ProteinIds;
@@ -44,6 +44,8 @@ static SHOW_PATH: &str = "/{sequence}";
 /// Errors that can occur while handling peptide endpoints.
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error("Requested output format is invalid")]
+    InvalidAcceptHeader,
     #[error("Peptide error: {0}")]
     Peptide(#[from] crate::peptide::Error),
     #[error("Peptide not found")]
@@ -63,6 +65,12 @@ pub enum Error {
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         match self {
+            Error::InvalidAcceptHeader => (
+                StatusCode::NOT_ACCEPTABLE,
+                DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                Body::from(self.to_string()),
+            )
+                .into_response(),
             Error::Peptide(err) => (
                 StatusCode::BAD_REQUEST,
                 DEFAULT_ERROR_HEADER_MAP.deref().clone(),
@@ -112,6 +120,32 @@ pub const SEQUENCE_PEPTIDE_COLUMN_SELECTION: PeptideColumnSelection = PeptideCol
         ))
     },
 };
+
+struct PeptidoformToJsonTransformation;
+impl IsPeptidoformTransformation for PeptidoformToJsonTransformation {
+    type Output = String;
+    type Error = serde_json::Error;
+
+    fn try_from_peptidoform(
+        peptidoform: crate::peptide::Peptidoform,
+    ) -> Result<Self::Output, Self::Error> {
+        serde_json::to_string(
+            &macpepdb_web_common::responses::peptide::PeptideResponse::from(&peptidoform),
+        )
+    }
+}
+
+struct PeptidoformToPlainTextTransformation;
+impl IsPeptidoformTransformation for PeptidoformToPlainTextTransformation {
+    type Output = String;
+    type Error = serde_json::Error;
+
+    fn try_from_peptidoform(
+        peptidoform: crate::peptide::Peptidoform,
+    ) -> Result<Self::Output, Self::Error> {
+        Ok(peptidoform.sequence().to_string())
+    }
+}
 
 // TODO: Adjust all controller methods to return error instread ok Ok(body) with error message.
 /// Controller providing peptide lookup and mass search endpoints under `/api/peptides`.
@@ -336,9 +370,9 @@ impl PeptideController {
     /// Again, resolve modification controls if canonical sequences or Profoma compliant notation
     ///
     /// ```text
-    /// >mdb|<sequential peptidoform counter>|<mass>
+    /// >mdb|<sequential peptidoform counter>
     /// <57.021464@C>NCLETPSCKNGFLLDGFPR
-    /// >mdb|<sequential peptidoform counter>|<mass>
+    /// >mdb|<sequential peptidoform counter>
     /// <57.021464@C>NCLETPSCKNGFLLM[+15.994915]DGFPR
     /// ...
     /// ```
@@ -559,24 +593,17 @@ impl PeptideController {
                     HeaderValue::from_static("application/json; charset=utf-8"),
                 );
             }
-            "text/plain" => {
+            "text/plain" | "text/fasta" => {
                 headers.insert(
                     header::CONTENT_TYPE,
                     HeaderValue::from_static("text/plain; charset=utf-8"),
                 );
                 selection = &SEQUENCE_PEPTIDE_COLUMN_SELECTION;
             }
-            "text/fasta" => {
-                headers.insert(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("text/plain; charset=utf-8"), // no official mime type for proforma most clients can deal with text/plain
-                );
-                selection = &SEQUENCE_PEPTIDE_COLUMN_SELECTION;
-            }
-            _ => (),
+            _ => return Err(Error::InvalidAcceptHeader),
         }
 
-        let peptide_stream = PeptideSearch::search(
+        let peptide_search = PeptideSearch::new(
             server_state.db_client(),
             selection,
             server_state.configuration(),
@@ -591,116 +618,119 @@ impl PeptideController {
             ptm_collection.clone(),
             payload.resolve_modifications.unwrap_or(false),
             server_state.concurrent_searches(),
-        )
-        .await?;
+        );
 
         let (status_code, headers, body) = match accept_header.as_str() {
-            "application/json" => (
-                StatusCode::OK,
-                headers,
-                Body::from_stream(stream! {
-                    // start json array
-                    yield Ok("[".to_string());
-                    // set delimiter to empty string for first element
-                    let mut delimiter: &'static str = "";
-                    // stream peptides
-                    for await peptidoforms in peptide_stream {
-                        match peptidoforms {
-                            Ok(peptidoforms) => {
-                                for peptidoform in peptidoforms.into_iter() {
-                                    // convert to json and yield delimiter + json in one chunk
-                                    match serde_json::to_string(&PeptideResponse::from(&peptidoform)) {
-                                        Ok(json) => {
-                                            let mut chunk = String::with_capacity(delimiter.len() + json.len());
-                                            chunk.push_str(delimiter);
-                                            chunk.push_str(&json);
-                                            yield Ok(chunk);
-                                            delimiter = ",";
-                                        }
-                                        Err(err) => {
-                                            tracing::error!("{:?}", err);
-                                            yield Err(format!("!!! {:?}", err));
-                                            break;
-                                        }
-                                    };
+            "application/json" => {
+                let peptide_stream = peptide_search
+                    .search::<PeptidoformToJsonTransformation>()
+                    .await?;
+                (
+                    StatusCode::OK,
+                    headers,
+                    Body::from_stream(stream! {
+                        // start json array
+                        yield Ok("[".to_string());
+                        // set delimiter to empty string for first element
+                        let mut delimiter: &'static str = "";
+                        // stream peptides
+                        for await peptidoforms in peptide_stream {
+                            match peptidoforms {
+                                Ok(peptidoforms) => {
+                                    for peptidoform in peptidoforms.into_iter() {
+                                        let mut chunk = String::with_capacity(delimiter.len() + peptidoform.len());
+                                        chunk.push_str(delimiter);
+                                        chunk.push_str(&peptidoform);
+                                        yield Ok(chunk);
+                                        delimiter = ",";
+                                    }
                                 }
-                            }
-                            Err(err) => {
-                                tracing::error!("{:?}", err);
-                                yield Err(format!("!!! {:?}", err));
-                                break;
-                            }
-                        };
-                    }
-                    // end json array
-                    yield Ok("]".to_string());
-                }),
-            ),
-            "text/plain" => (
-                StatusCode::OK,
-                headers,
-                Body::from_stream(stream! {
-                    // guarantee at least one non-empty chunk even on zero hits, so the
-                    // streamed body is never fully empty (empty h2c bodies can trip the
-                    // client's decoder)
-                    yield Ok("\n".to_string());
-                    let mut delimiter: &'static str = "";
-                    for await peptidoforms in peptide_stream {
-                        match peptidoforms {
-                            Ok(peptidoforms) => {
-                                for peptidoform in peptidoforms.into_iter() {
-                                    let mut chunk = String::from(delimiter);
-                                    // sequence() is a &ModifiedSequence (Display only, no cheap &str/as_bytes for the general modified case)
-                                    write!(chunk, "{}", peptidoform.sequence()).unwrap();
-                                    yield Ok(chunk);
-                                    delimiter = "\n";
+                                Err(err) => {
+                                    tracing::error!("{:?}", err);
+                                    yield Err(format!("!!! {:?}", err));
+                                    break;
                                 }
-                            }
-                            Err(err) => {
-                                tracing::error!("{:?}", err);
-                                yield Err(format!("!!! {:?}", err));
-                                break;
-                            }
-                        };
-                    }
-                }),
-            ),
-            "text/fasta" => (
-                StatusCode::OK,
-                headers,
-                Body::from_stream(stream! {
-                    // guarantee at least one non-empty chunk even on zero hits, so the
-                    // streamed body is never fully empty (empty h2c bodies can trip the
-                    // client's decoder)
-                    yield Ok("\n".to_string());
-                    let mut peptidoform_ctr: usize = 0;
-                    let mut delimiter: &'static str = "";
-                    for await peptidoforms in peptide_stream {
-                        match peptidoforms {
-                            Ok(peptidoforms) => {
-                                for peptidoform in peptidoforms.into_iter() {
-                                    let mut chunk = String::from(delimiter);
-                                    write!(
-                                        chunk,
-                                        ">mdb|{peptidoform_ctr}|{}\n{}",
-                                        mass_to_float(peptidoform.mass()),
-                                        peptidoform.sequence()
-                                    )
-                                    .unwrap();
-                                    peptidoform_ctr += 1;
-                                    yield Ok(chunk);
-                                    delimiter = "\n";
+                            };
+                        }
+                        // end json array
+                        yield Ok("]".to_string());
+                    }),
+                )
+            }
+            "text/plain" => {
+                let peptide_stream = peptide_search
+                    .search::<PeptidoformToPlainTextTransformation>()
+                    .await?;
+                (
+                    StatusCode::OK,
+                    headers,
+                    Body::from_stream(stream! {
+                        // guarantee at least one non-empty chunk even on zero hits, so the
+                        // streamed body is never fully empty (empty h2c bodies can trip the
+                        // client's decoder)
+                        yield Ok("\n".to_string());
+                        let mut delimiter: &'static str = "";
+                        for await peptidoforms in peptide_stream {
+                            match peptidoforms {
+                                Ok(peptidoforms) => {
+                                    for peptidoform in peptidoforms.into_iter() {
+                                        let mut chunk = String::from(delimiter);
+                                        // sequence() is a &ModifiedSequence (Display only, no cheap &str/as_bytes for the general modified case)
+                                        write!(chunk, "{}", peptidoform).unwrap();
+                                        yield Ok(chunk);
+                                        delimiter = "\n";
+                                    }
                                 }
-                            }
-                            Err(err) => {
-                                tracing::error!("{:?}", err);
-                                yield Err(format!("!!! {:?}", err));
-                                break;
-                            }
-                        };
-                    }
-                }),
-            ),
+                                Err(err) => {
+                                    tracing::error!("{:?}", err);
+                                    yield Err(format!("!!! {:?}", err));
+                                    break;
+                                }
+                            };
+                        }
+                    }),
+                )
+            }
+            "text/fasta" => {
+                let peptide_stream = peptide_search
+                    .search::<PeptidoformToPlainTextTransformation>()
+                    .await?;
+                (
+                    StatusCode::OK,
+                    headers,
+                    Body::from_stream(stream! {
+                        // guarantee at least one non-empty chunk even on zero hits, so the
+                        // streamed body is never fully empty (empty h2c bodies can trip the
+                        // client's decoder)
+                        yield Ok("\n".to_string());
+                        let mut peptidoform_ctr: usize = 0;
+                        let mut delimiter: &'static str = "";
+                        for await peptidoforms in peptide_stream {
+                            match peptidoforms {
+                                Ok(peptidoforms) => {
+                                    for peptidoform in peptidoforms.into_iter() {
+                                        let mut chunk = String::from(delimiter);
+                                        write!(
+                                            chunk,
+                                            ">mdb|{peptidoform_ctr}\n{}",
+                                            peptidoform
+                                        )
+                                        .unwrap();
+                                        peptidoform_ctr += 1;
+                                        yield Ok(chunk);
+                                        delimiter = "\n";
+                                    }
+                                }
+                                Err(err) => {
+                                    tracing::error!("{:?}", err);
+                                    yield Err(format!("!!! {:?}", err));
+                                    break;
+                                }
+                            };
+                        }
+                    }),
+                )
+            }
             _ => (
                 StatusCode::NOT_ACCEPTABLE,
                 DEFAULT_ERROR_HEADER_MAP.deref().clone(),

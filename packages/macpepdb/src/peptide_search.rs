@@ -110,6 +110,8 @@ pub enum Error {
     Transaction(Box<tokio_postgres::Error>),
     #[error("Row to peptide conversion error in peptide search: {0}")]
     RowPeptideConversion(Box<tokio_postgres::Error>),
+    #[error("Unable to transform peptide into requested format, underlaying error: {0}")]
+    Transformation(String),
 }
 
 into_thiserror_boxed!(crate::client::Error, Error, Client);
@@ -612,17 +614,37 @@ where
 
 /// A stream of batches of matching [`Peptidoform`]s produced by a running search, common
 /// to both the `MultiTask` and `UnionAll` strategies so callers can handle them uniformly.
-pub trait IsFallibleMatchingPeptideStream:
-    Stream<Item = Result<Vec<Peptidoform>, Error>> + Send
+pub trait IsFallibleMatchingPeptideStream<T>:
+    Stream<Item = Result<Vec<T::Output>, Error>> + Send
+where
+    T: IsPeptidoformTransformation,
 {
     /// Name of the `metrics` counter this stream's matching-peptide count is reported under.
     fn matching_peptide_metric(&self) -> &str;
 }
 
+pub trait IsPeptidoformTransformation: Unpin + Send {
+    type Output: Send + 'static;
+    type Error: std::fmt::Display;
+
+    fn try_from_peptidoform(peptidoform: Peptidoform) -> Result<Self::Output, Self::Error>;
+}
+
+pub struct PeptidoformPassthroughTransformation;
+
+impl IsPeptidoformTransformation for PeptidoformPassthroughTransformation {
+    type Output = Peptidoform;
+    type Error = Error;
+
+    fn try_from_peptidoform(peptidoform: Peptidoform) -> Result<Self::Output, Self::Error> {
+        Ok(peptidoform)
+    }
+}
+
 type BoxedPeptideRowStream =
     Pin<Box<dyn Stream<Item = Result<Peptide, crate::peptide_table::Error>> + Send>>;
 
-struct ConditionalPeptideStream {
+struct ConditionalPeptideStream<T: IsPeptidoformTransformation> {
     condition: Pin<Box<PeptideCondition>>,
     inner: BoxedPeptideRowStream,
     resolve_modification: bool,
@@ -631,9 +653,13 @@ struct ConditionalPeptideStream {
     opened_at: std::time::Instant,
     rows: u64,
     distinct_filter: Option<Arc<DashSet<ModifiedSequence>>>,
+    _marker: std::marker::PhantomData<T>,
 }
 
-impl ConditionalPeptideStream {
+impl<T> ConditionalPeptideStream<T>
+where
+    T: IsPeptidoformTransformation,
+{
     /// Opens the DB query for a single [`PeptideCondition`] and wraps the resulting row
     /// stream, recording open/scan timings into `agg` as the stream is consumed.
     pub async fn new(
@@ -692,12 +718,16 @@ impl ConditionalPeptideStream {
             opened_at: std::time::Instant::now(),
             rows: 0,
             distinct_filter,
+            _marker: std::marker::PhantomData,
         })
     }
 }
 
-impl Stream for ConditionalPeptideStream {
-    type Item = Result<Vec<Peptidoform>, Error>;
+impl<T> Stream for ConditionalPeptideStream<T>
+where
+    T: IsPeptidoformTransformation,
+{
+    type Item = Result<Vec<T::Output>, Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -716,7 +746,11 @@ impl Stream for ConditionalPeptideStream {
                                         .map(|set| set.insert(peptidoform.sequence().clone()))
                                         .unwrap_or(true)
                                 })
-                                .collect::<Vec<_>>()
+                                .map(|peptidoform| {
+                                    T::try_from_peptidoform(peptidoform)
+                                        .map_err(|err| Error::Transformation(format!("{err}")))
+                                })
+                                .collect::<Result<Vec<_>, Error>>()
                         } else {
                             let peptidoform = Peptidoform::from(peptide);
                             if this
@@ -725,13 +759,15 @@ impl Stream for ConditionalPeptideStream {
                                 .map(|set| set.insert(peptidoform.sequence().clone()))
                                 .unwrap_or(true)
                             {
-                                vec![peptidoform]
+                                T::try_from_peptidoform(peptidoform)
+                                    .map(|representation| vec![representation])
+                                    .map_err(|err| Error::Transformation(format!("{err}")))
                             } else {
                                 continue 'polling_loop;
                             }
                         };
 
-                        Poll::Ready(Some(Ok(peptidoforms)))
+                        Poll::Ready(Some(peptidoforms))
                     } else {
                         continue 'polling_loop;
                     }
@@ -756,9 +792,9 @@ impl Stream for ConditionalPeptideStream {
 /// OS threads rather than polled cooperatively on a single task, and merges their rows
 /// into a single stream, applying the non-SQL-able filters (e.g. distinctness) as
 /// results arrive.
-pub struct FallibleMatchingPeptideStream {
+pub struct FallibleMatchingPeptideStream<T: IsPeptidoformTransformation> {
     /// Receives batches produced by the spawned per-condition tasks below.
-    rx: mpsc::UnboundedReceiver<Result<Vec<Peptidoform>, Error>>,
+    rx: mpsc::UnboundedReceiver<Result<Vec<T::Output>, Error>>,
     /// Owns the per-condition tasks; dropping it (e.g. the caller abandoning the
     /// search) aborts any still-running tasks. Never read directly — held only for
     /// this cancel-on-drop side effect.
@@ -772,7 +808,10 @@ pub struct FallibleMatchingPeptideStream {
     agg: Arc<SearchTimingAgg>,
 }
 
-impl FallibleMatchingPeptideStream {
+impl<T> FallibleMatchingPeptideStream<T>
+where
+    T: IsPeptidoformTransformation,
+{
     /// Builds the stream and spawns one task per [`PeptideCondition`], each gated by a
     /// shared [`Semaphore`] (bound = `concurrent_selects`) so at most that many DB
     /// queries/scans run at once — the same cap enforced today, but each task now runs
@@ -811,7 +850,7 @@ impl FallibleMatchingPeptideStream {
         );
         let agg = Arc::new(SearchTimingAgg::default());
         let semaphore = Arc::new(Semaphore::new(concurrent_selects));
-        let (tx, rx) = mpsc::unbounded_channel::<Result<Vec<Peptidoform>, Error>>();
+        let (tx, rx) = mpsc::unbounded_channel::<Result<Vec<T::Output>, Error>>();
 
         let mut tasks = JoinSet::new();
         for condition in conditions {
@@ -826,7 +865,7 @@ impl FallibleMatchingPeptideStream {
                     Ok(permit) => permit,
                     Err(_) => return, // semaphore never closed in practice
                 };
-                match ConditionalPeptideStream::new(
+                match ConditionalPeptideStream::<T>::new(
                     client,
                     selection,
                     condition,
@@ -882,14 +921,20 @@ impl FallibleMatchingPeptideStream {
     }
 }
 
-impl IsFallibleMatchingPeptideStream for FallibleMatchingPeptideStream {
+impl<T> IsFallibleMatchingPeptideStream<T> for FallibleMatchingPeptideStream<T>
+where
+    T: IsPeptidoformTransformation,
+{
     fn matching_peptide_metric(&self) -> &str {
         &self.matching_peptide_metric
     }
 }
 
-impl Stream for FallibleMatchingPeptideStream {
-    type Item = Result<Vec<Peptidoform>, Error>;
+impl<T> Stream for FallibleMatchingPeptideStream<T>
+where
+    T: IsPeptidoformTransformation,
+{
+    type Item = Result<Vec<T::Output>, Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
@@ -926,7 +971,10 @@ impl Stream for FallibleMatchingPeptideStream {
     }
 }
 
-impl Drop for FallibleMatchingPeptideStream {
+impl<T> Drop for FallibleMatchingPeptideStream<T>
+where
+    T: IsPeptidoformTransformation,
+{
     fn drop(&mut self) {
         // If the stream is dropped before reaching completion (Step 3), the search was
         // abandoned — almost always the HTTP client disconnecting / timing out. These
@@ -951,9 +999,76 @@ impl Drop for FallibleMatchingPeptideStream {
 
 /// Asynchronous filter where one task is spawned for each PTM condition.
 ///
-pub struct PeptideSearch;
+pub struct PeptideSearch {
+    client: Arc<Client>,
+    selection: &'static PeptideColumnSelection,
+    configuration: Arc<RuntimeConfiguration>,
+    mass: i64,
+    lower_mass_tolerance_ppm: i64,
+    upper_mass_tolerance_ppm: i64,
+    max_variable_modifications: usize,
+    is_distinct: bool,
+    taxonomy_ids: Option<Vec<i32>>,
+    proteome_ids: Option<Vec<String>>,
+    is_reviewed: Option<bool>,
+    ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
+    resolve_modifications: bool,
+    num_threads: NonZeroUsize,
+}
 
 impl PeptideSearch {
+    /// Search for peptides in the database based on the given parameters.
+    ///
+    /// # Arguments
+    /// * `client` - The client to use for the query
+    /// * `configuration` - The configuration to use for the query
+    /// * `mass` - The mass to search for
+    /// * `lower_mass_tolerance_ppm` - The lower mass tolerance in ppm
+    /// * `upper_mass_tolerance_ppm` - The upper mass tolerance in ppm
+    /// * `max_variable_modifications` - The maximum number of variable modifications to apply
+    /// * `distinct` - Whether to return distinct peptides only
+    /// * `taxonomy_ids` - The taxonomy IDs to filter the peptides by
+    /// * `proteome_ids` - The proteome IDs to filter the peptides by
+    /// * `is_reviewed` - Whether to filter the peptides by SwissProt or TrEMBL
+    /// * `ptm_collection` - The PTM collection to use for the query
+    /// * `resolve_modifications` - Whether to resolve modifications and return the modified sequences as ProForma compliant strings
+    /// * `num_threads` - The number of concurrent searches
+    ///
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        client: Arc<Client>,
+        selection: &'static PeptideColumnSelection,
+        configuration: Arc<RuntimeConfiguration>,
+        mass: i64,
+        lower_mass_tolerance_ppm: i64,
+        upper_mass_tolerance_ppm: i64,
+        max_variable_modifications: usize,
+        is_distinct: bool,
+        taxonomy_ids: Option<Vec<i32>>,
+        proteome_ids: Option<Vec<String>>,
+        is_reviewed: Option<bool>,
+        ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
+        resolve_modifications: bool,
+        num_threads: NonZeroUsize,
+    ) -> Self {
+        Self {
+            client,
+            selection,
+            configuration,
+            mass,
+            lower_mass_tolerance_ppm,
+            upper_mass_tolerance_ppm,
+            max_variable_modifications,
+            is_distinct,
+            taxonomy_ids,
+            proteome_ids,
+            is_reviewed,
+            ptm_collection,
+            resolve_modifications,
+            num_threads,
+        }
+    }
+
     /// Splitup and sort peptide condition by partition and finalize them.
     ///
     /// # Arguments
@@ -1030,55 +1145,27 @@ impl PeptideSearch {
         merged
     }
 
-    /// Search for peptides in the database based on the given parameters.
-    ///
-    /// # Arguments
-    /// * `client` - The client to use for the query
-    /// * `configuration` - The configuration to use for the query
-    /// * `mass` - The mass to search for
-    /// * `lower_mass_tolerance_ppm` - The lower mass tolerance in ppm
-    /// * `upper_mass_tolerance_ppm` - The upper mass tolerance in ppm
-    /// * `max_variable_modifications` - The maximum number of variable modifications to apply
-    /// * `distinct` - Whether to return distinct peptides only
-    /// * `taxonomy_ids` - The taxonomy IDs to filter the peptides by
-    /// * `proteome_ids` - The proteome IDs to filter the peptides by
-    /// * `is_reviewed` - Whether to filter the peptides by SwissProt or TrEMBL
-    /// * `ptm_collection` - The PTM collection to use for the query
-    /// * `resolve_modifications` - Whether to resolve modifications and return the modified sequences as ProForma compliant strings
-    /// * `num_threads` - The number of concurrent searches
-    ///
-    #[allow(clippy::too_many_arguments)]
-    pub async fn search(
-        client: Arc<Client>,
-        selection: &'static PeptideColumnSelection,
-        configuration: Arc<RuntimeConfiguration>,
-        mass: i64,
-        lower_mass_tolerance_ppm: i64,
-        upper_mass_tolerance_ppm: i64,
-        max_variable_modifications: usize,
-        is_distinct: bool,
-        taxonomy_ids: Option<Vec<i32>>,
-        proteome_ids: Option<Vec<String>>,
-        is_reviewed: Option<bool>,
-        ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
-        resolve_modifications: bool,
-        num_threads: NonZeroUsize,
-    ) -> Result<Pin<Box<dyn IsFallibleMatchingPeptideStream>>, Error> {
-        let taxonomy_ids = taxonomy_ids.map(Arc::new);
-        let proteome_ids = proteome_ids.map(Arc::new);
+    pub async fn search<T: IsPeptidoformTransformation + 'static>(
+        self,
+    ) -> Result<Pin<Box<dyn IsFallibleMatchingPeptideStream<T>>>, Error> {
+        let taxonomy_ids = self.taxonomy_ids.map(Arc::new);
+        let proteome_ids = self.proteome_ids.map(Arc::new);
 
-        if !ptm_collection.is_empty() {
-            let min_mass = configuration.protease().min_length().get() as i64 * GLYCINE.mono_mass();
+        if !self.ptm_collection.is_empty() {
+            let min_mass =
+                self.configuration.protease().min_length().get() as i64 * GLYCINE.mono_mass();
 
             // Calulcate max mass as stated in PeptideCondition::from_ptm_collection() 2.3
-            let largest_negative_static_ptm = ptm_collection
+            let largest_negative_static_ptm = self
+                .ptm_collection
                 .get_static_ptms()
                 .iter()
                 .filter(|ptm| ptm.mass_delta().is_negative())
                 .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
                 .abs();
 
-            let largest_negative_variable_ptm = ptm_collection
+            let largest_negative_variable_ptm = self
+                .ptm_collection
                 .get_variable_ptms()
                 .iter()
                 .filter(|ptm| ptm.mass_delta().is_negative())
@@ -1091,62 +1178,62 @@ impl PeptideSearch {
                 .map(|aa| aa.mono_mass())
                 .sum::<i64>()
                 / AminoAcid::canonical().len() as i64;
-            let possible_peptide_length = ((mass / amino_acid_average) as f64 * 1.3) as i64;
+            let possible_peptide_length = ((self.mass / amino_acid_average) as f64 * 1.3) as i64;
 
-            let max_mass = mass
+            let max_mass = self.mass
                 + (largest_negative_static_ptm * possible_peptide_length)
                 + (largest_negative_variable_ptm * possible_peptide_length);
 
             let sorted_ptm_conditions = VecDeque::from(Self::split_and_sort_peptide_conditions(
                 PeptideConditionBuilder::from_ptm_collection(
-                    &ptm_collection,
-                    mass,
+                    &self.ptm_collection,
+                    self.mass,
                     min_mass,
                     max_mass,
-                    max_variable_modifications,
+                    self.max_variable_modifications,
                 ),
-                configuration.mass_partitioning(),
-                lower_mass_tolerance_ppm,
-                upper_mass_tolerance_ppm,
+                self.configuration.mass_partitioning(),
+                self.lower_mass_tolerance_ppm,
+                self.upper_mass_tolerance_ppm,
             )?);
 
             FallibleMatchingPeptideStream::new(
-                client,
-                selection,
-                is_distinct,
+                self.client,
+                self.selection,
+                self.is_distinct,
                 FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
                     proteome_ids,
-                    is_reviewed,
+                    self.is_reviewed,
                 )?,
                 sorted_ptm_conditions,
-                resolve_modifications,
-                num_threads,
+                self.resolve_modifications,
+                self.num_threads,
             )
             .await
-            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
+            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream<T>>>)
         } else {
-            let conditions = VecDeque::from(PeptideConditionBuilder::new(mass).finalize(
-                configuration.mass_partitioning(),
-                lower_mass_tolerance_ppm,
-                upper_mass_tolerance_ppm,
+            let conditions = VecDeque::from(PeptideConditionBuilder::new(self.mass).finalize(
+                self.configuration.mass_partitioning(),
+                self.lower_mass_tolerance_ppm,
+                self.upper_mass_tolerance_ppm,
             ));
 
             FallibleMatchingPeptideStream::new(
-                client,
-                selection,
-                is_distinct,
+                self.client,
+                self.selection,
+                self.is_distinct,
                 FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
                     proteome_ids,
-                    is_reviewed,
+                    self.is_reviewed,
                 )?,
                 conditions,
-                resolve_modifications,
-                num_threads,
+                self.resolve_modifications,
+                self.num_threads,
             )
             .await
-            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
+            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream<T>>>)
         }
     }
 }
