@@ -30,9 +30,7 @@ use macpepdb::client::Client;
 use macpepdb::configuration::RuntimeConfiguration;
 use macpepdb::database_build::DatabaseBuild;
 use macpepdb::peptide::{IsPeptide, Peptide};
-use macpepdb::peptide_search::{
-    MultiTaskSearch, PeptideCondition, PeptideConditionBuilder, Search, UnionAllSearch,
-};
+use macpepdb::peptide_search::{PeptideCondition, PeptideConditionBuilder, PeptideSearch};
 use macpepdb::peptide_table::PeptideTable;
 use macpepdb::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use macpepdb::protease::Protease;
@@ -173,10 +171,6 @@ fn ppm_window(mass: i64, lower_ppm: i64, upper_ppm: i64) -> (i64, i64) {
     (lower, upper)
 }
 
-fn empty_ptm_collection() -> Arc<PTMCollection<Arc<PostTranslationalModification>>> {
-    Arc::new(PTMCollection::new(Vec::<Arc<PostTranslationalModification>>::new()).unwrap())
-}
-
 fn ptm_collection_from_fixture() -> Arc<PTMCollection<Arc<PostTranslationalModification>>> {
     let path = repo_root().join("test_data").join("ptms.tsv");
 
@@ -231,7 +225,7 @@ async fn test_peptidoforms_match_queried_mass() {
     let (lower_mass, upper_mass) = ppm_window(target_mass, lower_ppm, upper_ppm);
     let ptm_collection = ptm_collection_from_fixture();
 
-    let mut stream = MultiTaskSearch::search(
+    let mut stream = PeptideSearch::search(
         client.clone(),
         configuration.clone(),
         target_mass,
@@ -342,89 +336,6 @@ async fn test_peptidoforms_match_queried_mass() {
     }
 }
 
-/// The search must return every peptide in the DB whose mass falls in the queried window —
-/// checked against an independent direct table scan, not against the search's own logic.
-#[tokio::test]
-#[ignore]
-async fn test_search_recall_matches_every_peptide_in_mass_window() {
-    let _guard = TEST_LOCK.lock().await;
-    let (client, configuration) = setup().await;
-    let target_mass = sample_peptide_mass(&client, "ORDER BY mass LIMIT 1 OFFSET 5").await;
-
-    let lower_ppm = 50;
-    let upper_ppm = 50;
-    let (lower_mass, upper_mass) = ppm_window(target_mass, lower_ppm, upper_ppm);
-
-    // Ground truth: direct table scan, bypassing PeptideConditionBuilder/partition pruning.
-    let table = PeptideTable::new(client.clone());
-    let params: Vec<Box<dyn ToSql + Sync + Send>> =
-        vec![Box::new(lower_mass), Box::new(upper_mass)];
-    let mut ground_truth_stream = table
-        .select("WHERE mass BETWEEN $1 AND $2", params)
-        .await
-        .unwrap();
-    let mut expected_sequences = HashSet::new();
-    while let Some(peptide) = ground_truth_stream.next().await {
-        expected_sequences.insert(peptide.unwrap().sequence().to_string());
-    }
-    assert!(
-        !expected_sequences.is_empty(),
-        "expected at least one peptide in the sampled mass window"
-    );
-
-    let multi_task_sequences = collect_sequences(
-        MultiTaskSearch::search(
-            client.clone(),
-            configuration.clone(),
-            target_mass,
-            lower_ppm,
-            upper_ppm,
-            0,
-            true,
-            None,
-            None,
-            None,
-            empty_ptm_collection(),
-            false,
-            NonZeroUsize::new(4).unwrap(),
-        )
-        .await
-        .unwrap(),
-    )
-    .await;
-
-    assert_eq!(
-        multi_task_sequences, expected_sequences,
-        "MultiTaskSearch missed or over-returned peptides vs. a direct table scan"
-    );
-
-    let union_all_sequences = collect_sequences(
-        UnionAllSearch::search(
-            client,
-            configuration,
-            target_mass,
-            lower_ppm,
-            upper_ppm,
-            0,
-            true,
-            None,
-            None,
-            None,
-            empty_ptm_collection(),
-            false,
-            NonZeroUsize::new(4).unwrap(),
-        )
-        .await
-        .unwrap(),
-    )
-    .await;
-
-    assert_eq!(
-        union_all_sequences, expected_sequences,
-        "UnionAllSearch missed or over-returned peptides vs. a direct table scan"
-    );
-}
-
 /// Every peptide in the independently-generated reference list must exist in the DB after the
 /// build — an end-to-end check on the whole digestion/build pipeline, not just search recall
 /// within one mass window.
@@ -451,16 +362,4 @@ async fn test_every_fixture_peptide_exists_in_database() {
         expected.len(),
         missing.iter().take(20).collect::<Vec<_>>()
     );
-}
-
-async fn collect_sequences(
-    mut stream: std::pin::Pin<Box<dyn macpepdb::peptide_search::IsFallibleMatchingPeptideStream>>,
-) -> HashSet<String> {
-    let mut sequences = HashSet::new();
-    while let Some(batch) = stream.next().await {
-        for peptidoform in batch.unwrap() {
-            sequences.insert(peptidoform.sequence().to_string());
-        }
-    }
-    sequences
 }

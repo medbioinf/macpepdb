@@ -22,7 +22,7 @@ use crate::{
     client::Client as DbClient,
     configuration::RuntimeConfiguration,
     mass::to_float as mass_to_float,
-    peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch},
+    peptide_search::PeptideSearch,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
 };
 
@@ -62,11 +62,11 @@ into_thiserror_boxed!(crate::peptide_search::Error, Error, PeptideSearch);
 /// reuturning them in as ProForma compliant strings
 pub enum PeptidoformSearchClient {
     WebApi(WebClient, String),
-    Database(Arc<DbClient>, Arc<RuntimeConfiguration>, PeptideSearchType),
+    Database(Arc<DbClient>, Arc<RuntimeConfiguration>),
 }
 
 impl PeptidoformSearchClient {
-    pub async fn try_from_url(url: &str, search_type: PeptideSearchType) -> Result<Self, Error> {
+    pub async fn try_from_url(url: &str) -> Result<Self, Error> {
         if url.starts_with("http://") || url.starts_with("https://") {
             let mut web_client_builder = WebClient::builder().timeout(Duration::from_secs(60));
             if url.starts_with("http://") {
@@ -96,11 +96,7 @@ impl PeptidoformSearchClient {
             .ok_or(Error::MissingRuntimeConfig)
             .map(Arc::new)?;
 
-            Ok(PeptidoformSearchClient::Database(
-                db_client,
-                config,
-                search_type,
-            ))
+            Ok(PeptidoformSearchClient::Database(db_client, config))
         } else {
             Err(Error::InvalidClientUrl)
         }
@@ -201,48 +197,26 @@ impl PeptidoformSearchClient {
 
                 Ok(Box::pin(peptidoform_stream))
             }
-            PeptidoformSearchClient::Database(db_client, configuration, search_type) => {
+            PeptidoformSearchClient::Database(db_client, configuration) => {
                 let db_client = db_client.clone();
                 let configuration = configuration.clone();
                 let ptms = ptms.clone();
-                let peptide_stream = match search_type {
-                    PeptideSearchType::UnionAll => {
-                        UnionAllSearch::search(
-                            db_client,
-                            configuration,
-                            mass,
-                            lower_mass_tolerance_ppm,
-                            upper_mass_tolerance_ppm,
-                            max_variable_modifications,
-                            true,
-                            None,
-                            None,
-                            None,
-                            ptms,
-                            true,
-                            concurrent_searches,
-                        )
-                        .await?
-                    }
-                    PeptideSearchType::MultiTask => {
-                        MultiTaskSearch::search(
-                            db_client,
-                            configuration,
-                            mass,
-                            lower_mass_tolerance_ppm,
-                            upper_mass_tolerance_ppm,
-                            max_variable_modifications,
-                            true,
-                            None,
-                            None,
-                            None,
-                            ptms,
-                            true,
-                            concurrent_searches,
-                        )
-                        .await?
-                    }
-                };
+                let peptide_stream = PeptideSearch::search(
+                    db_client,
+                    configuration,
+                    mass,
+                    lower_mass_tolerance_ppm,
+                    upper_mass_tolerance_ppm,
+                    max_variable_modifications,
+                    true,
+                    None,
+                    None,
+                    None,
+                    ptms,
+                    true,
+                    concurrent_searches,
+                )
+                .await?;
 
                 let peptide_stream =
                     peptide_stream.flat_map(|peptidoform_result| match peptidoform_result {

@@ -5,9 +5,7 @@ use std::{
 };
 
 // internal imports
-use crate::{
-    client::Client, configuration::RuntimeConfiguration, peptide_search::PeptideSearchType,
-};
+use crate::{client::Client, configuration::RuntimeConfiguration};
 
 /// Matomo tracking endpoint configuration, used by the tracking middleware
 /// to report requests unless the client sent `X-Do-Not-Track`.
@@ -45,7 +43,6 @@ pub struct ServerState {
     configuration: RwLock<Arc<RuntimeConfiguration>>,
     matomo_info: Option<MatomoInfo>,
     concurrent_searches: RwLock<NonZeroUsize>,
-    search_type: PeptideSearchType,
 }
 
 impl ServerState {
@@ -62,11 +59,9 @@ impl ServerState {
         configuration: RuntimeConfiguration,
         matomo_info: Option<MatomoInfo>,
         concurrent_searches: NonZeroUsize,
-        search_type: PeptideSearchType,
     ) -> Self {
         Self {
             concurrent_searches: RwLock::new(concurrent_searches),
-            search_type,
             matomo_info,
             db_client: RwLock::new(Arc::new(db_client)),
             configuration: RwLock::new(Arc::new(configuration)),
@@ -113,10 +108,5 @@ impl ServerState {
     ///
     pub fn matomo_info(&self) -> Option<&MatomoInfo> {
         self.matomo_info.as_ref()
-    }
-
-    /// Returns whether search results are returned as ProForma or canonical-only.
-    pub fn search_type(&self) -> PeptideSearchType {
-        self.search_type
     }
 }

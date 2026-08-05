@@ -23,7 +23,7 @@ use urlencoding::decode as urldecode;
 
 use crate::mass::{mass_to_charge_to_dalton, to_float as mass_to_float};
 use crate::peptide::{IsPeptide, Peptide};
-use crate::peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch};
+use crate::peptide_search::PeptideSearch;
 use crate::peptide_table::PeptideTable;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::protein_table::ProteinTable;
@@ -512,44 +512,22 @@ impl PeptideController {
             }
         };
 
-        let peptide_stream = match server_state.search_type() {
-            PeptideSearchType::UnionAll => {
-                UnionAllSearch::search(
-                    server_state.db_client(),
-                    server_state.configuration(),
-                    mass,
-                    payload.lower_mass_tolerance_ppm,
-                    payload.upper_mass_tolerance_ppm,
-                    payload.max_variable_modifications,
-                    true,
-                    taxonomy_ids,
-                    proteome_ids.clone(),
-                    payload.is_reviewed,
-                    ptm_collection.clone(),
-                    payload.resolve_modifications.unwrap_or(false),
-                    server_state.concurrent_searches(),
-                )
-                .await?
-            }
-            PeptideSearchType::MultiTask => {
-                MultiTaskSearch::search(
-                    server_state.db_client(),
-                    server_state.configuration(),
-                    mass,
-                    payload.lower_mass_tolerance_ppm,
-                    payload.upper_mass_tolerance_ppm,
-                    payload.max_variable_modifications,
-                    true,
-                    taxonomy_ids,
-                    proteome_ids.clone(),
-                    payload.is_reviewed,
-                    ptm_collection.clone(),
-                    payload.resolve_modifications.unwrap_or(false),
-                    server_state.concurrent_searches(),
-                )
-                .await?
-            }
-        };
+        let peptide_stream = PeptideSearch::search(
+            server_state.db_client(),
+            server_state.configuration(),
+            mass,
+            payload.lower_mass_tolerance_ppm,
+            payload.upper_mass_tolerance_ppm,
+            payload.max_variable_modifications,
+            true,
+            taxonomy_ids,
+            proteome_ids.clone(),
+            payload.is_reviewed,
+            ptm_collection.clone(),
+            payload.resolve_modifications.unwrap_or(false),
+            server_state.concurrent_searches(),
+        )
+        .await?;
 
         let mut headers = HeaderMap::new();
         if is_download {

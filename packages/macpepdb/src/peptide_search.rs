@@ -52,27 +52,21 @@ fn fetch_max(slot: &AtomicU64, v: u64) {
     }
 }
 
-use clap::ValueEnum;
 use dashmap::DashSet;
 use futures::stream::{Stream, StreamExt};
 use itertools::Itertools;
 use metrics::{Counter, counter};
 use postgres_types::ToSql;
-use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
-use tokio_postgres::Row;
 
 use crate::amino_acid::{AminoAcid, AminoAcidBitCode, GLYCINE};
-use crate::client::OwnedRowStream;
 use crate::configuration::RuntimeConfiguration;
 use crate::database_build::MassPartitionMap;
 use crate::molecules::WATER_MONO_MASS;
 use crate::peptide::{IS_SWISS_PROT_BIT, IS_TREMBL_BIT, IsPeptide, Peptidoform};
 use crate::peptide_table::{FLAGS_COLUMN, MASS_COL, PARTITION_COL, PeptideTable, TABLE_NAME};
-// use crate::entities::configuration::Configuration;
-// use crate::entities::peptide::MatchingPeptide;
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::sequence::{IsSimpleSequence, ModifiedSequence, ModifiedSequencePart};
 use crate::{mass::to_float as mass_to_float, peptide::Peptide};
@@ -82,8 +76,6 @@ use super::client::Client;
 /// Base name for the metric counting matching peptides emitted by a search; each search
 /// instance appends a unique suffix to it to get its own counter.
 pub static MATCHING_PEPTIDE_METRIC: &str = "peptide_search:matching_peptides";
-
-const CONDITION_REF_COL: &str = "condition_ref";
 
 const SEARCH_COLUMNS: &str =
     "mass, sequence, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids, flags";
@@ -121,45 +113,6 @@ pub enum Error {
 into_thiserror_boxed!(crate::client::Error, Error, Client);
 into_thiserror_boxed!(crate::peptide::Error, Error, Peptide);
 into_thiserror_boxed!(crate::peptide_table::Error, Error, PeptideTable);
-
-/// Selects which search strategy runs the query: one condition per concurrent DB task
-/// (`MultiTask`) or a single `UNION ALL` query covering all conditions (`UnionAll`).
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, ValueEnum)]
-#[serde(try_from = "String", into = "String")]
-pub enum PeptideSearchType {
-    MultiTask,
-    UnionAll,
-}
-
-impl Display for PeptideSearchType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PeptideSearchType::MultiTask => write!(f, "multi-task"),
-            PeptideSearchType::UnionAll => write!(f, "union-all"),
-        }
-    }
-}
-
-impl From<PeptideSearchType> for String {
-    fn from(search_type: PeptideSearchType) -> Self {
-        match search_type {
-            PeptideSearchType::MultiTask => "multi-task".to_string(),
-            PeptideSearchType::UnionAll => "union-all".to_string(),
-        }
-    }
-}
-
-impl TryFrom<String> for PeptideSearchType {
-    type Error = Error;
-
-    fn try_from(s: String) -> Result<Self, Self::Error> {
-        match s.as_str() {
-            "multi-task" => Ok(PeptideSearchType::MultiTask),
-            "union-all" => Ok(PeptideSearchType::UnionAll),
-            _ => Err(Error::InvalidPeptideSearchType(s)),
-        }
-    }
-}
 
 /// Trait to check conditions on peptides
 ///
@@ -1021,249 +974,11 @@ impl Drop for FallibleMatchingPeptideStream {
     }
 }
 
-struct PeptideWithConditionRef {
-    condition_ref: usize,
-    inner_peptide: Peptide,
-}
-
-impl PeptideWithConditionRef {
-    /// Index into the `UnionAll` conditions list that this row's `condition_ref` column
-    /// points to, used to look up which [`PeptideCondition`] produced/should filter it.
-    pub fn condition_ref(&self) -> usize {
-        self.condition_ref
-    }
-
-    /// The peptide read from the row, without the condition reference.
-    pub fn inner_peptide(&self) -> &Peptide {
-        &self.inner_peptide
-    }
-}
-
-impl TryFrom<Row> for PeptideWithConditionRef {
-    type Error = Error;
-
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
-        let condition_ref =
-            row.try_get::<_, i64>(CONDITION_REF_COL)
-                .map_err(|err| Error::RowPeptideConversion(Box::new(err)))? as usize;
-        Ok(Self {
-            condition_ref,
-            inner_peptide: Peptide::try_from_search_row(&row)?,
-        })
-    }
-}
-
-impl From<PeptideWithConditionRef> for Peptide {
-    fn from(value: PeptideWithConditionRef) -> Self {
-        value.inner_peptide
-    }
-}
-
-/// `UnionAll` search strategy: combines every [`PeptideCondition`] into a single
-/// `UNION ALL` query with all filters inlined as literals (so Citus can prune shards
-/// and columnar chunk groups at plan time) and streams the merged rows back.
-pub struct UnionAllFallibleMatchingPeptideStream {
-    filter_pipeline: Pin<Box<FilterPipeline<Peptidoform>>>,
-    conditions: Pin<Vec<PeptideCondition>>,
-    resolve_modifications: bool,
-    #[allow(clippy::box_collection)]
-    row_stream: Pin<Box<OwnedRowStream>>,
-    matching_peptide_metric: String,
-    matching_peptide_counter: Counter,
-}
-
-impl UnionAllFallibleMatchingPeptideStream {
-    /// Builds and dispatches the single `UNION ALL` statement covering all `conditions`
-    /// and opens the resulting row stream.
-    pub async fn new(
-        client: Arc<Client>,
-        is_distinct: bool,
-        sql_filters: FilterPipeline<Peptide>,
-        mut conditions: Vec<PeptideCondition>,
-        resolve_modifications: bool,
-    ) -> Result<Self, Error> {
-        for filter in sql_filters.iter() {
-            if !filter.is_sqlable() {
-                return Err(Error::NonSqlAbleFilter(format!("{filter}")));
-            }
-        }
-        let sql_filters = Arc::new(sql_filters);
-
-        // Build filter pipeline for non sqlable conditions
-        let mut filters: Vec<Box<dyn FilterFunction<Peptidoform>>> = Vec::new();
-        if is_distinct {
-            filters.push(Box::new(ThreadSafeDistinctFilterFunction {
-                sequences: DashSet::with_capacity(300_000), // With an average length of 30 amino acids this should grow to about 72MB in memory
-            }));
-        }
-        let filter_pipeline = FilterPipeline::new(filters);
-
-        // One UNION ALL branch per condition (a mass range over its partition set), with
-        // all values inlined as literals — no bind params. Inlining lets Citus prune
-        // shards + columnar chunk groups at plan time; a parameterized distributed query
-        // cannot (Citus errors on a generic plan and re-plans every execute).
-        let statement = conditions
-            .iter_mut()
-            .enumerate()
-            .map(|(condition_idx, condition)| {
-                let mut where_clause = vec![
-                    format!(
-                        "{PARTITION_COL} = ANY(ARRAY[{}]::bigint[])",
-                        condition.partitions().iter().join(",")
-                    ),
-                    format!("{MASS_COL} >= {}", condition.lower_mass()),
-                    format!("{MASS_COL} <= {}", condition.upper_mass()),
-                ];
-                // add peptide condition specific where clauses (this will precisly locate the peptides and reduce them most)
-                for filter_fn in condition.filter_pipeline().iter() {
-                    filter_fn.to_sql_literal(&mut where_clause);
-                }
-                condition.remove_sqlable_filters();
-
-                for filter_fn in sql_filters.iter() {
-                    filter_fn.to_sql_literal(&mut where_clause);
-                }
-
-
-                format!(
-                    "SELECT {condition_idx}::bigint as {CONDITION_REF_COL}, {SEARCH_COLUMNS} FROM {TABLE_NAME} WHERE {}", where_clause.join(" AND ")
-                )
-            })
-            .join(" UNION ALL ");
-
-        let matching_peptide_metric = format!(
-            "{}:{}",
-            MATCHING_PEPTIDE_METRIC,
-            // TODO: Think of a better way to generate the node ID
-            uuid::Uuid::now_v1(&[
-                resolve_modifications as u8,
-                conditions.len() as u8,
-                filter_pipeline.len() as u8,
-                resolve_modifications as u8,
-                conditions.len() as u8,
-                filter_pipeline.len() as u8,
-            ])
-        );
-        let matching_peptide_counter = counter!(matching_peptide_metric.clone());
-
-        let row_stream = client.query_stream_inline(&statement).await?;
-
-        Ok(Self {
-            resolve_modifications,
-            matching_peptide_metric,
-            matching_peptide_counter,
-            filter_pipeline: Box::pin(filter_pipeline),
-            conditions: Pin::new(conditions),
-            row_stream: Box::pin(row_stream),
-        })
-    }
-}
-
-impl IsFallibleMatchingPeptideStream for UnionAllFallibleMatchingPeptideStream {
-    fn matching_peptide_metric(&self) -> &str {
-        &self.matching_peptide_metric
-    }
-}
-
-impl Stream for UnionAllFallibleMatchingPeptideStream {
-    type Item = Result<Vec<Peptidoform>, Error>;
-
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        'polling_loop: loop {
-            return match Pin::new(&mut this.row_stream).poll_next(cx) {
-                Poll::Ready(Some(Ok(row))) => {
-                    let peptide = match PeptideWithConditionRef::try_from(row) {
-                        Ok(peptide) => peptide,
-                        Err(err) => return Poll::Ready(Some(Err(err))),
-                    };
-
-                    let condition = match this.conditions.get_mut(peptide.condition_ref()) {
-                        Some(condition) => condition,
-                        None => {
-                            return Poll::Ready(Some(Err(Error::MissingCondition(
-                                peptide.condition_ref(),
-                                this.conditions.len(),
-                            ))));
-                        }
-                    };
-
-                    if !condition.is_match(peptide.inner_peptide()) {
-                        continue 'polling_loop;
-                    }
-
-                    let peptidoforms = if this.resolve_modifications {
-                        condition.modify_peptide(peptide.inner_peptide())
-                    } else {
-                        vec![Peptidoform::from(Peptide::from(peptide))]
-                    };
-
-                    let matching_peptidoforms = peptidoforms
-                        .into_iter()
-                        .filter_map(|peptide| match this.filter_pipeline.is_match(&peptide) {
-                            Ok(true) => Some(Ok(peptide)),
-                            Ok(false) => None, // skip non-matching peptide
-                            Err(err) => Some(Err(err)),
-                        })
-                        .collect::<Result<Vec<_>, Error>>();
-
-                    return match matching_peptidoforms {
-                        Ok(peptidoforms) => {
-                            this.matching_peptide_counter
-                                .increment(peptidoforms.len() as u64);
-                            Poll::Ready(Some(Ok(peptidoforms)))
-                        }
-                        Err(err) => Poll::Ready(Some(Err(err))),
-                    };
-                }
-                Poll::Ready(Some(Err(err))) => {
-                    Poll::Ready(Some(Err(Error::NextPeptide(Box::new(err)))))
-                }
-                Poll::Ready(None) => Poll::Ready(None),
-                Poll::Pending => Poll::Pending,
-            };
-        }
-    }
-}
-
-/// Defines the search for peptides in the database and provides some helper functions
+/// Asynchronous filter where one task is spawned for each PTM condition.
 ///
-#[allow(clippy::too_many_arguments)]
-pub trait Search {
-    /// Search for peptides in the database based on the given parameters.
-    ///
-    /// # Arguments
-    /// * `client` - The client to use for the query
-    /// * `configuration` - The configuration to use for the query
-    /// * `mass` - The mass to search for
-    /// * `lower_mass_tolerance_ppm` - The lower mass tolerance in ppm
-    /// * `upper_mass_tolerance_ppm` - The upper mass tolerance in ppm
-    /// * `max_variable_modifications` - The maximum number of variable modifications to apply
-    /// * `distinct` - Whether to return distinct peptides only
-    /// * `taxonomy_ids` - The taxonomy IDs to filter the peptides by
-    /// * `proteome_ids` - The proteome IDs to filter the peptides by
-    /// * `is_reviewed` - Whether to filter the peptides by SwissProt or TrEMBL
-    /// * `ptm_collection` - The PTM collection to use for the query
-    /// * `resolve_modifications` - Whether to resolve modifications and return the modified sequences as ProForma compliant strings
-    /// * `num_threads` - The number of concurrent searches
-    ///
-    fn search(
-        client: Arc<Client>,
-        configuration: Arc<RuntimeConfiguration>,
-        mass: i64,
-        lower_mass_tolerance_ppm: i64,
-        upper_mass_tolerance_ppm: i64,
-        max_variable_modifications: usize,
-        distinct: bool,
-        taxonomy_ids: Option<Vec<i32>>,
-        proteome_ids: Option<Vec<String>>,
-        is_reviewed: Option<bool>,
-        ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
-        resolve_modifications: bool,
-        num_threads: NonZeroUsize,
-    ) -> impl Future<Output = Result<Pin<Box<dyn IsFallibleMatchingPeptideStream>>, Error>> + Send;
+pub struct PeptideSearch;
 
+impl PeptideSearch {
     /// Splitup and sort peptide condition by partition and finalize them.
     ///
     /// # Arguments
@@ -1339,14 +1054,25 @@ pub trait Search {
         }
         merged
     }
-}
 
-/// Asynchronous filter where one task is spawned for each PTM condition.
-///
-pub struct MultiTaskSearch;
-
-impl Search for MultiTaskSearch {
-    async fn search(
+    /// Search for peptides in the database based on the given parameters.
+    ///
+    /// # Arguments
+    /// * `client` - The client to use for the query
+    /// * `configuration` - The configuration to use for the query
+    /// * `mass` - The mass to search for
+    /// * `lower_mass_tolerance_ppm` - The lower mass tolerance in ppm
+    /// * `upper_mass_tolerance_ppm` - The upper mass tolerance in ppm
+    /// * `max_variable_modifications` - The maximum number of variable modifications to apply
+    /// * `distinct` - Whether to return distinct peptides only
+    /// * `taxonomy_ids` - The taxonomy IDs to filter the peptides by
+    /// * `proteome_ids` - The proteome IDs to filter the peptides by
+    /// * `is_reviewed` - Whether to filter the peptides by SwissProt or TrEMBL
+    /// * `ptm_collection` - The PTM collection to use for the query
+    /// * `resolve_modifications` - Whether to resolve modifications and return the modified sequences as ProForma compliant strings
+    /// * `num_threads` - The number of concurrent searches
+    ///
+    pub async fn search(
         client: Arc<Client>,
         configuration: Arc<RuntimeConfiguration>,
         mass: i64,
@@ -1439,109 +1165,6 @@ impl Search for MultiTaskSearch {
                 conditions,
                 resolve_modifications,
                 num_threads,
-            )
-            .await
-            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
-        }
-    }
-}
-
-/// Use of PostgreSQL's UNION ALL to concatenate all conditions
-///
-pub struct UnionAllSearch;
-
-impl Search for UnionAllSearch {
-    async fn search(
-        client: Arc<Client>,
-        configuration: Arc<RuntimeConfiguration>,
-        mass: i64,
-        lower_mass_tolerance_ppm: i64,
-        upper_mass_tolerance_ppm: i64,
-        max_variable_modifications: usize,
-        is_distinct: bool,
-        taxonomy_ids: Option<Vec<i32>>,
-        proteome_ids: Option<Vec<String>>,
-        is_reviewed: Option<bool>,
-        ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
-        resolve_modifications: bool,
-        _num_threads: NonZeroUsize,
-    ) -> Result<Pin<Box<dyn IsFallibleMatchingPeptideStream>>, Error> {
-        let taxonomy_ids = taxonomy_ids.map(Arc::new);
-        let proteome_ids = proteome_ids.map(Arc::new);
-
-        if !ptm_collection.is_empty() {
-            let min_mass = configuration.protease().min_length().get() as i64 * GLYCINE.mono_mass();
-
-            // Calulcate max mass as stated in PeptideCondition::from_ptm_collection() 2.3
-            let largest_negative_static_ptm = ptm_collection
-                .get_static_ptms()
-                .iter()
-                .filter(|ptm| ptm.mass_delta().is_negative())
-                .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
-                .abs();
-
-            let largest_negative_variable_ptm = ptm_collection
-                .get_variable_ptms()
-                .iter()
-                .filter(|ptm| ptm.mass_delta().is_negative())
-                .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
-                .abs();
-
-            // Possible peptide length plus 30% "play" to account for errors
-            let amino_acid_average = AminoAcid::canonical()
-                .iter()
-                .map(|aa| aa.mono_mass())
-                .sum::<i64>()
-                / AminoAcid::canonical().len() as i64;
-            let possible_peptide_length = ((mass / amino_acid_average) as f64 * 1.3) as i64;
-
-            let max_mass = mass
-                + (largest_negative_static_ptm * possible_peptide_length)
-                + (largest_negative_variable_ptm * possible_peptide_length);
-
-            let sorted_ptm_conditions = Self::split_and_sort_peptide_conditions(
-                PeptideConditionBuilder::from_ptm_collection(
-                    &ptm_collection,
-                    mass,
-                    min_mass,
-                    max_mass,
-                    max_variable_modifications,
-                ),
-                configuration.mass_partitioning(),
-                lower_mass_tolerance_ppm,
-                upper_mass_tolerance_ppm,
-            )?;
-
-            UnionAllFallibleMatchingPeptideStream::new(
-                client,
-                is_distinct,
-                FilterPipeline::new_for_general_sql_able_peptide_attributes(
-                    taxonomy_ids,
-                    proteome_ids,
-                    is_reviewed,
-                )?,
-                sorted_ptm_conditions,
-                resolve_modifications,
-            )
-            .await
-            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
-        } else {
-            let conditions = PeptideConditionBuilder::new(mass).finalize(
-                configuration.mass_partitioning(),
-                lower_mass_tolerance_ppm,
-                upper_mass_tolerance_ppm,
-            );
-
-            UnionAllFallibleMatchingPeptideStream::new(
-                client,
-                is_distinct,
-                FilterPipeline::new_for_general_sql_able_peptide_attributes(
-                    taxonomy_ids,
-                    proteome_ids,
-                    is_reviewed,
-                )?,
-                conditions,
-                resolve_modifications,
             )
             .await
             .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream>>)
@@ -2767,7 +2390,7 @@ mod tests {
 
         let dedup_partitioning =
             MassPartitionMap::from(HashMap::from_iter(vec![(dup_a.query_mass, vec![1_i64])]));
-        let deduped = <MultiTaskSearch as Search>::split_and_sort_peptide_conditions(
+        let deduped = PeptideSearch::split_and_sort_peptide_conditions(
             vec![dup_a, dup_b],
             &dedup_partitioning,
             0,
@@ -2810,7 +2433,7 @@ mod tests {
             (builder_a.query_mass, vec![1_i64]),
             (builder_b.query_mass, vec![1_i64]),
         ]));
-        let merged = <MultiTaskSearch as Search>::split_and_sort_peptide_conditions(
+        let merged = PeptideSearch::split_and_sort_peptide_conditions(
             vec![builder_a, builder_b],
             &merge_partitioning,
             50,

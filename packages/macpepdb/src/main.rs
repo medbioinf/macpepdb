@@ -19,7 +19,7 @@ use macpepdb::{
     mass_to_int,
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide::{Peptide, Peptidoform},
-    peptide_search::{MultiTaskSearch, PeptideSearchType, Search, UnionAllSearch},
+    peptide_search::PeptideSearch,
     peptide_table::PeptideTable,
     performance_test::PerformanceTest,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
@@ -151,9 +151,6 @@ enum PeptideCommand {
         /// PSM file to use for the performance test
         #[arg(long)]
         ptm_file_path: Option<PathBuf>,
-        /// Type of search to perform, multi-task search can be faster but also more memory intensive
-        #[arg(long, default_value_t = PeptideSearchType::MultiTask)]
-        r#type: PeptideSearchType,
         /// Base URL for the web API, this overrides the global `--database-url` argument and is used to test the web API performance
         #[arg(long)]
         web_base_url: Option<String>,
@@ -232,9 +229,6 @@ enum Command {
         /// multiplex at once; without this, HTTP/2 has no default limit (RFC 7540 §6.5.2).
         #[arg(long, default_value_t = NonZeroUsize::new(32).unwrap())]
         max_concurrent_streams_per_connection: NonZeroUsize,
-        /// Type of search to perform, multi-task search can be faster but also more memory intensive
-        #[arg(long, default_value_t = PeptideSearchType::MultiTask)]
-        search_type: PeptideSearchType,
         // Positional default arguments
         #[arg(default_value_t = SocketAddr::from_str("127.0.0.1:8080").unwrap())]
         socket: SocketAddr,
@@ -341,9 +335,6 @@ enum Command {
         /// Concurrent searches of condition
         #[arg(long, default_value_t = NonZeroUsize::new(16).unwrap())]
         threads: NonZeroUsize,
-        /// Type of search to perform, multi-task search can be faster but also more memory intensive
-        #[arg(long, default_value_t = PeptideSearchType::MultiTask)]
-        r#type: PeptideSearchType,
         /// Upper mass tolerance in PPM
         #[arg(short, long, default_value_t = 10)]
         upper_mass_tolerance_ppm: i64,
@@ -472,7 +463,6 @@ async fn main() -> Result<(), Error> {
             matomo_site_id,
             concurrent_searches,
             max_concurrent_streams_per_connection,
-            search_type,
             socket,
         } => {
             let mut matomo_info = None;
@@ -491,7 +481,6 @@ async fn main() -> Result<(), Error> {
                 socket,
                 concurrent_searches,
                 max_concurrent_streams_per_connection,
-                search_type,
                 matomo_info,
                 Box::pin(shutdown_signal()),
             )
@@ -721,7 +710,6 @@ async fn main() -> Result<(), Error> {
             proteome_ids,
             taxonomy_ids,
             threads,
-            r#type,
             upper_mass_tolerance_ppm,
             mass,
             output_file_path,
@@ -740,7 +728,6 @@ async fn main() -> Result<(), Error> {
                 proteome_ids,
                 taxonomy_ids,
                 threads,
-                r#type,
                 upper_mass_tolerance_ppm,
                 mass,
                 output_file_path,
@@ -758,7 +745,6 @@ async fn main() -> Result<(), Error> {
                 lower_mass_tolerance_ppm,
                 max_variable_modifications,
                 ptm_file_path,
-                r#type,
                 web_base_url,
                 upper_mass_tolerance_ppm,
                 concurrent_searches,
@@ -776,7 +762,6 @@ async fn main() -> Result<(), Error> {
                     &cli.database_url,
                     ptm_file_path,
                     web_base_url,
-                    r#type,
                 )
                 .await
                 .unwrap();
@@ -1129,7 +1114,6 @@ async fn peptide_search(
     proteome_ids: Vec<String>,
     taxonomy_ids: Vec<i32>,
     threads: NonZeroUsize,
-    r#type: PeptideSearchType,
     upper_mass_tolerance_ppm: i64,
     mass: i64,
     output_file_path: PathBuf,
@@ -1181,42 +1165,23 @@ async fn peptide_search(
             .unwrap(),
     );
 
-    let mut peptide_stream = match r#type {
-        PeptideSearchType::MultiTask => MultiTaskSearch::search(
-            client,
-            configuration,
-            mass,
-            lower_mass_tolerance_ppm,
-            upper_mass_tolerance_ppm,
-            max_variable_modifications,
-            !allow_duplicates,
-            taxonomy_ids,
-            proteome_ids,
-            is_reviewed,
-            ptm_collection,
-            !only_canonical,
-            threads,
-        )
-        .await
-        .unwrap(),
-        PeptideSearchType::UnionAll => UnionAllSearch::search(
-            client,
-            configuration,
-            mass,
-            lower_mass_tolerance_ppm,
-            upper_mass_tolerance_ppm,
-            max_variable_modifications,
-            !allow_duplicates,
-            taxonomy_ids,
-            proteome_ids,
-            is_reviewed,
-            ptm_collection,
-            !only_canonical,
-            threads,
-        )
-        .await
-        .unwrap(),
-    };
+    let mut peptide_stream = PeptideSearch::search(
+        client,
+        configuration,
+        mass,
+        lower_mass_tolerance_ppm,
+        upper_mass_tolerance_ppm,
+        max_variable_modifications,
+        !allow_duplicates,
+        taxonomy_ids,
+        proteome_ids,
+        is_reviewed,
+        ptm_collection,
+        !only_canonical,
+        threads,
+    )
+    .await
+    .unwrap();
 
     if let Some(tui) = &tui {
         tui.add_metric(MetricConfig::counter(

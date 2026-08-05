@@ -15,7 +15,6 @@ use tracing::{info, warn};
 
 use crate::{
     mass::{to_float as mass_to_float, to_int as mass_to_int},
-    peptide_search::PeptideSearchType,
     peptidoform_search_client::PeptidoformSearchClient,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
 };
@@ -73,15 +72,13 @@ impl PerformanceTest {
         database_url: &str,
         ptm_file_path: Option<String>,
         web_base_url: Option<String>,
-        search_type: PeptideSearchType,
     ) -> Result<Self, Error> {
         tracing::info!("Initializing peptide search client");
         let peptidoform_search_client = web_base_url
             .as_ref()
-            .map_or(
-                PeptidoformSearchClient::try_from_url(database_url, search_type),
-                |url| PeptidoformSearchClient::try_from_url(url, search_type),
-            )
+            .map_or(PeptidoformSearchClient::try_from_url(database_url), |url| {
+                PeptidoformSearchClient::try_from_url(url)
+            })
             .await?;
 
         tracing::info!("Read PTMs");

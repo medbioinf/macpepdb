@@ -16,7 +16,6 @@ use tower_http::cors::{Any, CorsLayer};
 use crate::blob_table::BlobTable;
 use crate::client::Client;
 use crate::configuration::RuntimeConfiguration;
-use crate::peptide_search::PeptideSearchType;
 #[cfg(feature = "admin-api")]
 use crate::web::admin_controller::AdminController;
 use crate::web::chemistry_controller::ChemistryController;
@@ -74,7 +73,6 @@ pub async fn start(
     socket: SocketAddr,
     concurrent_searches: NonZeroUsize,
     max_concurrent_streams_per_connection: NonZeroUsize,
-    search_type: PeptideSearchType,
     matomo_info: Option<MatomoInfo>,
     shutdown_signal: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
 ) -> Result<(), Error> {
@@ -91,7 +89,6 @@ pub async fn start(
         configuration,
         matomo_info,
         concurrent_searches,
-        search_type,
     ));
 
     // Add CORS layer
