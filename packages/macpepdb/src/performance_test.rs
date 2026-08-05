@@ -154,7 +154,7 @@ impl PerformanceTest {
 
                     info!("Successfully rebuilt DB client via admin endpoint");
                 }
-                PeptidoformSearchClient::Database(_, _, _) => {
+                PeptidoformSearchClient::Database(_, _) => {
                     warn!("Client is database but web url is set. Should not occure");
                 }
             }
