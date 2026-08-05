@@ -612,17 +612,6 @@ where
     }
 }
 
-/// A stream of batches of matching [`Peptidoform`]s produced by a running search, common
-/// to both the `MultiTask` and `UnionAll` strategies so callers can handle them uniformly.
-pub trait IsFallibleMatchingPeptideStream<T>:
-    Stream<Item = Result<Vec<T::Output>, Error>> + Send
-where
-    T: IsPeptidoformTransformation,
-{
-    /// Name of the `metrics` counter this stream's matching-peptide count is reported under.
-    fn matching_peptide_metric(&self) -> &str;
-}
-
 pub trait IsPeptidoformTransformation: Unpin + Send {
     type Output: Send + 'static;
     type Error: std::fmt::Display;
@@ -919,13 +908,8 @@ where
             agg,
         })
     }
-}
 
-impl<T> IsFallibleMatchingPeptideStream<T> for FallibleMatchingPeptideStream<T>
-where
-    T: IsPeptidoformTransformation,
-{
-    fn matching_peptide_metric(&self) -> &str {
+    pub fn matching_peptide_metric(&self) -> &str {
         &self.matching_peptide_metric
     }
 }
@@ -1147,7 +1131,7 @@ impl PeptideSearch {
 
     pub async fn search<T: IsPeptidoformTransformation + 'static>(
         self,
-    ) -> Result<Pin<Box<dyn IsFallibleMatchingPeptideStream<T>>>, Error> {
+    ) -> Result<Pin<Box<FallibleMatchingPeptideStream<T>>>, Error> {
         let taxonomy_ids = self.taxonomy_ids.map(Arc::new);
         let proteome_ids = self.proteome_ids.map(Arc::new);
 
@@ -1211,7 +1195,7 @@ impl PeptideSearch {
                 self.num_threads,
             )
             .await
-            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream<T>>>)
+            .map(Box::pin)
         } else {
             let conditions = VecDeque::from(PeptideConditionBuilder::new(self.mass).finalize(
                 self.configuration.mass_partitioning(),
@@ -1233,7 +1217,7 @@ impl PeptideSearch {
                 self.num_threads,
             )
             .await
-            .map(|stream| Box::pin(stream) as Pin<Box<dyn IsFallibleMatchingPeptideStream<T>>>)
+            .map(Box::pin)
         }
     }
 }
