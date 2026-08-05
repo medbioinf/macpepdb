@@ -274,43 +274,36 @@ impl PeptideController {
     /// * Method: `POST`
     /// * Headers:
     ///     * `Content-Type`: `application/json`
-    ///     * `Accept`: `application/json`, `text/tab-separated-values`, `text/plain`, `text/proforma` (optional, default: `application/json`, controls the output format)
+    ///     * `Accept`: `application/json`, `text/plain`, `text/fasta` (optional, default: `application/json`, controls the output format)
     /// * Query:
     ///     * `is_download`: `bool` (optional, default: `false`, if true set the Content-Disposition header to download the response instead of showing it in the browser)
     /// * Body:
     ///     ```json
     ///     {
-    ///         # Mass to search for
-    ///         "mass": 2006.988396539,
-    ///         # Mass can also be given as tuple of m/z and charge
-    ///         # "mass": [2006.988396539, 2],
-    ///         # Lower mass tolerance in ppm
-    ///         "lower_mass_tolerance_ppm": 5,
-    ///         # Upper mass tolerance in ppm
-    ///         "upper_mass_tolerance_ppm": 5,
-    ///         # Optional parameters for digestion, if one of them is skipped
+    ///         "mass": 1475.748089764,
+    ///         "lower_mass_tolerance_ppm": 10,
+    ///         "upper_mass_tolerance_ppm": 10,
     ///         "max_variable_modifications": 3,
-    ///         # List of post translational modifications
     ///         "modifications": [
     ///             {
-    ///                 "name": "Mod something",
+    ///                 "name": "the ususal ",
     ///                 "amino_acid": "C",
-    ///                 "mass_delta": 42.0,
-    ///                 "mod_type": Static,     # Type: Static, Variable
-    ///                 "position": Anywhere    # Position: Anywhere, Terminus-N, Terminus-C, Bond-C, Bond-N
+    ///                 "mass_delta": 57.021464,
+    ///                 "mod_type": "Static",
+    ///                 "position": "Anywhere"
+    ///             },
+    ///             {
+    ///                 "name": "the ususal M",
+    ///                 "amino_acid": "M",
+    ///                 "mass_delta": 15.994915,
+    ///                 "mod_type": "Variable",
+    ///                 "position": "Anywhere"
     ///             }
     ///         ],
-    ///         # Optional taxonomy ID to search for
-    ///         "taxonomy_id": 10090,
-    ///         # Optional proteome ID to search for
-    ///         "proteome_id": "UP000000589",
-    ///         # Optional flag to search only reviewed proteins
-    ///         "is_reviewed": true
-    ///         # Optional: If the PTMs in sequences should be resolved
-    ///         "resolve_modifications": true
+    ///         "resolve_modifications": false
     ///     }
     ///     ```
-    ///     Deserialized into [SearchRequestBody]
+    ///     See [SearchRequestBody] for details.
     ///
     /// ## Response
     /// ### `application/json`
@@ -323,24 +316,29 @@ impl PeptideController {
     /// ```
     /// Peptides are formatted as mentioned in the [`show`-endpoint](PeptideController::show) + attribute `additional_sequences` if `resolve_modifications` is true.
     ///
-    /// ### `text/tsv`
-    /// ```tsv
-    /// partition	mass	sequence	missed_cleavages	aa_counts	proteins	is_swiss_prot	is_trembl	taxonomy_ids	unique_taxonomy_ids	proteome_ids
-    /// 51\t2006.988396539\tNLETPSCKNGFLLDGFPR\t1,0,0,1,1,1,2,2,0,0,0,1,3,0,2,0,2,0,1,1,1,0,0,0,0,0,0\tQ9WTP6\ttrue\tfalse\t10090\t10090\tUP000000589
+    ///
+    /// ### `text/plain`
+    /// With resolve modification set to `false`the canonical seqeunces are returned.
+    /// ```text
+    /// NCLETPSCKNGFLLDGFPR
+    /// NCLETPSCKNGFLLMDGFPR
     /// ...
     /// ```
     ///
-    /// ### `text/plain`
-    /// ```text
-    /// sequence_1
-    /// sequence_2
-    /// ...
-    ///
-    /// ### `text/proforma`
-    /// Note: The output will only contain the mass shifts but not the modification ID.
-    ///
+    /// With resolve modification set to `true` the sequences with the needed modification to reach the target mass are returned in Profoma compliant notation.
     /// ```text
     /// <57.021464@C>NCLETPSCKNGFLLDGFPR
+    /// <57.021464@C>NCLETPSCKNGFLLM[+15.994915]DGFPR
+    /// ...
+    /// ```
+    ///
+    /// ### `text/fasta`
+    /// Again, resolve modification controls if canonical sequences or Profoma compliant notation
+    ///
+    /// ```text
+    /// >mdb|<sequential peptidoform counter>|<mass>
+    /// <57.021464@C>NCLETPSCKNGFLLDGFPR
+    /// >mdb|<sequential peptidoform counter>|<mass>
     /// <57.021464@C>NCLETPSCKNGFLLM[+15.994915]DGFPR
     /// ...
     /// ```
@@ -561,12 +559,6 @@ impl PeptideController {
                     HeaderValue::from_static("application/json; charset=utf-8"),
                 );
             }
-            "text/tab-separated-values" => {
-                headers.insert(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("text/tab-separated-values; charset=utf-8"),
-                );
-            }
             "text/plain" => {
                 headers.insert(
                     header::CONTENT_TYPE,
@@ -574,7 +566,7 @@ impl PeptideController {
                 );
                 selection = &SEQUENCE_PEPTIDE_COLUMN_SELECTION;
             }
-            "text/proforma" => {
+            "text/fasta" => {
                 headers.insert(
                     header::CONTENT_TYPE,
                     HeaderValue::from_static("text/plain; charset=utf-8"), // no official mime type for proforma most clients can deal with text/plain
