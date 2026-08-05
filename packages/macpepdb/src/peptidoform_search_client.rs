@@ -17,6 +17,7 @@ use macpepdb_web_common::requests::{
 use reqwest::Client as WebClient;
 use thiserror::Error;
 
+use crate::peptide_table::FULL_PEPTIDE_COLUMN_SELECTION;
 use crate::{
     blob_table::BlobTable,
     client::Client as DbClient,
@@ -203,6 +204,7 @@ impl PeptidoformSearchClient {
                 let ptms = ptms.clone();
                 let peptide_stream = PeptideSearch::search(
                     db_client,
+                    &FULL_PEPTIDE_COLUMN_SELECTION,
                     configuration,
                     mass,
                     lower_mass_tolerance_ppm,

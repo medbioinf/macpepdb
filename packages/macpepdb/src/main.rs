@@ -20,7 +20,7 @@ use macpepdb::{
     monitoring::{MetricTarget, Monitoring, TracingLogRotation, TracingTarget},
     peptide::{Peptide, Peptidoform},
     peptide_search::PeptideSearch,
-    peptide_table::PeptideTable,
+    peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideTable},
     performance_test::PerformanceTest,
     post_translational_modification::{PTMCollection, PostTranslationalModification},
     protease::{Protease, Trypsin},
@@ -815,6 +815,7 @@ async fn main() -> Result<(), Error> {
 
                 let peptide = PeptideTable::new(client.clone())
                     .select(
+                        &FULL_PEPTIDE_COLUMN_SELECTION,
                         "WHERE partition = ANY($1) AND mass = $2 AND sequence = $3 LIMIT 1",
                         params,
                     )
@@ -1167,6 +1168,7 @@ async fn peptide_search(
 
     let mut peptide_stream = PeptideSearch::search(
         client,
+        &FULL_PEPTIDE_COLUMN_SELECTION,
         configuration,
         mass,
         lower_mass_tolerance_ppm,

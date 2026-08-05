@@ -3,7 +3,7 @@ use std::{
     num::NonZeroUsize,
     ops::RangeInclusive,
     sync::{
-        Arc, LazyLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicI64, AtomicUsize, Ordering},
     },
 };
@@ -12,13 +12,13 @@ use fallible_iterator::FallibleIterator;
 use futures::{Stream, StreamExt};
 use postgres_types::{ToSql, Type};
 use thiserror::Error;
+use tokio_postgres::Row;
 
 use crate::{
     client::Client,
     database_build::{IsProteinAccess, PartitionRange},
     mass_index::MassIndex,
-    peptide::{IsPeptide, Peptide},
-    peptide_search::SEARCH_SELECT_STATEMENT,
+    peptide::{IsPeptide, MAX_AMINO_ACID_BIT_CODE, Peptide},
     protease::Protease,
     protein::Protein,
     sequence::{CompactSequence, PeptideSequence},
@@ -78,9 +78,6 @@ static COPY_TYPES: LazyLock<[Type; 8]> = LazyLock::new(|| {
         Type::CHAR,       // flags
     ]
 });
-
-static SELECT_STATEMENT: LazyLock<String> =
-    LazyLock::new(|| format!("SELECT {COLUMNS} FROM {TABLE_NAME}"));
 
 /// Metric name for the gauge tracking protein-association digestion progress during
 /// [`PeptideTable::build_concurrently`].
@@ -197,6 +194,38 @@ impl TryFrom<(CompactSequence, PeptideMetadata, bool)> for Peptide {
     }
 }
 
+pub struct PeptideColumnSelection {
+    pub columns: &'static str,
+    pub try_peptide_from_row_fn: fn(&Row) -> Result<Peptide, Error>,
+}
+
+pub const FULL_PEPTIDE_COLUMN_SELECTION: PeptideColumnSelection = PeptideColumnSelection {
+    columns: "partition, mass, sequence, amino_acid_counts, protein_ids, unique_taxonomy_ids, non_unique_taxonomy_ids, flags",
+    try_peptide_from_row_fn: |row: &Row| {
+        Ok(Peptide::full_new(
+            Some(row.try_get(0)?),
+            row.try_get(1)?,
+            row.try_get(2)?,
+            row.try_get(4)?,
+            row.try_get(5)?,
+            row.try_get(6)?,
+            row.try_get(7)?,
+            row.try_get::<_, Vec<u8>>(3).map(|vec| {
+                let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
+                vec.into_iter()
+                    .take(MAX_AMINO_ACID_BIT_CODE)
+                    .enumerate()
+                    .for_each(|(idx, count)| {
+                        counts[idx] = count;
+                    });
+                let once_lock = OnceLock::new();
+                once_lock.set(counts).unwrap();
+                once_lock
+            })?,
+        ))
+    },
+};
+
 /// Handle for reading, writing, and building the columnar, mass-partitioned `peptides` table.
 pub struct PeptideTable {
     client: Arc<Client>,
@@ -254,15 +283,19 @@ impl PeptideTable {
     /// mass = $2`), binding `params` positionally.
     pub async fn select(
         &self,
+        selection: &'static PeptideColumnSelection,
         where_clause: &str,
         params: Vec<Box<dyn ToSql + Sync + Send>>,
     ) -> Result<impl Stream<Item = Result<Peptide, Error>> + Send + use<>, Error> {
-        let statement = format!("{} {where_clause}", SELECT_STATEMENT.as_str());
+        let statement = format!(
+            "SELECT {} FROM {TABLE_NAME} {where_clause}",
+            selection.columns
+        );
         let stream = self.client.query_stream(&statement, params).await?;
         Ok(stream.map(|row_res| {
             row_res
                 .map_err(Error::Row)
-                .and_then(|row| Peptide::try_from(row).map_err(Error::from))
+                .and_then(|row| (selection.try_peptide_from_row_fn)(&row))
         }))
     }
 
@@ -271,14 +304,18 @@ impl PeptideTable {
     /// prune shards/chunk groups at plan time. See [`Client::query_stream_inline`].
     pub async fn select_inline(
         &self,
+        selection: &'static PeptideColumnSelection,
         where_clause: &str,
     ) -> Result<impl Stream<Item = Result<Peptide, Error>> + Send + use<>, Error> {
-        let statement = format!("{} {where_clause}", SEARCH_SELECT_STATEMENT.as_str());
+        let statement = format!(
+            "SELECT {} FROM {TABLE_NAME} {where_clause}",
+            selection.columns
+        );
         let stream = self.client.query_stream_inline(&statement).await?;
         Ok(stream.map(|row_res| {
             row_res
                 .map_err(Error::Row)
-                .and_then(|row| Peptide::try_from_search_row(&row).map_err(Error::from))
+                .and_then(|row| (selection.try_peptide_from_row_fn)(&row))
         }))
     }
 

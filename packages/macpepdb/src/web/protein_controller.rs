@@ -17,7 +17,7 @@ use postgres_types::ToSql;
 use thiserror::Error;
 
 use crate::peptide::{IsPeptide, Peptide};
-use crate::peptide_table::PeptideTable;
+use crate::peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideTable};
 use crate::protease::Protease;
 use crate::protein::Protein;
 use crate::protein_table::ProteinTable;
@@ -158,7 +158,7 @@ impl ProteinController {
         let where_clause = format!("WHERE {}", where_clause);
 
         let mut peptides = PeptideTable::new(state.db_client())
-            .select(&where_clause, params)
+            .select(&FULL_PEPTIDE_COLUMN_SELECTION, &where_clause, params)
             .await?
             .try_collect::<Vec<_>>()
             .await?;

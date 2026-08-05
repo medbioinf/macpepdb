@@ -1,6 +1,6 @@
 use std::fmt::Write as _;
 use std::ops::Deref;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use async_stream::stream;
 use axum::Router;
@@ -19,13 +19,15 @@ use macpepdb_web_common::requests::peptide::{
 use macpepdb_web_common::responses::peptide::PeptideResponse;
 use postgres_types::ToSql;
 use thiserror::Error;
+use tokio_postgres::Row;
 use urlencoding::decode as urldecode;
 
 use crate::mass::{mass_to_charge_to_dalton, to_float as mass_to_float};
 use crate::peptide::{IsPeptide, Peptide};
 use crate::peptide_search::PeptideSearch;
-use crate::peptide_table::PeptideTable;
+use crate::peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideColumnSelection, PeptideTable};
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
+use crate::protein_ids::ProteinIds;
 use crate::protein_table::ProteinTable;
 use crate::taxonomy_table::TaxonomyTable;
 use crate::web::DEFAULT_ERROR_HEADER_MAP;
@@ -94,6 +96,22 @@ impl IntoResponse for Error {
         }
     }
 }
+
+pub const SEQUENCE_PEPTIDE_COLUMN_SELECTION: PeptideColumnSelection = PeptideColumnSelection {
+    columns: "mass, sequence",
+    try_peptide_from_row_fn: |row: &Row| {
+        Ok(Peptide::full_new(
+            None,
+            row.try_get(0)?,
+            row.try_get(1)?,
+            ProteinIds::default(),
+            Vec::new(),
+            Vec::new(),
+            0,
+            OnceLock::new(),
+        ))
+    },
+};
 
 // TODO: Adjust all controller methods to return error instread ok Ok(body) with error message.
 /// Controller providing peptide lookup and mass search endpoints under `/api/peptides`.
@@ -226,6 +244,7 @@ impl PeptideController {
 
         let mut stream = PeptideTable::new(server_state.db_client())
             .select(
+                &FULL_PEPTIDE_COLUMN_SELECTION,
                 "WHERE partition = ANY($1) AND mass = $2 AND sequence = $3 LIMIT 1",
                 params,
             )
@@ -512,23 +531,7 @@ impl PeptideController {
             }
         };
 
-        let peptide_stream = PeptideSearch::search(
-            server_state.db_client(),
-            server_state.configuration(),
-            mass,
-            payload.lower_mass_tolerance_ppm,
-            payload.upper_mass_tolerance_ppm,
-            payload.max_variable_modifications,
-            true,
-            taxonomy_ids,
-            proteome_ids.clone(),
-            payload.is_reviewed,
-            ptm_collection.clone(),
-            payload.resolve_modifications.unwrap_or(false),
-            server_state.concurrent_searches(),
-        )
-        .await?;
-
+        let mut selection: &'static PeptideColumnSelection = &FULL_PEPTIDE_COLUMN_SELECTION;
         let mut headers = HeaderMap::new();
         if is_download {
             let file_extension = match accept_header.as_str() {
@@ -569,15 +572,35 @@ impl PeptideController {
                     header::CONTENT_TYPE,
                     HeaderValue::from_static("text/plain; charset=utf-8"),
                 );
+                selection = &SEQUENCE_PEPTIDE_COLUMN_SELECTION;
             }
             "text/proforma" => {
                 headers.insert(
                     header::CONTENT_TYPE,
                     HeaderValue::from_static("text/plain; charset=utf-8"), // no official mime type for proforma most clients can deal with text/plain
                 );
+                selection = &SEQUENCE_PEPTIDE_COLUMN_SELECTION;
             }
             _ => (),
         }
+
+        let peptide_stream = PeptideSearch::search(
+            server_state.db_client(),
+            selection,
+            server_state.configuration(),
+            mass,
+            payload.lower_mass_tolerance_ppm,
+            payload.upper_mass_tolerance_ppm,
+            payload.max_variable_modifications,
+            true,
+            taxonomy_ids,
+            proteome_ids.clone(),
+            payload.is_reviewed,
+            ptm_collection.clone(),
+            payload.resolve_modifications.unwrap_or(false),
+            server_state.concurrent_searches(),
+        )
+        .await?;
 
         let (status_code, headers, body) = match accept_header.as_str() {
             "application/json" => (

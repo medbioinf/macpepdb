@@ -8,7 +8,6 @@ use itertools::Itertools;
 use macpepdb_web_common::responses::peptide::PeptideResponse;
 use serde::Serialize;
 use thiserror::Error;
-use tokio_postgres::Row;
 use zerocopy::IntoBytes;
 
 use crate::{
@@ -36,8 +35,6 @@ pub const IS_TREMBL_BIT: usize = 1;
 pub enum Error {
     #[error("Client error in peptide: {0}")]
     Client(#[from] crate::client::Error),
-    #[error("Row decoding error in peptide: {0}")]
-    Row(#[from] tokio_postgres::Error),
     #[error("Partition not found peptide `{0}` with mass {1}")]
     NoPartition(String, i64),
     #[error("Sequence error in peptide: {0}")]
@@ -142,6 +139,40 @@ impl Peptide {
             partition: None,
             flags,
             amino_acid_counts: OnceLock::new(),
+        }
+    }
+
+    /// Build a new peptide with full control over each attribute
+    ///
+    /// # Arguments
+    /// * `partition` - Mass partition
+    /// * `mass` - Mass
+    /// * `sequence` - The peptide's amino acid sequence
+    /// * `protein_ids` - IDs of the proteins the peptide was cleaved from
+    /// * `unique_taxonomy_ids` - IDs of taxa in which the peptide occurs in exactly one protein
+    /// * `non_unique_taxonomy_ids` - IDs of taxa in which the peptide occurs in more than one protein
+    /// * `flags` - Bit flags for e.g. review status, see constants to see what is stored in which bit
+    /// * `amino_acid_counts` - Amino acid counts
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn full_new(
+        partition: Option<i64>,
+        mass: i64,
+        sequence: Sequence,
+        protein_ids: ProteinIds,
+        unique_taxonomy_ids: Vec<i32>,
+        non_unique_taxonomy_ids: Vec<i32>,
+        flags: i8,
+        amino_acid_counts: OnceLock<[u8; MAX_AMINO_ACID_BIT_CODE]>,
+    ) -> Self {
+        Self {
+            partition,
+            mass,
+            sequence,
+            flags,
+            amino_acid_counts,
+            protein_ids: Arc::new(protein_ids),
+            unique_taxonomy_ids: Arc::new(unique_taxonomy_ids),
+            non_unique_taxonomy_ids: Arc::new(non_unique_taxonomy_ids),
         }
     }
 
@@ -563,51 +594,6 @@ impl IsPeptide for Peptidoform {
 
     fn non_unique_taxonomy_ids(&self) -> &[i32] {
         &self.non_unique_taxonomy_ids
-    }
-}
-
-impl TryFrom<Row> for Peptide {
-    type Error = Error;
-
-    fn try_from(row: Row) -> Result<Self, Self::Error> {
-        Ok(Self {
-            partition: Some(row.try_get("partition")?),
-            mass: row.try_get("mass")?,
-            sequence: row.try_get("sequence")?,
-            amino_acid_counts: row.try_get::<_, Vec<u8>>("amino_acid_counts").map(|vec| {
-                let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
-                vec.into_iter()
-                    .take(MAX_AMINO_ACID_BIT_CODE)
-                    .enumerate()
-                    .for_each(|(idx, count)| {
-                        counts[idx] = count;
-                    });
-                let once_lock = OnceLock::new();
-                once_lock.set(counts).unwrap();
-                once_lock
-            })?,
-            protein_ids: Arc::new(row.try_get("protein_ids")?),
-            unique_taxonomy_ids: Arc::new(row.try_get("unique_taxonomy_ids")?),
-            non_unique_taxonomy_ids: Arc::new(row.try_get("non_unique_taxonomy_ids")?),
-            flags: row.try_get("flags")?,
-        })
-    }
-}
-
-impl Peptide {
-    /// Builds a `Peptide` from a search-result row (`SEARCH_SELECT_STATEMENT`), which omits
-    /// the `partition` column.
-    pub fn try_from_search_row(row: &Row) -> Result<Self, Error> {
-        Ok(Self {
-            partition: None,
-            mass: row.try_get("mass")?,
-            sequence: row.try_get("sequence")?,
-            protein_ids: Arc::new(row.try_get("protein_ids")?),
-            unique_taxonomy_ids: Arc::new(row.try_get("unique_taxonomy_ids")?),
-            non_unique_taxonomy_ids: Arc::new(row.try_get("non_unique_taxonomy_ids")?),
-            flags: row.try_get("flags")?,
-            amino_acid_counts: OnceLock::new(),
-        })
     }
 }
 

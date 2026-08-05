@@ -66,7 +66,9 @@ use crate::configuration::RuntimeConfiguration;
 use crate::database_build::MassPartitionMap;
 use crate::molecules::WATER_MONO_MASS;
 use crate::peptide::{IS_SWISS_PROT_BIT, IS_TREMBL_BIT, IsPeptide, Peptidoform};
-use crate::peptide_table::{FLAGS_COLUMN, MASS_COL, PARTITION_COL, PeptideTable, TABLE_NAME};
+use crate::peptide_table::{
+    FLAGS_COLUMN, MASS_COL, PARTITION_COL, PeptideColumnSelection, PeptideTable, TABLE_NAME,
+};
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::sequence::{IsSimpleSequence, ModifiedSequence, ModifiedSequencePart};
 use crate::{mass::to_float as mass_to_float, peptide::Peptide};
@@ -669,6 +671,7 @@ impl ConditionalPeptideStream {
     /// stream, recording open/scan timings into `agg` as the stream is consumed.
     pub async fn new(
         client: Arc<Client>,
+        selection: &'static PeptideColumnSelection,
         mut condition: PeptideCondition,
         sql_filters: Arc<FilterPipeline<Peptide>>,
         resolve_modification: bool,
@@ -709,7 +712,7 @@ impl ConditionalPeptideStream {
         let setup_start = std::time::Instant::now();
         let inner: BoxedPeptideRowStream = Box::pin(
             PeptideTable::new(client)
-                .select_inline(&where_clause)
+                .select_inline(selection, &where_clause)
                 .await?,
         );
         agg.record_setup(setup_start.elapsed().as_micros() as u64, num_partitions);
@@ -791,6 +794,7 @@ impl FallibleMatchingPeptideStream {
     /// of all conditions being polled cooperatively on one task.
     pub async fn new(
         client: Arc<Client>,
+        selection: &'static PeptideColumnSelection,
         is_distinct: bool,
         // Global SQL filters, e.g. review or taxonomy condition
         sql_filters: FilterPipeline<Peptide>,
@@ -840,6 +844,7 @@ impl FallibleMatchingPeptideStream {
                 };
                 match ConditionalPeptideStream::new(
                     client,
+                    selection,
                     condition,
                     sql_filters,
                     resolve_modifications,
@@ -1072,8 +1077,10 @@ impl PeptideSearch {
     /// * `resolve_modifications` - Whether to resolve modifications and return the modified sequences as ProForma compliant strings
     /// * `num_threads` - The number of concurrent searches
     ///
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         client: Arc<Client>,
+        selection: &'static PeptideColumnSelection,
         configuration: Arc<RuntimeConfiguration>,
         mass: i64,
         lower_mass_tolerance_ppm: i64,
@@ -1135,6 +1142,7 @@ impl PeptideSearch {
 
             FallibleMatchingPeptideStream::new(
                 client,
+                selection,
                 is_distinct,
                 FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
@@ -1156,6 +1164,7 @@ impl PeptideSearch {
 
             FallibleMatchingPeptideStream::new(
                 client,
+                selection,
                 is_distinct,
                 FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,

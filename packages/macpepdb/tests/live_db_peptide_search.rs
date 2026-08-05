@@ -22,7 +22,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use futures::StreamExt;
-use postgres_types::ToSql;
 use tokio::sync::{Mutex, OnceCell};
 
 use macpepdb::amino_acid::{AminoAcid, GLYCINE};
@@ -31,7 +30,7 @@ use macpepdb::configuration::RuntimeConfiguration;
 use macpepdb::database_build::DatabaseBuild;
 use macpepdb::peptide::{IsPeptide, Peptide};
 use macpepdb::peptide_search::{PeptideCondition, PeptideConditionBuilder, PeptideSearch};
-use macpepdb::peptide_table::PeptideTable;
+use macpepdb::peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideTable};
 use macpepdb::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use macpepdb::protease::Protease;
 use macpepdb::sequence::ModifiedSequencePart;
@@ -154,7 +153,10 @@ async fn setup() -> (Arc<Client>, Arc<RuntimeConfiguration>) {
 /// have at least one match.
 async fn sample_peptide_mass(client: &Arc<Client>, order_and_limit: &str) -> i64 {
     let table = PeptideTable::new(client.clone());
-    let mut stream = table.select(order_and_limit, Vec::new()).await.unwrap();
+    let mut stream = table
+        .select(&FULL_PEPTIDE_COLUMN_SELECTION, order_and_limit, Vec::new())
+        .await
+        .unwrap();
     let peptide: Peptide = stream
         .next()
         .await
@@ -227,6 +229,7 @@ async fn test_peptidoforms_match_queried_mass() {
 
     let mut stream = PeptideSearch::search(
         client.clone(),
+        &FULL_PEPTIDE_COLUMN_SELECTION,
         configuration.clone(),
         target_mass,
         lower_ppm,
@@ -314,7 +317,10 @@ async fn test_peptidoforms_match_queried_mass() {
     .collect();
 
     let table = PeptideTable::new(client.clone());
-    let mut all_peptides = table.select("", Vec::new()).await.unwrap();
+    let mut all_peptides = table
+        .select(&FULL_PEPTIDE_COLUMN_SELECTION, "", Vec::new())
+        .await
+        .unwrap();
     while let Some(peptide) = all_peptides.next().await {
         let peptide = peptide.unwrap();
         if returned_sequences.contains(&peptide.sequence().to_string()) {
@@ -348,7 +354,10 @@ async fn test_every_fixture_peptide_exists_in_database() {
     let expected = expected_peptide_fixture();
 
     let table = PeptideTable::new(client.clone());
-    let mut stream = table.select("", Vec::new()).await.unwrap();
+    let mut stream = table
+        .select(&FULL_PEPTIDE_COLUMN_SELECTION, "", Vec::new())
+        .await
+        .unwrap();
     let mut actual = HashSet::new();
     while let Some(peptide) = stream.next().await {
         actual.insert(peptide.unwrap().sequence().to_string());
