@@ -201,40 +201,6 @@ impl Display for IsTrEMBLFilterFunction {
     }
 }
 
-/// Makes sure that no peptide is returned twice
-///
-pub struct ThreadSafeDistinctFilterFunction<T: IsPeptide> {
-    // TODO: This could be change to store ByteSequence instead to save up some memory in exchange for computational overhead for the conversion
-    sequences: DashSet<T::Sequence>,
-}
-
-impl<T> FilterFunction<T> for ThreadSafeDistinctFilterFunction<T>
-where
-    T: IsPeptide,
-{
-    // Returns true if the peptide is distinct (not seen before), false otherwise.
-    fn is_match(&self, peptide: &T) -> Result<bool, Error> {
-        Ok(self.sequences.insert(peptide.sequence().clone()))
-    }
-
-    fn to_sql(&self, _filters: &mut Vec<String>, _params: &mut Vec<Box<dyn ToSql + Sync + Send>>) {}
-
-    fn to_sql_literal(&self, _filters: &mut Vec<String>) {}
-
-    fn is_sqlable(&self) -> bool {
-        false
-    }
-}
-
-impl<T> Display for ThreadSafeDistinctFilterFunction<T>
-where
-    T: IsPeptide,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "distinct")
-    }
-}
-
 /// Filters peptides which are not in the given taxonomy IDs
 ///
 struct TaxonomyFilterFunction {
@@ -664,6 +630,7 @@ struct ConditionalPeptideStream {
     agg: Arc<SearchTimingAgg>,
     opened_at: std::time::Instant,
     rows: u64,
+    distinct_filter: Option<Arc<DashSet<ModifiedSequence>>>,
 }
 
 impl ConditionalPeptideStream {
@@ -676,6 +643,7 @@ impl ConditionalPeptideStream {
         sql_filters: Arc<FilterPipeline<Peptide>>,
         resolve_modification: bool,
         agg: Arc<SearchTimingAgg>,
+        distinct_filter: Option<Arc<DashSet<ModifiedSequence>>>,
     ) -> Result<Self, Error> {
         for filter in sql_filters.iter() {
             if !filter.is_sqlable() {
@@ -723,6 +691,7 @@ impl ConditionalPeptideStream {
             agg,
             opened_at: std::time::Instant::now(),
             rows: 0,
+            distinct_filter,
         })
     }
 }
@@ -738,9 +707,28 @@ impl Stream for ConditionalPeptideStream {
                     this.rows += 1;
                     if this.condition.is_match(&peptide) {
                         let peptidoforms = if this.resolve_modification {
-                            this.condition.modify_peptide(&peptide)
+                            this.condition
+                                .modify_peptide(&peptide)
+                                .into_iter()
+                                .filter(|peptidoform| {
+                                    this.distinct_filter
+                                        .as_ref()
+                                        .map(|set| set.insert(peptidoform.sequence().clone()))
+                                        .unwrap_or(true)
+                                })
+                                .collect::<Vec<_>>()
                         } else {
-                            vec![Peptidoform::from(peptide)]
+                            let peptidoform = Peptidoform::from(peptide);
+                            if this
+                                .distinct_filter
+                                .as_ref()
+                                .map(|set| set.insert(peptidoform.sequence().clone()))
+                                .unwrap_or(true)
+                            {
+                                vec![peptidoform]
+                            } else {
+                                continue 'polling_loop;
+                            }
                         };
 
                         Poll::Ready(Some(Ok(peptidoforms)))
@@ -769,8 +757,6 @@ impl Stream for ConditionalPeptideStream {
 /// into a single stream, applying the non-SQL-able filters (e.g. distinctness) as
 /// results arrive.
 pub struct FallibleMatchingPeptideStream {
-    // Should only contain non sql able filters
-    filter_pipeline: Pin<Box<FilterPipeline<Peptidoform>>>,
     /// Receives batches produced by the spawned per-condition tasks below.
     rx: mpsc::UnboundedReceiver<Result<Vec<Peptidoform>, Error>>,
     /// Owns the per-condition tasks; dropping it (e.g. the caller abandoning the
@@ -809,14 +795,11 @@ impl FallibleMatchingPeptideStream {
         }
         let sql_filters = Arc::new(sql_filters);
 
-        // Build filter pipeline for non sqlable conditions
-        let mut filters: Vec<Box<dyn FilterFunction<Peptidoform>>> = Vec::new();
-        if is_distinct {
-            filters.push(Box::new(ThreadSafeDistinctFilterFunction {
-                sequences: DashSet::with_capacity(300_000), // With an average length of 30 amino acids this should grow to about 72MB in memory
-            }));
-        }
-        let filter_pipeline = FilterPipeline::new(filters);
+        let distinct_filter: Option<Arc<DashSet<ModifiedSequence>>> = if is_distinct {
+            Some(Arc::new(DashSet::with_capacity(300_000)))
+        } else {
+            None
+        };
 
         let total_conditions = conditions.len();
         let concurrent_selects = concurrent_selects.get();
@@ -837,6 +820,7 @@ impl FallibleMatchingPeptideStream {
             let agg = agg.clone();
             let semaphore = semaphore.clone();
             let tx = tx.clone();
+            let distinct_filter = distinct_filter.clone();
             tasks.spawn(async move {
                 let _permit = match semaphore.acquire().await {
                     Ok(permit) => permit,
@@ -849,6 +833,7 @@ impl FallibleMatchingPeptideStream {
                     sql_filters,
                     resolve_modifications,
                     agg,
+                    distinct_filter,
                 )
                 .await
                 {
@@ -876,10 +861,10 @@ impl FallibleMatchingPeptideStream {
             uuid::Uuid::now_v1(&[
                 resolve_modifications as u8,
                 total_conditions as u8,
-                filter_pipeline.len() as u8,
+                is_distinct as u8,
                 resolve_modifications as u8,
                 total_conditions as u8,
-                filter_pipeline.len() as u8,
+                is_distinct as u8
             ])
         );
         let matching_peptide_counter = counter!(matching_peptide_metric.clone());
@@ -889,7 +874,6 @@ impl FallibleMatchingPeptideStream {
             _tasks: tasks,
             matching_peptide_metric,
             matching_peptide_counter,
-            filter_pipeline: Box::pin(filter_pipeline),
             started_at: std::time::Instant::now(),
             total_conditions,
             done_logged: false,
@@ -912,24 +896,10 @@ impl Stream for FallibleMatchingPeptideStream {
         // Every condition's spawned task streams its batches into `rx`; once all tasks
         // finish, all sender clones drop and `rx` yields `None`.
         match this.rx.poll_recv(cx) {
-            Poll::Ready(Some(Ok(peptides))) => {
-                let matching_peptides = peptides
-                    .into_iter()
-                    .filter_map(|peptide| match this.filter_pipeline.is_match(&peptide) {
-                        Ok(true) => Some(Ok(peptide)),
-                        Ok(false) => None, // skip non-matching peptide
-                        Err(err) => Some(Err(err)),
-                    })
-                    .collect::<Result<Vec<_>, Error>>();
-
-                match matching_peptides {
-                    Ok(peptides) => {
-                        this.matching_peptide_counter
-                            .increment(peptides.len() as u64);
-                        Poll::Ready(Some(Ok(peptides)))
-                    }
-                    Err(err) => Poll::Ready(Some(Err(err))),
-                }
+            Poll::Ready(Some(Ok(peptidoforms))) => {
+                this.matching_peptide_counter
+                    .increment(peptidoforms.len() as u64);
+                Poll::Ready(Some(Ok(peptidoforms)))
             }
             Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err))),
             Poll::Ready(None) => {
