@@ -16,12 +16,13 @@ use tokio_postgres::Row;
 
 use crate::{
     client::Client,
+    configuration::RuntimeConfiguration,
     database_build::{IsProteinAccess, PartitionRange},
     mass_index::MassIndex,
     peptide::{IsPeptide, MAX_AMINO_ACID_BIT_CODE, Peptide},
     protease::Protease,
     protein::Protein,
-    sequence::{CompactSequence, PeptideSequence},
+    sequence::{CompactSequence, IsSimpleSequence, PeptideSequence},
     stats_table::StatsTable,
 };
 
@@ -77,6 +78,12 @@ static COPY_TYPES: LazyLock<[Type; 8]> = LazyLock::new(|| {
         Type::INT4_ARRAY, // non_unique_taxonomy_ids
         Type::CHAR,       // flags
     ]
+});
+
+static EXISTS_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "SELECT true::bool FROM {TABLE_NAME} WHERE partition = $1 AND mass = $2 AND sequence = $3 LIMIT 1"
+    )
 });
 
 /// Metric name for the gauge tracking protein-association digestion progress during
@@ -326,6 +333,35 @@ impl PeptideTable {
             .await
             .map_err(Error::from)?
             .ok_or(Error::CountNotFound)
+    }
+
+    pub async fn exists(
+        &self,
+        configuration: &RuntimeConfiguration,
+        sequence: PeptideSequence,
+    ) -> Result<bool, Error> {
+        let mass = Peptide::peptide_mass_from_amino_acid_bits(sequence.amino_acid_bit_codes());
+        let partitions = configuration
+            .mass_partitioning()
+            .partition_by_mass(mass)
+            .collect::<Vec<_>>();
+
+        let params: Vec<Box<dyn ToSql + Sync + Send>> = vec![
+            Box::new(partitions) as Box<dyn ToSql + Sync + Send>,
+            Box::new(mass) as Box<dyn ToSql + Sync + Send>,
+            Box::new(sequence) as Box<dyn ToSql + Sync + Send>,
+        ];
+
+        let mut stream = self
+            .client
+            .query_stream(EXISTS_STATEMENT.as_str(), params)
+            .await?;
+
+        match stream.next().await {
+            Some(Ok(_)) => Ok(true),
+            Some(Err(err)) => Err(Error::Row(err)),
+            None => Ok(false),
+        }
     }
 
     /// Builds the `peptides` table from a previously built [`MassIndex`]: `num_threads` workers
