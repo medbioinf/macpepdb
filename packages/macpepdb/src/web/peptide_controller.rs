@@ -35,6 +35,11 @@ use crate::web::server_state::ServerState;
 
 const DEFAULT_POST_SEARCH_ACCEPT_HEADER: &str = "application/json";
 
+/// Target size (bytes) for buffered chunks written to the response stream, before yielding.
+/// Matches the HTTP/2 `max_frame_size` configured in `web::server` so buffered chunks aren't
+/// re-split by h2 framing.
+const RESPONSE_STREAM_CHUNK_THRESHOLD: usize = 64 * 1024;
+
 pub static CONTROLLER_PATH: &str = "/api/peptides";
 static SEARCH_GET_PATH: &str = "/search/{payload}/{accept}";
 pub static SEARCH_POST_PATH: &str = "/search";
@@ -629,8 +634,9 @@ impl PeptideController {
                     StatusCode::OK,
                     headers,
                     Body::from_stream(stream! {
+                        let mut buffer = String::with_capacity(RESPONSE_STREAM_CHUNK_THRESHOLD + 4096);
                         // start json array
-                        yield Ok("[".to_string());
+                        buffer.push('[');
                         // set delimiter to empty string for first element
                         let mut delimiter: &'static str = "";
                         // stream peptides
@@ -638,22 +644,27 @@ impl PeptideController {
                             match peptidoforms {
                                 Ok(peptidoforms) => {
                                     for peptidoform in peptidoforms.into_iter() {
-                                        let mut chunk = String::with_capacity(delimiter.len() + peptidoform.len());
-                                        chunk.push_str(delimiter);
-                                        chunk.push_str(&peptidoform);
-                                        yield Ok(chunk);
+                                        buffer.push_str(delimiter);
+                                        buffer.push_str(&peptidoform);
                                         delimiter = ",";
+                                        if buffer.len() >= RESPONSE_STREAM_CHUNK_THRESHOLD {
+                                            yield Ok(std::mem::replace(&mut buffer, String::with_capacity(RESPONSE_STREAM_CHUNK_THRESHOLD + 4096)));
+                                        }
                                     }
                                 }
                                 Err(err) => {
                                     tracing::error!("{:?}", err);
+                                    if !buffer.is_empty() {
+                                        yield Ok(std::mem::take(&mut buffer));
+                                    }
                                     yield Err(format!("!!! {:?}", err));
                                     break;
                                 }
                             };
                         }
                         // end json array
-                        yield Ok("]".to_string());
+                        buffer.push(']');
+                        yield Ok(buffer);
                     }),
                 )
             }
@@ -665,28 +676,37 @@ impl PeptideController {
                     StatusCode::OK,
                     headers,
                     Body::from_stream(stream! {
+                        let mut buffer = String::with_capacity(RESPONSE_STREAM_CHUNK_THRESHOLD + 4096);
                         // guarantee at least one non-empty chunk even on zero hits, so the
                         // streamed body is never fully empty (empty h2c bodies can trip the
                         // client's decoder)
-                        yield Ok("\n".to_string());
+                        buffer.push('\n');
                         let mut delimiter: &'static str = "";
                         for await peptidoforms in peptide_stream {
                             match peptidoforms {
                                 Ok(peptidoforms) => {
                                     for peptidoform in peptidoforms.into_iter() {
-                                        let mut chunk = String::from(delimiter);
+                                        buffer.push_str(delimiter);
                                         // sequence() is a &ModifiedSequence (Display only, no cheap &str/as_bytes for the general modified case)
-                                        write!(chunk, "{}", peptidoform).unwrap();
-                                        yield Ok(chunk);
+                                        write!(buffer, "{}", peptidoform).unwrap();
                                         delimiter = "\n";
+                                        if buffer.len() >= RESPONSE_STREAM_CHUNK_THRESHOLD {
+                                            yield Ok(std::mem::replace(&mut buffer, String::with_capacity(RESPONSE_STREAM_CHUNK_THRESHOLD + 4096)));
+                                        }
                                     }
                                 }
                                 Err(err) => {
                                     tracing::error!("{:?}", err);
+                                    if !buffer.is_empty() {
+                                        yield Ok(std::mem::take(&mut buffer));
+                                    }
                                     yield Err(format!("!!! {:?}", err));
                                     break;
                                 }
                             };
+                        }
+                        if !buffer.is_empty() {
+                            yield Ok(buffer);
                         }
                     }),
                 )
@@ -699,34 +719,43 @@ impl PeptideController {
                     StatusCode::OK,
                     headers,
                     Body::from_stream(stream! {
+                        let mut buffer = String::with_capacity(RESPONSE_STREAM_CHUNK_THRESHOLD + 4096);
                         // guarantee at least one non-empty chunk even on zero hits, so the
                         // streamed body is never fully empty (empty h2c bodies can trip the
                         // client's decoder)
-                        yield Ok("\n".to_string());
+                        buffer.push('\n');
                         let mut peptidoform_ctr: usize = 0;
                         let mut delimiter: &'static str = "";
                         for await peptidoforms in peptide_stream {
                             match peptidoforms {
                                 Ok(peptidoforms) => {
                                     for peptidoform in peptidoforms.into_iter() {
-                                        let mut chunk = String::from(delimiter);
+                                        buffer.push_str(delimiter);
                                         write!(
-                                            chunk,
+                                            buffer,
                                             ">mdb|{peptidoform_ctr}\n{}",
                                             peptidoform
                                         )
                                         .unwrap();
                                         peptidoform_ctr += 1;
-                                        yield Ok(chunk);
                                         delimiter = "\n";
+                                        if buffer.len() >= RESPONSE_STREAM_CHUNK_THRESHOLD {
+                                            yield Ok(std::mem::replace(&mut buffer, String::with_capacity(RESPONSE_STREAM_CHUNK_THRESHOLD + 4096)));
+                                        }
                                     }
                                 }
                                 Err(err) => {
                                     tracing::error!("{:?}", err);
+                                    if !buffer.is_empty() {
+                                        yield Ok(std::mem::take(&mut buffer));
+                                    }
                                     yield Err(format!("!!! {:?}", err));
                                     break;
                                 }
                             };
+                        }
+                        if !buffer.is_empty() {
+                            yield Ok(buffer);
                         }
                     }),
                 )

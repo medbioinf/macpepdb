@@ -177,7 +177,11 @@ pub async fn start(
     let mut h2_builder = auto::Builder::new(TokioExecutor::new());
     h2_builder
         .http2()
-        .max_concurrent_streams(Some(max_concurrent_streams_per_connection.get() as u32));
+        .max_concurrent_streams(Some(max_concurrent_streams_per_connection.get() as u32))
+        // Match the response stream's buffering threshold (see
+        // `RESPONSE_STREAM_CHUNK_THRESHOLD` in `peptide_controller.rs`) so buffered chunks
+        // aren't silently re-split by h2's default 16 KiB SETTINGS_MAX_FRAME_SIZE.
+        .max_frame_size(65_536u32);
     let h2_builder = Arc::new(h2_builder);
 
     let mut make_service = app.into_make_service_with_connect_info::<SocketAddr>();
