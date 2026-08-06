@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
+use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::pin::Pin;
@@ -25,6 +26,13 @@ struct SearchTimingAgg {
     /// Max number of partitions in a single condition's `partition = ANY(...)` list,
     /// i.e. the worst-case shard fan-out per range query.
     partitions_max: AtomicU64,
+    /// Peptidoforms offered to the distinct filter, and how many of those it rejected as
+    /// already seen. Only counted while a distinct filter is active. Duplicates can only
+    /// arise *between* conditions — within one condition the DB rows are distinct and the
+    /// variable-modification map is deduped by mass delta — so this measures whether the
+    /// global dedup is earning its share of search CPU.
+    distinct_candidates: AtomicU64,
+    distinct_duplicates: AtomicU64,
 }
 
 impl SearchTimingAgg {
@@ -39,6 +47,16 @@ impl SearchTimingAgg {
         fetch_max(&self.scan_us_max, us);
         self.rows.fetch_add(rows, Ordering::Relaxed);
         self.conditions.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Folds one condition's distinct-filter tallies into the search total. Called once
+    /// per stream at exhaustion (not per peptidoform) so the hot path stays free of
+    /// cross-thread atomics.
+    fn record_distinct(&self, candidates: u64, duplicates: u64) {
+        self.distinct_candidates
+            .fetch_add(candidates, Ordering::Relaxed);
+        self.distinct_duplicates
+            .fetch_add(duplicates, Ordering::Relaxed);
     }
 }
 
@@ -60,12 +78,15 @@ use postgres_types::ToSql;
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
+use xxhash_rust::xxh3::Xxh3;
 
 use crate::amino_acid::{AminoAcid, AminoAcidBitCode, GLYCINE};
 use crate::configuration::RuntimeConfiguration;
 use crate::database_build::MassPartitionMap;
 use crate::molecules::WATER_MONO_MASS;
-use crate::peptide::{IS_SWISS_PROT_BIT, IS_TREMBL_BIT, IsPeptide, Peptidoform};
+use crate::peptide::{
+    IS_SWISS_PROT_BIT, IS_TREMBL_BIT, IsPeptide, MAX_AMINO_ACID_BIT_CODE, Peptidoform,
+};
 use crate::peptide_table::{
     FLAGS_COLUMN, MASS_COL, PARTITION_COL, PeptideColumnSelection, PeptideTable, TABLE_NAME,
 };
@@ -630,6 +651,20 @@ impl IsPeptidoformTransformation for PeptidoformPassthroughTransformation {
     }
 }
 
+/// 128-bit digest of a [`ModifiedSequence`], used as the distinct filter's key instead of
+/// the sequence itself. The set only ever needs to *recognise* a sequence, never reproduce
+/// it, so storing a digest avoids one ~600-byte clone per candidate and shrinks the set from
+/// hundreds of megabytes to 16 bytes per entry — which also keeps its buckets in cache.
+///
+/// Collision risk is a birthday bound of `n^2 / 2^129`; at ten million peptidoforms in a
+/// single search that is ~1e-25, and a collision could only ever drop one peptidoform from
+/// one result — it cannot produce a wrong one.
+fn distinct_key(sequence: &ModifiedSequence) -> u128 {
+    let mut hasher = Xxh3::new();
+    sequence.hash(&mut hasher);
+    hasher.digest128()
+}
+
 type BoxedPeptideRowStream =
     Pin<Box<dyn Stream<Item = Result<Peptide, crate::peptide_table::Error>> + Send>>;
 
@@ -641,7 +676,12 @@ struct ConditionalPeptideStream<T: IsPeptidoformTransformation> {
     agg: Arc<SearchTimingAgg>,
     opened_at: std::time::Instant,
     rows: u64,
-    distinct_filter: Option<Arc<DashSet<ModifiedSequence>>>,
+    /// Peptidoforms this condition offered to `distinct_filter`, and the subset it
+    /// rejected. Accumulated per-stream and folded into `agg` at exhaustion — same
+    /// pattern as `rows`, to keep atomics off the per-peptidoform path.
+    distinct_candidates: u64,
+    distinct_duplicates: u64,
+    distinct_filter: Option<Arc<DashSet<u128>>>,
     _marker: std::marker::PhantomData<T>,
 }
 
@@ -658,7 +698,7 @@ where
         sql_filters: Arc<FilterPipeline<Peptide>>,
         resolve_modification: bool,
         agg: Arc<SearchTimingAgg>,
-        distinct_filter: Option<Arc<DashSet<ModifiedSequence>>>,
+        distinct_filter: Option<Arc<DashSet<u128>>>,
     ) -> Result<Self, Error> {
         for filter in sql_filters.iter() {
             if !filter.is_sqlable() {
@@ -706,6 +746,8 @@ where
             agg,
             opened_at: std::time::Instant::now(),
             rows: 0,
+            distinct_candidates: 0,
+            distinct_duplicates: 0,
             distinct_filter,
             _marker: std::marker::PhantomData,
         })
@@ -725,29 +767,53 @@ where
                 Poll::Ready(Some(Ok(peptide))) => {
                     this.rows += 1;
                     if this.condition.is_match(&peptide) {
+                        // `Option<&Arc<_>>` is `Copy`, so the closure below captures it by
+                        // value and never borrows `this` — leaving the tallies free to be
+                        // written back afterwards.
+                        let distinct_filter = this.distinct_filter.as_ref();
+                        let mut candidates: u64 = 0;
+                        let mut duplicates: u64 = 0;
+
                         let peptidoforms = if this.resolve_modification {
-                            this.condition
+                            let peptidoforms = this
+                                .condition
                                 .modify_peptide(&peptide)
                                 .into_iter()
                                 .filter(|peptidoform| {
-                                    this.distinct_filter
-                                        .as_ref()
-                                        .map(|set| set.insert(peptidoform.sequence().clone()))
-                                        .unwrap_or(true)
+                                    let Some(set) = distinct_filter else {
+                                        return true;
+                                    };
+                                    candidates += 1;
+                                    let is_new = set.insert(distinct_key(peptidoform.sequence()));
+                                    if !is_new {
+                                        duplicates += 1;
+                                    }
+                                    is_new
                                 })
                                 .map(|peptidoform| {
                                     T::try_from_peptidoform(peptidoform)
                                         .map_err(|err| Error::Transformation(format!("{err}")))
                                 })
-                                .collect::<Result<Vec<_>, Error>>()
+                                .collect::<Result<Vec<_>, Error>>();
+                            this.distinct_candidates += candidates;
+                            this.distinct_duplicates += duplicates;
+                            peptidoforms
                         } else {
                             let peptidoform = Peptidoform::from(peptide);
-                            if this
-                                .distinct_filter
-                                .as_ref()
-                                .map(|set| set.insert(peptidoform.sequence().clone()))
-                                .unwrap_or(true)
-                            {
+                            let is_new = match distinct_filter {
+                                Some(set) => {
+                                    candidates += 1;
+                                    let is_new = set.insert(distinct_key(peptidoform.sequence()));
+                                    if !is_new {
+                                        duplicates += 1;
+                                    }
+                                    is_new
+                                }
+                                None => true,
+                            };
+                            this.distinct_candidates += candidates;
+                            this.distinct_duplicates += duplicates;
+                            if is_new {
                                 T::try_from_peptidoform(peptidoform)
                                     .map(|representation| vec![representation])
                                     .map_err(|err| Error::Transformation(format!("{err}")))
@@ -767,6 +833,8 @@ where
                     // per-search aggregate (the search logs one summary at the end).
                     this.agg
                         .record_scan(this.opened_at.elapsed().as_micros() as u64, this.rows);
+                    this.agg
+                        .record_distinct(this.distinct_candidates, this.distinct_duplicates);
                     Poll::Ready(None)
                 }
                 Poll::Pending => Poll::Pending,
@@ -823,7 +891,7 @@ where
         }
         let sql_filters = Arc::new(sql_filters);
 
-        let distinct_filter: Option<Arc<DashSet<ModifiedSequence>>> = if is_distinct {
+        let distinct_filter: Option<Arc<DashSet<u128>>> = if is_distinct {
             Some(Arc::new(DashSet::with_capacity(300_000)))
         } else {
             None
@@ -945,6 +1013,10 @@ where
                         scan_us_max = this.agg.scan_us_max.load(Ordering::Relaxed),
                         partitions_max = this.agg.partitions_max.load(Ordering::Relaxed),
                         rows = this.agg.rows.load(Ordering::Relaxed),
+                        distinct_candidates =
+                            this.agg.distinct_candidates.load(Ordering::Relaxed),
+                        distinct_duplicates =
+                            this.agg.distinct_duplicates.load(Ordering::Relaxed),
                         "search finished (MultiTask)"
                     );
                 }
@@ -975,6 +1047,8 @@ where
                 setup_us_max = self.agg.setup_us_max.load(Ordering::Relaxed),
                 partitions_max = self.agg.partitions_max.load(Ordering::Relaxed),
                 rows = self.agg.rows.load(Ordering::Relaxed),
+                distinct_candidates = self.agg.distinct_candidates.load(Ordering::Relaxed),
+                distinct_duplicates = self.agg.distinct_duplicates.load(Ordering::Relaxed),
                 "search abandoned before completion (client disconnect/timeout?)"
             );
         }
@@ -1248,9 +1322,15 @@ pub struct PeptideConditionBuilder {
     modification_maps: OnceLock<ModificationMaps>,
 }
 
+/// Per-amino-acid counts of variable modifications, indexed by bit code. Used both as the
+/// exact quota a condition must fill (`required`) and as the running tally during recursion
+/// (`applied`); a fixed array keeps both allocation-free on the per-peptide hot path.
+type VariableModCounts = [u8; MAX_AMINO_ACID_BIT_CODE];
+
 type ModificationMaps = (
     HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>>,
     HashMap<AminoAcidBitCode, Vec<Arc<PostTranslationalModification>>>,
+    VariableModCounts,
 );
 
 impl PeptideConditionBuilder {
@@ -1366,7 +1446,7 @@ impl PeptideConditionBuilder {
     /// * `sequence` - The amino acid sequence to apply the condition to
     ///
     pub fn modify_peptide(&self, peptide: &Peptide) -> Vec<Peptidoform> {
-        let (static_modifications_map, variable_modifications_map) =
+        let (static_modifications_map, variable_modifications_map, required_variable_mods) =
             self.modification_maps.get_or_init(|| {
                 let static_map: HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>> =
                     self.static_ptms
@@ -1398,15 +1478,27 @@ impl PeptideConditionBuilder {
                     }
                 }
 
-                (static_map, variable_map)
+                // Exact per-residue quota this condition must fill. `variable_ptms` is a
+                // multiset, and its *multiplicities* — not just its size and key set — are
+                // what distinguishes one condition from another: `{S,S,T}` and `{S,T,T}`
+                // have the same length and the same keys but are different hypotheses at
+                // the same query mass. The recursion enforces this quota per residue so the
+                // two stop generating each other's peptidoforms.
+                let mut required: VariableModCounts = [0; MAX_AMINO_ACID_BIT_CODE];
+                for ptm in self.variable_ptms.iter() {
+                    required[*ptm.amino_acid().bit_code() as usize] += 1;
+                }
+
+                (static_map, variable_map, required)
             });
 
         // Results vector to store the modified sequences. No local dedup here: the
         // variable-modification map built above is already deduped by mass_delta per amino
-        // acid, so no two recursion branches can ever produce the same Peptidoform: the
-        // global distinct filter (`ThreadSafeDistinctFilterFunction`) is the sole dedup
-        // point across conditions/partitions.
+        // acid, and `required_variable_mods` keeps each recursion branch inside its own
+        // per-residue quota, so no two branches of *this* condition can produce the same
+        // Peptidoform. The global distinct filter remains the backstop across conditions.
         let mut peptidoforms: Vec<Peptidoform> = Vec::new();
+        let mut applied_variable_mods: VariableModCounts = [0; MAX_AMINO_ACID_BIT_CODE];
 
         let mut modified_sequence = ModifiedSequence::with_capacity(peptide.len());
         let mut mass: i64 = WATER_MONO_MASS;
@@ -1436,6 +1528,8 @@ impl PeptideConditionBuilder {
             mass,
             static_modifications_map,
             variable_modifications_map,
+            required_variable_mods,
+            &mut applied_variable_mods,
             0,
             0,
             &mut peptidoforms,
@@ -1468,6 +1562,8 @@ impl PeptideConditionBuilder {
             AminoAcidBitCode,
             Vec<Arc<PostTranslationalModification>>,
         >,
+        required_variable_mods: &VariableModCounts,
+        applied_variable_mods: &mut VariableModCounts,
         position: usize,
         applied_vmods: usize,
         peptidoforms: &mut Vec<Peptidoform>,
@@ -1507,6 +1603,8 @@ impl PeptideConditionBuilder {
                 mass,
                 static_modifications_map,
                 variable_modifications_map,
+                required_variable_mods,
+                applied_variable_mods,
                 position + 1,
                 applied_vmods,
                 peptidoforms,
@@ -1523,6 +1621,8 @@ impl PeptideConditionBuilder {
                 mass,
                 static_modifications_map,
                 variable_modifications_map,
+                required_variable_mods,
+                applied_variable_mods,
                 position + 1,
                 applied_vmods,
                 peptidoforms,
@@ -1535,16 +1635,29 @@ impl PeptideConditionBuilder {
                 mass,
                 static_modifications_map,
                 variable_modifications_map,
+                required_variable_mods,
+                applied_variable_mods,
                 position + 1,
                 applied_vmods,
                 peptidoforms,
             );
 
-            if !is_statically_modified && applied_vmods < self.variable_ptms.len() {
+            // Only branch into a modified residue while *this residue's* quota is unfilled.
+            // Without the per-residue check a condition places its whole budget anywhere its
+            // map allows, so `{S,S,T}` and `{S,T,T}` — same length, same keys, same query
+            // mass — each emit every 3-subset of the S∪T positions and duplicate one another
+            // wholesale. The quota sums to `variable_ptms.len()`, so honouring it per residue
+            // also turns the `applied_vmods == variable_ptms.len()` gate in
+            // `end_modify_peptide` into an exact per-residue match.
+            let amino_acid = peptide.sequence()[position] as usize;
+            let quota_left = applied_variable_mods[amino_acid] < required_variable_mods[amino_acid];
+
+            if !is_statically_modified && applied_vmods < self.variable_ptms.len() && quota_left {
                 // # Next with modified amino acid
                 if let Some(modifications) =
                     variable_modifications_map.get(&peptide.sequence()[position])
                 {
+                    applied_variable_mods[amino_acid] += 1;
                     for modification in modifications.iter() {
                         modified_sequence.push(ModifiedSequencePart::PositionModification(
                             modification.mass_delta(),
@@ -1556,12 +1669,17 @@ impl PeptideConditionBuilder {
                             next_mass,
                             static_modifications_map,
                             variable_modifications_map,
+                            required_variable_mods,
+                            applied_variable_mods,
                             position + 1,
                             applied_vmods + 1,
                             peptidoforms,
                         );
                         modified_sequence.truncate(start_len + 1);
                     }
+                    // Backtrack the tally the way `modified_sequence` is truncated, so
+                    // sibling branches see this residue's quota unspent.
+                    applied_variable_mods[amino_acid] -= 1;
                 }
             }
         }
