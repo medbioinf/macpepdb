@@ -3,6 +3,7 @@ use std::{
     hash::Hash,
     num::{NonZeroU8, NonZeroUsize},
     ops::{Index, Range},
+    sync::Arc,
 };
 
 use pastey::paste;
@@ -427,190 +428,178 @@ make_sequence!(PeptideSequence, u8, 6, 1, 50);
 // Proteinsequence limited to 1 to 65.536 amino acids length can be stored in 16 bits
 make_sequence!(ProteinSequence, u16, 16, 1, u16::MAX as usize);
 
-/// Part of the a modified sequence which can keep amino acids as well as modifications (as strings)
+/// A ProForma-compatible sequence that can contain both amino acids and modifications.
 ///
-#[derive(Clone, Eq, Hash, PartialEq)]
-pub enum ModifiedSequencePart {
-    AminoAcid(AminoAcidBitCode),
-    CTerminalModification(i64),
-    GlobalModifications(Vec<(i64, AminoAcidBitCode)>),
-    NTerminalModification(i64),
-    PositionModification(i64),
-}
-
-impl Display for ModifiedSequencePart {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ModifiedSequencePart::AminoAcid(aa) => {
-                write!(f, "{}", AminoAcid::by_bit_code(aa).code())
-            }
-            ModifiedSequencePart::CTerminalModification(mass) => {
-                write!(f, "-[{:+}]", mass_to_float(*mass))
-            }
-            ModifiedSequencePart::GlobalModifications(modifications) => {
-                let mods = modifications
-                    .iter()
-                    .map(|(mass, aa)| {
-                        format!(
-                            "[{:+}]@{}",
-                            mass_to_float(*mass),
-                            AminoAcid::by_bit_code(aa).code()
-                        )
-                    })
-                    .collect::<Vec<String>>()
-                    .join(",");
-                write!(f, "<{}>", mods)
-            }
-            ModifiedSequencePart::NTerminalModification(mass) => {
-                write!(f, "[{:+}]-", mass_to_float(*mass))
-            }
-            ModifiedSequencePart::PositionModification(mass) => {
-                write!(f, "[{:+}]", mass_to_float(*mass))
-            }
-        }
-    }
-}
-
-impl From<ModifiedSequencePart> for String {
-    fn from(part: ModifiedSequencePart) -> Self {
-        part.to_string()
-    }
-}
-
-/// sequences which can contain both amino acids and modifications (ProForma compatible),
+/// Stored as a compact residue stream plus a sparse list of per-position modifications
+/// (only residues that are actually modified pay for it), instead of one flat `Vec` tagged
+/// per element — see the module-level memory-footprint notes for why.
 #[derive(Clone, Eq, Hash, PartialEq, Serialize)]
 #[serde(into = "String")]
-pub struct ModifiedSequence(Vec<ModifiedSequencePart>);
+pub struct ModifiedSequence {
+    residues: Vec<AminoAcidBitCode>,
+    /// `(residue index, mass delta)`, always kept sorted ascending by index.
+    position_modifications: Vec<(u32, i64)>,
+    n_terminal_bond: Option<i64>,
+    c_terminal_bond: Option<i64>,
+    /// Static/fixed PTMs, shared (not deep-cloned) across every peptidoform of a search
+    /// condition, since the list is identical for all of them.
+    global_modifications: Option<Arc<[(i64, AminoAcidBitCode)]>>,
+}
 
 impl ModifiedSequence {
-    /// The first amino acid's bit code, skipping over any leading modification parts.
+    /// The first amino acid's bit code, if any.
     pub fn first(&self) -> Option<&AminoAcidBitCode> {
-        self.0.iter().find_map(|part| {
-            if let ModifiedSequencePart::AminoAcid(aa) = part {
-                Some(aa)
-            } else {
-                None
-            }
-        })
+        self.residues.first()
     }
 
-    /// Iterates over the sequence parts (amino acids and modifications) in order.
-    pub fn iter(&self) -> impl Iterator<Item = &ModifiedSequencePart> {
-        self.0.iter()
+    /// Iterates over the amino acid bit codes in order (modifications are not part of this
+    /// iterator; use [`Display`] for the full ProForma rendering).
+    pub fn iter(&self) -> impl Iterator<Item = &AminoAcidBitCode> {
+        self.residues.iter()
     }
 
-    /// The last amino acid's bit code, skipping over any trailing modification parts.
+    /// The last amino acid's bit code, if any.
     pub fn last(&self) -> Option<&AminoAcidBitCode> {
-        self.0.iter().rev().find_map(|part| {
-            if let ModifiedSequencePart::AminoAcid(aa) = part {
-                Some(aa)
-            } else {
-                None
-            }
-        })
+        self.residues.last()
     }
 
-    pub(crate) fn push(&mut self, part: ModifiedSequencePart) {
-        self.0.push(part);
+    pub(crate) fn push_residue(&mut self, bit_code: AminoAcidBitCode) {
+        self.residues.push(bit_code);
     }
 
-    pub(crate) fn len(&self) -> usize {
-        self.0.len()
+    pub(crate) fn residue_len(&self) -> usize {
+        self.residues.len()
     }
 
-    pub(crate) fn truncate(&mut self, len: usize) {
-        self.0.truncate(len);
+    pub(crate) fn truncate_residues(&mut self, len: usize) {
+        self.residues.truncate(len);
     }
 
-    /// Creates an empty sequence with pre-allocated capacity for `capacity` parts.
+    pub(crate) fn push_position_modification(&mut self, position: u32, mass_delta: i64) {
+        self.position_modifications.push((position, mass_delta));
+    }
+
+    pub(crate) fn position_modification_len(&self) -> usize {
+        self.position_modifications.len()
+    }
+
+    pub(crate) fn truncate_position_modifications(&mut self, len: usize) {
+        self.position_modifications.truncate(len);
+    }
+
+    pub(crate) fn set_n_terminal_bond(&mut self, mass_delta: i64) {
+        self.n_terminal_bond = Some(mass_delta);
+    }
+
+    pub(crate) fn set_c_terminal_bond(&mut self, mass_delta: i64) {
+        self.c_terminal_bond = Some(mass_delta);
+    }
+
+    pub(crate) fn set_global_modifications(
+        &mut self,
+        modifications: Arc<[(i64, AminoAcidBitCode)]>,
+    ) {
+        self.global_modifications = Some(modifications);
+    }
+
+    /// Creates an empty sequence with pre-allocated capacity for `capacity` residues.
     pub fn with_capacity(capacity: usize) -> Self {
-        Self(Vec::with_capacity(capacity))
+        Self {
+            residues: Vec::with_capacity(capacity),
+            position_modifications: Vec::new(),
+            n_terminal_bond: None,
+            c_terminal_bond: None,
+            global_modifications: None,
+        }
     }
 }
 
 impl Display for ModifiedSequence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for part in &self.0 {
-            write!(f, "{}", part)?;
+        if let Some(global) = &self.global_modifications {
+            let mods = global
+                .iter()
+                .map(|(mass, aa)| {
+                    format!(
+                        "[{:+}]@{}",
+                        mass_to_float(*mass),
+                        AminoAcid::by_bit_code(aa).code()
+                    )
+                })
+                .collect::<Vec<String>>()
+                .join(",");
+            write!(f, "<{}>", mods)?;
         }
+
+        if let Some(mass) = self.n_terminal_bond {
+            write!(f, "[{:+}]-", mass_to_float(mass))?;
+        }
+
+        let mut position_modifications = self.position_modifications.iter();
+        let mut next_modification = position_modifications.next();
+        for (index, aa) in self.residues.iter().enumerate() {
+            write!(f, "{}", AminoAcid::by_bit_code(aa).code())?;
+            if let Some(&(position, mass)) = next_modification
+                && position as usize == index
+            {
+                write!(f, "[{:+}]", mass_to_float(mass))?;
+                next_modification = position_modifications.next();
+            }
+        }
+
+        if let Some(mass) = self.c_terminal_bond {
+            write!(f, "-[{:+}]", mass_to_float(mass))?;
+        }
+
         Ok(())
     }
 }
 
 impl From<PeptideSequence> for ModifiedSequence {
     fn from(peptide_sequence: PeptideSequence) -> Self {
-        Self(
-            peptide_sequence
-                .into_iter()
-                .map(ModifiedSequencePart::AminoAcid)
-                .collect(),
-        )
+        Self {
+            residues: peptide_sequence.into_iter().collect(),
+            position_modifications: Vec::new(),
+            n_terminal_bond: None,
+            c_terminal_bond: None,
+            global_modifications: None,
+        }
     }
 }
 
 impl From<ModifiedSequence> for String {
     fn from(value: ModifiedSequence) -> Self {
-        value.0.into_iter().map(String::from).collect()
+        value.to_string()
     }
 }
 
 impl IsSimpleSequence for ModifiedSequence {
     fn amino_acids(&self) -> impl Iterator<Item = &'static AminoAcid> {
-        self.0.iter().filter_map(|part| {
-            if let ModifiedSequencePart::AminoAcid(aa) = part {
-                Some(AminoAcid::by_bit_code(aa))
-            } else {
-                None
-            }
-        })
+        self.residues.iter().map(<&'static AminoAcid>::from)
     }
 
     fn amino_acid_bit_codes(&self) -> impl Iterator<Item = &AminoAcidBitCode> {
-        self.0.iter().filter_map(|part| {
-            if let ModifiedSequencePart::AminoAcid(aa) = part {
-                Some(aa)
-            } else {
-                None
-            }
-        })
+        self.residues.iter()
     }
 
     fn len(&self) -> usize {
-        self.0
-            .iter()
-            .filter(|part| matches!(part, ModifiedSequencePart::AminoAcid(_)))
-            .count()
+        self.residues.len()
     }
 
     fn is_empty(&self) -> bool {
-        self.0
-            .iter()
-            .all(|part| !matches!(part, ModifiedSequencePart::AminoAcid(_)))
+        self.residues.is_empty()
     }
 
     fn first(&self) -> Option<&AminoAcidBitCode> {
-        self.0.iter().find_map(|part| {
-            if let ModifiedSequencePart::AminoAcid(aa) = part {
-                Some(aa)
-            } else {
-                None
-            }
-        })
+        self.residues.first()
     }
 
     fn last(&self) -> Option<&AminoAcidBitCode> {
-        self.0.iter().rev().find_map(|part| {
-            if let ModifiedSequencePart::AminoAcid(aa) = part {
-                Some(aa)
-            } else {
-                None
-            }
-        })
+        self.residues.last()
     }
 
     fn contains(&self, aa: &AminoAcid) -> bool {
-        self.0
-            .contains(&ModifiedSequencePart::AminoAcid(*aa.bit_code()))
+        self.residues.contains(aa.bit_code())
     }
 }
 
@@ -681,5 +670,32 @@ mod tests {
             matches!(compact_protein.0, TinyVec::Heap(_)),
             "oversized sequence must spill to the heap"
         );
+    }
+
+    #[test]
+    fn test_modified_sequence_is_compact() {
+        // Struct itself stays small (a handful of Vec/Option headers), well under the old
+        // enum-tagged `Vec<ModifiedSequencePart>` layout where every element alone cost
+        // ~32 bytes regardless of whether it carried a modification.
+        assert!(std::mem::size_of::<ModifiedSequence>() <= 96);
+
+        let known_aa_seq = AminoAcid::all()
+            .iter()
+            .map(|aa| aa.code())
+            .collect::<String>();
+        let sequence = PeptideSequence::try_from(known_aa_seq.as_str()).unwrap();
+
+        // Built the way `modify_peptide` builds one: pre-sized once, then pushed residue by
+        // residue with no modifications applied.
+        let mut modified = ModifiedSequence::with_capacity(sequence.len());
+        for bit_code in sequence {
+            modified.push_residue(bit_code);
+        }
+
+        // An unmodified sequence pays only 1 byte/residue on the heap and allocates
+        // nothing at all for the (empty) sparse modification vec.
+        assert_eq!(modified.residues.capacity(), known_aa_seq.len());
+        assert_eq!(modified.position_modifications.capacity(), 0);
+        assert_eq!(modified.to_string(), known_aa_seq);
     }
 }

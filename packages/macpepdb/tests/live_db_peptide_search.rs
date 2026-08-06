@@ -35,7 +35,7 @@ use macpepdb::peptide_search::{
 use macpepdb::peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideTable};
 use macpepdb::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use macpepdb::protease::Protease;
-use macpepdb::sequence::ModifiedSequencePart;
+use macpepdb::sequence::IsSimpleSequence;
 
 fn database_url() -> String {
     std::env::var("MACPEPDB_TEST_DATABASE_URL")
@@ -275,11 +275,8 @@ async fn test_peptidoforms_match_queried_mass() {
         .map(|peptidoform| {
             peptidoform
                 .sequence()
-                .iter()
-                .filter_map(|part| match part {
-                    ModifiedSequencePart::AminoAcid(aa) => Some(AminoAcid::by_bit_code(aa).code()),
-                    _ => None,
-                })
+                .amino_acid_bit_codes()
+                .map(|aa| AminoAcid::by_bit_code(aa).code())
                 .collect::<String>()
         })
         .collect();

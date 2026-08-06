@@ -15,7 +15,7 @@ use crate::{
     molecules::WATER_MONO_MASS,
     protein_ids::ProteinIds,
     sequence::{
-        CompactSequence, IsBitSequence, IsSimpleSequence, ModifiedSequence, ModifiedSequencePart,
+        CompactSequence, IsBitSequence, IsSimpleSequence, ModifiedSequence,
         PeptideSequence as Sequence,
     },
 };
@@ -498,11 +498,7 @@ impl Peptidoform {
             let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
 
             self.sequence
-                .iter()
-                .filter_map(|part| match part {
-                    ModifiedSequencePart::AminoAcid(aa) => Some(*aa),
-                    _ => None,
-                })
+                .amino_acid_bit_codes()
                 .for_each(|bit_code| counts[bit_code.as_bytes()[0] as usize] += 1);
             counts
         })
@@ -578,11 +574,7 @@ impl IsPeptide for Peptidoform {
             let mut counts = [0; MAX_AMINO_ACID_BIT_CODE];
 
             self.sequence
-                .iter()
-                .filter_map(|part| match part {
-                    ModifiedSequencePart::AminoAcid(aa) => Some(*aa),
-                    _ => None,
-                })
+                .amino_acid_bit_codes()
                 .for_each(|bit_code| counts[bit_code.as_bytes()[0] as usize] += 1);
             counts
         })

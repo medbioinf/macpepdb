@@ -91,7 +91,7 @@ use crate::peptide_table::{
     FLAGS_COLUMN, MASS_COL, PARTITION_COL, PeptideColumnSelection, PeptideTable, TABLE_NAME,
 };
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
-use crate::sequence::{IsSimpleSequence, ModifiedSequence, ModifiedSequencePart};
+use crate::sequence::{IsSimpleSequence, ModifiedSequence};
 use crate::{mass::to_float as mass_to_float, peptide::Peptide};
 
 use super::client::Client;
@@ -1331,6 +1331,7 @@ type ModificationMaps = (
     HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>>,
     HashMap<AminoAcidBitCode, Vec<Arc<PostTranslationalModification>>>,
     VariableModCounts,
+    Option<Arc<[(i64, AminoAcidBitCode)]>>,
 );
 
 impl PeptideConditionBuilder {
@@ -1446,51 +1447,72 @@ impl PeptideConditionBuilder {
     /// * `sequence` - The amino acid sequence to apply the condition to
     ///
     pub fn modify_peptide(&self, peptide: &Peptide) -> Vec<Peptidoform> {
-        let (static_modifications_map, variable_modifications_map, required_variable_mods) =
-            self.modification_maps.get_or_init(|| {
-                let static_map: HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>> =
+        let (
+            static_modifications_map,
+            variable_modifications_map,
+            required_variable_mods,
+            global_modifications,
+        ) = self.modification_maps.get_or_init(|| {
+            let static_map: HashMap<AminoAcidBitCode, Arc<PostTranslationalModification>> = self
+                .static_ptms
+                .iter()
+                .map(|ptm| (*ptm.amino_acid().bit_code(), ptm.clone()))
+                .collect();
+
+            // Map for fast access to variable modifications by amino acid. Two distinct
+            // PTMs on the same amino acid with the same mass_delta would otherwise make
+            // the recursion below enumerate two branches that serialize to the same
+            // Peptidoform (the per-position modification only stores mass_delta + bit
+            // code, never PTM identity) — dedup by mass_delta here, once per condition, so
+            // those branches never get generated instead of hashing them away per peptide.
+            let mut variable_map: HashMap<
+                AminoAcidBitCode,
+                Vec<Arc<PostTranslationalModification>>,
+            > = HashMap::new();
+            for ptm in self.variable_ptms.iter() {
+                let mods = variable_map
+                    .entry(*ptm.amino_acid().bit_code())
+                    .or_default();
+                if !mods
+                    .iter()
+                    .any(|existing: &Arc<PostTranslationalModification>| {
+                        existing.mass_delta() == ptm.mass_delta()
+                    })
+                {
+                    mods.push(ptm.clone());
+                }
+            }
+
+            // Exact per-residue quota this condition must fill. `variable_ptms` is a
+            // multiset, and its *multiplicities* — not just its size and key set — are
+            // what distinguishes one condition from another: `{S,S,T}` and `{S,T,T}`
+            // have the same length and the same keys but are different hypotheses at
+            // the same query mass. The recursion enforces this quota per residue so the
+            // two stop generating each other's peptidoforms.
+            let mut required: VariableModCounts = [0; MAX_AMINO_ACID_BIT_CODE];
+            for ptm in self.variable_ptms.iter() {
+                required[*ptm.amino_acid().bit_code() as usize] += 1;
+            }
+
+            // Static/fixed PTMs are identical for every peptidoform this condition ever
+            // produces, so compute the deduped list once here (per condition) and share it
+            // via `Arc` — `modify_peptide` used to rebuild this `Vec` on every call (once
+            // per matching peptide) and every peptidoform clone deep-cloned it again.
+            let global_modifications = if self.static_ptms.is_empty() {
+                None
+            } else {
+                Some(
                     self.static_ptms
                         .iter()
-                        .map(|ptm| (*ptm.amino_acid().bit_code(), ptm.clone()))
-                        .collect();
-
-                // Map for fast access to variable modifications by amino acid. Two distinct
-                // PTMs on the same amino acid with the same mass_delta would otherwise make
-                // the recursion below enumerate two branches that serialize to the same
-                // Peptidoform (ModifiedSequencePart only stores mass_delta + bit_code, never
-                // PTM identity) — dedup by mass_delta here, once per condition, so those
-                // branches never get generated instead of hashing them away per peptide.
-                let mut variable_map: HashMap<
-                    AminoAcidBitCode,
-                    Vec<Arc<PostTranslationalModification>>,
-                > = HashMap::new();
-                for ptm in self.variable_ptms.iter() {
-                    let mods = variable_map
-                        .entry(*ptm.amino_acid().bit_code())
-                        .or_default();
-                    if !mods
+                        .collect::<HashSet<_>>()
                         .iter()
-                        .any(|existing: &Arc<PostTranslationalModification>| {
-                            existing.mass_delta() == ptm.mass_delta()
-                        })
-                    {
-                        mods.push(ptm.clone());
-                    }
-                }
+                        .map(|ptm| (ptm.mass_delta(), *ptm.amino_acid().bit_code()))
+                        .collect::<Arc<[(i64, AminoAcidBitCode)]>>(),
+                )
+            };
 
-                // Exact per-residue quota this condition must fill. `variable_ptms` is a
-                // multiset, and its *multiplicities* — not just its size and key set — are
-                // what distinguishes one condition from another: `{S,S,T}` and `{S,T,T}`
-                // have the same length and the same keys but are different hypotheses at
-                // the same query mass. The recursion enforces this quota per residue so the
-                // two stop generating each other's peptidoforms.
-                let mut required: VariableModCounts = [0; MAX_AMINO_ACID_BIT_CODE];
-                for ptm in self.variable_ptms.iter() {
-                    required[*ptm.amino_acid().bit_code() as usize] += 1;
-                }
-
-                (static_map, variable_map, required)
-            });
+            (static_map, variable_map, required, global_modifications)
+        });
 
         // Results vector to store the modified sequences. No local dedup here: the
         // variable-modification map built above is already deduped by mass_delta per amino
@@ -1503,23 +1525,21 @@ impl PeptideConditionBuilder {
         let mut modified_sequence = ModifiedSequence::with_capacity(peptide.len());
         let mut mass: i64 = WATER_MONO_MASS;
 
-        if !self.static_ptms.is_empty() {
-            modified_sequence.push(ModifiedSequencePart::GlobalModifications(
-                self.static_ptms
-                    .iter()
-                    .collect::<HashSet<_>>()
-                    .iter()
-                    .map(|ptm| (ptm.mass_delta(), *ptm.amino_acid().bit_code()))
-                    .collect(),
-            ))
+        if let Some(global_modifications) = global_modifications {
+            modified_sequence.set_global_modifications(global_modifications.clone());
         }
 
         // Add n-bond if present
         if let Some(n_bond_ptm) = &self.n_bond_ptm {
-            modified_sequence.push(ModifiedSequencePart::NTerminalModification(
-                n_bond_ptm.mass_delta(),
-            ));
+            modified_sequence.set_n_terminal_bond(n_bond_ptm.mass_delta());
             mass += n_bond_ptm.mass_delta();
+        }
+
+        // The c-bond, like the n-bond and the static/global PTMs above, is constant for
+        // every peptidoform this condition produces — set it once here instead of pushing
+        // and truncating it on every leaf inside `end_modify_peptide`.
+        if let Some(c_bond_ptm) = &self.c_bond_ptm {
+            modified_sequence.set_c_terminal_bond(c_bond_ptm.mass_delta());
         }
 
         self.inner_modify_peptide(
@@ -1579,11 +1599,10 @@ impl PeptideConditionBuilder {
             return;
         }
 
-        let start_len = modified_sequence.len();
+        let residue_start = modified_sequence.residue_len();
+        let mod_start = modified_sequence.position_modification_len();
         let mut is_statically_modified = false;
-        modified_sequence.push(ModifiedSequencePart::AminoAcid(
-            peptide.sequence()[position],
-        ));
+        modified_sequence.push_residue(peptide.sequence()[position]);
         mass += AminoAcid::by_bit_code(&peptide.sequence()[position]).mono_mass();
         if let Some(static_mod) = static_modifications_map.get(&peptide.sequence()[position]) {
             mass += static_mod.mass_delta();
@@ -1595,7 +1614,7 @@ impl PeptideConditionBuilder {
             && !is_statically_modified
             && let Some(ptm) = self.n_terminal_ptm.as_ref()
         {
-            modified_sequence.push(ModifiedSequencePart::PositionModification(ptm.mass_delta()));
+            modified_sequence.push_position_modification(position as u32, ptm.mass_delta());
             mass += ptm.mass_delta();
             self.inner_modify_peptide(
                 peptide,
@@ -1613,7 +1632,7 @@ impl PeptideConditionBuilder {
             && !is_statically_modified
             && let Some(ptm) = self.c_terminal_ptm.as_ref()
         {
-            modified_sequence.push(ModifiedSequencePart::PositionModification(ptm.mass_delta()));
+            modified_sequence.push_position_modification(position as u32, ptm.mass_delta());
             mass += ptm.mass_delta();
             self.inner_modify_peptide(
                 peptide,
@@ -1659,9 +1678,8 @@ impl PeptideConditionBuilder {
                 {
                     applied_variable_mods[amino_acid] += 1;
                     for modification in modifications.iter() {
-                        modified_sequence.push(ModifiedSequencePart::PositionModification(
-                            modification.mass_delta(),
-                        ));
+                        modified_sequence
+                            .push_position_modification(position as u32, modification.mass_delta());
                         let next_mass = mass + modification.mass_delta();
                         self.inner_modify_peptide(
                             peptide,
@@ -1675,7 +1693,7 @@ impl PeptideConditionBuilder {
                             applied_vmods + 1,
                             peptidoforms,
                         );
-                        modified_sequence.truncate(start_len + 1);
+                        modified_sequence.truncate_position_modifications(mod_start);
                     }
                     // Backtrack the tally the way `modified_sequence` is truncated, so
                     // sibling branches see this residue's quota unspent.
@@ -1684,7 +1702,8 @@ impl PeptideConditionBuilder {
             }
         }
 
-        modified_sequence.truncate(start_len);
+        modified_sequence.truncate_position_modifications(mod_start);
+        modified_sequence.truncate_residues(residue_start);
     }
 
     /// Modifies the peptide sequence at the end by adding c-terminal to the proforma sequences.
@@ -1702,11 +1721,7 @@ impl PeptideConditionBuilder {
         applied_vmods: usize,
         peptidoforms: &mut Vec<Peptidoform>,
     ) {
-        let start_len = modified_sequence.len();
         if let Some(c_bond_ptm) = &self.c_bond_ptm {
-            modified_sequence.push(ModifiedSequencePart::CTerminalModification(
-                c_bond_ptm.mass_delta(),
-            ));
             mass += c_bond_ptm.mass_delta();
         }
         // If the number of applied variable modifications not equals the number of variable PTMs,
@@ -1722,7 +1737,6 @@ impl PeptideConditionBuilder {
                 peptide.is_trembl(),
             ));
         }
-        modified_sequence.truncate(start_len);
     }
 
     /// Creates a vector of PeptideConditions from a PTMCollection.
