@@ -17,7 +17,7 @@ use macpepdb_web_common::requests::{
 use reqwest::Client as WebClient;
 use thiserror::Error;
 
-use crate::peptide_search::PeptidoformToPlainTextTransformation;
+use crate::peptide_search::PeptidoformPassthroughTransformation;
 use crate::peptide_table::FULL_PEPTIDE_COLUMN_SELECTION;
 use crate::taxonomy_table::TaxonomyTable;
 use crate::{
@@ -65,7 +65,7 @@ into_thiserror_boxed!(crate::peptide_search::Error, Error, PeptideSearch);
 into_thiserror_boxed!(crate::taxonomy_table::Error, Error, TaxonomyTable);
 
 /// Client which searches peptidoforms matching the given conditions
-/// reuturning them as ProForma compliant strings
+/// reuturning them in as ProForma compliant strings
 pub enum PeptidoformSearchClient {
     WebApi(WebClient, String),
     Database(Arc<DbClient>, Arc<RuntimeConfiguration>),
@@ -120,7 +120,7 @@ impl PeptidoformSearchClient {
         ptms: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
         concurrent_searches: NonZeroUsize,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, Error>>>>, Error> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, Error>> + Send>>, Error> {
         match self {
             PeptidoformSearchClient::WebApi(web_client, search_url) => {
                 let mass = mass_to_float(mass);
@@ -222,7 +222,7 @@ impl PeptidoformSearchClient {
                 let db_client = db_client.clone();
                 let configuration = configuration.clone();
                 let ptms = ptms.clone();
-                let peptidoform_stream = PeptideSearch::new(
+                let peptide_stream = PeptideSearch::new(
                     db_client,
                     &FULL_PEPTIDE_COLUMN_SELECTION,
                     configuration,
@@ -237,21 +237,24 @@ impl PeptidoformSearchClient {
                     true,
                     concurrent_searches,
                 )
-                .search::<PeptidoformToPlainTextTransformation>()
-                .await?
-                .flat_map(|result| match result {
-                    Ok(peptidoforms) => Box::pin(futures::stream::iter(
-                        peptidoforms.into_iter().map(Ok::<_, Error>),
-                    ))
-                        as Pin<Box<dyn Stream<Item = Result<String, Error>>>>,
-                    Err(e) => Box::pin(futures::stream::once(async move {
-                        Err(Error::PeptideSearch(Box::new(e)))
-                    }))
-                        as Pin<Box<dyn Stream<Item = Result<String, Error>>>>,
-                });
+                .search::<PeptidoformPassthroughTransformation>()
+                .await?;
 
-                Ok(Box::pin(peptidoform_stream)
-                    as Pin<Box<dyn Stream<Item = Result<String, Error>>>>)
+                let peptide_stream =
+                    peptide_stream.flat_map(|peptidoform_result| match peptidoform_result {
+                        Ok(peptidoforms) => Box::pin(futures::stream::iter(
+                            peptidoforms
+                                .into_iter()
+                                .map(|peptidoform| Ok(peptidoform.sequence().to_string())),
+                        ))
+                            as Pin<Box<dyn Stream<Item = Result<String, Error>> + Send>>,
+                        Err(e) => Box::pin(futures::stream::once(async move {
+                            Err(Error::PeptideSearch(Box::new(e)))
+                        }))
+                            as Pin<Box<dyn Stream<Item = Result<String, Error>> + Send>>,
+                    });
+
+                Ok(Box::pin(peptide_stream))
             }
         }
     }
