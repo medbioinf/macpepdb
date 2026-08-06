@@ -210,7 +210,10 @@ impl PerformanceTest {
                             self.lower_mass_tolerance_ppm,
                             self.upper_mass_tolerance_ppm,
                             self.max_variable_modifications,
+                            None,
+                            None,
                             ptms.clone(),
+                            true,
                             self.concurrent_searches,
                         )
                         .await

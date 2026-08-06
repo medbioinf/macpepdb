@@ -19,6 +19,7 @@ use thiserror::Error;
 
 use crate::peptide_search::PeptidoformPassthroughTransformation;
 use crate::peptide_table::FULL_PEPTIDE_COLUMN_SELECTION;
+use crate::taxonomy_table::TaxonomyTable;
 use crate::{
     blob_table::BlobTable,
     client::Client as DbClient,
@@ -51,6 +52,8 @@ pub enum Error {
     WebClientBuild(Box<reqwest::Error>),
     #[error("HTTP request error while performing peptide search: {0}")]
     Request(Box<reqwest::Error>),
+    #[error("Taxonomy table error in peptidoform search client: {0}")]
+    TaxonomyTable(Box<crate::taxonomy_table::Error>),
     #[error("Unsuccessful search request: status code {0}, content type {1}, response text {2}")]
     UnsuccessfullSearchRequest(StatusCode, String, String),
 }
@@ -59,6 +62,7 @@ into_thiserror_boxed!(crate::blob_table::Error, Error, BlobTable);
 into_thiserror_boxed!(crate::client::Error, Error, DbClient);
 into_thiserror_boxed!(std::io::Error, Error, NextHttpPeptidoform);
 into_thiserror_boxed!(crate::peptide_search::Error, Error, PeptideSearch);
+into_thiserror_boxed!(crate::taxonomy_table::Error, Error, TaxonomyTable);
 
 /// Client which searches peptidoforms matching the given conditions
 /// reuturning them in as ProForma compliant strings
@@ -104,13 +108,17 @@ impl PeptidoformSearchClient {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn search(
         &self,
         mass: i64,
         lower_mass_tolerance_ppm: i64,
         upper_mass_tolerance_ppm: i64,
         max_variable_modifications: usize,
+        taxonomy_id: Option<i32>,
+        is_reviewed: Option<bool>,
         ptms: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
+        resolve_modifications: bool,
         concurrent_searches: NonZeroUsize,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<String, Error>>>>, Error> {
         match self {
@@ -143,10 +151,9 @@ impl PeptidoformSearchClient {
                     upper_mass_tolerance_ppm,
                     max_variable_modifications,
                     modifications,
-                    taxonomy_id: None,
-                    proteome_id: None,
-                    is_reviewed: None,
-                    resolve_modifications: None,
+                    taxonomy_id,
+                    is_reviewed,
+                    resolve_modifications: Some(resolve_modifications),
                 };
 
                 let response = web_client
@@ -200,6 +207,18 @@ impl PeptidoformSearchClient {
                 Ok(Box::pin(peptidoform_stream))
             }
             PeptidoformSearchClient::Database(db_client, configuration) => {
+                let taxonomy_ids = match taxonomy_id {
+                    Some(taxonomy_id) => Some(
+                        TaxonomyTable::new(db_client.clone())
+                            .select_sub_species(taxonomy_id)
+                            .await?
+                            .map(|taxonomy_res| taxonomy_res.map(|taxonomy| taxonomy.id()))
+                            .try_collect::<Vec<_>>()
+                            .await?,
+                    ),
+                    None => None,
+                };
+
                 let db_client = db_client.clone();
                 let configuration = configuration.clone();
                 let ptms = ptms.clone();
@@ -212,7 +231,7 @@ impl PeptidoformSearchClient {
                     upper_mass_tolerance_ppm,
                     max_variable_modifications,
                     true,
-                    None,
+                    taxonomy_ids,
                     None,
                     ptms,
                     true,

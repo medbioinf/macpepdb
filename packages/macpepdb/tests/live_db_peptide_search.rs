@@ -240,7 +240,6 @@ async fn test_peptidoforms_match_queried_mass() {
         true,
         None,
         None,
-        None,
         ptm_collection.clone(),
         true,
         NonZeroUsize::new(4).unwrap(),
