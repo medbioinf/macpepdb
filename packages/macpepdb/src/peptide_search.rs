@@ -2049,9 +2049,9 @@ impl PeptideCondition {
         let mass = peptide.mass();
         self.members
             .iter()
-            .find(|(lower, upper, _)| mass >= *lower && mass <= *upper)
-            .map(|(_, _, inner)| inner.modify_peptide(peptide))
-            .unwrap_or_default()
+            .filter(|(lower, upper, _)| mass >= *lower && mass <= *upper)
+            .flat_map(|(_, _, inner)| inner.modify_peptide(peptide))
+            .collect()
     }
 
     /// Partitions this condition's mass range overlaps (populated by `finalize` with
