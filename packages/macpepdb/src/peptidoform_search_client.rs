@@ -120,7 +120,7 @@ impl PeptidoformSearchClient {
         ptms: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
         concurrent_searches: NonZeroUsize,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, Error>>>>, Error> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<String, Error>> + Send>>, Error> {
         match self {
             PeptidoformSearchClient::WebApi(web_client, search_url) => {
                 let mass = mass_to_float(mass);
@@ -243,15 +243,17 @@ impl PeptidoformSearchClient {
                     Ok(peptidoforms) => Box::pin(futures::stream::iter(
                         peptidoforms.into_iter().map(Ok::<_, Error>),
                     ))
-                        as Pin<Box<dyn Stream<Item = Result<String, Error>>>>,
+                        as Pin<Box<dyn Stream<Item = Result<String, Error>> + Send>>,
                     Err(e) => Box::pin(futures::stream::once(async move {
                         Err(Error::PeptideSearch(Box::new(e)))
                     }))
-                        as Pin<Box<dyn Stream<Item = Result<String, Error>>>>,
+                        as Pin<Box<dyn Stream<Item = Result<String, Error>> + Send>>,
                 });
 
                 Ok(Box::pin(peptidoform_stream)
-                    as Pin<Box<dyn Stream<Item = Result<String, Error>>>>)
+                    as Pin<
+                        Box<dyn Stream<Item = Result<String, Error>> + Send>,
+                    >)
             }
         }
     }
