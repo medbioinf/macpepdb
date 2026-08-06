@@ -646,6 +646,32 @@ impl IsPeptidoformTransformation for PeptidoformPassthroughTransformation {
     }
 }
 
+pub struct PeptidoformToJsonTransformation;
+impl IsPeptidoformTransformation for PeptidoformToJsonTransformation {
+    type Output = String;
+    type Error = serde_json::Error;
+
+    fn try_from_peptidoform(
+        peptidoform: crate::peptide::Peptidoform,
+    ) -> Result<Self::Output, Self::Error> {
+        serde_json::to_string(
+            &macpepdb_web_common::responses::peptide::PeptideResponse::from(&peptidoform),
+        )
+    }
+}
+
+pub struct PeptidoformToPlainTextTransformation;
+impl IsPeptidoformTransformation for PeptidoformToPlainTextTransformation {
+    type Output = String;
+    type Error = serde_json::Error;
+
+    fn try_from_peptidoform(
+        peptidoform: crate::peptide::Peptidoform,
+    ) -> Result<Self::Output, Self::Error> {
+        Ok(peptidoform.sequence().to_string())
+    }
+}
+
 /// 128-bit digest of a [`ModifiedSequence`], used as the distinct filter's key instead of
 /// the sequence itself. The set only ever needs to *recognise* a sequence, never reproduce
 /// it, so storing a digest avoids one ~600-byte clone per candidate and shrinks the set from

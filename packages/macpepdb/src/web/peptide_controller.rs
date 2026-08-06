@@ -24,7 +24,9 @@ use urlencoding::decode as urldecode;
 
 use crate::mass::mass_to_charge_to_dalton;
 use crate::peptide::{IsPeptide, Peptide};
-use crate::peptide_search::{IsPeptidoformTransformation, PeptideSearch};
+use crate::peptide_search::{
+    PeptideSearch, PeptidoformToJsonTransformation, PeptidoformToPlainTextTransformation,
+};
 use crate::peptide_table::{FULL_PEPTIDE_COLUMN_SELECTION, PeptideColumnSelection, PeptideTable};
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::protein_ids::ProteinIds;
@@ -125,32 +127,6 @@ pub const SEQUENCE_PEPTIDE_COLUMN_SELECTION: PeptideColumnSelection = PeptideCol
         ))
     },
 };
-
-struct PeptidoformToJsonTransformation;
-impl IsPeptidoformTransformation for PeptidoformToJsonTransformation {
-    type Output = String;
-    type Error = serde_json::Error;
-
-    fn try_from_peptidoform(
-        peptidoform: crate::peptide::Peptidoform,
-    ) -> Result<Self::Output, Self::Error> {
-        serde_json::to_string(
-            &macpepdb_web_common::responses::peptide::PeptideResponse::from(&peptidoform),
-        )
-    }
-}
-
-struct PeptidoformToPlainTextTransformation;
-impl IsPeptidoformTransformation for PeptidoformToPlainTextTransformation {
-    type Output = String;
-    type Error = serde_json::Error;
-
-    fn try_from_peptidoform(
-        peptidoform: crate::peptide::Peptidoform,
-    ) -> Result<Self::Output, Self::Error> {
-        Ok(peptidoform.sequence().to_string())
-    }
-}
 
 // TODO: Adjust all controller methods to return error instread ok Ok(body) with error message.
 /// Controller providing peptide lookup and mass search endpoints under `/api/peptides`.
