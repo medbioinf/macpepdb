@@ -214,7 +214,6 @@ impl PeptidoformSearchClient {
                     true,
                     None,
                     None,
-                    None,
                     ptms,
                     true,
                     concurrent_searches,

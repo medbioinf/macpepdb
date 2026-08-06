@@ -539,8 +539,6 @@ impl PeptideController {
             }
         }
 
-        let proteome_ids = payload.proteome_id.map(|proteome_id| vec![proteome_id]);
-
         let modifications: Vec<PostTranslationalModification> = match payload
             .modifications
             .into_iter()
@@ -618,7 +616,6 @@ impl PeptideController {
             payload.max_variable_modifications,
             true,
             taxonomy_ids,
-            proteome_ids.clone(),
             payload.is_reviewed,
             ptm_collection.clone(),
             payload.resolve_modifications.unwrap_or(false),

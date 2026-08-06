@@ -21,7 +21,6 @@ pub struct SearchRequestBody {
     /// Not wired up server-side yet (see `crate::web::peptide_controller::search`) — kept typed
     /// so the frontend can already send it once taxonomy filtering is implemented.
     pub taxonomy_id: Option<i32>,
-    pub proteome_id: Option<String>,
     pub is_reviewed: Option<bool>,
     pub resolve_modifications: Option<bool>,
 }
@@ -72,7 +71,6 @@ mod tests {
                 position: PtmPosition::Anywhere,
             }],
             taxonomy_id: Some(10090),
-            proteome_id: Some("UP000000589".to_string()),
             is_reviewed: Some(true),
             resolve_modifications: Some(true),
         };

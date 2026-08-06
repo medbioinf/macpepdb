@@ -542,21 +542,16 @@ where
     ///
     /// # Arguments
     /// * `taxonomy_ids` - Optional list of taxonomy IDs to filter by
-    /// * `_proteome_ids` - Optional list of proteome IDs to filter by (currently not used)
     /// * `is_reviewed` - Optional boolean to filter by review status (true for SwissProt, false for TrEMBL)
     ///
     pub fn new_for_general_sql_able_peptide_attributes(
         taxonomy_ids: Option<Arc<Vec<i32>>>,
-        _proteome_ids: Option<Arc<Vec<String>>>,
         is_reviewed: Option<bool>,
     ) -> Result<Self, Error> {
         let mut filter_function: Vec<Box<dyn FilterFunction<T>>> = Vec::new();
         if let Some(taxonomy_ids) = taxonomy_ids {
             filter_function.push(Box::new(TaxonomyFilterFunction { taxonomy_ids }));
         }
-        // if let Some(proteome_ids) = proteome_ids {
-        //     filter_function.push(Box::new(ProteomeFilterFunction { proteome_ids }));
-        // }
         if let Some(is_reviewed) = is_reviewed {
             if is_reviewed {
                 filter_function.push(Box::new(IsSwissProtFilterFunction {}));
@@ -1067,7 +1062,6 @@ pub struct PeptideSearch {
     max_variable_modifications: usize,
     is_distinct: bool,
     taxonomy_ids: Option<Vec<i32>>,
-    proteome_ids: Option<Vec<String>>,
     is_reviewed: Option<bool>,
     ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
     resolve_modifications: bool,
@@ -1086,7 +1080,6 @@ impl PeptideSearch {
     /// * `max_variable_modifications` - The maximum number of variable modifications to apply
     /// * `distinct` - Whether to return distinct peptides only
     /// * `taxonomy_ids` - The taxonomy IDs to filter the peptides by
-    /// * `proteome_ids` - The proteome IDs to filter the peptides by
     /// * `is_reviewed` - Whether to filter the peptides by SwissProt or TrEMBL
     /// * `ptm_collection` - The PTM collection to use for the query
     /// * `resolve_modifications` - Whether to resolve modifications and return the modified sequences as ProForma compliant strings
@@ -1103,7 +1096,6 @@ impl PeptideSearch {
         max_variable_modifications: usize,
         is_distinct: bool,
         taxonomy_ids: Option<Vec<i32>>,
-        proteome_ids: Option<Vec<String>>,
         is_reviewed: Option<bool>,
         ptm_collection: Arc<PTMCollection<Arc<PostTranslationalModification>>>,
         resolve_modifications: bool,
@@ -1119,7 +1111,6 @@ impl PeptideSearch {
             max_variable_modifications,
             is_distinct,
             taxonomy_ids,
-            proteome_ids,
             is_reviewed,
             ptm_collection,
             resolve_modifications,
@@ -1207,7 +1198,6 @@ impl PeptideSearch {
         self,
     ) -> Result<Pin<Box<FallibleMatchingPeptideStream<T>>>, Error> {
         let taxonomy_ids = self.taxonomy_ids.map(Arc::new);
-        let proteome_ids = self.proteome_ids.map(Arc::new);
 
         if !self.ptm_collection.is_empty() {
             let min_mass =
@@ -1261,7 +1251,6 @@ impl PeptideSearch {
                 self.is_distinct,
                 FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
-                    proteome_ids,
                     self.is_reviewed,
                 )?,
                 sorted_ptm_conditions,
@@ -1283,7 +1272,6 @@ impl PeptideSearch {
                 self.is_distinct,
                 FilterPipeline::new_for_general_sql_able_peptide_attributes(
                     taxonomy_ids,
-                    proteome_ids,
                     self.is_reviewed,
                 )?,
                 conditions,

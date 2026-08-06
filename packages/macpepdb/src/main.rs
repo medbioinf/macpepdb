@@ -326,9 +326,6 @@ enum Command {
         /// and fall back to canonical sequences only
         #[arg(short, long, default_value_t = false, action = clap::ArgAction::SetTrue)]
         only_canonical: bool,
-        /// Proteome IDs to filter for, can be used multiple times, if not set, all proteome IDs are included
-        #[arg(short, long, action = clap::ArgAction::Append)]
-        proteome_ids: Vec<String>,
         /// Taxonomy IDs to filter for, can be used multiple times, if not set, all taxonomy IDs are included
         #[arg(short, long, action = clap::ArgAction::Append)]
         taxonomy_ids: Vec<i32>,
@@ -707,7 +704,6 @@ async fn main() -> Result<(), Error> {
             max_variable_modifications,
             ptm_file_path,
             only_canonical,
-            proteome_ids,
             taxonomy_ids,
             threads,
             upper_mass_tolerance_ppm,
@@ -725,7 +721,6 @@ async fn main() -> Result<(), Error> {
                 max_variable_modifications,
                 ptm_file_path,
                 only_canonical,
-                proteome_ids,
                 taxonomy_ids,
                 threads,
                 upper_mass_tolerance_ppm,
@@ -1112,7 +1107,6 @@ async fn peptide_search(
     max_variable_modifications: usize,
     ptm_file_path: Option<PathBuf>,
     only_canonical: bool,
-    proteome_ids: Vec<String>,
     taxonomy_ids: Vec<i32>,
     threads: NonZeroUsize,
     upper_mass_tolerance_ppm: i64,
@@ -1131,11 +1125,6 @@ async fn peptide_search(
         None
     } else {
         Some(taxonomy_ids)
-    };
-    let proteome_ids = if proteome_ids.is_empty() {
-        None
-    } else {
-        Some(proteome_ids)
     };
 
     let ptms = ptm_file_path
@@ -1176,7 +1165,6 @@ async fn peptide_search(
         max_variable_modifications,
         !allow_duplicates,
         taxonomy_ids,
-        proteome_ids,
         is_reviewed,
         ptm_collection,
         !only_canonical,
