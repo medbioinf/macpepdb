@@ -629,7 +629,9 @@ where
 }
 
 pub trait IsPeptidoformTransformation: Unpin + Send {
-    type Output: Send + 'static;
+    /// `Unpin` because [`ConditionalPeptideStream`] buffers outputs in a `Vec` before
+    /// emitting them, and a stream holding one has to stay `Unpin` itself.
+    type Output: Send + Unpin + 'static;
     type Error: std::fmt::Display;
 
     fn try_from_peptidoform(peptidoform: Peptidoform) -> Result<Self::Output, Self::Error>;
@@ -689,10 +691,29 @@ fn distinct_key(sequence: &ModifiedSequence) -> u128 {
 type BoxedPeptideRowStream =
     Pin<Box<dyn Stream<Item = Result<Peptide, crate::peptide_table::Error>> + Send>>;
 
+/// Peptidoforms accumulated per message handed to the search's collector.
+///
+/// Emitting one message per DB row made the channel a hot shared structure: every send
+/// touched the same tail cache line and woke the single receiver, which cost ~12% of
+/// process CPU with 64 producers. Batching amortises the send, the wake-up and the `Vec`
+/// allocation across this many peptidoforms. Sized so a batch stays small in absolute
+/// terms (~11 KB of plain text, ~64 KB of JSON) — large enough that the per-message
+/// overhead disappears, small enough that a stalled consumer pins little memory per
+/// in-flight condition.
+const OUTPUT_BATCH_SIZE: usize = 256;
+
 struct ConditionalPeptideStream<T: IsPeptidoformTransformation> {
     condition: Pin<Box<PeptideCondition>>,
     inner: BoxedPeptideRowStream,
     resolve_modification: bool,
+    /// Peptidoforms produced but not yet emitted. Flushed at [`OUTPUT_BATCH_SIZE`], when
+    /// the inner row stream goes pending, and at exhaustion.
+    batch: Vec<T::Output>,
+    /// Inner row stream returned `None`; the partial batch still has to drain first.
+    inner_done: bool,
+    /// Error seen while the batch was non-empty. Held back so rows produced before it are
+    /// still delivered, then surfaced on the following poll.
+    pending_error: Option<Error>,
     // ── timing diagnostics ──
     agg: Arc<SearchTimingAgg>,
     opened_at: std::time::Instant,
@@ -767,11 +788,19 @@ where
             agg,
             opened_at: std::time::Instant::now(),
             rows: 0,
+            batch: Vec::with_capacity(OUTPUT_BATCH_SIZE),
+            inner_done: false,
+            pending_error: None,
             distinct_candidates: 0,
             distinct_duplicates: 0,
             distinct_filter,
             _marker: std::marker::PhantomData,
         })
+    }
+
+    /// Hands off the accumulated batch and installs a fresh, pre-sized buffer in its place.
+    fn take_batch(&mut self) -> Vec<T::Output> {
+        std::mem::replace(&mut self.batch, Vec::with_capacity(OUTPUT_BATCH_SIZE))
     }
 }
 
@@ -784,82 +813,96 @@ where
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         let this = self.get_mut();
         'polling_loop: loop {
-            return match this.inner.as_mut().poll_next(cx) {
+            // Terminal states drain the partial batch before reporting themselves, so a
+            // condition's last rows are never stranded in the buffer.
+            if this.inner_done || this.pending_error.is_some() {
+                if !this.batch.is_empty() {
+                    return Poll::Ready(Some(Ok(this.take_batch())));
+                }
+                if let Some(err) = this.pending_error.take() {
+                    return Poll::Ready(Some(Err(err)));
+                }
+                return Poll::Ready(None);
+            }
+
+            match this.inner.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(peptide))) => {
                     this.rows += 1;
-                    if this.condition.is_match(&peptide) {
-                        // `Option<&Arc<_>>` is `Copy`, so the closure below captures it by
-                        // value and never borrows `this` — leaving the tallies free to be
-                        // written back afterwards.
-                        let distinct_filter = this.distinct_filter.as_ref();
-                        let mut candidates: u64 = 0;
-                        let mut duplicates: u64 = 0;
-
-                        let peptidoforms = if this.resolve_modification {
-                            let peptidoforms = this
-                                .condition
-                                .modify_peptide(&peptide)
-                                .into_iter()
-                                .filter(|peptidoform| {
-                                    let Some(set) = distinct_filter else {
-                                        return true;
-                                    };
-                                    candidates += 1;
-                                    let is_new = set.insert(distinct_key(peptidoform.sequence()));
-                                    if !is_new {
-                                        duplicates += 1;
-                                    }
-                                    is_new
-                                })
-                                .map(|peptidoform| {
-                                    T::try_from_peptidoform(peptidoform)
-                                        .map_err(|err| Error::Transformation(format!("{err}")))
-                                })
-                                .collect::<Result<Vec<_>, Error>>();
-                            this.distinct_candidates += candidates;
-                            this.distinct_duplicates += duplicates;
-                            peptidoforms
-                        } else {
-                            let peptidoform = Peptidoform::from(peptide);
-                            let is_new = match distinct_filter {
-                                Some(set) => {
-                                    candidates += 1;
-                                    let is_new = set.insert(distinct_key(peptidoform.sequence()));
-                                    if !is_new {
-                                        duplicates += 1;
-                                    }
-                                    is_new
-                                }
-                                None => true,
-                            };
-                            this.distinct_candidates += candidates;
-                            this.distinct_duplicates += duplicates;
-                            if is_new {
-                                T::try_from_peptidoform(peptidoform)
-                                    .map(|representation| vec![representation])
-                                    .map_err(|err| Error::Transformation(format!("{err}")))
-                            } else {
-                                continue 'polling_loop;
-                            }
-                        };
-
-                        Poll::Ready(Some(peptidoforms))
-                    } else {
+                    if !this.condition.is_match(&peptide) {
                         continue 'polling_loop;
                     }
+                    // `Option<&Arc<_>>` is `Copy`, so this holds no borrow that would
+                    // conflict with pushing into `batch` or bumping the tallies below.
+                    let distinct_filter = this.distinct_filter.as_ref();
+
+                    if this.resolve_modification {
+                        for peptidoform in this.condition.modify_peptide(&peptide) {
+                            if let Some(set) = distinct_filter {
+                                this.distinct_candidates += 1;
+                                if !set.insert(distinct_key(peptidoform.sequence())) {
+                                    this.distinct_duplicates += 1;
+                                    continue;
+                                }
+                            }
+                            match T::try_from_peptidoform(peptidoform) {
+                                Ok(output) => this.batch.push(output),
+                                Err(err) => {
+                                    this.pending_error =
+                                        Some(Error::Transformation(format!("{err}")));
+                                    continue 'polling_loop;
+                                }
+                            }
+                        }
+                    } else {
+                        let peptidoform = Peptidoform::from(peptide);
+                        if let Some(set) = distinct_filter {
+                            this.distinct_candidates += 1;
+                            if !set.insert(distinct_key(peptidoform.sequence())) {
+                                this.distinct_duplicates += 1;
+                                continue 'polling_loop;
+                            }
+                        }
+                        match T::try_from_peptidoform(peptidoform) {
+                            Ok(output) => this.batch.push(output),
+                            Err(err) => {
+                                this.pending_error = Some(Error::Transformation(format!("{err}")));
+                                continue 'polling_loop;
+                            }
+                        }
+                    }
+
+                    if this.batch.len() >= OUTPUT_BATCH_SIZE {
+                        return Poll::Ready(Some(Ok(this.take_batch())));
+                    }
+                    continue 'polling_loop;
                 }
-                Poll::Ready(Some(Err(err))) => Poll::Ready(Some(Err(err.into()))),
+                Poll::Ready(Some(Err(err))) => {
+                    this.pending_error = Some(err.into());
+                    continue 'polling_loop;
+                }
                 Poll::Ready(None) => {
                     // Condition exhausted: fold its scan time + row count into the
                     // per-search aggregate (the search logs one summary at the end).
+                    // Recorded on the transition rather than where `None` is returned, so
+                    // it happens exactly once even though the partial batch drains after.
+                    this.inner_done = true;
                     this.agg
                         .record_scan(this.opened_at.elapsed().as_micros() as u64, this.rows);
                     this.agg
                         .record_distinct(this.distinct_candidates, this.distinct_duplicates);
-                    Poll::Ready(None)
+                    continue 'polling_loop;
                 }
-                Poll::Pending => Poll::Pending,
-            };
+                // Nothing available right now: emit what we have rather than holding it
+                // until the socket delivers enough rows to fill a batch. The inner poll
+                // above already registered the waker, so returning `Ready` here cannot
+                // lose a wake-up.
+                Poll::Pending => {
+                    if !this.batch.is_empty() {
+                        return Poll::Ready(Some(Ok(this.take_batch())));
+                    }
+                    return Poll::Pending;
+                }
+            }
         }
     }
 }
