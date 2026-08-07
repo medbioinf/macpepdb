@@ -82,6 +82,9 @@ pub mod protein_table;
 /// * Byte packed seqeunces encoding for common operations, e.g. cleavages
 /// * Bit-packed (5 bits/residue) sequence encoding to safe memory.
 pub mod sequence;
+/// Partition -> Citus shard resolution, letting the search batch conditions that share a
+/// shard into one statement.
+pub mod shard_map;
 /// The `stats` table: build/search counters and sizes persisted across runs.
 pub mod stats_table;
 /// Taxonomy entity (NCBI taxon: id, parent, scientific name, rank).

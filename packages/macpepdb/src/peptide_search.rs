@@ -22,9 +22,16 @@ struct SearchTimingAgg {
     scan_us_sum: AtomicU64,
     scan_us_max: AtomicU64,
     rows: AtomicU64,
+    /// Conditions covered by the statements that have finished, and the number of
+    /// statements it took to cover them. They differ because conditions whose partitions
+    /// share a Citus shard are OR-ed into one statement (see [`crate::shard_map`]); the
+    /// ratio is the batching factor actually achieved.
     conditions: AtomicU64,
-    /// Max number of partitions in a single condition's `partition = ANY(...)` list,
-    /// i.e. the worst-case shard fan-out per range query.
+    statements: AtomicU64,
+    /// Widest disjunction issued, i.e. the most conditions OR-ed into one statement.
+    conditions_max: AtomicU64,
+    /// Max number of distinct partitions named by a single statement. All of them live on
+    /// one shard when batching applied, so this is no longer a shard fan-out measure.
     partitions_max: AtomicU64,
     /// Peptidoforms offered to the distinct filter, and how many of those it rejected as
     /// already seen. Only counted while a distinct filter is active. Duplicates can only
@@ -36,17 +43,19 @@ struct SearchTimingAgg {
 }
 
 impl SearchTimingAgg {
-    fn record_setup(&self, us: u64, partitions: u64) {
+    fn record_setup(&self, us: u64, partitions: u64, conditions: u64) {
         self.setup_us_sum.fetch_add(us, Ordering::Relaxed);
         fetch_max(&self.setup_us_max, us);
         fetch_max(&self.partitions_max, partitions);
+        fetch_max(&self.conditions_max, conditions);
     }
 
-    fn record_scan(&self, us: u64, rows: u64) {
+    fn record_scan(&self, us: u64, rows: u64, conditions: u64) {
         self.scan_us_sum.fetch_add(us, Ordering::Relaxed);
         fetch_max(&self.scan_us_max, us);
         self.rows.fetch_add(rows, Ordering::Relaxed);
-        self.conditions.fetch_add(1, Ordering::Relaxed);
+        self.conditions.fetch_add(conditions, Ordering::Relaxed);
+        self.statements.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Folds one condition's distinct-filter tallies into the search total. Called once
@@ -92,6 +101,7 @@ use crate::peptide_table::{
 };
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::sequence::{IsSimpleSequence, ModifiedSequence};
+use crate::shard_map;
 use crate::{mass::to_float as mass_to_float, peptide::Peptide};
 
 use super::client::Client;
@@ -702,8 +712,124 @@ type BoxedPeptideRowStream =
 /// in-flight condition.
 const OUTPUT_BATCH_SIZE: usize = 256;
 
+/// Upper bound on how many conditions are OR-ed into a single statement.
+///
+/// With ~800k partitions over 1024 shards a shard collects ~3.6 conditions on average, so
+/// this cap almost never bites — it exists to bound the tail. A disjunction has to be
+/// evaluated against every chunk group the task scans, so an unbounded one would trade the
+/// metadata scans it saves for filter evaluations it adds, and would push the planner into
+/// territory that has not been measured.
+const MAX_CONDITIONS_PER_STATEMENT: usize = 16;
+
+/// The conditions covered by one statement.
+///
+/// Every condition in a group resolves to the same Citus shard, so the statement plans as a
+/// single task (`Task Count: 1`) that scans that shard's columnar metadata once for all of
+/// them, instead of once per condition. The `WHERE` clause is the disjunction of the
+/// conditions' predicates; Citus pushes it into `Columnar Chunk Group Filters` intact, so
+/// each disjunct still prunes to its own chunk groups.
+///
+/// A group of one is the pre-batching shape and keeps its behaviour exactly.
+pub struct ConditionGroup {
+    conditions: Vec<PeptideCondition>,
+}
+
+impl ConditionGroup {
+    /// Number of conditions covered by this group's statement.
+    fn len(&self) -> usize {
+        self.conditions.len()
+    }
+
+    /// Distinct partitions named by this group's statement.
+    fn num_partitions(&self) -> usize {
+        self.conditions
+            .iter()
+            .flat_map(|condition| condition.partitions())
+            .unique()
+            .count()
+    }
+
+    /// Builds the statement's `WHERE` clause and strips from each condition's in-process
+    /// filter pipeline whatever the SQL now guarantees.
+    ///
+    /// For a single condition the SQL fully determines the result set, so its SQL-able
+    /// filters are dropped and only the leftovers are re-checked per row — the pre-batching
+    /// behaviour. For a disjunction the SQL only guarantees that *some* disjunct matched, so
+    /// every condition keeps its full pipeline and re-verifies it per row; that is what lets
+    /// [`ConditionGroup::accepting`] attribute a row to the condition(s) it actually belongs
+    /// to.
+    ///
+    /// # Arguments
+    /// * `sql_filters` - Global filters (taxonomy, review status) AND-ed onto the disjunction
+    fn where_clause(&mut self, sql_filters: &FilterPipeline<Peptide>) -> String {
+        let is_batched = self.conditions.len() > 1;
+        let mut disjuncts = Vec::with_capacity(self.conditions.len());
+
+        for condition in self.conditions.iter_mut() {
+            // Inline literals (no bind params): Citus prunes shards + columnar chunk groups
+            // at plan time only for an inlined query — a parameterized distributed query
+            // re-plans every execute (~11 ms) and cannot use a cached generic plan.
+            //
+            // Plain equality rather than `= ANY(ARRAY[...])` for the single-partition case
+            // (which is what `finalize` always produces): that is the form measured to keep
+            // chunk-group pruning intact inside a disjunction.
+            let partitions = condition.partitions();
+            let mut filters = vec![
+                if let [partition] = partitions.as_slice() {
+                    format!("{PARTITION_COL} = {partition}")
+                } else {
+                    format!(
+                        "{PARTITION_COL} = ANY(ARRAY[{}]::bigint[])",
+                        partitions.iter().join(",")
+                    )
+                },
+                format!("{MASS_COL} >= {}", condition.lower_mass()),
+                format!("{MASS_COL} <= {}", condition.upper_mass()),
+            ];
+            // Condition-specific clauses; these are what actually locate the peptides.
+            for filter_fn in condition.filter_pipeline().iter() {
+                filter_fn.to_sql_literal(&mut filters);
+            }
+            if !is_batched {
+                condition.remove_sqlable_filters();
+            }
+            disjuncts.push(format!("({})", filters.join(" AND ")));
+        }
+
+        let mut clauses = vec![if is_batched {
+            format!("({})", disjuncts.join(" OR "))
+        } else {
+            disjuncts.pop().unwrap_or_else(|| "false".to_string())
+        }];
+        // Global clauses apply to every disjunct, so they stay outside the parentheses.
+        for filter_fn in sql_filters.iter() {
+            filter_fn.to_sql_literal(&mut clauses);
+        }
+
+        format!("WHERE {}", clauses.join(" AND "))
+    }
+
+    /// Indices of the conditions `peptide` satisfies, appended to `out`.
+    ///
+    /// A row returned by a disjunction satisfies at least one disjunct but the statement
+    /// does not say which, and it may satisfy several — overlapping ppm windows carrying
+    /// different PTM hypotheses. Each match is a separate result, exactly as when every
+    /// condition had its own statement and both returned the row.
+    fn accepting(&self, peptide: &Peptide, out: &mut Vec<usize>) {
+        out.clear();
+        for (index, condition) in self.conditions.iter().enumerate() {
+            if condition.accepts(peptide) {
+                out.push(index);
+            }
+        }
+    }
+}
+
 struct ConditionalPeptideStream<T: IsPeptidoformTransformation> {
-    condition: Pin<Box<PeptideCondition>>,
+    group: ConditionGroup,
+    /// Scratch buffer for [`ConditionGroup::accepting`], reused across rows so the per-row
+    /// path stays allocation-free.
+    matching: Vec<usize>,
     inner: BoxedPeptideRowStream,
     resolve_modification: bool,
     /// Peptidoforms produced but not yet emitted. Flushed at [`OUTPUT_BATCH_SIZE`], when
@@ -731,12 +857,12 @@ impl<T> ConditionalPeptideStream<T>
 where
     T: IsPeptidoformTransformation,
 {
-    /// Opens the DB query for a single [`PeptideCondition`] and wraps the resulting row
-    /// stream, recording open/scan timings into `agg` as the stream is consumed.
+    /// Opens the DB query for one [`ConditionGroup`] and wraps the resulting row stream,
+    /// recording open/scan timings into `agg` as the stream is consumed.
     pub async fn new(
         client: Arc<Client>,
         selection: &'static PeptideColumnSelection,
-        mut condition: PeptideCondition,
+        mut group: ConditionGroup,
         sql_filters: Arc<FilterPipeline<Peptide>>,
         resolve_modification: bool,
         agg: Arc<SearchTimingAgg>,
@@ -748,31 +874,17 @@ where
             }
         }
 
-        // Inline literals (no bind params): Citus prunes shards + columnar chunk groups
-        // at plan time only for an inlined query — a parameterized distributed query
-        // re-plans every execute (~11 ms) and cannot use a cached generic plan.
-        let num_partitions = condition.partitions().len() as u64;
-
-        let mut filters = vec![
-            format!(
-                "{PARTITION_COL} = ANY(ARRAY[{}]::bigint[])",
-                condition.partitions().iter().join(",")
-            ),
-            format!("{MASS_COL} >= {}", condition.lower_mass()),
-            format!("{MASS_COL} <= {}", condition.upper_mass()),
-        ];
-        // add peptide condition specific where clauses (this will precisly locate the peptides and reduce them most)
-        for filter_fn in condition.filter_pipeline().iter() {
-            filter_fn.to_sql_literal(&mut filters);
-        }
-        // add global where clauses
-        condition.remove_sqlable_filters();
-
-        for filter_fn in sql_filters.iter() {
-            filter_fn.to_sql_literal(&mut filters);
-        }
-
-        let where_clause = format!("WHERE {}", filters.join(" AND "));
+        let num_partitions = group.num_partitions() as u64;
+        let num_conditions = group.len() as u64;
+        let where_clause = group.where_clause(&sql_filters);
+        // The statement verbatim, so a real batched disjunction can be pulled from the log
+        // and run through `EXPLAIN` to confirm chunk-group pruning survived the OR.
+        tracing::debug!(
+            target: "search_timing",
+            conditions = num_conditions,
+            partitions = num_partitions,
+            "{where_clause}"
+        );
 
         let setup_start = std::time::Instant::now();
         let inner: BoxedPeptideRowStream = Box::pin(
@@ -780,11 +892,16 @@ where
                 .select_inline(selection, &where_clause)
                 .await?,
         );
-        agg.record_setup(setup_start.elapsed().as_micros() as u64, num_partitions);
+        agg.record_setup(
+            setup_start.elapsed().as_micros() as u64,
+            num_partitions,
+            num_conditions,
+        );
         Ok(Self {
             resolve_modification,
             inner,
-            condition: Box::pin(condition),
+            matching: Vec::with_capacity(group.len()),
+            group,
             agg,
             opened_at: std::time::Instant::now(),
             rows: 0,
@@ -801,6 +918,26 @@ where
     /// Hands off the accumulated batch and installs a fresh, pre-sized buffer in its place.
     fn take_batch(&mut self) -> Vec<T::Output> {
         std::mem::replace(&mut self.batch, Vec::with_capacity(OUTPUT_BATCH_SIZE))
+    }
+
+    /// Runs one peptidoform through the distinct filter and the output transformation,
+    /// pushing the result into the batch. A peptidoform the filter has already seen is
+    /// dropped silently.
+    fn accept(&mut self, peptidoform: Peptidoform) -> Result<(), Error> {
+        if let Some(set) = self.distinct_filter.as_ref() {
+            self.distinct_candidates += 1;
+            if !set.insert(distinct_key(peptidoform.sequence())) {
+                self.distinct_duplicates += 1;
+                return Ok(());
+            }
+        }
+        match T::try_from_peptidoform(peptidoform) {
+            Ok(output) => {
+                self.batch.push(output);
+                Ok(())
+            }
+            Err(err) => Err(Error::Transformation(format!("{err}"))),
+        }
     }
 }
 
@@ -828,46 +965,37 @@ where
             match this.inner.as_mut().poll_next(cx) {
                 Poll::Ready(Some(Ok(peptide))) => {
                     this.rows += 1;
-                    if !this.condition.is_match(&peptide) {
-                        continue 'polling_loop;
-                    }
-                    // `Option<&Arc<_>>` is `Copy`, so this holds no borrow that would
-                    // conflict with pushing into `batch` or bumping the tallies below.
-                    let distinct_filter = this.distinct_filter.as_ref();
+                    // Attribute the row to the conditions it satisfies. For an unbatched
+                    // group this is the single condition's leftover, non-SQL-able filters;
+                    // for a disjunction it also decides which of the OR-ed conditions
+                    // actually claim the row.
+                    this.group.accepting(&peptide, &mut this.matching);
 
                     if this.resolve_modification {
-                        for peptidoform in this.condition.modify_peptide(&peptide) {
-                            if let Some(set) = distinct_filter {
-                                this.distinct_candidates += 1;
-                                if !set.insert(distinct_key(peptidoform.sequence())) {
-                                    this.distinct_duplicates += 1;
-                                    continue;
-                                }
-                            }
-                            match T::try_from_peptidoform(peptidoform) {
-                                Ok(output) => this.batch.push(output),
-                                Err(err) => {
-                                    this.pending_error =
-                                        Some(Error::Transformation(format!("{err}")));
+                        // Indexed rather than iterated: `accept` needs `&mut self`, which a
+                        // live iterator over `this.matching` would block.
+                        for i in 0..this.matching.len() {
+                            let index = this.matching[i];
+                            // The returned `Vec` is owned, so the borrow of `group` ends
+                            // here and `accept` can take `&mut self` below.
+                            let peptidoforms =
+                                this.group.conditions[index].modify_peptide(&peptide);
+                            for peptidoform in peptidoforms {
+                                if let Err(err) = this.accept(peptidoform) {
+                                    this.pending_error = Some(err);
                                     continue 'polling_loop;
                                 }
                             }
                         }
-                    } else {
-                        let peptidoform = Peptidoform::from(peptide);
-                        if let Some(set) = distinct_filter {
-                            this.distinct_candidates += 1;
-                            if !set.insert(distinct_key(peptidoform.sequence())) {
-                                this.distinct_duplicates += 1;
-                                continue 'polling_loop;
-                            }
-                        }
-                        match T::try_from_peptidoform(peptidoform) {
-                            Ok(output) => this.batch.push(output),
-                            Err(err) => {
-                                this.pending_error = Some(Error::Transformation(format!("{err}")));
-                                continue 'polling_loop;
-                            }
+                    } else if !this.matching.is_empty() {
+                        // Canonical-only output carries no PTM annotation, so it is the same
+                        // peptidoform whichever condition claimed the row — emit it once.
+                        // (Before batching, two overlapping conditions each had their own
+                        // statement, so the row came back twice and the distinct filter
+                        // collapsed it; now it comes back once to begin with.)
+                        if let Err(err) = this.accept(Peptidoform::from(peptide)) {
+                            this.pending_error = Some(err);
+                            continue 'polling_loop;
                         }
                     }
 
@@ -881,13 +1009,16 @@ where
                     continue 'polling_loop;
                 }
                 Poll::Ready(None) => {
-                    // Condition exhausted: fold its scan time + row count into the
+                    // Statement exhausted: fold its scan time + row count into the
                     // per-search aggregate (the search logs one summary at the end).
                     // Recorded on the transition rather than where `None` is returned, so
                     // it happens exactly once even though the partial batch drains after.
                     this.inner_done = true;
-                    this.agg
-                        .record_scan(this.opened_at.elapsed().as_micros() as u64, this.rows);
+                    this.agg.record_scan(
+                        this.opened_at.elapsed().as_micros() as u64,
+                        this.rows,
+                        this.group.len() as u64,
+                    );
                     this.agg
                         .record_distinct(this.distinct_candidates, this.distinct_duplicates);
                     continue 'polling_loop;
@@ -907,16 +1038,16 @@ where
     }
 }
 
-/// `MultiTask` search strategy: runs one concurrent DB query per [`PeptideCondition`]
+/// `MultiTask` search strategy: runs one concurrent DB query per [`ConditionGroup`]
 /// (bounded by `concurrent_selects`), each driven by its own spawned task so the
 /// per-row CPU work (decode, condition matching, PTM expansion) is parallelized across
 /// OS threads rather than polled cooperatively on a single task, and merges their rows
 /// into a single stream, applying the non-SQL-able filters (e.g. distinctness) as
 /// results arrive.
 pub struct FallibleMatchingPeptideStream<T: IsPeptidoformTransformation> {
-    /// Receives batches produced by the spawned per-condition tasks below.
+    /// Receives batches produced by the spawned per-statement tasks below.
     rx: mpsc::UnboundedReceiver<Result<Vec<T::Output>, Error>>,
-    /// Owns the per-condition tasks; dropping it (e.g. the caller abandoning the
+    /// Owns the per-statement tasks; dropping it (e.g. the caller abandoning the
     /// search) aborts any still-running tasks. Never read directly — held only for
     /// this cancel-on-drop side effect.
     _tasks: JoinSet<()>,
@@ -925,6 +1056,7 @@ pub struct FallibleMatchingPeptideStream<T: IsPeptidoformTransformation> {
     // ── timing diagnostics ──
     started_at: std::time::Instant,
     total_conditions: usize,
+    total_statements: usize,
     done_logged: bool,
     agg: Arc<SearchTimingAgg>,
 }
@@ -933,7 +1065,7 @@ impl<T> FallibleMatchingPeptideStream<T>
 where
     T: IsPeptidoformTransformation,
 {
-    /// Builds the stream and spawns one task per [`PeptideCondition`], each gated by a
+    /// Builds the stream and spawns one task per [`ConditionGroup`], each gated by a
     /// shared [`Semaphore`] (bound = `concurrent_selects`) so at most that many DB
     /// queries/scans run at once — the same cap enforced today, but each task now runs
     /// its row decode / condition matching / PTM expansion on its own OS thread instead
@@ -944,7 +1076,7 @@ where
         is_distinct: bool,
         // Global SQL filters, e.g. review or taxonomy condition
         sql_filters: FilterPipeline<Peptide>,
-        conditions: VecDeque<PeptideCondition>,
+        groups: VecDeque<ConditionGroup>,
         resolve_modifications: bool,
         concurrent_selects: NonZeroUsize,
     ) -> Result<Self, Error> {
@@ -961,11 +1093,13 @@ where
             None
         };
 
-        let total_conditions = conditions.len();
+        let total_statements = groups.len();
+        let total_conditions = groups.iter().map(ConditionGroup::len).sum();
         let concurrent_selects = concurrent_selects.get();
         tracing::info!(
             target: "search_timing",
             total_conditions,
+            total_statements,
             concurrent_selects,
             "search started (MultiTask)"
         );
@@ -974,7 +1108,7 @@ where
         let (tx, rx) = mpsc::unbounded_channel::<Result<Vec<T::Output>, Error>>();
 
         let mut tasks = JoinSet::new();
-        for condition in conditions {
+        for group in groups {
             let client = client.clone();
             let sql_filters = sql_filters.clone();
             let agg = agg.clone();
@@ -989,7 +1123,7 @@ where
                 match ConditionalPeptideStream::<T>::new(
                     client,
                     selection,
-                    condition,
+                    group,
                     sql_filters,
                     resolve_modifications,
                     agg,
@@ -1036,6 +1170,7 @@ where
             matching_peptide_counter,
             started_at: std::time::Instant::now(),
             total_conditions,
+            total_statements,
             done_logged: false,
             agg,
         })
@@ -1066,14 +1201,17 @@ where
             Poll::Ready(None) => {
                 if !this.done_logged {
                     this.done_logged = true;
-                    let conds = this.agg.conditions.load(Ordering::Relaxed).max(1);
+                    // Setup/scan are timed per statement, so the means divide by statements.
+                    let stmts = this.agg.statements.load(Ordering::Relaxed).max(1);
                     tracing::info!(
                         target: "search_timing",
                         total_us = this.started_at.elapsed().as_micros(),
                         total_conditions = this.total_conditions,
-                        setup_us_mean = this.agg.setup_us_sum.load(Ordering::Relaxed) / conds,
+                        total_statements = this.total_statements,
+                        conditions_max = this.agg.conditions_max.load(Ordering::Relaxed),
+                        setup_us_mean = this.agg.setup_us_sum.load(Ordering::Relaxed) / stmts,
                         setup_us_max = this.agg.setup_us_max.load(Ordering::Relaxed),
-                        scan_us_mean = this.agg.scan_us_sum.load(Ordering::Relaxed) / conds,
+                        scan_us_mean = this.agg.scan_us_sum.load(Ordering::Relaxed) / stmts,
                         scan_us_max = this.agg.scan_us_max.load(Ordering::Relaxed),
                         partitions_max = this.agg.partitions_max.load(Ordering::Relaxed),
                         rows = this.agg.rows.load(Ordering::Relaxed),
@@ -1101,13 +1239,15 @@ where
         // never hit the "search finished" log, which would otherwise bias measurements
         // toward only the searches fast enough to complete. Log them as abandoned.
         if !self.done_logged {
-            let conds = self.agg.conditions.load(Ordering::Relaxed).max(1);
+            let stmts = self.agg.statements.load(Ordering::Relaxed).max(1);
             tracing::warn!(
                 target: "search_timing",
                 total_us = self.started_at.elapsed().as_micros(),
                 total_conditions = self.total_conditions,
+                total_statements = self.total_statements,
                 completed_conditions = self.agg.conditions.load(Ordering::Relaxed),
-                setup_us_mean = self.agg.setup_us_sum.load(Ordering::Relaxed) / conds,
+                completed_statements = self.agg.statements.load(Ordering::Relaxed),
+                setup_us_mean = self.agg.setup_us_sum.load(Ordering::Relaxed) / stmts,
                 setup_us_max = self.agg.setup_us_max.load(Ordering::Relaxed),
                 partitions_max = self.agg.partitions_max.load(Ordering::Relaxed),
                 rows = self.agg.rows.load(Ordering::Relaxed),
@@ -1263,6 +1403,104 @@ impl PeptideSearch {
         merged
     }
 
+    /// Packs conditions into as few statements as possible by OR-ing together the ones whose
+    /// partitions live on the same Citus shard.
+    ///
+    /// The cost of a statement is dominated by the columnar chunk-group metadata scan of the
+    /// shard it lands on, and that scan is paid once per task — so N conditions on one shard
+    /// cost N metadata scans as N statements but only one as a single disjunction. With ~800k
+    /// partitions over 1024 shards the expected packing factor is the partitions-per-shard
+    /// ratio, around 3.6 for a large PTM search.
+    ///
+    /// Falls back to one statement per condition when the shard mapping is unavailable (see
+    /// [`crate::shard_map`]), which is exactly the behaviour that preceded batching.
+    ///
+    /// # Arguments
+    /// * `client` - Client used to resolve partitions to shards
+    /// * `conditions` - Finalized conditions, each scoped to a single partition
+    async fn group_conditions_by_shard(
+        client: &Client,
+        conditions: Vec<PeptideCondition>,
+    ) -> VecDeque<ConditionGroup> {
+        let partitions: Vec<i64> = conditions
+            .iter()
+            .flat_map(|condition| condition.partitions().iter().copied())
+            .unique()
+            .collect();
+
+        let shard_by_partition = shard_map::for_client(client)
+            .shards_for(client, &partitions)
+            .await
+            .unwrap_or_default();
+
+        Self::pack_conditions(conditions, &shard_by_partition)
+    }
+
+    /// The pure half of [`Self::group_conditions_by_shard`]: given a partition → shard map,
+    /// packs the conditions into statements.
+    ///
+    /// A condition is only batched when *all* of its partitions resolve to one shard;
+    /// anything else gets a statement of its own, so an incomplete map only costs batching,
+    /// never correctness.
+    ///
+    /// Within a shard, two conditions may only share a statement if they name the same
+    /// partitions or their mass windows are disjoint. That invariant is what lets a returned
+    /// row be attributed to the right disjunct from its mass alone: same-partition
+    /// conditions with overlapping windows are genuinely both applicable (competing PTM
+    /// hypotheses, exactly as when each had its own statement), while different-partition
+    /// conditions are kept apart so a row can never be credited to a partition it does not
+    /// live in.
+    fn pack_conditions(
+        conditions: Vec<PeptideCondition>,
+        shard_by_partition: &HashMap<i64, i64>,
+    ) -> VecDeque<ConditionGroup> {
+        let mut by_shard: HashMap<i64, Vec<PeptideCondition>> = HashMap::new();
+        let mut groups: VecDeque<ConditionGroup> = VecDeque::new();
+
+        for condition in conditions {
+            let mut shards = condition
+                .partitions()
+                .iter()
+                .map(|partition| shard_by_partition.get(partition));
+            match shards.next().flatten() {
+                Some(shard) if shards.all(|other| other == Some(shard)) => {
+                    by_shard.entry(*shard).or_default().push(condition);
+                }
+                _ => groups.push_back(ConditionGroup {
+                    conditions: vec![condition],
+                }),
+            }
+        }
+
+        // Sorted so the emitted statements are deterministic despite the HashMap.
+        for shard in by_shard.keys().copied().sorted().collect::<Vec<_>>() {
+            let mut shard_conditions = by_shard.remove(&shard).unwrap_or_default();
+            shard_conditions.sort_by_key(|condition| (condition.lower_mass, condition.upper_mass));
+
+            let mut batch: Vec<PeptideCondition> = Vec::new();
+            for condition in shard_conditions {
+                let overlaps_other_partition = batch.iter().any(|other| {
+                    other.partitions != condition.partitions
+                        && other.lower_mass <= condition.upper_mass
+                        && condition.lower_mass <= other.upper_mass
+                });
+                if !batch.is_empty()
+                    && (overlaps_other_partition || batch.len() >= MAX_CONDITIONS_PER_STATEMENT)
+                {
+                    groups.push_back(ConditionGroup {
+                        conditions: std::mem::take(&mut batch),
+                    });
+                }
+                batch.push(condition);
+            }
+            if !batch.is_empty() {
+                groups.push_back(ConditionGroup { conditions: batch });
+            }
+        }
+
+        groups
+    }
+
     pub async fn search<T: IsPeptidoformTransformation + 'static>(
         self,
     ) -> Result<Pin<Box<FallibleMatchingPeptideStream<T>>>, Error> {
@@ -1301,7 +1539,7 @@ impl PeptideSearch {
                 + (largest_negative_static_ptm * possible_peptide_length)
                 + (largest_negative_variable_ptm * possible_peptide_length);
 
-            let sorted_ptm_conditions = VecDeque::from(Self::split_and_sort_peptide_conditions(
+            let sorted_ptm_conditions = Self::split_and_sort_peptide_conditions(
                 PeptideConditionBuilder::from_ptm_collection(
                     &self.ptm_collection,
                     self.mass,
@@ -1312,7 +1550,8 @@ impl PeptideSearch {
                 self.configuration.mass_partitioning(),
                 self.lower_mass_tolerance_ppm,
                 self.upper_mass_tolerance_ppm,
-            )?);
+            )?;
+            let groups = Self::group_conditions_by_shard(&self.client, sorted_ptm_conditions).await;
 
             FallibleMatchingPeptideStream::new(
                 self.client,
@@ -1322,18 +1561,19 @@ impl PeptideSearch {
                     taxonomy_ids,
                     self.is_reviewed,
                 )?,
-                sorted_ptm_conditions,
+                groups,
                 self.resolve_modifications,
                 self.num_threads,
             )
             .await
             .map(Box::pin)
         } else {
-            let conditions = VecDeque::from(PeptideConditionBuilder::new(self.mass).finalize(
+            let conditions = PeptideConditionBuilder::new(self.mass).finalize(
                 self.configuration.mass_partitioning(),
                 self.lower_mass_tolerance_ppm,
                 self.upper_mass_tolerance_ppm,
-            ));
+            );
+            let groups = Self::group_conditions_by_shard(&self.client, conditions).await;
 
             FallibleMatchingPeptideStream::new(
                 self.client,
@@ -1343,7 +1583,7 @@ impl PeptideSearch {
                     taxonomy_ids,
                     self.is_reviewed,
                 )?,
-                conditions,
+                groups,
                 self.resolve_modifications,
                 self.num_threads,
             )
@@ -2222,8 +2462,21 @@ impl PeptideCondition {
     /// treated as a non-match). The filter pipeline is shared across all absorbed
     /// `members` by construction (they were only merged because it's identical), so this
     /// never needs to pick a specific member.
-    pub fn is_match(&mut self, peptide: &Peptide) -> bool {
+    pub fn is_match(&self, peptide: &Peptide) -> bool {
         self.filter_pipeline.is_match(peptide).unwrap_or(false)
+    }
+
+    /// Whether `peptide` satisfies this condition: its ppm mass window and its filter
+    /// pipeline.
+    ///
+    /// What the pipeline still contains depends on how the condition was queried. Alone in
+    /// a statement, its SQL-able filters were dropped after being inlined into the `WHERE`
+    /// clause and only the leftovers remain to be checked. OR-ed together with others, the
+    /// SQL guarantees only that *some* disjunct matched, so the pipeline was left intact and
+    /// this re-derives whether this particular condition is one of them.
+    pub fn accepts(&self, peptide: &Peptide) -> bool {
+        let mass = peptide.mass();
+        mass >= self.lower_mass && mass <= self.upper_mass && self.is_match(peptide)
     }
 
     /// Applies this condition's PTMs to `peptide`, returning every resulting [`Peptidoform`].
@@ -2686,5 +2939,178 @@ mod tests {
             "same-signature, overlapping-window conditions on the same partition must merge"
         );
         assert_eq!(merged[0].members.len(), 2);
+    }
+
+    /// A finalized, unmodified condition on `partition`, with a ppm window around `mass`.
+    fn condition_at(mass: i64, partition: i64, ppm: i64) -> PeptideCondition {
+        let partitioning =
+            MassPartitionMap::from(HashMap::from_iter(vec![(mass, vec![partition])]));
+        PeptideConditionBuilder::new(mass)
+            .finalize(&partitioning, ppm, ppm)
+            .pop()
+            .unwrap()
+    }
+
+    /// Same, but carrying one static PTM so the condition has a SQL-able filter to inline.
+    fn carba_condition_at(mass: i64, partition: i64) -> PeptideCondition {
+        let carba = Arc::new(PostTranslationalModification::new(
+            "carba of C",
+            AminoAcid::by_code('C').unwrap(),
+            mass_to_int!(57.021464),
+            ModificationType::Static,
+            Position::Anywhere,
+        ));
+        let mut builder = PeptideConditionBuilder::new(mass);
+        assert!(builder.add_static_ptm(carba));
+        let partitioning = MassPartitionMap::from(HashMap::from_iter(vec![(
+            builder.query_mass,
+            vec![partition],
+        )]));
+        builder.finalize(&partitioning, 0, 0).pop().unwrap()
+    }
+
+    /// Conditions whose partitions share a shard collapse into one statement; conditions on
+    /// different shards, and conditions whose partition has no known shard, keep their own.
+    #[test]
+    fn test_pack_conditions_batches_by_shard() {
+        let conditions = vec![
+            condition_at(mass_to_int!(1000.0), 10, 0),
+            condition_at(mass_to_int!(2000.0), 11, 0),
+            condition_at(mass_to_int!(3000.0), 12, 0),
+            condition_at(mass_to_int!(4000.0), 13, 0),
+        ];
+        // 10 + 11 -> shard 1, 12 -> shard 2, 13 -> unmapped.
+        let shards = HashMap::from_iter(vec![(10_i64, 1_i64), (11, 1), (12, 2)]);
+
+        let groups = PeptideSearch::pack_conditions(conditions, &shards);
+        let mut sizes: Vec<usize> = groups.iter().map(ConditionGroup::len).collect();
+        sizes.sort_unstable();
+        assert_eq!(
+            sizes,
+            vec![1, 1, 2],
+            "the two same-shard conditions must share a statement, the others must not"
+        );
+        assert_eq!(
+            groups.iter().map(ConditionGroup::len).sum::<usize>(),
+            4,
+            "packing must not drop or duplicate conditions"
+        );
+    }
+
+    /// Two conditions on the same shard but different partitions must not share a statement
+    /// when their mass windows overlap: a returned row is attributed to a disjunct by mass,
+    /// so an overlap would credit it to a partition it does not live in.
+    #[test]
+    fn test_pack_conditions_keeps_overlapping_partitions_apart() {
+        let mass = mass_to_int!(1000.0);
+        // Wide ppm windows around the same mass, on two partitions of the same shard.
+        let conditions = vec![condition_at(mass, 10, 100), condition_at(mass, 11, 100)];
+        assert!(
+            conditions[0].lower_mass() <= conditions[1].upper_mass()
+                && conditions[1].lower_mass() <= conditions[0].upper_mass(),
+            "fixture must actually overlap"
+        );
+        let shards = HashMap::from_iter(vec![(10_i64, 1_i64), (11, 1)]);
+
+        let groups = PeptideSearch::pack_conditions(conditions, &shards);
+        assert_eq!(groups.len(), 2, "overlapping windows must not be OR-ed");
+        assert!(groups.iter().all(|group| group.len() == 1));
+    }
+
+    /// A shard collecting more conditions than a statement may carry splits into several.
+    #[test]
+    fn test_pack_conditions_respects_statement_cap() {
+        let count = MAX_CONDITIONS_PER_STATEMENT * 2 + 3;
+        let conditions: Vec<PeptideCondition> = (0..count)
+            .map(|i| condition_at(mass_to_int!(1000.0) + i as i64 * mass_to_int!(1.0), 10, 0))
+            .collect();
+        let shards = HashMap::from_iter(vec![(10_i64, 1_i64)]);
+
+        let groups = PeptideSearch::pack_conditions(conditions, &shards);
+        assert_eq!(groups.len(), 3);
+        assert!(
+            groups
+                .iter()
+                .all(|group| group.len() <= MAX_CONDITIONS_PER_STATEMENT)
+        );
+        assert_eq!(
+            groups.iter().map(ConditionGroup::len).sum::<usize>(),
+            count,
+            "splitting must not drop conditions"
+        );
+    }
+
+    /// A single-condition statement inlines its filters and drops them from the in-process
+    /// pipeline; a batched one keeps them, because its SQL only proves that *some* disjunct
+    /// matched and each condition still has to re-derive whether the row is its own.
+    #[test]
+    fn test_where_clause_shape_and_filter_retention() {
+        let no_global_filters: FilterPipeline<Peptide> = FilterPipeline::new(Vec::new());
+
+        let mut single = ConditionGroup {
+            conditions: vec![carba_condition_at(mass_to_int!(1000.0), 10)],
+        };
+        let single_clause = single.where_clause(&no_global_filters);
+        assert!(
+            !single_clause.contains(" OR "),
+            "an unbatched statement must stay a plain conjunction: {single_clause}"
+        );
+        assert!(single_clause.contains(&format!("{PARTITION_COL} = 10")));
+        assert!(
+            single.conditions[0].filter_pipeline.is_empty(),
+            "SQL-able filters must be dropped once SQL fully determines the result set"
+        );
+
+        let mut batched = ConditionGroup {
+            conditions: vec![
+                carba_condition_at(mass_to_int!(1000.0), 10),
+                carba_condition_at(mass_to_int!(2000.0), 11),
+            ],
+        };
+        let batched_clause = batched.where_clause(&no_global_filters);
+        assert!(batched_clause.contains(") OR ("), "expected a disjunction");
+        assert!(batched_clause.contains(&format!("{PARTITION_COL} = 10")));
+        assert!(batched_clause.contains(&format!("{PARTITION_COL} = 11")));
+        assert!(
+            batched
+                .conditions
+                .iter()
+                .all(|condition| !condition.filter_pipeline.is_empty()),
+            "a batched condition must keep its filters to re-check per row"
+        );
+    }
+
+    /// Row attribution inside a batched statement: each condition claims only the rows its
+    /// own mass window and filters accept, so the disjunction cannot leak a row from one
+    /// disjunct into another's PTM expansion.
+    #[test]
+    fn test_batched_group_attributes_rows_by_condition() {
+        let sequence = "MFCQLAKTCPVQLWVDMSTPPPGTRVR";
+        let peptide = Peptide::new(
+            PeptideSequence::try_from(sequence).unwrap(),
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            false,
+            false,
+        );
+        let peptide_mass = peptide.mass();
+
+        let mut group = ConditionGroup {
+            conditions: vec![
+                condition_at(peptide_mass, 10, 0),
+                // Far outside the peptide's mass, so it must not claim the row.
+                condition_at(peptide_mass + mass_to_int!(500.0), 11, 0),
+            ],
+        };
+        group.where_clause(&FilterPipeline::new(Vec::new()));
+
+        let mut matching = Vec::new();
+        group.accepting(&peptide, &mut matching);
+        assert_eq!(
+            matching,
+            vec![0],
+            "only the condition whose window contains the row may claim it"
+        );
     }
 }
