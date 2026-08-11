@@ -569,7 +569,7 @@ pub fn MassSearch() -> Element {
                     "Add PTM"
                 }
             }
-            div { class: "list-group",
+            div { class: "list_input_group",
                 for (idx , ptm) in ptms.iter().enumerate() {
                     div { class: "input-group",
                         input {

@@ -1,0 +1,25 @@
+.list-input-group
+  .input-group
+    &:first-child:not(:last-child)
+      padding-bottom: 0
+
+      *
+        border-bottom-left-radius: 0
+        border-bottom-right-radius: 0
+
+    &:last-child:not(:first-child)
+      padding-top: 0
+
+      *
+        border-top-left-radius: 0
+        border-top-right-radius: 0
+
+    &:not(:last-child):not(:first-child)
+      padding-top: 0
+      padding-bottom: 0
+
+      *
+        border-radius: 0
+
+    &:not(:first-child) *
+      border-top: 0
