@@ -262,7 +262,7 @@ impl TaxonomyController {
                 )
             } else {
                 (
-                    format!("WHERE {SCIENTIFIC_NAME_COL} LIKE $1"),
+                    format!("WHERE {SCIENTIFIC_NAME_COL} ILIKE $1"),
                     vec![Box::new(format!("%{}%", payload.search_query))],
                 )
             };
