@@ -56,6 +56,9 @@ static SELECT_WITH_RANK_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
+static SELECT_ID_NAME_STATEMENT: LazyLock<String> =
+    LazyLock::new(|| format!("SELECT {ID_COL}, {SCIENTIFIC_NAME_COL} FROM {TABLE_NAME}"));
+
 /// Recursive CTE query to select all species-rank descendants of a given taxonomy ID, walking the
 /// `parent_id` tree downward. The rank name is not joined in, since the recursive
 /// query already filters on the species rank ID, so the rank name is filled in manually in
@@ -145,6 +148,25 @@ impl TaxonomyTable {
             row_res
                 .map_err(Error::from)
                 .and_then(|row| Taxonomy::try_from(row).map_err(Error::from))
+        }))
+    }
+
+    /// Resolves each id in `ids` to its `(id, scientific_name)` pair (`WHERE id = ANY($1)`).
+    pub async fn resolve_ids(
+        &self,
+        ids: Vec<i32>,
+    ) -> Result<impl Stream<Item = Result<(i32, String), Error>> + Send + use<>, Error> {
+        let statement = format!("{} WHERE id = ANY($1)", SELECT_ID_NAME_STATEMENT.as_str());
+
+        let stream = self
+            .client
+            .query_stream(statement.as_str(), vec![Box::new(ids)])
+            .await?;
+        Ok(stream.map(|row_res| {
+            let row = row_res.map_err(Error::from)?;
+            let id = row.try_get::<_, i32>(0).map_err(Error::from)?;
+            let scientific_name = row.try_get::<_, String>(1).map_err(Error::from)?;
+            Ok((id, scientific_name))
         }))
     }
 

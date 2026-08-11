@@ -293,4 +293,17 @@ impl<'a> Client<'a> {
         let pairs: HashSet<(i32, String)> = self.post(endpoint, ids, None).await?;
         Ok(pairs.into_iter().collect())
     }
+
+    /// Resolves a list of taxonomy IDs to their scientific names.
+    ///
+    /// # Arguments
+    /// * `ids` - A vector of taxonomy IDs to resolve.
+    ///
+    pub async fn resolve_taxonomy_ids(
+        &self,
+        ids: Vec<i32>,
+    ) -> Result<HashMap<i32, String>, ApiClientError> {
+        let endpoint = "/api/taxonomies/resolve-ids";
+        self.post(endpoint, ids, None).await
+    }
 }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use dioxus::prelude::*;
@@ -57,6 +58,37 @@ pub fn Peptide(props: PeptideProps) -> Element {
             .await?)
     });
 
+    let taxonomy_names: Resource<Result<HashMap<i32, String>, GeneralError>> =
+        use_resource(move || async move {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => return Err(GeneralError::ConfigurationNotLoaded),
+            };
+
+            let ids: Vec<i32> = match &*peptide.read_unchecked() {
+                Some(Ok(p)) => {
+                    let mut ids: Vec<i32> = p
+                        .unique_taxonomy_ids
+                        .iter()
+                        .chain(p.non_unique_taxonomy_ids.iter())
+                        .copied()
+                        .collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    ids
+                }
+                _ => return Ok(HashMap::new()),
+            };
+
+            if ids.is_empty() {
+                return Ok(HashMap::new());
+            }
+
+            let client = Client::new(macpepdb_base_url)?;
+            Ok(client.resolve_taxonomy_ids(ids).await?)
+        });
+
     use_future(move || async move {
         track_page_visit(vec![(
             peptide_sequence.to_string(),
@@ -99,7 +131,15 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 td {
                                     ul {
                                         for id in peptide.non_unique_taxonomy_ids.iter() {
-                                            li { "{id}" }
+                                            li {
+                                                match &*taxonomy_names.read_unchecked() {
+                                                    Some(Ok(names)) => match names.get(id) {
+                                                        Some(name) => rsx! { "{name} (ID: {id})" },
+                                                        None => rsx! { "{id}" },
+                                                    },
+                                                    _ => rsx! { "{id}" },
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -114,7 +154,15 @@ pub fn Peptide(props: PeptideProps) -> Element {
                                 td {
                                     ul {
                                         for id in peptide.unique_taxonomy_ids.iter() {
-                                            li { "{id}" }
+                                            li {
+                                                match &*taxonomy_names.read_unchecked() {
+                                                    Some(Ok(names)) => match names.get(id) {
+                                                        Some(name) => rsx! { "{name} (ID: {id})" },
+                                                        None => rsx! { "{id}" },
+                                                    },
+                                                    _ => rsx! { "{id}" },
+                                                }
+                                            }
                                         }
                                     }
                                 }

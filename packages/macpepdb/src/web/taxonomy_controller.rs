@@ -1,9 +1,10 @@
+use std::fmt::Write;
 use std::ops::Deref;
 use std::sync::Arc;
 
 use async_stream::stream;
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{DefaultBodyLimit, Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -22,6 +23,9 @@ static CONTROLLER_PATH: &str = "/api/taxonomies";
 static TAXONOMY_PATH: &str = "/{id}";
 static SUB_SPECIES_PATH: &str = "/{id}/sub";
 static SEARCH_TAXONOMIES_PATH: &str = "/search";
+static ID_RESOLVE_PATH: &str = "/resolve-ids";
+
+static RESOLVE_ID_BODY_SIZE_LIMIT: usize = 10485760; // 10 MiB
 
 /// Errors that can occur while handling taxonomy endpoints.
 #[derive(Debug, Error)]
@@ -32,10 +36,13 @@ pub enum Error {
     TaxonomyNotFound,
     #[error("Taxonomy table error: {0}")]
     TaxonomyTable(Box<crate::taxonomy_table::Error>),
+    #[error("Response error: {0}")]
+    Response(Box<http::Error>),
 }
 
 into_thiserror_boxed!(crate::taxonomy::Error, Error, Taxonomy);
 into_thiserror_boxed!(crate::taxonomy_table::Error, Error, TaxonomyTable);
+into_thiserror_boxed!(http::Error, Error, Response);
 
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
@@ -76,7 +83,11 @@ impl TaxonomyController {
         let router: Router<Arc<ServerState>> = Router::new()
             .route(TAXONOMY_PATH, get(Self::taxonomy))
             .route(SUB_SPECIES_PATH, get(Self::sub_species))
-            .route(SEARCH_TAXONOMIES_PATH, post(Self::search_taxonomies));
+            .route(SEARCH_TAXONOMIES_PATH, post(Self::search_taxonomies))
+            .route(
+                ID_RESOLVE_PATH,
+                post(Self::resolve_ids).layer(DefaultBodyLimit::max(RESOLVE_ID_BODY_SIZE_LIMIT)),
+            );
 
         router.with_state(state)
     }
@@ -298,5 +309,80 @@ impl TaxonomyController {
         );
 
         Ok((StatusCode::OK, headers, Body::from_stream(stream)))
+    }
+
+    /// Resolves taxonomy database IDs to their scientific names, streaming the result in
+    /// chunks of 10000 IDs per query to keep memory usage bounded for large requests.
+    ///
+    /// # Arguments
+    /// * `state` - Server state
+    /// * `ids` - Taxonomy database IDs to resolve
+    ///
+    /// # API
+    /// ## Request
+    /// * Path: `/api/taxonomies/resolve-ids`
+    /// * Method: `POST`
+    /// * Body:
+    ///     ```json
+    ///     [9606, 10090]
+    ///     ```
+    ///
+    /// ## Response
+    /// ```json
+    /// {
+    ///     "9606": "Homo sapiens",
+    ///     "10090": "Mus musculus"
+    /// }
+    /// ```
+    ///
+    pub async fn resolve_ids(
+        State(state): State<Arc<ServerState>>,
+        Json(ids): Json<Vec<i32>>,
+    ) -> Result<Response, Error> {
+        let stream = stream! {
+            let mut delimiter = "";
+            yield Ok("{".to_string());
+            for id_chunk in ids.chunks(10000) {
+                let name_stream = match TaxonomyTable::new(state.db_client())
+                    .resolve_ids(id_chunk.to_vec())
+                    .await {
+                        Ok(names) => names,
+                        Err(err) => {
+                            yield Err(format!("!!! {:?}", err));
+                            break;
+                        }
+                    };
+
+                let names = match name_stream.try_collect::<Vec<_>>().await {
+                    Ok(names) => names,
+                    Err(err) => {
+                        yield Err(format!("!!! {:?}", err));
+                        break;
+                    }
+                };
+
+                let mut chunk = String::with_capacity(names.len() * 25);
+                for (id, scientific_name) in names {
+                    write!(
+                        chunk,
+                        "{}\"{}\":\"{}\"",
+                        delimiter,
+                        id,
+                        scientific_name
+                    ).unwrap();
+                    delimiter = ",";
+                }
+                yield Ok(chunk);
+            }
+
+            yield Ok("}".to_string());
+        };
+
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from_stream(stream))?;
+
+        Ok(response)
     }
 }
