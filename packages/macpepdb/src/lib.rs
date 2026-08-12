@@ -52,6 +52,8 @@ pub mod client;
 pub mod error;
 /// The three-stage build pipeline: proteins → mass index → peptides.
 pub mod database_build;
+/// Experimental Koina (https://doi.org/10.1038/s41467-025-64870-5) client to add predicted peptide attributed like retention time to the PRM/SRM targets
+pub mod koina;
 /// Hybrid in-memory/disk `mass -> protein ids` index built by digesting every protein once.
 pub mod mass_index;
 /// Compile-time-generated molecule masses (e.g. `WATER_MONO_MASS`); see `build.rs`.
