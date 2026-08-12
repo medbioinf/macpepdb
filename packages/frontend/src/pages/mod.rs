@@ -8,6 +8,8 @@ mod peptide_search;
 mod protein;
 /// Protein search
 mod protein_search;
+/// Tool to find suitable SRM/PRM targets
+mod srm_prm_target_finder;
 /// Information page about MaCPepDB
 mod status;
 
@@ -17,4 +19,5 @@ pub use peptide::Peptide;
 pub use peptide_search::PeptideSearch;
 pub use protein::Protein;
 pub use protein_search::ProteinSearch;
+pub use srm_prm_target_finder::SrmPrmTargetFinder;
 pub use status::Status;

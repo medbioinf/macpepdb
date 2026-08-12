@@ -27,6 +27,7 @@ use crate::web::peptide_controller::PeptideController;
 use crate::web::protein_controller::ProteinController;
 use crate::web::server_state::{MatomoInfo, ServerState};
 use crate::web::taxonomy_controller::TaxonomyController;
+use crate::web::tools_controller::ToolsController;
 
 /// Errors that can occur while starting or running the web server.
 #[derive(Debug, Error)]
@@ -130,6 +131,11 @@ pub async fn start(
         .nest(
             ChemistryController::controller_path(),
             ChemistryController::routes(server_state.clone()),
+        )
+        // Tools routes (SRM/PRM target finder, etc.)
+        .nest(
+            ToolsController::controller_path(),
+            ToolsController::routes(server_state.clone()),
         );
 
     #[cfg(feature = "admin-api")]

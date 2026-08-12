@@ -28,6 +28,8 @@ pub mod server_state;
 pub mod status_controller;
 /// Route handlers for `/api/taxonomies`.
 pub mod taxonomy_controller;
+/// Route handlers for `/api/tools`
+pub mod tools_controller;
 
 /// Default response headers (plain-text content type) used for error responses.
 pub static DEFAULT_ERROR_HEADER_MAP: LazyLock<HeaderMap> = LazyLock::new(|| {

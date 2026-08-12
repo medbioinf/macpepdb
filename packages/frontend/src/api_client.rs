@@ -5,10 +5,12 @@ use macpepdb_web_common::{
         peptide::{SearchRequestBody, SearchRequestMass},
         ptm::PostTranslationalModificationRequest,
         taxonomy::SearchRequestBody as TaxonomySearchRequestBody,
+        tools::SrmPrmRequest,
     },
     responses::{
         amino_acid::AminoAcidResponse, configuration::RuntimeConfigurationResponse,
         peptide::PeptideResponse, protein::ProteinResponse, taxonomy::TaxonomyResponse,
+        tools::SrmPrmResponse,
     },
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -305,5 +307,27 @@ impl<'a> Client<'a> {
     ) -> Result<HashMap<i32, String>, ApiClientError> {
         let endpoint = "/api/taxonomies/resolve-ids";
         self.post(endpoint, ids, None).await
+    }
+
+    /// Runs an SRM/PRM target search: for each (m/z, charge) target, searches the given
+    /// taxonomies (expanded to species) and returns only peptides unique within a species.
+    ///
+    /// # Arguments
+    /// * `request` - The fully-built SRM/PRM request (targets, tolerances, PTMs, taxonomy
+    ///   IDs, normalized collision energy)
+    ///
+    pub async fn search_srm_prm_targets(
+        &self,
+        request: &SrmPrmRequest,
+    ) -> Result<SrmPrmResponse, ApiClientError> {
+        self.post(
+            "/api/tools/prm-srm",
+            request,
+            Some(&[(
+                reqwest::header::ACCEPT,
+                HeaderValue::from_static("application/json"),
+            )]),
+        )
+        .await
     }
 }

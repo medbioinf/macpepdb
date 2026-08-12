@@ -84,6 +84,18 @@ pub fn TwoPanes() -> Element {
                                 }
                             }
                         }
+                        div { class: "separator fw-bold", "Tools" }
+                        ul { class: "navbar-nav mx-3",
+                            li { class: "nav-item",
+                                Link {
+                                    to: Routes::SrmPrmTargetFinder { },
+                                    onclick: close_menu_fn,
+                                    class: "nav-link",
+                                    i { class: "fa-solid fa-bullseye me-2" }
+                                    "SRM/PRM target finder"
+                                }
+                            }
+                        }
                         div { class: "separator fw-bold", "Publications" }
                         ul { class: "navbar-nav mx-3",
                             li { class: "nav-item",

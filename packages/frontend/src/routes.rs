@@ -17,6 +17,8 @@ pub enum Routes {
         Peptide { peptide_sequence: String },
         #[route("/peptides")]
         PeptideSearch { },
+        #[route("/tools/srm-prm-target-finder")]
+        SrmPrmTargetFinder {},
     #[end_layout]
     #[route("/:..segments")]
     NotFound { segments: Vec<String> },
