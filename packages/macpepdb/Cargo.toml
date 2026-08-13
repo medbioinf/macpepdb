@@ -75,7 +75,12 @@ dihardts_omicstools = { workspace = true }
 
 [dev-dependencies]
 flate2 = { workspace = true }
+criterion = { workspace = true }
+fancy-regex = { workspace = true }
 
+[[bench]]
+name = "protease_benchmark"
+harness = false
 
 [features]
 default = ["mimalloc"]
