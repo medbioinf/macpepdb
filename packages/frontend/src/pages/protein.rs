@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use dioxus::prelude::*;
 use dioxus_router::components::Link;
 use macpepdb_web_common::responses::peptide::PeptideResponse;
@@ -43,6 +45,23 @@ pub fn Protein(props: ProteinProps) -> Element {
 
     let uniprot_link = use_signal(|| format!("https://www.uniprot.org/uniprot/{}", protein_id));
 
+    let taxonomy_names: Resource<Result<HashMap<i32, String>, GeneralError>> =
+        use_resource(move || async move {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => return Err(GeneralError::ConfigurationNotLoaded),
+            };
+
+            let taxonomy_id = match &*protein.read_unchecked() {
+                Some(Ok(p)) => p.taxonomy_id,
+                _ => return Ok(HashMap::new()),
+            };
+
+            let client = Client::new(macpepdb_base_url)?;
+            Ok(client.resolve_taxonomy_ids(vec![taxonomy_id]).await?)
+        });
+
     use_future(move || async move {
         track_page_visit(vec![(
             protein_id.to_string(),
@@ -80,7 +99,15 @@ pub fn Protein(props: ProteinProps) -> Element {
                             }
                             tr {
                                 td { "Taxonomy ID" }
-                                td { "{protein.taxonomy_id}" }
+                                td {
+                                    match &*taxonomy_names.read_unchecked() {
+                                        Some(Ok(names)) => match names.get(&protein.taxonomy_id) {
+                                            Some(name) => rsx! { "{name} (ID: {protein.taxonomy_id})" },
+                                            None => rsx! { "{protein.taxonomy_id}" },
+                                        },
+                                        _ => rsx! { "{protein.taxonomy_id}" },
+                                    }
+                                }
                             }
                             tr {
                                 td { "Is reviewed" }
