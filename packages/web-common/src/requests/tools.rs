@@ -2,15 +2,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::requests::ptm::PostTranslationalModificationRequest;
 
-/// Request body for `POST /api/tools/prm-srm`. `thompson` is a list of independent
-/// (m/z, charge) targets; `taxonomies`, tolerances and `ptms`
-/// apply to every target. The backend expands each taxonomy ID to its species-level subtree
-/// and only returns peptides unique within an individual species.
+/// Request body for `POST /api/tools/prm-srm`. `targets` is a list of independent
+/// (protein accession, charge spec) targets, where charge spec is a single integer
+/// (`"2"`), a comma-separated list (`"2,3,4"`), or a range (`"2-4"`); `taxonomies` and
+/// `ptms` apply to every target. The backend expands each taxonomy ID to its
+/// species-level subtree and only returns peptides unique within an individual species.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SrmPrmRequest {
-    pub thompson: Vec<(f64, u8)>,
-    pub lower_tolerance_ppm: i64,
-    pub upper_tolerance_ppm: i64,
+    pub targets: Vec<(String, String)>,
     pub max_variable_modifications: usize,
     pub ptms: Vec<PostTranslationalModificationRequest>,
     pub taxonomies: Vec<i32>,
@@ -24,9 +23,10 @@ mod tests {
     #[test]
     fn srm_prm_request_round_trips() {
         let request = SrmPrmRequest {
-            thompson: vec![(1003.5, 2), (750.25, 3)],
-            lower_tolerance_ppm: 5,
-            upper_tolerance_ppm: 5,
+            targets: vec![
+                ("P12345".to_string(), "2".to_string()),
+                ("Q9WTP6".to_string(), "2-4".to_string()),
+            ],
             max_variable_modifications: 2,
             ptms: vec![PostTranslationalModificationRequest {
                 name: "Oxidation".to_string(),

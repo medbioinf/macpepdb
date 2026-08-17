@@ -44,6 +44,16 @@ pub fn mass_to_charge_to_dalton(mz: f64, charge: u8) -> f64 {
     mz * charge - PROTON_MASS_DA * charge
 }
 
+/// Converts a neutral mass (Dalton) into the m/z value at a given charge.
+///
+/// # Arguments
+///
+/// * `mass` - Neutral mass in Dalton
+/// * `charge` - Charge state
+pub fn dalton_to_mass_to_charge(da: f64, charge: u8) -> f64 {
+    (da + charge as f64 * PROTON_MASS_DA) / charge as f64
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

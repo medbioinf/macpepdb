@@ -110,18 +110,18 @@ impl ProteinController {
         CONTROLLER_PATH
     }
 
-    /// Builds the response for this protein including its peptides.
-    /// As the peptides are not stored in the same record, the protein sequence needs to be digested
-    /// using the given protease.
+    /// Digests the protein's sequence with the configured protease and fetches the full DB
+    /// records (with taxonomy annotations) for the resulting peptides via a single batched
+    /// exact-match (`partition`/`mass`/`sequence`) lookup. Returned peptides are sorted by mass.
     ///
     /// # Arguments
-    /// * `protein` - The protein to build the response for
+    /// * `protein` - The protein to digest
     /// * `state` - Server state
     ///
-    pub async fn to_response(
+    pub async fn digest_and_fetch_peptides(
         protein: &Protein,
         state: &ServerState,
-    ) -> Result<ProteinResponse<PeptideResponse>, Error> {
+    ) -> Result<Vec<Peptide>, Error> {
         let peptides = state
             .configuration()
             .protease()
@@ -170,6 +170,22 @@ impl ProteinController {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
+        Ok(peptides)
+    }
+
+    /// Builds the response for this protein including its peptides.
+    /// As the peptides are not stored in the same record, the protein sequence needs to be digested
+    /// using the given protease.
+    ///
+    /// # Arguments
+    /// * `protein` - The protein to build the response for
+    /// * `state` - Server state
+    ///
+    pub async fn to_response(
+        protein: &Protein,
+        state: &ServerState,
+    ) -> Result<ProteinResponse<PeptideResponse>, Error> {
+        let peptides = Self::digest_and_fetch_peptides(protein, state).await?;
         let peptides: Vec<PeptideResponse> = peptides.iter().map(PeptideResponse::from).collect();
 
         Ok(protein.to_response(peptides))

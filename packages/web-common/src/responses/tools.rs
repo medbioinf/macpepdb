@@ -2,9 +2,8 @@ use std::hash::Hash;
 
 use serde::{Deserialize, Serialize};
 
-/// One unique SRM/PRM assay target: a peptide matched at a given (m/z, charge) target,
-/// unique within the given species, carrying the request's pass-through normalized
-/// collision energy.
+/// One unique SRM/PRM assay target: a peptide digested from a requested protein accession,
+/// matched at a given charge, unique within the given species.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SrmPrmTarget {
     /// ProForma-annotated sequence (modifications resolved).
@@ -14,6 +13,9 @@ pub struct SrmPrmTarget {
     /// Species-level taxonomy ID this peptide is unique in. May differ from the
     /// originally-requested taxonomy ID if that was a higher-rank clade.
     pub taxonomy_id: i32,
+    /// Originating protein accession, with gene names in parentheses if any
+    /// (e.g. `"P12345 (GENE1, GENE2)"`).
+    pub accession: String,
     // FEATURE
     // pub ion_mobility: Option<f64>,
 }
@@ -59,12 +61,14 @@ mod tests {
                     mz: 1003.5,
                     charge: 2,
                     taxonomy_id: 10090,
+                    accession: "P12345 (GENE1)".to_string(),
                 },
                 SrmPrmTarget {
                     sequence: "NCLETPSCKNGFLLDGFPR".to_string(),
                     mz: 750.25,
                     charge: 3,
                     taxonomy_id: 9606,
+                    accession: "Q9WTP6".to_string(),
                 },
             ],
         };

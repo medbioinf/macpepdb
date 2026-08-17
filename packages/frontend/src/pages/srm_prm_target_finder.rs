@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fmt::Write, rc::Rc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Write,
+    rc::Rc,
+    time::Duration,
+};
 
 use ::web_sys::window;
 use async_std::task::sleep;
@@ -20,11 +25,8 @@ use macpepdb_web_common::{
     responses::taxonomy::TaxonomyResponse,
 };
 
-/// Default upper and lower mass tolerance
-const DEFAULT_UPPER_LOWER_MASS_TOLERANCE: i64 = 10;
-
-/// Default charge
-const DEFAULT_CHARGE: u8 = 2;
+/// Default charge spec pre-filled into the "Add target" charge input.
+const DEFAULT_CHARGE_SPEC: &str = "2";
 
 /// Default max variable modifications
 const DEFAULT_MAX_VAR_MODIFICATIONS: i16 = 2;
@@ -105,14 +107,10 @@ pub fn SrmPrmTargetFinder() -> Element {
 
     use_future(move || async move { track_page_visit(vec![]).await });
 
-    // target masses
-    let mut new_target_mz = use_signal(|| 0.0);
-    let mut new_target_charge = use_signal(|| DEFAULT_CHARGE);
-    let mut targets: Signal<Vec<(f64, u8)>> = use_signal(Vec::new);
-
-    // mass tolerance
-    let mut lower_mass_tolerance = use_signal(|| DEFAULT_UPPER_LOWER_MASS_TOLERANCE);
-    let mut upper_mass_tolerance = use_signal(|| DEFAULT_UPPER_LOWER_MASS_TOLERANCE);
+    // targets: protein accession + charge spec (single int, comma list, or "N-M" range)
+    let mut new_target_accession = use_signal(String::new);
+    let mut new_target_charge_spec = use_signal(|| DEFAULT_CHARGE_SPEC.to_string());
+    let mut targets: Signal<Vec<(String, String)>> = use_signal(Vec::new);
 
     // taxonomy filter (multi-select)
     let mut taxonomy_search_term = use_signal(|| "".to_string());
@@ -165,6 +163,9 @@ pub fn SrmPrmTargetFinder() -> Element {
     // resolved taxonomy names for the results table (id -> scientific name)
     let mut taxonomy_names: Signal<HashMap<i32, String>> = use_signal(HashMap::new);
 
+    // indices of results rows the user removed from the table before export; reset on new search
+    let mut removed_target_indices: Signal<HashSet<usize>> = use_signal(HashSet::new);
+
     // search for SRM/PRM targets
     let mut search = use_action(move || async move {
         let app_config = app_config.read_unchecked();
@@ -175,9 +176,7 @@ pub fn SrmPrmTargetFinder() -> Element {
         let client = Client::new(macpepdb_base_url)?;
 
         let request = SrmPrmRequest {
-            thompson: targets.read_unchecked().clone(),
-            lower_tolerance_ppm: *lower_mass_tolerance.read_unchecked(),
-            upper_tolerance_ppm: *upper_mass_tolerance.read_unchecked(),
+            targets: targets.read_unchecked().clone(),
             max_variable_modifications: max_var_modifications.read_unchecked().max(0) as usize,
             ptms: ptms.read_unchecked().clone(),
             taxonomies: selected_taxonomies
@@ -216,12 +215,15 @@ pub fn SrmPrmTargetFinder() -> Element {
         let tsv = match vendor {
             MsVendor::ThermoFisher => {
                 let mut tsv = String::from(
-                    "Compound\tMass [m/z]\tFormula [M]\tSpecies\tCS [z]\tStart [min]\tEnd [min]\tNCE\n",
+                    "Compound\tMass [m/z]\tFormula [M]\tSpecies\tCS [z]\tStart [min]\tEnd [min]\tNCE\tAccession\n",
                 );
-                for target in results.read_unchecked().iter() {
+                for (idx, target) in results.read_unchecked().iter().enumerate() {
+                    if removed_target_indices.read_unchecked().contains(&idx) {
+                        continue;
+                    }
                     writeln!(
                         tsv,
-                        "{}\t{}\t\t{} ({})\t{}\t\t\t{}",
+                        "{}\t{}\t\t{} ({})\t{}\t\t\t{}\t{}",
                         target.sequence,
                         target.mz,
                         taxonomy_names
@@ -231,6 +233,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                         target.taxonomy_id,
                         target.charge,
                         normalized_collision_energy,
+                        target.accession,
                     )
                     .unwrap();
                 }
@@ -238,12 +241,15 @@ pub fn SrmPrmTargetFinder() -> Element {
             }
             MsVendor::Bruker => {
                 let mut tsv = String::from(
-                    "Mass [m/z]\tCharge\tIsolation Width [m/z]\tRT [s]\tRT Range [s]\tStart IM [1/K0]\tEnd IM [1/K0]\tCE [eV]\tExternal ID\tDescription\n"
+                    "Mass [m/z]\tCharge\tIsolation Width [m/z]\tRT [s]\tRT Range [s]\tStart IM [1/K0]\tEnd IM [1/K0]\tCE [eV]\tExternal ID\tDescription\tAccession\n"
                 );
-                for target in results.read_unchecked().iter() {
+                for (idx, target) in results.read_unchecked().iter().enumerate() {
+                    if removed_target_indices.read_unchecked().contains(&idx) {
+                        continue;
+                    }
                     writeln!(
                         tsv,
-                        "{}\t{}\t\t\t\t\t\t{}\t{}\tSpecies: {} ({})",
+                        "{}\t{}\t\t\t\t\t\t{}\t{}\tSpecies: {} ({})\t{}",
                         target.mz,
                         target.charge,
                         normalized_collision_energy,
@@ -252,7 +258,8 @@ pub fn SrmPrmTargetFinder() -> Element {
                             .get(&target.taxonomy_id)
                             .map(|id| id.to_string())
                             .unwrap_or_default(),
-                        target.taxonomy_id
+                        target.taxonomy_id,
+                        target.accession,
                     )
                     .unwrap();
                 }
@@ -267,35 +274,42 @@ pub fn SrmPrmTargetFinder() -> Element {
         h1 { "SRM / PRM target finder" }
         p {
             """"
-            "This tool is a specialiced version of the mass search. Using the provided information, MaCPepDB searchs for all peptides matching the targetes masses which are unique for the in the given species. \
+            "For each target protein accession and charge (single charge, comma separated list, or a range like `2-4`), MaCPepDB digests the protein and returns the peptides which are unique for the in the given species. \
             If multiple species were selected, MaCPepDB will also remove all peptides which might be unique in each species but occure on more then one of the selected. \
-            Same is true if a higher taxonomy is selected like genus. In this case genus i resolved to all contained species."
+            Same is true if a higher taxonomy like genus is selected. Higher taxonomies getting resolved to contained species."
         }
 
-        SeparatorLine { label: "Target masses" }
+        SeparatorLine { label: "Targets (protein accession + charge)" }
         div { class: "input-group mb-3",
-            span { class: "input-group-text", "m/z" }
+            span { class: "input-group-text", "Accession" }
             input {
-                r#type: "number",
+                r#type: "text",
                 class: "form-control",
-                value: "{new_target_mz}",
-                oninput: move |evt| new_target_mz.set(evt.value().parse().unwrap_or(0.0)),
+                placeholder: "gene names are not unique, sorry",
+                value: "{new_target_accession}",
+                oninput: move |evt| new_target_accession.set(evt.value()),
             }
-            span { class: "input-group-text", "charge" }
+            span { class: "input-group-text", "Charge" }
             input {
-                r#type: "number",
+                r#type: "text",
                 class: "form-control",
-                step: 1,
-                value: "{new_target_charge}",
-                oninput: move |evt| new_target_charge.set(evt.value().parse().unwrap_or(DEFAULT_CHARGE)),
+                placeholder: "e.g. 2 or 2,3 or 2-4",
+                value: "{new_target_charge_spec}",
+                oninput: move |evt| new_target_charge_spec.set(evt.value()),
             }
             button {
                 class: "btn btn-primary",
                 r#type: "button",
+                disabled: new_target_accession.read().trim().is_empty()
+                    || new_target_charge_spec.read().trim().is_empty(),
                 onclick: move |_| {
-                    targets.push((*new_target_mz.read(), *new_target_charge.read()));
-                    new_target_mz.set(0.0);
-                    new_target_charge.set(DEFAULT_CHARGE);
+                    targets
+                        .push((
+                            new_target_accession.read().trim().to_string(),
+                            new_target_charge_spec.read().trim().to_string(),
+                        ));
+                    new_target_accession.set(String::new());
+                    new_target_charge_spec.set(DEFAULT_CHARGE_SPEC.to_string());
                 },
                 "Add target"
             }
@@ -306,7 +320,7 @@ pub fn SrmPrmTargetFinder() -> Element {
             }
             for (idx , target) in targets.iter().enumerate() {
                 div { class: "list-group-item d-flex justify-content-between align-items-center",
-                    "m/z {target.0}, charge {target.1}"
+                    "{target.0}, charge {target.1}"
                     button {
                         class: "btn btn-danger",
                         r#type: "button",
@@ -320,34 +334,6 @@ pub fn SrmPrmTargetFinder() -> Element {
         }
 
         div {
-            SeparatorLine { label: "Mass tolerance (mandatory, unit: ppm)" }
-            div { class: "input-group mb-3",
-                span { class: "input-group-text", "Lower" }
-                input {
-                    r#type: "number",
-                    class: "form-control",
-                    step: 1,
-                    value: "{lower_mass_tolerance}",
-                    oninput: move |evt| {
-                        lower_mass_tolerance
-                            .set(evt.value().parse().unwrap_or(DEFAULT_UPPER_LOWER_MASS_TOLERANCE))
-                    },
-                }
-            }
-            div { class: "input-group mb-3",
-                span { class: "input-group-text", "Upper" }
-                input {
-                    r#type: "number",
-                    class: "form-control",
-                    step: 1,
-                    value: "{upper_mass_tolerance}",
-                    oninput: move |evt| {
-                        upper_mass_tolerance
-                            .set(evt.value().parse().unwrap_or(DEFAULT_UPPER_LOWER_MASS_TOLERANCE))
-                    },
-                }
-            }
-
             SeparatorLine { label: "Taxonomies" }
             div { class: "input-group mb-3",
                 span { class: "input-group-text", "Taxonomy search *" }
@@ -564,7 +550,10 @@ pub fn SrmPrmTargetFinder() -> Element {
                     class: "btn btn-primary",
                     r#type: "button",
                     disabled: search.pending() || targets.is_empty() || selected_taxonomies.is_empty(),
-                    onclick: move |_| { search.call() },
+                    onclick: move |_| {
+                        removed_target_indices.write().clear();
+                        search.call();
+                    },
                     i { class: "fa-solid fa-search me-2" }
                     "Search"
                 }
@@ -609,26 +598,49 @@ pub fn SrmPrmTargetFinder() -> Element {
                     thead {
                         tr {
                             th { "Sequence" }
+                            th { "Accession" }
                             th { "m/z" }
                             th { "Charge" }
                             th { "Taxonomy" }
+                            th { "" }
                         }
                     }
                     tbody {
-                        for target in results.read_unchecked().iter().cloned() {
-                            tr {
-                                td { "{target.sequence}" }
-                                td { "{target.mz}" }
-                                td { "{target.charge}" }
-                                td {
-                                    "{taxonomy_names.read().get(&target.taxonomy_id).cloned().unwrap_or_else(|| target.taxonomy_id.to_string())}"
+                        for (idx , target) in results.read_unchecked().iter().cloned().enumerate() {
+                            if !removed_target_indices.read().contains(&idx) {
+                                tr {
+                                    td { "{target.sequence}" }
+                                    td { "{target.accession}" }
+                                    td { "{target.mz}" }
+                                    td { "{target.charge}" }
+                                    td {
+                                        "{taxonomy_names.read().get(&target.taxonomy_id).cloned().unwrap_or_else(|| target.taxonomy_id.to_string())}"
+                                    }
+                                    td {
+                                        button {
+                                            class: "btn btn-danger",
+                                            r#type: "button",
+                                            onclick: move |_| {
+                                                removed_target_indices.write().insert(idx);
+                                            },
+                                            i { class: "fa-solid fa-xmark" }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                if results.read_unchecked().is_empty() {
-                    div { class: "alert alert-info", "No unique targets found for the given input." }
+                {
+                    let total = results.read_unchecked().len();
+                    let remaining = total - removed_target_indices.read().len();
+                    rsx! {
+                        if total == 0 {
+                            div { class: "alert alert-info", "No unique targets found for the given input." }
+                        } else if remaining == 0 {
+                            div { class: "alert alert-info", "All targets removed." }
+                        }
+                    }
                 }
             },
             Some(Err(err)) => rsx! {

@@ -100,6 +100,7 @@ use crate::peptide_table::{
     FLAGS_COLUMN, MASS_COL, PARTITION_COL, PeptideColumnSelection, PeptideTable, TABLE_NAME,
 };
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
+use crate::protease::Protease;
 use crate::sequence::{IsSimpleSequence, ModifiedSequence};
 use crate::shard_map;
 use crate::{mass::to_float as mass_to_float, peptide::Peptide};
@@ -1501,43 +1502,60 @@ impl PeptideSearch {
         groups
     }
 
+    /// Computes the `[min_mass, max_mass]` window a `PTMCollection` could push a peptide's
+    /// neutral `mass` into: `min_mass` from the protease's minimum peptide length in Glycine
+    /// masses, `max_mass` as `mass` plus headroom for the largest negative-delta static and
+    /// variable PTMs possibly applied across the whole peptide (see the `max_mass` doc on
+    /// [`PeptideConditionBuilder::from_ptm_collection`]). Shared by [`Self::search`] (mass-target
+    /// search, DB-side windowing) and the in-memory SRM/PRM accession flow (`tools_controller`),
+    /// which both need the same headroom sizing before calling `from_ptm_collection`.
+    pub(crate) fn ptm_mass_bounds(
+        mass: i64,
+        ptm_collection: &PTMCollection<Arc<PostTranslationalModification>>,
+        protease: &Protease,
+    ) -> (i64, i64) {
+        let min_mass = protease.min_length().get() as i64 * GLYCINE.mono_mass();
+
+        let largest_negative_static_ptm = ptm_collection
+            .get_static_ptms()
+            .iter()
+            .filter(|ptm| ptm.mass_delta().is_negative())
+            .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
+            .abs();
+
+        let largest_negative_variable_ptm = ptm_collection
+            .get_variable_ptms()
+            .iter()
+            .filter(|ptm| ptm.mass_delta().is_negative())
+            .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
+            .abs();
+
+        // Possible peptide length plus 30% "play" to account for errors
+        let amino_acid_average = AminoAcid::canonical()
+            .iter()
+            .map(|aa| aa.mono_mass())
+            .sum::<i64>()
+            / AminoAcid::canonical().len() as i64;
+        let possible_peptide_length = ((mass / amino_acid_average) as f64 * 1.3) as i64;
+
+        let max_mass = mass
+            + (largest_negative_static_ptm * possible_peptide_length)
+            + (largest_negative_variable_ptm * possible_peptide_length);
+
+        (min_mass, max_mass)
+    }
+
     pub async fn search<T: IsPeptidoformTransformation + 'static>(
         self,
     ) -> Result<Pin<Box<FallibleMatchingPeptideStream<T>>>, Error> {
         let taxonomy_ids = self.taxonomy_ids.map(Arc::new);
 
         if !self.ptm_collection.is_empty() {
-            let min_mass =
-                self.configuration.protease().min_length().get() as i64 * GLYCINE.mono_mass();
-
-            // Calulcate max mass as stated in PeptideCondition::from_ptm_collection() 2.3
-            let largest_negative_static_ptm = self
-                .ptm_collection
-                .get_static_ptms()
-                .iter()
-                .filter(|ptm| ptm.mass_delta().is_negative())
-                .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
-                .abs();
-
-            let largest_negative_variable_ptm = self
-                .ptm_collection
-                .get_variable_ptms()
-                .iter()
-                .filter(|ptm| ptm.mass_delta().is_negative())
-                .fold(0_i64, |acc, ptm| acc.min(ptm.mass_delta()))
-                .abs();
-
-            // Possible peptide length plus 30% "play" to account for errors
-            let amino_acid_average = AminoAcid::canonical()
-                .iter()
-                .map(|aa| aa.mono_mass())
-                .sum::<i64>()
-                / AminoAcid::canonical().len() as i64;
-            let possible_peptide_length = ((self.mass / amino_acid_average) as f64 * 1.3) as i64;
-
-            let max_mass = self.mass
-                + (largest_negative_static_ptm * possible_peptide_length)
-                + (largest_negative_variable_ptm * possible_peptide_length);
+            let (min_mass, max_mass) = Self::ptm_mass_bounds(
+                self.mass,
+                &self.ptm_collection,
+                self.configuration.protease(),
+            );
 
             let sorted_ptm_conditions = Self::split_and_sort_peptide_conditions(
                 PeptideConditionBuilder::from_ptm_collection(
