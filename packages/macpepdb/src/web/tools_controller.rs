@@ -7,6 +7,7 @@ use crate::peptide::{IsPeptide, Peptidoform};
 use crate::peptide_search::{PeptideConditionBuilder, PeptideSearch};
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::protein_table::ProteinTable;
+use crate::sequence::IsSimpleSequence;
 use crate::taxonomy_table::TaxonomyTable;
 use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::protein_controller::ProteinController;
@@ -349,10 +350,15 @@ impl ToolsController {
 
                 for peptidoform in peptidoforms {
                     let mass = to_float(peptidoform.mass());
+                    let plain_sequence: String =
+                        peptidoform.sequence().amino_acids().map(|aa| aa.code()).collect();
+                    let hydrophobicity =
+                        macpepdb_peptide_hydrophobicity::krokhin::score_sequence(&plain_sequence);
                     for &charge in &charges {
                         let target = SrmPrmTarget {
                             sequence: peptidoform.sequence().to_string(),
                             mz: dalton_to_mass_to_charge(mass, charge),
+                            hydrophobicity,
                             charge,
                             taxonomy_id,
                             accession: accession_label.clone(),

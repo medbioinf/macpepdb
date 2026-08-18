@@ -664,6 +664,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                             th { "Accession" }
                             th { "m/z" }
                             th { "Charge" }
+                            th { "Hydrophobicity" }
                             th { "Taxonomy" }
                             th { "" }
                         }
@@ -676,6 +677,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                                     td { "{target.accession}" }
                                     td { "{target.mz}" }
                                     td { "{target.charge}" }
+                                    td { "{target.hydrophobicity:.3}" }
                                     td {
                                         "{taxonomy_names.read().get(&target.taxonomy_id).cloned().unwrap_or_else(|| target.taxonomy_id.to_string())}"
                                     }

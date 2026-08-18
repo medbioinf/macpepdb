@@ -9,6 +9,8 @@ pub struct SrmPrmTarget {
     /// ProForma-annotated sequence (modifications resolved).
     pub sequence: String,
     pub mz: f64,
+    /// Predicted hydrophobicity (Krokhin/SSRCalc3 retention score).
+    pub hydrophobicity: f64,
     pub charge: u8,
     /// Species-level taxonomy ID this peptide is unique in. May differ from the
     /// originally-requested taxonomy ID if that was a higher-rank clade.
@@ -59,6 +61,7 @@ mod tests {
                 SrmPrmTarget {
                     sequence: "NCLETPSC[+57.021464]KNGFLLDGFPR".to_string(),
                     mz: 1003.5,
+                    hydrophobicity: 24.7,
                     charge: 2,
                     taxonomy_id: 10090,
                     accession: "P12345 (GENE1)".to_string(),
@@ -66,6 +69,7 @@ mod tests {
                 SrmPrmTarget {
                     sequence: "NCLETPSCKNGFLLDGFPR".to_string(),
                     mz: 750.25,
+                    hydrophobicity: 22.1,
                     charge: 3,
                     taxonomy_id: 9606,
                     accession: "Q9WTP6".to_string(),
