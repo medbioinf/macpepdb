@@ -22,7 +22,7 @@ use macpepdb_web_common::{
         ptm::{PostTranslationalModificationRequest, PtmPosition, PtmType},
         tools::SrmPrmRequest,
     },
-    responses::taxonomy::TaxonomyResponse,
+    responses::{protein::ProteinResponse, taxonomy::TaxonomyResponse},
 };
 
 /// Default charge spec pre-filled into the "Add target" charge input.
@@ -30,6 +30,9 @@ const DEFAULT_CHARGE_SPEC: &str = "2";
 
 /// Default max variable modifications
 const DEFAULT_MAX_VAR_MODIFICATIONS: i16 = 2;
+
+/// Minimum length of the accession/gene search term before querying for suggestions.
+const MIN_PROTEIN_SEARCH_TERM_LENGTH: usize = 3;
 
 // See `components::peptide_search::mass_search` for why these labels/parsers are
 // reproduced locally instead of living on `PtmType`/`PtmPosition` themselves.
@@ -134,6 +137,30 @@ pub fn SrmPrmTargetFinder() -> Element {
             let search_term = taxonomy_search_term.read_unchecked().clone();
 
             Ok(Some(client.search_taxonomies(&search_term).await?))
+        });
+
+    let protein_suggestions: Resource<Result<Option<Vec<ProteinResponse<String>>>, GeneralError>> =
+        use_resource(move || async move {
+            if new_target_accession.read_unchecked().trim().len() < MIN_PROTEIN_SEARCH_TERM_LENGTH {
+                return Ok(None);
+            }
+
+            sleep(Duration::from_millis(300)).await; // debounce
+
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => Err(GeneralError::ConfigurationNotLoaded)?,
+            };
+
+            let client = Client::new(macpepdb_base_url)?;
+            let term = new_target_accession.read_unchecked().trim().to_string();
+
+            let mut proteins = client.search_protein(&term).await?;
+
+            proteins.sort_unstable_by_key(|prot| !prot.is_reviewed);
+
+            Ok(Some(proteins))
         });
 
     // post translational modifications
@@ -285,7 +312,7 @@ pub fn SrmPrmTargetFinder() -> Element {
             input {
                 r#type: "text",
                 class: "form-control",
-                placeholder: "gene names are not unique, sorry",
+                placeholder: "Search by accession or gene name",
                 value: "{new_target_accession}",
                 oninput: move |evt| new_target_accession.set(evt.value()),
             }
@@ -313,6 +340,42 @@ pub fn SrmPrmTargetFinder() -> Element {
                 },
                 "Add target"
             }
+        }
+        match &*protein_suggestions.read_unchecked() {
+            Some(Ok(Some(found_proteins))) if !found_proteins.is_empty() => rsx! {
+                table { class: "table table-sm table-striped table-hover mb-3",
+                    thead {
+                        tr {
+                            th { "Accession" }
+                            th { "Genes" }
+                            th { "Reviewed" }
+                            th { "" }
+                        }
+                    }
+                    tbody {
+                        for protein in found_proteins.iter().cloned() {
+                            tr {
+                                td { "{protein.accession}" }
+                                td { "{protein.genes.join(\", \")}" }
+                                td { if protein.is_reviewed { "yes" } else { "no" } }
+                                td {
+                                    button {
+                                        class: "btn btn-sm btn-primary",
+                                        r#type: "button",
+                                        disabled: new_target_accession.read().trim() == protein.accession,
+                                        onclick: move |_| new_target_accession.set(protein.accession.clone()),
+                                        "Use"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            Some(Err(err)) => rsx! {
+                div { class: "alert alert-danger mb-3", "Error searching for proteins: {err}" }
+            },
+            _ => rsx! {},
         }
         div { class: "list-group mb-3",
             if targets.is_empty() {
