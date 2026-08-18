@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 // 3rd party imports
 use dioxus::prelude::*;
@@ -6,7 +6,7 @@ use dioxus_router::components::Link;
 use macpepdb_web_common::responses::protein::ProteinResponse;
 
 // internal imports
-use crate::routes::Routes;
+use crate::{errors::general_error::GeneralError, routes::Routes};
 
 /// Properties for protein list
 ///
@@ -14,6 +14,8 @@ use crate::routes::Routes;
 pub struct ProteinListProps {
     /// List of proteins to render
     pub proteins: Arc<Vec<ProteinResponse<String>>>,
+    /// Taxonomy ID/name map
+    pub taxonomy_names: Resource<Result<HashMap<i32, String>, GeneralError>>,
 }
 
 /// Renders a list of proteins with most common attributes: accession, genes, is reviewed.
@@ -53,6 +55,7 @@ pub fn ProteinList(props: ProteinListProps) -> Element {
                     tr {
                         th { "Accession" }
                         th { "Genes" }
+                        th { "Taxonomy" }
                         th { "Is reviewed" }
                     }
                 }
@@ -68,6 +71,15 @@ pub fn ProteinList(props: ProteinListProps) -> Element {
                                 }
                             }
                             td { "{protein.genes.join(\", \")}" }
+                            td {
+                                match &*props.taxonomy_names.read_unchecked() {
+                                    Some(Ok(names)) => match names.get(&protein.taxonomy_id) {
+                                        Some(name) => rsx! { "{name} (ID: {protein.taxonomy_id})" },
+                                        None => rsx! { "{protein.taxonomy_id}" },
+                                    },
+                                    _ => rsx! { "{protein.taxonomy_id}" },
+                                }
+                            }
                             td {
                                 i { class: if protein.is_reviewed { "fas fa-check" } else { "fas fa-times" } }
                             }

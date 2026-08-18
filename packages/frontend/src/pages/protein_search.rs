@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use dioxus::html::input_data::keyboard_types::Code;
@@ -45,6 +46,32 @@ pub fn ProteinSearch() -> Element {
         }
     });
 
+    let taxonomy_names: Resource<Result<HashMap<i32, String>, GeneralError>> =
+        use_resource(move || async move {
+            let app_config = app_config.read_unchecked();
+            let macpepdb_base_url = match app_config.as_ref() {
+                Some(config) => config.get_macpepdb_base_url(),
+                None => return Err(GeneralError::ConfigurationNotLoaded),
+            };
+
+            let ids: Vec<i32> = match proteins.value() {
+                Some(Ok(sig)) => {
+                    let mut ids: Vec<i32> = sig.read().iter().map(|p| p.taxonomy_id).collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    ids
+                }
+                _ => return Ok(HashMap::new()),
+            };
+
+            if ids.is_empty() {
+                return Ok(HashMap::new());
+            }
+
+            let client = Client::new(macpepdb_base_url)?;
+            Ok(client.resolve_taxonomy_ids(ids).await?)
+        });
+
     use_future(move || async move { track_page_visit(vec![]).await });
 
     rsx! {
@@ -71,7 +98,7 @@ pub fn ProteinSearch() -> Element {
         }
         match proteins.value() {
             Some(Ok(proteins)) => rsx! {
-                ProteinList { proteins: proteins.read().clone() }
+                ProteinList { proteins: proteins.read().clone(), taxonomy_names }
             },
             Some(Err(err)) => rsx! {
                 div { class: "alert alert-danger", "Error getting proteins: {err}" }

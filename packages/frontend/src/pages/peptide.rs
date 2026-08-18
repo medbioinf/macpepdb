@@ -200,6 +200,7 @@ pub fn Peptide(props: PeptideProps) -> Element {
                         class: "mb-3",
                         ProteinList {
                             proteins: peptide.proteins.clone().unwrap_or(Arc::new(Vec::new())),
+                            taxonomy_names
                         }
                     }
                 },
