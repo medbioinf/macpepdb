@@ -350,8 +350,11 @@ impl ToolsController {
 
                 for peptidoform in peptidoforms {
                     let mass = to_float(peptidoform.mass());
-                    let plain_sequence: String =
-                        peptidoform.sequence().amino_acids().map(|aa| aa.code()).collect();
+                    let plain_sequence: String = peptidoform
+                        .sequence()
+                        .amino_acids()
+                        .map(|aa| aa.code())
+                        .collect();
                     let hydrophobicity =
                         macpepdb_peptide_hydrophobicity::krokhin::score_sequence(&plain_sequence);
                     for &charge in &charges {
