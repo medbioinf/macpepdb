@@ -165,6 +165,18 @@ enum PeptideCommand {
         /// Test file with Dalton or m/z + charge per line
         masses_file_path: PathBuf,
     },
+    /// Reports, for each mass in a masses file, the number of distinct PTM-combination
+    /// peptide conditions produced. Purely in-memory, no database required.
+    ConditionCount {
+        /// Maximum variable modification considered per peptide
+        #[arg(short, long, default_value_t = 3)]
+        max_variable_modifications: usize,
+        /// PTM file to use for the condition count
+        #[arg(long)]
+        ptm_file_path: Option<PathBuf>,
+        /// File with Dalton or m/z + charge per line
+        masses_file_path: PathBuf,
+    },
     Show {
         /// Sequence to select
         sequence: String,
@@ -781,6 +793,51 @@ async fn main() -> Result<(), Error> {
 
                 if let Some(mut tui) = tui {
                     tracing::info!("Press Ctrl+C or q to exit.");
+                    tui.wait().await;
+                }
+            }
+            PeptideCommand::ConditionCount {
+                max_variable_modifications,
+                ptm_file_path,
+                masses_file_path,
+            } => {
+                let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
+                let configuration = BlobTable::select::<RuntimeConfiguration>(
+                    client.as_ref(),
+                    RuntimeConfiguration::BLOB_KEY,
+                )
+                .await
+                .map_err(|err| Error::BlobTable(Box::new(err)))?
+                .ok_or(Error::MissingRuntimeConfiguration)?;
+
+                let ptms =
+                    macpepdb::performance_test::read_ptm_file(ptm_file_path.as_deref()).unwrap();
+                let masses =
+                    macpepdb::performance_test::read_masses_file(&masses_file_path).unwrap();
+
+                println!("mass\tcondition_count");
+                for mass in masses {
+                    let condition_count = PeptideSearch::distinct_conditions_for_mass(
+                        mass,
+                        &ptms,
+                        max_variable_modifications,
+                        configuration.protease(),
+                    )
+                    .len();
+                    let msg = format!(
+                        "mass: {}, conditions: {condition_count}",
+                        mass_to_float(mass),
+                    );
+
+                    if cli.terminal || cli.tui {
+                        tracing::info!(msg);
+                    } else {
+                        println!("{msg}");
+                    }
+                }
+
+                tracing::info!("Done. Press Ctrl+C or q to exit.");
+                if let Some(mut tui) = tui {
                     tui.wait().await;
                 }
             }

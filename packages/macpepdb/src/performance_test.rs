@@ -2,7 +2,7 @@ use std::{
     fs::File,
     io::{BufRead, BufReader},
     num::NonZeroUsize,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -49,6 +49,59 @@ into_thiserror_boxed!(
 );
 into_thiserror_boxed!(crate::post_translational_modification::Error, Error, Ptm);
 
+/// Reads a masses file: one entry per line, either a bare Dalton mass or `"<mz> <charge>"`,
+/// converted to the internal integer mass representation.
+pub fn read_masses_file(path: &Path) -> Result<Vec<i64>, Error> {
+    let buf_reader = BufReader::new(File::open(path).map_err(|e| Error::MassesRead(Box::new(e)))?);
+
+    buf_reader
+        .lines()
+        .map(|line| {
+            let line = line.map_err(|e| Error::NextMass(Box::new(e)))?;
+            let line = line.trim();
+            if !line.contains(" ") {
+                line.parse::<f64>()
+                    .map_err(|_| Error::InvalidMass(line.to_string()))
+            } else {
+                let (mz, charge) = line
+                    .split_once(' ')
+                    .ok_or_else(|| Error::InvalidMass(line.to_string()))?;
+                let mz = mz
+                    .parse::<f64>()
+                    .map_err(|_| Error::InvalidMass(line.to_string()))?;
+                let charge = charge
+                    .parse::<u8>()
+                    .map_err(|_| Error::InvalidMass(line.to_string()))?;
+                Ok(crate::mass::mass_to_charge_to_dalton(mz, charge))
+            }
+        })
+        .map(|result| result.map(mass_to_int))
+        .collect::<Result<Vec<_>, Error>>()
+}
+
+/// Reads a tab-delimited PTM file into a [`PTMCollection`], or an empty collection if `path` is
+/// `None`.
+pub fn read_ptm_file(
+    path: Option<&Path>,
+) -> Result<PTMCollection<Arc<PostTranslationalModification>>, Error> {
+    let ptms = path
+        .map(|path| {
+            csv::ReaderBuilder::new()
+                .delimiter(b'\t')
+                .has_headers(true)
+                .from_path(path)
+                .map_err(|e| Error::PtmRead(Box::new(e)))?
+                .deserialize()
+                .map(|result| result.map(Arc::new))
+                .collect::<Result<Vec<Arc<PostTranslationalModification>>, csv::Error>>()
+                .map_err(|e| Error::PtmRead(Box::new(e)))
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    Ok(PTMCollection::new(ptms)?)
+}
+
 pub struct PerformanceTest {
     masses: Vec<i64>,
     lower_mass_tolerance_ppm: i64,
@@ -82,51 +135,10 @@ impl PerformanceTest {
             .await?;
 
         tracing::info!("Read PTMs");
-        let ptms = ptm_file_path
-            .map(|path| {
-                csv::ReaderBuilder::new()
-                    .delimiter(b'\t')
-                    .has_headers(true)
-                    .from_path(path)
-                    .unwrap()
-                    .deserialize()
-                    .map(|result| result.map(Arc::new))
-                    .collect::<Result<Vec<Arc<PostTranslationalModification>>, csv::Error>>()
-                    .map_err(|e| Error::PtmRead(Box::new(e)))
-            })
-            .transpose()?
-            .unwrap_or_default();
-
-        let ptms = Arc::new(PTMCollection::new(ptms)?);
+        let ptms = Arc::new(read_ptm_file(ptm_file_path.as_deref().map(Path::new))?);
 
         tracing::info!("Read masses");
-        let buf_reader = BufReader::new(
-            File::open(&masses_file_path).map_err(|e| Error::MassesRead(Box::new(e)))?,
-        );
-
-        let masses = buf_reader
-            .lines()
-            .map(|line| {
-                let line = line.map_err(|e| Error::NextMass(Box::new(e)))?;
-                let line = line.trim();
-                if !line.contains(" ") {
-                    line.parse::<f64>()
-                        .map_err(|_| Error::InvalidMass(line.to_string()))
-                } else {
-                    let (mz, charge) = line
-                        .split_once(' ')
-                        .ok_or_else(|| Error::InvalidMass(line.to_string()))?;
-                    let mz = mz
-                        .parse::<f64>()
-                        .map_err(|_| Error::InvalidMass(line.to_string()))?;
-                    let charge = charge
-                        .parse::<u8>()
-                        .map_err(|_| Error::InvalidMass(line.to_string()))?;
-                    Ok(crate::mass::mass_to_charge_to_dalton(mz, charge))
-                }
-            })
-            .map(|result| result.map(mass_to_int))
-            .collect::<Result<Vec<_>, Error>>()?;
+        let masses = read_masses_file(&masses_file_path)?;
 
         #[cfg(feature = "admin-api")]
         if let Some(web_base_url) = web_base_url {

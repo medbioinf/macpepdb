@@ -1545,6 +1545,41 @@ impl PeptideSearch {
         (min_mass, max_mass)
     }
 
+    /// Distinct PTM-combination conditions for `mass` (pre-partition-expansion, no DB or
+    /// protease needed) — the number of DB-independent branches
+    /// `PeptideConditionBuilder::from_ptm_collection` produces for `mass` once same-signature
+    /// duplicates are dropped, mirroring the dedup [`Self::split_and_sort_peptide_conditions`]
+    /// does before `finalize` fans each one out across DB partitions.
+    pub fn distinct_conditions_for_mass(
+        mass: i64,
+        ptm_collection: &PTMCollection<Arc<PostTranslationalModification>>,
+        max_variable_modifications: usize,
+        protease: &Protease,
+    ) -> Vec<PeptideConditionBuilder> {
+        if ptm_collection.is_empty() {
+            return vec![PeptideConditionBuilder::new(mass)];
+        }
+
+        let (min_mass, max_mass) = Self::ptm_mass_bounds(mass, ptm_collection, protease);
+        let builders = PeptideConditionBuilder::from_ptm_collection(
+            ptm_collection,
+            mass,
+            min_mass,
+            max_mass,
+            max_variable_modifications,
+        );
+        let mut seen_builders: HashSet<(i64, String)> = HashSet::new();
+        builders
+            .into_iter()
+            .filter(|condition| {
+                seen_builders.insert((
+                    condition.query_mass,
+                    condition.filter_pipeline().to_string(),
+                ))
+            })
+            .collect()
+    }
+
     pub async fn search<T: IsPeptidoformTransformation + 'static>(
         self,
     ) -> Result<Pin<Box<FallibleMatchingPeptideStream<T>>>, Error> {
