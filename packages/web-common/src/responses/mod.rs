@@ -1,4 +1,5 @@
 pub mod amino_acid;
+pub mod cluster_health;
 pub mod configuration;
 pub mod peptide;
 pub mod protein;

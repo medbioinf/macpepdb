@@ -47,6 +47,8 @@ pub mod mass;
 pub mod blob_table;
 /// The pooled Postgres/Citus client, congestion control, and binary `COPY` support.
 pub mod client;
+/// Citus cluster node health (`citus_check_cluster_node_health()`) and connectivity graph building.
+pub mod cluster_health;
 /// The `into_thiserror_boxed!` macro used to box external errors into `thiserror` variants.
 #[macro_use]
 pub mod error;
