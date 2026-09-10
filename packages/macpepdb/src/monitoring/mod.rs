@@ -56,7 +56,7 @@ pub enum Error {
 /// Target for tracing
 ///
 pub enum TracingTarget {
-    Loki(Url, String),
+    Loki(Url, Vec<(String, String)>),
     File(PathBuf, Rotation),
     Terminal,
     Tui(TuiLayer),
@@ -174,9 +174,12 @@ impl Monitoring {
                     file_layer = Some(tracing_subscriber::fmt::layer().with_writer(non_blocking));
                     monitoring.log_writer_guard = Some(guard);
                 }
-                TracingTarget::Loki(url, label) => {
-                    let (layer, task) = tracing_loki::builder()
-                        .label(env!("CARGO_CRATE_NAME"), label)?
+                TracingTarget::Loki(url, labels) => {
+                    let mut builder = tracing_loki::builder();
+                    for (key, value) in labels {
+                        builder = builder.label(key, value)?;
+                    }
+                    let (layer, task) = builder
                         .extra_field("pid", format!("{}", process::id()))?
                         .build_url(url)?;
                     monitoring.loki_handler = Some(tokio::spawn(task));

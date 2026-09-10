@@ -443,7 +443,10 @@ async fn main() -> Result<(), Error> {
     }
 
     if let Some(loki_url) = cli.loki {
-        tracing_targets.push(TracingTarget::Loki(loki_url, cli.loki_label));
+        tracing_targets.push(TracingTarget::Loki(
+            loki_url,
+            vec![("instance".to_string(), cli.loki_label.clone())],
+        ));
     }
 
     if let Some(prometheus_socket) = cli.prometheus {
