@@ -93,3 +93,9 @@ macpepdb_uniprot_reader = { path = "packages/uniprot_reader", version = "0.1.0" 
 [profile.wasm-dev]
 inherits = "dev"
 opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

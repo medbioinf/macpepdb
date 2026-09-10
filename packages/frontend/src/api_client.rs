@@ -8,9 +8,9 @@ use macpepdb_web_common::{
         tools::SrmPrmRequest,
     },
     responses::{
-        amino_acid::AminoAcidResponse, configuration::RuntimeConfigurationResponse,
-        peptide::PeptideResponse, protein::ProteinResponse, taxonomy::TaxonomyResponse,
-        tools::SrmPrmResponse,
+        amino_acid::AminoAcidResponse, cluster_health::ClusterHealthResponse,
+        configuration::RuntimeConfigurationResponse, peptide::PeptideResponse,
+        protein::ProteinResponse, taxonomy::TaxonomyResponse, tools::SrmPrmResponse,
     },
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -139,6 +139,12 @@ impl<'a> Client<'a> {
     ///
     pub async fn get_configuration(&self) -> Result<RuntimeConfigurationResponse, ApiClientError> {
         self.get("/api/configuration").await
+    }
+
+    /// Fetches the Citus cluster health/connectivity graph from the server
+    ///
+    pub async fn get_cluster_health(&self) -> Result<ClusterHealthResponse, ApiClientError> {
+        self.get("/api/status/cluster-health").await
     }
 
     /// Get peptide by sequence

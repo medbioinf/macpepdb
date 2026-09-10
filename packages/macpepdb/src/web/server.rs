@@ -26,6 +26,7 @@ use crate::web::middleware::tracking_middleware;
 use crate::web::peptide_controller::PeptideController;
 use crate::web::protein_controller::ProteinController;
 use crate::web::server_state::{MatomoInfo, ServerState};
+use crate::web::status_controller::StatusController;
 use crate::web::taxonomy_controller::TaxonomyController;
 use crate::web::tools_controller::ToolsController;
 
@@ -136,6 +137,10 @@ pub async fn start(
         .nest(
             ToolsController::controller_path(),
             ToolsController::routes(server_state.clone()),
+        )
+        .nest(
+            StatusController::controller_path(),
+            StatusController::routes(server_state.clone()),
         );
 
     #[cfg(feature = "admin-api")]
