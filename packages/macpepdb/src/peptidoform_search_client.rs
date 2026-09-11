@@ -48,9 +48,9 @@ pub enum Error {
     NextHttpPeptidoform(Box<std::io::Error>),
     #[error("Peptide search error in performance test: {0}")]
     PeptideSearch(Box<crate::peptide_search::Error>),
-    #[error("Error building web client: {0}")]
+    #[error("Error building web client: {0:?}")]
     WebClientBuild(Box<reqwest::Error>),
-    #[error("HTTP request error while performing peptide search: {0}")]
+    #[error("HTTP request error while performing peptide search: {0:?}")]
     Request(Box<reqwest::Error>),
     #[error("Taxonomy table error in peptidoform search client: {0}")]
     TaxonomyTable(Box<crate::taxonomy_table::Error>),
