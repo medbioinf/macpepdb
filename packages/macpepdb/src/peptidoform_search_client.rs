@@ -36,9 +36,9 @@ pub enum Error {
     #[error("Database client error in performance test: {0}")]
     DbClient(Box<crate::client::Error>),
     #[error(
-        "Client url can either start with http:// or https:// for web API or postgresql:// for database"
+        "Client url `{0}` can either start with http:// or https:// for web API or postgresql:// for database"
     )]
-    InvalidClientUrl,
+    InvalidClientUrl(String),
     #[error(
         "Missing runtime configuration in database. A database built before the mass partitioning \
          switched to per-partition ranges needs `config migrate`."
@@ -104,7 +104,7 @@ impl PeptidoformSearchClient {
 
             Ok(PeptidoformSearchClient::Database(db_client, config))
         } else {
-            Err(Error::InvalidClientUrl)
+            Err(Error::InvalidClientUrl(url.to_string()))
         }
     }
 
