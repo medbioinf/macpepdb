@@ -1,4 +1,9 @@
 use dioxus::prelude::*;
+use plotly::{
+    common::{Font, Line, Marker, Mode, Title},
+    layout::{Annotation, Axis},
+    Layout, Plot, Scatter,
+};
 
 use crate::{
     api_client::Client, components::configuration::*, components::spinner::Spinner,
@@ -9,49 +14,68 @@ use macpepdb_web_common::responses::cluster_health::ClusterHealthResponse;
 
 /// Builds the Plotly traces/layout from the received graph and renders them into
 /// `#cluster-health-plot`. Plotly.js has no built-in graph-layout algorithm, so the backend
-/// already precomputed node positions (`x`/`y`); this script only shapes them into traces.
-/// `null` entries in the `x`/`y` arrays are Plotly's standard "break the line here" gap marker,
+/// already precomputed node positions (`x`/`y`); this only shapes them into traces.
+/// `None` entries in the `x`/`y` vectors are Plotly's standard "break the line here" gap marker,
 /// used to draw one disconnected line segment per edge within a single trace.
-const CLUSTER_HEALTH_PLOT_SCRIPT: &str = r#"
-    const data = await dioxus.recv();
-    const okX = [], okY = [], badX = [], badY = [];
-    for (const e of data.edges) {
-        const a = data.nodes[e.source];
-        const b = data.nodes[e.target];
-        const xs = e.healthy ? okX : badX;
-        const ys = e.healthy ? okY : badY;
-        xs.push(a.x, b.x, null);
-        ys.push(a.y, b.y, null);
+fn build_cluster_health_plot(data: &ClusterHealthResponse) -> Plot {
+    let (mut ok_x, mut ok_y, mut bad_x, mut bad_y) = (vec![], vec![], vec![], vec![]);
+    for edge in &data.edges {
+        let a = &data.nodes[edge.source];
+        let b = &data.nodes[edge.target];
+        let (xs, ys) = if edge.healthy {
+            (&mut ok_x, &mut ok_y)
+        } else {
+            (&mut bad_x, &mut bad_y)
+        };
+        xs.extend([Some(a.x), Some(b.x), None]);
+        ys.extend([Some(a.y), Some(b.y), None]);
     }
-    const traces = [
-        { x: okX, y: okY, mode: "lines", line: { color: "blue" }, name: "Working" },
-        { x: badX, y: badY, mode: "lines", line: { color: "green" }, name: "Failed" },
-        {
-            x: data.nodes.map(n => n.x),
-            y: data.nodes.map(n => n.y),
-            mode: "markers",
-            marker: { color: "gray" },
-            name: "Nodes",
-        },
-    ];
-    const annotations = data.nodes.map(n => ({
-        x: n.x,
-        y: n.y,
-        text: `${n.name}:${n.port}`,
-        showarrow: false,
-        yshift: 16,
-        font: { size: 16, weight: "bold" },
-        bgcolor: "rgba(255, 255, 255, 0.75)",
-    }));
-    const layout = {
-        title: "Inter-cluster connections",
-        xaxis: { visible: false },
-        yaxis: { visible: false },
-        showlegend: true,
-        annotations: annotations,
-    };
-    Plotly.newPlot("cluster-health-plot", traces, layout);
-"#;
+
+    let ok_trace = Scatter::new(ok_x, ok_y)
+        .mode(Mode::Lines)
+        .line(Line::new().color("blue"))
+        .name("Working");
+    let bad_trace = Scatter::new(bad_x, bad_y)
+        .mode(Mode::Lines)
+        .line(Line::new().color("green"))
+        .name("Failed");
+    let node_trace = Scatter::new(
+        data.nodes.iter().map(|n| n.x).collect::<Vec<_>>(),
+        data.nodes.iter().map(|n| n.y).collect::<Vec<_>>(),
+    )
+    .mode(Mode::Markers)
+    .marker(Marker::new().color("gray"))
+    .name("Nodes");
+
+    let annotations = data
+        .nodes
+        .iter()
+        .map(|n| {
+            Annotation::new()
+                .x(n.x)
+                .y(n.y)
+                .text(format!("<b>{}:{}</b>", n.name, n.port))
+                .show_arrow(false)
+                .y_shift(16.0)
+                .font(Font::new().size(16))
+                .background_color("rgba(255, 255, 255, 0.75)")
+        })
+        .collect();
+
+    let layout = Layout::new()
+        .title(Title::from("Inter-cluster connections"))
+        .x_axis(Axis::new().visible(false))
+        .y_axis(Axis::new().visible(false))
+        .show_legend(true)
+        .annotations(annotations);
+
+    let mut plot = Plot::new();
+    plot.add_trace(ok_trace);
+    plot.add_trace(bad_trace);
+    plot.add_trace(node_trace);
+    plot.set_layout(layout);
+    plot
+}
 
 pub fn Status() -> Element {
     use_future(move || async move { track_page_visit(vec![]).await });
@@ -72,10 +96,10 @@ pub fn Status() -> Element {
 
     use_effect(move || {
         if let Some(Ok(response)) = &*cluster_health.read_unchecked() {
-            let eval = document::eval(CLUSTER_HEALTH_PLOT_SCRIPT);
-            if let Err(err) = eval.send(response) {
-                error!("Failed to send cluster health data to Plotly: {err}");
-            }
+            let plot = build_cluster_health_plot(response);
+            spawn(async move {
+                plotly::bindings::new_plot("cluster-health-plot", &plot).await;
+            });
         }
     });
 
