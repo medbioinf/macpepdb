@@ -44,7 +44,7 @@ const CLUSTER_HEALTH_PLOT_SCRIPT: &str = r#"
         bgcolor: "rgba(255, 255, 255, 0.75)",
     }));
     const layout = {
-        title: data.healthy ? "Cluster health: OK" : "Cluster health: DEGRADED",
+        title: "Inter-cluster connections",
         xaxis: { visible: false },
         yaxis: { visible: false },
         showlegend: true,
@@ -88,7 +88,7 @@ pub fn Status() -> Element {
         }
         Configuration {}
         div {
-            h2 { "Inter-node connections" }
+            h2 { "Database cluster" }
             match &*cluster_health.read_unchecked() {
                 Some(Ok(response)) => {
                     let status_text = if response.healthy { "OK" } else { "DEGRADED" };
