@@ -4,7 +4,18 @@
 
 :80 {
 	root * /usr/share/caddy
-	header Access-Control-Allow-Origin "*"
+
+	header {
+        -Server
+        -Via
+        Content-Security-Policy "default-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'; img-src 'self' data:; <CSP_HEADER_ATTR> <CONNECT_SRC>"
+        X-Frame-Options SAMEORIGIN
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        Permissions-Policy "geolocation=('none'), midi=('none'), notifications=('none'), push=('none'), sync-xhr=('none'), microphone=('none'), camera=('none'), magnetometer=('none'), gyroscope=('none'), speaker=('none'), vibrate=('none'), fullscreen=('none'), payment=('none')"
+        Access-Control-Allow-Origin "<origin>"
+    }
+
 	try_files {path} {path}/ /index.html
 	file_server
 }

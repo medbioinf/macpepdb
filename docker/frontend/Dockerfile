@@ -8,8 +8,16 @@ COPY . .
 
 RUN dx build --release --web --package macpepdb-frontend
 
+RUN CSP_DYNAMIC="$(bash docker/frontend/create_content_security_header.sh)" && \
+    esc_csp=$(printf '%s' "$CSP_DYNAMIC" | sed 's/[&#\]/\\&/g') && \
+    sed -i "s#<CSP_HEADER_ATTR>#${esc_csp}#" docker/frontend/Caddyfile
+
 
 FROM caddy:2
 
-COPY docker/frontend/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build-stage /usr/src/macpepdb/docker/frontend/Caddyfile /etc/caddy/Caddyfile
 COPY --from=build-stage /usr/src/macpepdb/target/dx/macpepdb-frontend/release/web/public  /usr/share/caddy
+COPY docker/frontend/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
