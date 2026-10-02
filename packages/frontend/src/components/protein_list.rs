@@ -82,6 +82,7 @@ pub fn ProteinList(props: ProteinListProps) -> Element {
                             }
                             td {
                                 i { class: if protein.is_reviewed { "fas fa-check" } else { "fas fa-times" } }
+                                if protein.is_reviewed { " (SwissProt)" } else { " (TrEMBL)" }
                             }
                         }
                     }

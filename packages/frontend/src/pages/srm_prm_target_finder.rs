@@ -357,7 +357,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                             tr {
                                 td { "{protein.accession}" }
                                 td { "{protein.genes.join(\", \")}" }
-                                td { if protein.is_reviewed { "yes" } else { "no" } }
+                                td { if protein.is_reviewed { "SwissProt" } else { "TrEMBL" } }
                                 td {
                                     button {
                                         class: "btn btn-sm btn-primary",
