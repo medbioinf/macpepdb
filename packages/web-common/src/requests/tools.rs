@@ -13,6 +13,10 @@ pub struct SrmPrmRequest {
     pub max_variable_modifications: usize,
     pub ptms: Vec<PostTranslationalModificationRequest>,
     pub taxonomies: Vec<i32>,
+    /// Maximum number of missed cleavages a peptide may contain (default 0). Counted on the
+    /// fly via the configured protease.
+    #[serde(default)]
+    pub max_missed_cleavages: usize,
 }
 
 #[cfg(test)]
@@ -36,6 +40,7 @@ mod tests {
                 position: PtmPosition::Anywhere,
             }],
             taxonomies: vec![10090, 9606],
+            max_missed_cleavages: 1,
         };
 
         let json = serde_json::to_string(&request).unwrap();

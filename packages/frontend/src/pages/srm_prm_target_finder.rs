@@ -33,6 +33,7 @@ const DEFAULT_CHARGE_SPEC: &str = "2";
 
 /// Default max variable modifications
 const DEFAULT_MAX_VAR_MODIFICATIONS: i16 = 2;
+const DEFAULT_MAX_MISSED_CLEAVAGES: i16 = 0;
 
 /// Minimum length of the accession/gene search term before querying for suggestions.
 const MIN_PROTEIN_SEARCH_TERM_LENGTH: usize = 3;
@@ -265,6 +266,7 @@ pub fn SrmPrmTargetFinder() -> Element {
 
     // post translational modifications
     let mut max_var_modifications = use_signal(|| DEFAULT_MAX_VAR_MODIFICATIONS);
+    let mut max_missed_cleavages = use_signal(|| DEFAULT_MAX_MISSED_CLEAVAGES);
     let mut new_ptm_amino_acid = use_signal(|| ' ');
     let mut new_ptm_mass = use_signal(|| 0.0);
     let mut new_ptm_type = use_signal(|| PtmType::Static);
@@ -311,6 +313,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                 .iter()
                 .map(|taxonomy| taxonomy.id)
                 .collect(),
+            max_missed_cleavages: max_missed_cleavages.read_unchecked().max(0) as usize,
         };
 
         let response = client.search_srm_prm_targets(&request).await?;
@@ -720,6 +723,22 @@ pub fn SrmPrmTargetFinder() -> Element {
                 None => rsx! {
                     Spinner {}
                 },
+                }
+            }
+
+            SeparatorLine { label: "Digestion" }
+            div { class: "input-group mb-3",
+                span { class: "input-group-text", "Max missed cleavages" }
+                input {
+                    r#type: "number",
+                    class: "form-control",
+                    min: 0,
+                    step: 1,
+                    value: "{max_missed_cleavages}",
+                    oninput: move |evt| {
+                        max_missed_cleavages
+                            .set(evt.value().parse().unwrap_or(DEFAULT_MAX_MISSED_CLEAVAGES))
+                    },
                 }
             }
 

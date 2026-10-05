@@ -7,7 +7,7 @@ use crate::peptide::{IsPeptide, Peptidoform};
 use crate::peptide_search::{PeptideConditionBuilder, PeptideSearch};
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::protein_table::ProteinTable;
-use crate::sequence::IsSimpleSequence;
+use crate::sequence::{IsBitSequence, IsSimpleSequence};
 use crate::taxonomy_table::TaxonomyTable;
 use crate::web::DEFAULT_ERROR_HEADER_MAP;
 use crate::web::protein_controller::ProteinController;
@@ -165,7 +165,8 @@ impl ToolsController {
     ///     ],
     ///     "max_variable_modifications": 2,
     ///     "ptms": [],
-    ///     "taxonomies": [10090, 9606]
+    ///     "taxonomies": [10090, 9606],
+    ///     "max_missed_cleavages": 0
     /// }
     /// ```
     /// See [SrmPrmRequest] for details.
@@ -287,6 +288,16 @@ impl ToolsController {
                     .await?;
 
             for peptide in peptides {
+                // Missed cleavages are calculated on the fly via the protease
+                if server_state
+                    .configuration()
+                    .protease()
+                    .count_missed_cleavages(peptide.sequence().data())
+                    > payload.max_missed_cleavages
+                {
+                    continue;
+                }
+
                 // Check which taxonomy was matched
                 let taxonomy_ids = peptide
                     .unique_taxonomy_ids()

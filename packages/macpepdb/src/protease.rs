@@ -108,26 +108,14 @@ impl IsProtease for Trypsin {
         let arginine_byte: u8 = ARGININE.bit_code().as_bytes()[0];
         let proline_byte: u8 = PROLINE.bit_code().as_bytes()[0];
 
-        memchr::memchr2_iter(
-            lysine_byte,
-            arginine_byte,
-            sequence
-                .iter()
-                .map(|bit_code| bit_code.as_bytes()[0])
-                .collect::<Vec<u8>>()
-                .as_slice(),
-        )
-        .map(|pos| sequence.get(pos + 1).map(|bit_code| bit_code.as_bytes()[0]))
-        .filter_map(|next_aa| {
-            if let Some(next_aa) = next_aa
-                && next_aa == proline_byte
-            {
-                None
-            } else {
-                Some(())
-            }
-        })
-        .count()
+        // A K/R at the very end is the peptide's own cleavage site, not a missed one.
+        sequence
+            .windows(2)
+            .filter(|pair| {
+                let aa = pair[0].as_bytes()[0];
+                (aa == lysine_byte || aa == arginine_byte) && pair[1].as_bytes()[0] != proline_byte
+            })
+            .count()
     }
 }
 
@@ -152,7 +140,7 @@ impl IsProtease for Unspecific {
     }
 
     fn count_missed_cleavages(&self, sequence: &[AminoAcidBitCode]) -> usize {
-        sequence.len()
+        sequence.len().saturating_sub(1)
     }
 }
 
@@ -692,6 +680,11 @@ impl Protease {
         self.max_length
     }
 
+    /// Counts the missed cleavages within a peptide sequence.
+    pub fn count_missed_cleavages(&self, sequence: &[AminoAcidBitCode]) -> usize {
+        self.inner.count_missed_cleavages(sequence)
+    }
+
     /// Returns the maximum number of missed cleavages.
     pub fn max_missed_cleavages(&self) -> usize {
         self.max_missed_cleavages
@@ -912,5 +905,16 @@ mod tests {
 
         assert_eq!(peps.len(), expected_peps.len());
         assert_eq!(peps, expected_peps);
+    }
+
+    #[test]
+    fn test_trypsin_count_missed_cleavages() {
+        let count = |seq: &str| {
+            Trypsin.count_missed_cleavages(ProteinSequence::try_from(seq).unwrap().as_ref())
+        };
+        assert_eq!(count("AAAAAK"), 0);
+        assert_eq!(count("AAKAAK"), 1);
+        assert_eq!(count("AAKPAAK"), 0);
+        assert_eq!(count("AKAARAAK"), 2);
     }
 }
