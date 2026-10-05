@@ -2,17 +2,20 @@ use std::{
     collections::{HashMap, HashSet},
     fmt::Write,
     rc::Rc,
-    time::Duration,
 };
 
 use ::web_sys::window;
-use async_std::task::sleep;
 use dioxus::prelude::*;
 use wasm_bindgen::{JsCast, JsValue};
 
 use crate::{
     api_client::Client,
-    components::{separator_line::SeparatorLine, spinner::Spinner},
+    components::{
+        pagination::{sortable_th, PageSizeSelect, Pager},
+        protein_list::{ProteinSort, ProteinSortColumn, SortDirection},
+        separator_line::SeparatorLine,
+        spinner::Spinner,
+    },
     configuration::Configuration as AppConfiguration,
     errors::general_error::GeneralError,
     tracking::track_page_visit,
@@ -33,6 +36,67 @@ const DEFAULT_MAX_VAR_MODIFICATIONS: i16 = 2;
 
 /// Minimum length of the accession/gene search term before querying for suggestions.
 const MIN_PROTEIN_SEARCH_TERM_LENGTH: usize = 3;
+
+/// Rows per page by default in the protein/taxonomy selection tables.
+const DEFAULT_PAGE_SIZE: usize = 10;
+
+/// Selectable page sizes of the protein/taxonomy selection tables.
+const PAGE_SIZE_OPTIONS: [usize; 4] = [10, 25, 50, 100];
+
+/// Which proteins to show in the protein suggestions, by review status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewFilter {
+    SwissProt,
+    TrEMBL,
+    Both,
+}
+
+impl ReviewFilter {
+    fn label(self) -> &'static str {
+        match self {
+            ReviewFilter::SwissProt => "SwissProt",
+            ReviewFilter::TrEMBL => "TrEMBL",
+            ReviewFilter::Both => "SwissProt + TrEMBL",
+        }
+    }
+
+    fn parse(value: &str) -> Self {
+        match value {
+            "TrEMBL" => ReviewFilter::TrEMBL,
+            "SwissProt + TrEMBL" => ReviewFilter::Both,
+            _ => ReviewFilter::SwissProt,
+        }
+    }
+
+    fn matches(self, protein: &ProteinResponse<String>) -> bool {
+        match self {
+            ReviewFilter::SwissProt => protein.is_reviewed,
+            ReviewFilter::TrEMBL => !protein.is_reviewed,
+            ReviewFilter::Both => true,
+        }
+    }
+}
+
+/// Columns the taxonomy selection table can be sorted by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaxonomySortColumn {
+    Id,
+    ScientificName,
+}
+
+/// Returns the sorting after a click on `column`: toggles the direction if the column is
+/// already active, otherwise sorts ascending by the new column.
+fn toggle_taxonomy_sort(
+    current: Option<(TaxonomySortColumn, SortDirection)>,
+    column: TaxonomySortColumn,
+) -> (TaxonomySortColumn, SortDirection) {
+    match current {
+        Some((active, SortDirection::Ascending)) if active == column => {
+            (column, SortDirection::Descending)
+        }
+        _ => (column, SortDirection::Ascending),
+    }
+}
 
 // See `components::peptide_search::mass_search` for why these labels/parsers are
 // reproduced locally instead of living on `PtmType`/`PtmPosition` themselves.
@@ -111,21 +175,36 @@ pub fn SrmPrmTargetFinder() -> Element {
     use_future(move || async move { track_page_visit(vec![]).await });
 
     // targets: protein accession + charge spec (single int, comma list, or "N-M" range)
-    let mut new_target_accession = use_signal(String::new);
-    let mut new_target_charge_spec = use_signal(|| DEFAULT_CHARGE_SPEC.to_string());
+    let mut protein_search_term = use_signal(String::new);
+    // term submitted by button/enter; the counter makes re-submitting the same term re-run the search
+    let mut protein_search_submitted = use_signal(|| (0u32, String::new()));
+    // charge spec typed into the suggestion row, keyed by accession (default: DEFAULT_CHARGE_SPEC)
+    let mut target_charge_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
     let mut targets: Signal<Vec<(String, String)>> = use_signal(Vec::new);
 
     // taxonomy filter (multi-select)
     let mut taxonomy_search_term = use_signal(|| "".to_string());
+    // term submitted by button/enter; the counter makes re-submitting the same term re-run the search
+    let mut taxonomy_search_submitted = use_signal(|| (0u32, String::new()));
     let mut selected_taxonomies: Signal<Vec<TaxonomyResponse>> = use_signal(Vec::new);
+    let mut taxonomy_page = use_signal(|| 0usize);
+    let taxonomy_page_size = use_signal(|| DEFAULT_PAGE_SIZE);
+    let mut taxonomy_sort = use_signal(|| None::<(TaxonomySortColumn, SortDirection)>);
+
+    // pagination/sorting of the protein suggestions
+    let mut protein_page = use_signal(|| 0usize);
+    let protein_page_size = use_signal(|| DEFAULT_PAGE_SIZE);
+    let mut protein_sort = use_signal(|| None::<ProteinSort>);
+    // selection in the dropdown; only applied to the results when the search is submitted
+    let mut review_filter = use_signal(|| ReviewFilter::SwissProt);
+    let mut applied_review_filter = use_signal(|| ReviewFilter::SwissProt);
 
     let taxonomies: Resource<Result<Option<Vec<TaxonomyResponse>>, GeneralError>> =
         use_resource(move || async move {
-            if taxonomy_search_term.read_unchecked().is_empty() {
+            let search_term = taxonomy_search_submitted.read_unchecked().1.clone();
+            if search_term.is_empty() {
                 return Ok(None);
             }
-
-            sleep(Duration::from_millis(300)).await; // debounce
 
             let app_config = app_config.read_unchecked();
             let macpepdb_base_url = match app_config.as_ref() {
@@ -134,18 +213,21 @@ pub fn SrmPrmTargetFinder() -> Element {
             };
 
             let client = Client::new(macpepdb_base_url)?;
-            let search_term = taxonomy_search_term.read_unchecked().clone();
 
-            Ok(Some(client.search_taxonomies(&search_term).await?))
+            let found = client.search_taxonomies(&search_term).await?;
+
+            taxonomy_page.set(0);
+            taxonomy_sort.set(None);
+
+            Ok(Some(found))
         });
 
     let protein_suggestions: Resource<Result<Option<Vec<ProteinResponse<String>>>, GeneralError>> =
         use_resource(move || async move {
-            if new_target_accession.read_unchecked().trim().len() < MIN_PROTEIN_SEARCH_TERM_LENGTH {
+            let term = protein_search_submitted.read_unchecked().1.clone();
+            if term.len() < MIN_PROTEIN_SEARCH_TERM_LENGTH {
                 return Ok(None);
             }
-
-            sleep(Duration::from_millis(300)).await; // debounce
 
             let app_config = app_config.read_unchecked();
             let macpepdb_base_url = match app_config.as_ref() {
@@ -154,14 +236,32 @@ pub fn SrmPrmTargetFinder() -> Element {
             };
 
             let client = Client::new(macpepdb_base_url)?;
-            let term = new_target_accession.read_unchecked().trim().to_string();
 
             let mut proteins = client.search_protein(&term).await?;
 
             proteins.sort_unstable_by_key(|prot| !prot.is_reviewed);
 
+            protein_page.set(0);
+            protein_sort.set(None);
+
             Ok(Some(proteins))
         });
+
+    let mut submit_protein_search = move || {
+        let term = protein_search_term.read().trim().to_string();
+        if term.len() >= MIN_PROTEIN_SEARCH_TERM_LENGTH {
+            let counter = protein_search_submitted.read().0.wrapping_add(1);
+            applied_review_filter.set(review_filter());
+            protein_search_submitted.set((counter, term));
+        }
+    };
+    let mut submit_taxonomy_search = move || {
+        let term = taxonomy_search_term.read().trim().to_string();
+        if !term.is_empty() {
+            let counter = taxonomy_search_submitted.read().0.wrapping_add(1);
+            taxonomy_search_submitted.set((counter, term));
+        }
+    };
 
     // post translational modifications
     let mut max_var_modifications = use_signal(|| DEFAULT_MAX_VAR_MODIFICATIONS);
@@ -307,76 +407,6 @@ pub fn SrmPrmTargetFinder() -> Element {
         }
 
         SeparatorLine { label: "Targets (protein accession + charge)" }
-        div { class: "input-group mb-3",
-            span { class: "input-group-text", "Accession" }
-            input {
-                r#type: "text",
-                class: "form-control",
-                placeholder: "Search by accession or gene name",
-                value: "{new_target_accession}",
-                oninput: move |evt| new_target_accession.set(evt.value()),
-            }
-            span { class: "input-group-text", "Charge" }
-            input {
-                r#type: "text",
-                class: "form-control",
-                placeholder: "e.g. 2 or 2,3 or 2-4",
-                value: "{new_target_charge_spec}",
-                oninput: move |evt| new_target_charge_spec.set(evt.value()),
-            }
-            button {
-                class: "btn btn-primary",
-                r#type: "button",
-                disabled: new_target_accession.read().trim().is_empty()
-                    || new_target_charge_spec.read().trim().is_empty(),
-                onclick: move |_| {
-                    targets
-                        .push((
-                            new_target_accession.read().trim().to_string(),
-                            new_target_charge_spec.read().trim().to_string(),
-                        ));
-                    new_target_accession.set(String::new());
-                    new_target_charge_spec.set(DEFAULT_CHARGE_SPEC.to_string());
-                },
-                "Add target"
-            }
-        }
-        match &*protein_suggestions.read_unchecked() {
-            Some(Ok(Some(found_proteins))) if !found_proteins.is_empty() => rsx! {
-                table { class: "table table-sm table-striped table-hover mb-3",
-                    thead {
-                        tr {
-                            th { "Accession" }
-                            th { "Genes" }
-                            th { "Reviewed" }
-                            th { "" }
-                        }
-                    }
-                    tbody {
-                        for protein in found_proteins.iter().cloned() {
-                            tr {
-                                td { "{protein.accession}" }
-                                td { "{protein.genes.join(\", \")}" }
-                                td { if protein.is_reviewed { "SwissProt" } else { "TrEMBL" } }
-                                td {
-                                    button {
-                                        class: "btn btn-sm btn-primary",
-                                        r#type: "button",
-                                        disabled: new_target_accession.read().trim() == protein.accession,
-                                        onclick: move |_| new_target_accession.set(protein.accession.clone()),
-                                        "Use"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
-            Some(Err(err)) => rsx! {
-                div { class: "alert alert-danger mb-3", "Error searching for proteins: {err}" }
-            },
-            _ => rsx! {},
-        }
         div { class: "list-group mb-3",
             if targets.is_empty() {
                 div { class: "list-group-item list-group-item-warning", "No targets added yet." }
@@ -395,6 +425,163 @@ pub fn SrmPrmTargetFinder() -> Element {
                 }
             }
         }
+        div { class: "input-group mb-3",
+            span { class: "input-group-text", "Protein search *" }
+            input {
+                r#type: "text",
+                class: "form-control",
+                placeholder: "Search by accession or gene name (at least 3 characters)",
+                value: "{protein_search_term}",
+                oninput: move |evt| protein_search_term.set(evt.value()),
+                onkeydown: move |evt| {
+                    if evt.key() == Key::Enter {
+                        submit_protein_search();
+                    }
+                },
+            }
+            button {
+                class: "btn btn-primary",
+                r#type: "button",
+                disabled: protein_search_term.read().trim().len() < MIN_PROTEIN_SEARCH_TERM_LENGTH
+                    || protein_suggestions.pending(),
+                onclick: move |_| submit_protein_search(),
+                i { class: "fa-solid fa-search me-2" }
+                "Search"
+            }
+            select {
+                class: "form-select flex-grow-0 w-auto",
+                value: "{review_filter().label()}",
+                onchange: move |evt| {
+                    review_filter.set(ReviewFilter::parse(&evt.value()));
+                },
+                for filter in [ReviewFilter::SwissProt, ReviewFilter::TrEMBL, ReviewFilter::Both] {
+                    option {
+                        value: filter.label(),
+                        selected: filter == review_filter(),
+                        "{filter.label()}"
+                    }
+                }
+            }
+        }
+        if protein_suggestions.pending()
+            && protein_search_submitted.read().1.len() >= MIN_PROTEIN_SEARCH_TERM_LENGTH
+        {
+            div { class: "mb-3",
+                Spinner {}
+            }
+        } else {
+            match &*protein_suggestions.read_unchecked() {
+            Some(Ok(Some(found_proteins)))
+                if found_proteins.iter().any(|protein| applied_review_filter().matches(protein)) =>
+            {
+                let filter = applied_review_filter();
+                let mut sorted_proteins: Vec<ProteinResponse<String>> = found_proteins
+                    .iter()
+                    .filter(|protein| filter.matches(protein))
+                    .cloned()
+                    .collect();
+                if let Some(sort) = protein_sort() {
+                    sort.sort(&mut sorted_proteins, &HashMap::new());
+                }
+                let total = sorted_proteins.len();
+                let size = protein_page_size();
+                let page_count = total.div_ceil(size).max(1);
+                let current_page = protein_page().min(page_count - 1);
+                let page_proteins: Vec<ProteinResponse<String>> = sorted_proteins
+                    .into_iter()
+                    .skip(current_page * size)
+                    .take(size)
+                    .collect();
+                let direction_of = move |column: ProteinSortColumn| {
+                    protein_sort()
+                        .filter(|sort| sort.column == column)
+                        .map(|sort| sort.direction)
+                };
+                rsx! {
+                    div { class: "d-flex align-items-center justify-content-between mb-3",
+                        span { "{total} proteins found" }
+                        PageSizeSelect {
+                            id: "protein-target-page-size",
+                            label: "Proteins per page",
+                            page_size: protein_page_size,
+                            page: protein_page,
+                            options: PAGE_SIZE_OPTIONS.to_vec(),
+                        }
+                    }
+                    table { class: "table table-sm table-striped table-hover mb-3",
+                    thead {
+                        tr {
+                            {sortable_th("Accession", direction_of(ProteinSortColumn::Accession), EventHandler::new(move |_| {
+                                protein_sort.set(Some(ProteinSort::toggled(protein_sort(), ProteinSortColumn::Accession)));
+                                protein_page.set(0);
+                            }))}
+                            {sortable_th("Genes", direction_of(ProteinSortColumn::Genes), EventHandler::new(move |_| {
+                                protein_sort.set(Some(ProteinSort::toggled(protein_sort(), ProteinSortColumn::Genes)));
+                                protein_page.set(0);
+                            }))}
+                            th { "Reviewed" }
+                            th { "Select" }
+                        }
+                    }
+                    tbody {
+                        for protein in page_proteins {
+                            tr {
+                                td { "{protein.accession}" }
+                                td { "{protein.genes.join(\", \")}" }
+                                td { if protein.is_reviewed { "SwissProt" } else { "TrEMBL" } }
+                                td {
+                                    {
+                                        let accession = protein.accession.clone();
+                                        let charge_spec = target_charge_specs
+                                            .read()
+                                            .get(&accession)
+                                            .cloned()
+                                            .unwrap_or_else(|| DEFAULT_CHARGE_SPEC.to_string());
+                                        let already_added = targets.read().iter().any(|(a, c)| a == &accession && c == charge_spec.trim());
+                                        let input_accession = accession.clone();
+                                        rsx! {
+                                            div { class: "input-group input-group-sm",
+                                                input {
+                                                    r#type: "text",
+                                                    class: "form-control",
+                                                    style: "min-width: 7rem",
+                                                    placeholder: "Charge, e.g. 2 or 2,3 or 2-4",
+                                                    value: "{charge_spec}",
+                                                    oninput: move |evt| {
+                                                        target_charge_specs.write().insert(input_accession.clone(), evt.value());
+                                                    },
+                                                }
+                                                button {
+                                                    class: "btn btn-primary",
+                                                    r#type: "button",
+                                                    disabled: charge_spec.trim().is_empty() || already_added,
+                                                    onclick: move |_| {
+                                                        targets.push((accession.clone(), charge_spec.trim().to_string()));
+                                                    },
+                                                    "Add"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    }
+                    Pager { page: protein_page, page_count }
+                }
+            }
+            Some(Ok(Some(found_proteins))) if !found_proteins.is_empty() => rsx! {
+                div { class: "alert alert-info mb-3",
+                    "{found_proteins.len()} proteins found, but none are in {applied_review_filter().label()}. Change the filter and search again."
+                }
+            },
+            Some(Err(err)) => rsx! {
+                div { class: "alert alert-danger mb-3", "Error searching for proteins: {err}" }
+            },
+            _ => rsx! {},
+            }
+        }
 
         div {
             SeparatorLine { label: "Taxonomies" }
@@ -405,6 +592,19 @@ pub fn SrmPrmTargetFinder() -> Element {
                     class: "form-control",
                     value: "{taxonomy_search_term}",
                     oninput: move |evt| { taxonomy_search_term.set(evt.value()) },
+                    onkeydown: move |evt| {
+                        if evt.key() == Key::Enter {
+                            submit_taxonomy_search();
+                        }
+                    },
+                }
+                button {
+                    class: "btn btn-primary",
+                    r#type: "button",
+                    disabled: taxonomy_search_term.read().trim().is_empty() || taxonomies.pending(),
+                    onclick: move |_| submit_taxonomy_search(),
+                    i { class: "fa-solid fa-search me-2" }
+                    "Search"
                 }
             }
             div { class: "list-group mb-3",
@@ -422,19 +622,71 @@ pub fn SrmPrmTargetFinder() -> Element {
                     }
                 }
             }
-            match &*taxonomies.read_unchecked() {
-                Some(Ok(Some(found_taxonomies))) => rsx! {
-                    table { class: "table table-striped table-hover",
+            if taxonomies.pending() && !taxonomy_search_submitted.read().1.is_empty() {
+                div { class: "mb-3",
+                    Spinner {}
+                }
+            } else {
+                match &*taxonomies.read_unchecked() {
+                Some(Ok(Some(found_taxonomies))) => {
+                    let mut sorted_taxonomies = found_taxonomies.clone();
+                    if let Some((column, direction)) = taxonomy_sort() {
+                        sorted_taxonomies.sort_by(|a, b| {
+                            let ordering = match column {
+                                TaxonomySortColumn::Id => a.id.cmp(&b.id),
+                                TaxonomySortColumn::ScientificName => a
+                                    .scientific_name
+                                    .to_lowercase()
+                                    .cmp(&b.scientific_name.to_lowercase()),
+                            };
+                            match direction {
+                                SortDirection::Ascending => ordering,
+                                SortDirection::Descending => ordering.reverse(),
+                            }
+                        });
+                    }
+                    let total = sorted_taxonomies.len();
+                    let size = taxonomy_page_size();
+                    let page_count = total.div_ceil(size).max(1);
+                    let current_page = taxonomy_page().min(page_count - 1);
+                    let page_taxonomies: Vec<TaxonomyResponse> = sorted_taxonomies
+                        .into_iter()
+                        .skip(current_page * size)
+                        .take(size)
+                        .collect();
+                    let direction_of = move |column: TaxonomySortColumn| {
+                        taxonomy_sort().filter(|(c, _)| *c == column).map(|(_, d)| d)
+                    };
+                    rsx! {
+                        if total > 0 {
+                            div { class: "d-flex align-items-center justify-content-between mb-3",
+                                span { "{total} taxonomies found" }
+                                PageSizeSelect {
+                                    id: "taxonomy-page-size",
+                                    label: "Taxonomies per page",
+                                    page_size: taxonomy_page_size,
+                                    page: taxonomy_page,
+                                    options: PAGE_SIZE_OPTIONS.to_vec(),
+                                }
+                            }
+                        }
+                        table { class: "table table-striped table-hover",
                         thead {
                             tr {
-                                th { "ID" }
-                                th { "Scientific name" }
+                                {sortable_th("ID", direction_of(TaxonomySortColumn::Id), EventHandler::new(move |_| {
+                                    taxonomy_sort.set(Some(toggle_taxonomy_sort(taxonomy_sort(), TaxonomySortColumn::Id)));
+                                    taxonomy_page.set(0);
+                                }))}
+                                {sortable_th("Scientific name", direction_of(TaxonomySortColumn::ScientificName), EventHandler::new(move |_| {
+                                    taxonomy_sort.set(Some(toggle_taxonomy_sort(taxonomy_sort(), TaxonomySortColumn::ScientificName)));
+                                    taxonomy_page.set(0);
+                                }))}
                                 th { "Rank" }
                                 th { "Select" }
                             }
                         }
                         tbody {
-                            for taxonomy in found_taxonomies.iter().cloned() {
+                            for taxonomy in page_taxonomies {
                                 tr {
                                     td { "{taxonomy.id}" }
                                     td { "{taxonomy.scientific_name}" }
@@ -455,8 +707,10 @@ pub fn SrmPrmTargetFinder() -> Element {
                                 }
                             }
                         }
+                        }
+                        Pager { page: taxonomy_page, page_count }
                     }
-                },
+                }
                 Some(Ok(None)) => rsx! {
                     div {}
                 },
@@ -464,8 +718,9 @@ pub fn SrmPrmTargetFinder() -> Element {
                     div { "Error fetching taxonomies: {err}" }
                 },
                 None => rsx! {
-                    div { "Loading..." }
+                    Spinner {}
                 },
+                }
             }
 
             SeparatorLine { label: "Post translational modifications" }

@@ -17,3 +17,6 @@ pub mod spinner;
 
 /// Pagination
 pub mod paginated_peptide_list;
+
+/// Generic pager, page size select and sortable table header
+pub mod pagination;
