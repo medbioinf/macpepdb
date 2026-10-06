@@ -2,6 +2,27 @@ use serde::{Deserialize, Serialize};
 
 use crate::requests::ptm::PostTranslationalModificationRequest;
 
+/// Review status of the proteins considered by the SRM/PRM target finder, both as targets and
+/// when judging peptide uniqueness.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReviewStatus {
+    SwissProt,
+    TrEMBL,
+    #[default]
+    Both,
+}
+
+impl ReviewStatus {
+    /// Returns `true` if a protein with the given review state is considered.
+    pub fn matches(self, is_reviewed: bool) -> bool {
+        match self {
+            ReviewStatus::SwissProt => is_reviewed,
+            ReviewStatus::TrEMBL => !is_reviewed,
+            ReviewStatus::Both => true,
+        }
+    }
+}
+
 /// Request body for `POST /api/tools/prm-srm`. `targets` is a list of independent
 /// (protein accession, charge spec) targets, where charge spec is a single integer
 /// (`"2"`), a comma-separated list (`"2,3,4"`), or a range (`"2-4"`); `taxonomies` and
@@ -17,6 +38,10 @@ pub struct SrmPrmRequest {
     /// fly via the configured protease.
     #[serde(default)]
     pub max_missed_cleavages: usize,
+    /// Only proteins with this review status are considered: targets must match it and
+    /// peptides only have to be unique among proteins matching it (default: both).
+    #[serde(default)]
+    pub review_status: ReviewStatus,
 }
 
 #[cfg(test)]
@@ -41,6 +66,7 @@ mod tests {
             }],
             taxonomies: vec![10090, 9606],
             max_missed_cleavages: 1,
+            review_status: ReviewStatus::SwissProt,
         };
 
         let json = serde_json::to_string(&request).unwrap();

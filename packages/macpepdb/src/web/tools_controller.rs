@@ -19,7 +19,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use futures::{StreamExt, TryStreamExt};
 use http::StatusCode;
-use macpepdb_web_common::requests::tools::SrmPrmRequest;
+use macpepdb_web_common::requests::tools::{ReviewStatus, SrmPrmRequest};
 use macpepdb_web_common::responses::tools::{SrmPrmResponse, SrmPrmTarget};
 use thiserror::Error;
 
@@ -134,33 +134,44 @@ const SIMILAR_MZ_TOLERANCE_PPM: f64 = 10.0;
 enum Uniqueness {
     /// Unique in exactly one selected taxon, no other selected taxon contains it.
     Unique(i32),
-    /// Contained in exactly one selected taxon, but in more than one protein there. Unique
-    /// only if all of these proteins are isoforms of the target, needs a protein check.
-    CheckProteins(i32),
+    /// The arrays can not decide: the peptide occurs in more than one protein of its only
+    /// selected taxon (unique only if these are all isoforms of the target) or a review status
+    /// filter is active (the arrays count proteins of every review status).
+    CheckProteins,
     /// Not contained in any selected taxon or shared by multiple selected taxa.
     Shared,
 }
 
-/// Classifies a peptide by its taxonomy arrays within the selected taxa. Sharing with taxa
+/// Classifies a peptide by its taxonomy arrays within the selected taxonomies. Sharing with taxonomies
 /// outside the selection is ignored.
 ///
 /// # Arguments
 /// * `unique_taxonomy_ids` - Taxa in which the peptide occurs in exactly one protein
 /// * `non_unique_taxonomy_ids` - Taxa in which the peptide occurs in more than one protein
 /// * `selected` - Selected (species) taxonomy IDs
+/// * `review_status` - Review status of the considered proteins
 ///
 fn classify_uniqueness(
     unique_taxonomy_ids: &[i32],
     non_unique_taxonomy_ids: &[i32],
     selected: &HashSet<i32>,
+    review_status: ReviewStatus,
 ) -> Uniqueness {
     let mut matching = unique_taxonomy_ids
         .iter()
         .chain(non_unique_taxonomy_ids)
         .filter(|id| selected.contains(id));
-    match (matching.next(), matching.next()) {
+    let (first, second) = (matching.next(), matching.next());
+    if first.is_none() {
+        return Uniqueness::Shared;
+    }
+    if review_status != ReviewStatus::Both {
+        // Excluded proteins can remove sharing, so even several taxa might end up as one.
+        return Uniqueness::CheckProteins;
+    }
+    match (first, second) {
         (Some(&id), None) if unique_taxonomy_ids.contains(&id) => Uniqueness::Unique(id),
-        (Some(&id), None) => Uniqueness::CheckProteins(id),
+        (Some(_), None) => Uniqueness::CheckProteins,
         _ => Uniqueness::Shared,
     }
 }
@@ -177,35 +188,40 @@ fn base_accession(accession: &str) -> &str {
     }
 }
 
-/// Checks if all proteins of the peptide within the selected taxa are the target protein or
-/// its isoforms.
+/// Determines the taxonomy a peptide is unique in by looking at its proteins: considered are the
+/// proteins of the selected taxonomies with a matching review status. The peptide is unique if all of
+/// them are the target protein or its isoforms (and therefore in a single taxonomy).
 ///
 /// # Arguments
 /// * `protein_ids` - IDs of all proteins containing the peptide
-/// * `proteins` - Resolved proteins (ID -> (accession, taxonomy ID))
+/// * `proteins` - Resolved proteins (ID -> (accession, taxonomy ID, is reviewed))
 /// * `selected` - Selected (species) taxonomy IDs
+/// * `review_status` - Review status of the considered proteins
 /// * `target_base_accession` - Accession of the target without isoform suffix
 ///
-fn only_isoforms_of_target(
+fn resolve_unique_taxonomy(
     protein_ids: &[i32],
-    proteins: &HashMap<i32, (String, i32)>,
+    proteins: &HashMap<i32, (String, i32, bool)>,
     selected: &HashSet<i32>,
+    review_status: ReviewStatus,
     target_base_accession: &str,
-) -> bool {
-    let mut found_any = false;
+) -> Option<i32> {
+    let mut unique_taxon: Option<i32> = None;
     for protein_id in protein_ids {
-        let Some((accession, taxonomy_id)) = proteins.get(protein_id) else {
-            return false;
-        };
-        if !selected.contains(taxonomy_id) {
+        let (accession, taxonomy_id, is_reviewed) = proteins.get(protein_id)?;
+        if !selected.contains(taxonomy_id) || !review_status.matches(*is_reviewed) {
             continue;
         }
         if base_accession(accession) != target_base_accession {
-            return false;
+            return None;
         }
-        found_any = true;
+        match unique_taxon {
+            None => unique_taxon = Some(*taxonomy_id),
+            Some(taxon) if taxon != *taxonomy_id => return None,
+            Some(_) => {}
+        }
     }
-    found_any
+    unique_taxon
 }
 
 /// Marks targets which have another target (different sequence) with the same charge and an
@@ -403,11 +419,14 @@ impl ToolsController {
             if !selected_species_ids.contains(&protein.taxonomy_id()) {
                 continue;
             }
+            if !payload.review_status.matches(protein.is_reviewed()) {
+                continue;
+            }
             let target_base_accession = base_accession(protein.accession()).to_string();
 
             // First pass: missed cleavages + cheap uniqueness classification from the taxonomy
             // arrays. Peptides that are only non-unique because of isoforms need a protein check.
-            let mut classified: Vec<(Peptide, i32, bool)> = Vec::new();
+            let mut classified: Vec<(Peptide, Option<i32>)> = Vec::new();
             let mut pending_protein_ids: HashSet<i32> = HashSet::new();
             for peptide in peptides {
                 // Missed cleavages are calculated on the fly via the protease
@@ -424,48 +443,59 @@ impl ToolsController {
                     peptide.unique_taxonomy_ids(),
                     peptide.non_unique_taxonomy_ids(),
                     &selected_species_ids,
+                    payload.review_status,
                 ) {
                     Uniqueness::Shared => {}
                     Uniqueness::Unique(taxonomy_id) => {
-                        classified.push((peptide, taxonomy_id, false))
+                        classified.push((peptide, Some(taxonomy_id)))
                     }
-                    Uniqueness::CheckProteins(taxonomy_id) => {
+                    Uniqueness::CheckProteins => {
                         pending_protein_ids.extend(peptide.protein_ids().as_slice());
-                        classified.push((peptide, taxonomy_id, true));
+                        classified.push((peptide, None));
                     }
                 }
             }
 
             // Second pass: resolve the proteins of the remaining candidates (one query per
             // target). A peptide shared only by the target and its isoforms stays unique.
-            let proteins_by_id: HashMap<i32, (String, i32)> = if pending_protein_ids.is_empty() {
-                HashMap::new()
-            } else {
-                let ids: Vec<i32> = pending_protein_ids.into_iter().collect();
-                ProteinTable::new(server_state.db_client())
-                    .select_by_ids(&ids)
-                    .await?
-                    .try_filter_map(|protein| async move {
-                        Ok(protein.id().map(|id| {
-                            (id, (protein.accession().to_string(), protein.taxonomy_id()))
-                        }))
-                    })
-                    .try_collect()
-                    .await?
-            };
+            let proteins_by_id: HashMap<i32, (String, i32, bool)> =
+                if pending_protein_ids.is_empty() {
+                    HashMap::new()
+                } else {
+                    let ids: Vec<i32> = pending_protein_ids.into_iter().collect();
+                    ProteinTable::new(server_state.db_client())
+                        .select_by_ids(&ids)
+                        .await?
+                        .try_filter_map(|protein| async move {
+                            Ok(protein.id().map(|id| {
+                                (
+                                    id,
+                                    (
+                                        protein.accession().to_string(),
+                                        protein.taxonomy_id(),
+                                        protein.is_reviewed(),
+                                    ),
+                                )
+                            }))
+                        })
+                        .try_collect()
+                        .await?
+                };
 
             let verified = classified
                 .into_iter()
-                .filter(|(peptide, _, needs_protein_check)| {
-                    !needs_protein_check
-                        || only_isoforms_of_target(
+                .filter_map(|(peptide, taxonomy_id)| {
+                    let taxonomy_id = taxonomy_id.or_else(|| {
+                        resolve_unique_taxonomy(
                             peptide.protein_ids().as_slice(),
                             &proteins_by_id,
                             &selected_species_ids,
+                            payload.review_status,
                             &target_base_accession,
                         )
+                    })?;
+                    Some((peptide, taxonomy_id))
                 })
-                .map(|(peptide, taxonomy_id, _)| (peptide, taxonomy_id))
                 .collect::<Vec<_>>();
 
             for (peptide, taxonomy_id) in verified {
@@ -586,10 +616,12 @@ mod tests {
         ids.iter().copied().collect()
     }
 
+    use ReviewStatus::{Both, SwissProt};
+
     #[test]
     fn classify_unique_in_single_taxon() {
         assert_eq!(
-            classify_uniqueness(&[9606], &[], &selected(&[9606, 10090])),
+            classify_uniqueness(&[9606], &[], &selected(&[9606, 10090]), Both),
             Uniqueness::Unique(9606)
         );
     }
@@ -597,7 +629,7 @@ mod tests {
     #[test]
     fn classify_ignores_taxa_outside_selection() {
         assert_eq!(
-            classify_uniqueness(&[9606], &[10090], &selected(&[9606])),
+            classify_uniqueness(&[9606], &[10090], &selected(&[9606]), Both),
             Uniqueness::Unique(9606)
         );
     }
@@ -605,11 +637,11 @@ mod tests {
     #[test]
     fn classify_shared_between_selected_taxa() {
         assert_eq!(
-            classify_uniqueness(&[9606], &[10090], &selected(&[9606, 10090])),
+            classify_uniqueness(&[9606], &[10090], &selected(&[9606, 10090]), Both),
             Uniqueness::Shared
         );
         assert_eq!(
-            classify_uniqueness(&[9606, 10090], &[], &selected(&[9606, 10090])),
+            classify_uniqueness(&[9606, 10090], &[], &selected(&[9606, 10090]), Both),
             Uniqueness::Shared
         );
     }
@@ -617,19 +649,35 @@ mod tests {
     #[test]
     fn classify_non_unique_needs_protein_check() {
         assert_eq!(
-            classify_uniqueness(&[], &[9606], &selected(&[9606])),
-            Uniqueness::CheckProteins(9606)
+            classify_uniqueness(&[], &[9606], &selected(&[9606]), Both),
+            Uniqueness::CheckProteins
         );
     }
 
     #[test]
     fn classify_empty_arrays_or_no_match() {
         assert_eq!(
-            classify_uniqueness(&[], &[], &selected(&[9606])),
+            classify_uniqueness(&[], &[], &selected(&[9606]), Both),
             Uniqueness::Shared
         );
         assert_eq!(
-            classify_uniqueness(&[10090], &[], &selected(&[9606])),
+            classify_uniqueness(&[10090], &[], &selected(&[9606]), Both),
+            Uniqueness::Shared
+        );
+    }
+
+    #[test]
+    fn classify_review_status_filter_always_checks_proteins() {
+        assert_eq!(
+            classify_uniqueness(&[9606], &[], &selected(&[9606]), SwissProt),
+            Uniqueness::CheckProteins
+        );
+        assert_eq!(
+            classify_uniqueness(&[9606], &[10090], &selected(&[9606, 10090]), SwissProt),
+            Uniqueness::CheckProteins
+        );
+        assert_eq!(
+            classify_uniqueness(&[10090], &[], &selected(&[9606]), SwissProt),
             Uniqueness::Shared
         );
     }
@@ -642,21 +690,32 @@ mod tests {
     }
 
     #[test]
-    fn only_isoforms_of_target_cases() {
-        let proteins: HashMap<i32, (String, i32)> = HashMap::from([
-            (1, ("P12345".to_string(), 9606)),
-            (2, ("P12345-2".to_string(), 9606)),
-            (3, ("Q99999".to_string(), 9606)),
-            (4, ("Q99999".to_string(), 10090)),
+    fn resolve_unique_taxonomy_cases() {
+        let proteins: HashMap<i32, (String, i32, bool)> = HashMap::from([
+            (1, ("P12345".to_string(), 9606, true)),
+            (2, ("P12345-2".to_string(), 9606, true)),
+            (3, ("Q99999".to_string(), 9606, true)),
+            (4, ("Q99999".to_string(), 10090, true)),
+            (5, ("A0A000".to_string(), 9606, false)),
+            (6, ("P12345".to_string(), 10090, true)),
         ]);
         let sel = selected(&[9606]);
-        assert!(only_isoforms_of_target(&[1, 2], &proteins, &sel, "P12345"));
-        assert!(!only_isoforms_of_target(&[1, 3], &proteins, &sel, "P12345"));
+        let resolve = |ids: &[i32], sel: &HashSet<i32>, status| {
+            resolve_unique_taxonomy(ids, &proteins, sel, status, "P12345")
+        };
+        assert_eq!(resolve(&[1, 2], &sel, Both), Some(9606));
+        assert_eq!(resolve(&[1, 3], &sel, Both), None);
         // protein outside the selected taxa is ignored
-        assert!(only_isoforms_of_target(&[1, 4], &proteins, &sel, "P12345"));
+        assert_eq!(resolve(&[1, 4], &sel, Both), Some(9606));
         // unresolved protein or no protein at all
-        assert!(!only_isoforms_of_target(&[1, 9], &proteins, &sel, "P12345"));
-        assert!(!only_isoforms_of_target(&[], &proteins, &sel, "P12345"));
+        assert_eq!(resolve(&[1, 9], &sel, Both), None);
+        assert_eq!(resolve(&[], &sel, Both), None);
+        // TrEMBL entry only counts if its status is considered
+        assert_eq!(resolve(&[1, 5], &sel, Both), None);
+        assert_eq!(resolve(&[1, 5], &sel, SwissProt), Some(9606));
+        // same accession in two selected taxa: shared between taxa
+        assert_eq!(resolve(&[1, 6], &selected(&[9606, 10090]), Both), None);
+        assert_eq!(resolve(&[1, 6], &selected(&[9606]), Both), Some(9606));
     }
 
     fn target(sequence: &str, mz: f64, charge: u8) -> SrmPrmTarget {

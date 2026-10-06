@@ -23,7 +23,7 @@ use crate::{
 use macpepdb_web_common::{
     requests::{
         ptm::{PostTranslationalModificationRequest, PtmPosition, PtmType},
-        tools::SrmPrmRequest,
+        tools::{ReviewStatus, SrmPrmRequest},
     },
     responses::{protein::ProteinResponse, taxonomy::TaxonomyResponse},
 };
@@ -44,7 +44,7 @@ const DEFAULT_PAGE_SIZE: usize = 10;
 /// Selectable page sizes of the protein/taxonomy selection tables.
 const PAGE_SIZE_OPTIONS: [usize; 4] = [10, 25, 50, 100];
 
-/// Which proteins to show in the protein suggestions, by review status.
+/// Which proteins to consider, by review status.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ReviewFilter {
     SwissProt,
@@ -66,6 +66,14 @@ impl ReviewFilter {
             "TrEMBL" => ReviewFilter::TrEMBL,
             "SwissProt + TrEMBL" => ReviewFilter::Both,
             _ => ReviewFilter::SwissProt,
+        }
+    }
+
+    fn status(self) -> ReviewStatus {
+        match self {
+            ReviewFilter::SwissProt => ReviewStatus::SwissProt,
+            ReviewFilter::TrEMBL => ReviewStatus::TrEMBL,
+            ReviewFilter::Both => ReviewStatus::Both,
         }
     }
 
@@ -202,9 +210,8 @@ pub fn SrmPrmTargetFinder() -> Element {
     let mut protein_page = use_signal(|| 0usize);
     let protein_page_size = use_signal(|| DEFAULT_PAGE_SIZE);
     let mut protein_sort = use_signal(|| None::<ProteinSort>);
-    // selection in the dropdown; only applied to the results when the search is submitted
+    // review status of the proteins to consider: suggestions, targets and peptide uniqueness
     let mut review_filter = use_signal(|| ReviewFilter::SwissProt);
-    let mut applied_review_filter = use_signal(|| ReviewFilter::SwissProt);
 
     let taxonomies: Resource<Result<Option<Vec<TaxonomyResponse>>, GeneralError>> =
         use_resource(move || async move {
@@ -266,7 +273,6 @@ pub fn SrmPrmTargetFinder() -> Element {
         let term = protein_search_term.read().trim().to_string();
         if term.len() >= MIN_PROTEIN_SEARCH_TERM_LENGTH {
             let counter = protein_search_submitted.read().0.wrapping_add(1);
-            applied_review_filter.set(review_filter());
             protein_search_submitted.set((counter, term));
         }
     };
@@ -328,6 +334,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                 .map(|taxonomy| taxonomy.id)
                 .collect(),
             max_missed_cleavages: max_missed_cleavages.read_unchecked().max(0) as usize,
+            review_status: review_filter.read_unchecked().status(),
         };
 
         let response = client.search_srm_prm_targets(&request).await?;
@@ -428,6 +435,7 @@ pub fn SrmPrmTargetFinder() -> Element {
             li { "Within that taxonomy the peptide must stem from a single protein. A protein and its isoforms (accession suffix `-N`) count as one protein." }
             li { "A peptide shared with another protein of the same taxonomy is removed." }
             li { "Sharing with organisms outside the selected taxonomies is ignored." }
+            li { "Only proteins with the selected review status (SwissProt, TrEMBL or both) are considered: targets must match it and sharing with proteins of another review status is ignored. A peptide can therefore be unique among SwissProt proteins but not among SwissProt + TrEMBL." }
             li { "Repeats of the peptide within one protein do not affect uniqueness." }
             li { "Uniqueness is defined by the initial input data of the database (loaded UniProt files, protease, missed cleavages (check start page))." }
             li { "Highlighted rows: another target has a similar m/z at the same charge, e.g. due to PTMs." }
@@ -458,30 +466,6 @@ pub fn SrmPrmTargetFinder() -> Element {
         }
         if let Some(err) = taxonomy_add_error() {
             div { class: "alert alert-danger", "{err}" }
-        }
-        div { class: "list-group mb-3",
-            for taxonomy in selected_taxonomies.iter().map(|t| t.clone()) {
-                div { class: "list-group-item d-flex justify-content-between align-items-center",
-                    "{taxonomy.scientific_name} (ID: {taxonomy.id}, Rank: {taxonomy.rank_name.clone().unwrap_or_default()})"
-                    button {
-                        class: "btn btn-danger",
-                        r#type: "button",
-                        onclick: move |_| {
-                            selected_taxonomies.write().retain(|t| t.id != taxonomy.id);
-                            selected_species_ids.write().remove(&taxonomy.id);
-                            // drop targets which are not covered by any remaining taxonomy
-                            let selected_species_ids = selected_species_ids.read();
-                            let target_taxonomy_ids = target_taxonomy_ids.read();
-                            targets.write().retain(|(accession, _)| {
-                                target_taxonomy_ids.get(accession).is_some_and(|species_id| {
-                                    selected_species_ids.values().any(|ids| ids.contains(species_id))
-                                })
-                            });
-                        },
-                        i { class: "fa-solid fa-xmark" }
-                    }
-                }
-            }
         }
         if taxonomies.pending() && !taxonomy_search_submitted.read().1.is_empty() {
             div { class: "mb-3",
@@ -588,7 +572,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                                                 }
                                             });
                                         },
-                                        "Add"
+                                        "Add taxonomy"
                                     }
                                 }
                             }
@@ -609,26 +593,52 @@ pub fn SrmPrmTargetFinder() -> Element {
             },
             }
         }
-
-        SeparatorLine { label: "Targets (protein accession + charge)" }
-        div { class: "list-group mb-3",
-            if targets.is_empty() {
-                div { class: "list-group-item list-group-item-warning", "No targets added yet." }
-            }
-            for (idx , target) in targets.iter().enumerate() {
+        div { class: "list-group",
+            for taxonomy in selected_taxonomies.iter().map(|t| t.clone()) {
                 div { class: "list-group-item d-flex justify-content-between align-items-center",
-                    "{target.0}, charge {target.1}"
+                    "{taxonomy.scientific_name} (ID: {taxonomy.id}, Rank: {taxonomy.rank_name.clone().unwrap_or_default()})"
                     button {
                         class: "btn btn-danger",
                         r#type: "button",
                         onclick: move |_| {
-                            targets.remove(idx);
+                            selected_taxonomies.write().retain(|t| t.id != taxonomy.id);
+                            selected_species_ids.write().remove(&taxonomy.id);
+                            // drop targets which are not covered by any remaining taxonomy
+                            let selected_species_ids = selected_species_ids.read();
+                            let target_taxonomy_ids = target_taxonomy_ids.read();
+                            targets.write().retain(|(accession, _)| {
+                                target_taxonomy_ids.get(accession).is_some_and(|species_id| {
+                                    selected_species_ids.values().any(|ids| ids.contains(species_id))
+                                })
+                            });
                         },
                         i { class: "fa-solid fa-xmark" }
                     }
                 }
             }
         }
+
+        SeparatorLine { label: "Review status" }
+        div { class: "input-group mb-1",
+            span { class: "input-group-text", "Review status to consider" }
+            select {
+                class: "form-select",
+                value: "{review_filter().label()}",
+                onchange: move |evt| {
+                    review_filter.set(ReviewFilter::parse(&evt.value()));
+                },
+                for filter in [ReviewFilter::SwissProt, ReviewFilter::TrEMBL, ReviewFilter::Both] {
+                    option {
+                        value: filter.label(),
+                        selected: filter == review_filter(),
+                        "{filter.label()}"
+                    }
+                }
+            }
+        }
+        small { class: "text-muted px-2 mb-3", "Affects the protein search and the peptide uniqueness." }
+
+        SeparatorLine { label: "Targets (protein accession + charge)" }
         if selected_taxonomies.is_empty() {
             div { class: "alert alert-warning", "Select at least one taxonomy first." }
         }
@@ -657,20 +667,6 @@ pub fn SrmPrmTargetFinder() -> Element {
                 i { class: "fa-solid fa-search me-2" }
                 "Search"
             }
-            select {
-                class: "form-select flex-grow-0 w-auto",
-                value: "{review_filter().label()}",
-                onchange: move |evt| {
-                    review_filter.set(ReviewFilter::parse(&evt.value()));
-                },
-                for filter in [ReviewFilter::SwissProt, ReviewFilter::TrEMBL, ReviewFilter::Both] {
-                    option {
-                        value: filter.label(),
-                        selected: filter == review_filter(),
-                        "{filter.label()}"
-                    }
-                }
-            }
         }
         if protein_suggestions.pending()
             && protein_search_submitted.read().1.len() >= MIN_PROTEIN_SEARCH_TERM_LENGTH
@@ -681,9 +677,9 @@ pub fn SrmPrmTargetFinder() -> Element {
         } else {
             match &*protein_suggestions.read_unchecked() {
             Some(Ok(Some(found_proteins)))
-                if found_proteins.iter().any(|protein| applied_review_filter().matches(protein) && in_selected_taxonomy(protein)) =>
+                if found_proteins.iter().any(|protein| review_filter().matches(protein) && in_selected_taxonomy(protein)) =>
             {
-                let filter = applied_review_filter();
+                let filter = review_filter();
                 let mut sorted_proteins: Vec<ProteinResponse<String>> = found_proteins
                     .iter()
                     .filter(|protein| filter.matches(protein) && in_selected_taxonomy(protein))
@@ -729,7 +725,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                                 protein_page.set(0);
                             }))}
                             th { "Reviewed" }
-                            th { "Select" }
+                            th { "Charge state(s)" }
                         }
                     }
                     tbody {
@@ -769,7 +765,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                                                         target_taxonomy_ids.write().insert(accession.clone(), protein_taxonomy_id);
                                                         targets.push((accession.clone(), charge_spec.trim().to_string()));
                                                     },
-                                                    "Add"
+                                                    "Add target"
                                                 }
                                             }
                                         }
@@ -784,13 +780,32 @@ pub fn SrmPrmTargetFinder() -> Element {
             }
             Some(Ok(Some(found_proteins))) if !found_proteins.is_empty() => rsx! {
                 div { class: "alert alert-info mb-3",
-                    "{found_proteins.len()} proteins found, but none are {applied_review_filter().label()} and part of the selected taxonomies. Change the filter or taxonomies and search again."
+                    "{found_proteins.len()} proteins found, but none are {review_filter().label()} and part of the selected taxonomies. Change the filter or taxonomies and search again."
                 }
             },
             Some(Err(err)) => rsx! {
                 div { class: "alert alert-danger mb-3", "Error searching for proteins: {err}" }
             },
             _ => rsx! {},
+            }
+        }
+
+        div { class: "list-group",
+            if targets.is_empty() {
+                div { class: "list-group-item list-group-item-warning", "No targets added yet." }
+            }
+            for (idx , target) in targets.iter().enumerate() {
+                div { class: "list-group-item d-flex justify-content-between align-items-center",
+                    "{target.0}, charge {target.1}"
+                    button {
+                        class: "btn btn-danger",
+                        r#type: "button",
+                        onclick: move |_| {
+                            targets.remove(idx);
+                        },
+                        i { class: "fa-solid fa-xmark" }
+                    }
+                }
             }
         }
 
