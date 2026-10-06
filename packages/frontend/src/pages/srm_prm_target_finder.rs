@@ -182,6 +182,12 @@ pub fn SrmPrmTargetFinder() -> Element {
     // charge spec typed into the suggestion row, keyed by accession (default: DEFAULT_CHARGE_SPEC)
     let mut target_charge_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
     let mut targets: Signal<Vec<(String, String)>> = use_signal(Vec::new);
+    // species contained in each selected taxonomy (selected taxonomy ID -> species IDs); proteins are
+    // matched by their species taxonomy
+    let mut selected_species_ids: Signal<HashMap<i32, HashSet<i32>>> = use_signal(HashMap::new);
+    let mut taxonomy_add_error = use_signal(|| None::<String>);
+    // species taxonomy ID of each added target accession, to drop targets with their taxonomy
+    let mut target_taxonomy_ids: Signal<HashMap<String, i32>> = use_signal(HashMap::new);
 
     // taxonomy filter (multi-select)
     let mut taxonomy_search_term = use_signal(|| "".to_string());
@@ -247,6 +253,14 @@ pub fn SrmPrmTargetFinder() -> Element {
 
             Ok(Some(proteins))
         });
+
+    // proteins are only offered for the selected taxonomies
+    let in_selected_taxonomy = move |protein: &ProteinResponse<String>| {
+        selected_species_ids
+            .read()
+            .values()
+            .any(|species_ids| species_ids.contains(&protein.taxonomy_id))
+    };
 
     let mut submit_protein_search = move || {
         let term = protein_search_term.read().trim().to_string();
@@ -403,10 +417,197 @@ pub fn SrmPrmTargetFinder() -> Element {
     rsx! {
         h1 { "SRM / PRM target finder" }
         p {
-            """"
-            "For each target protein accession and charge (single charge, comma separated list, or a range like `2-4`), MaCPepDB digests the protein and returns the peptides which are unique for the in the given species. \
-            If multiple species were selected, MaCPepDB will also remove all peptides which might be unique in each species but occure on more then one of the selected. \
-            Same is true if a higher taxonomy like genus is selected. Higher taxonomies getting resolved to contained species."
+            "Finds peptides of the given proteins which are unique for the selected taxonomies. \
+            First select the taxonomies (any rank, resolved to the contained species), then the target proteins and their charges. \
+            Proteins can only be selected for the selected taxonomies; if a taxonomy is removed, its targets are removed as well. \
+            Uniqueness is only judged within the selected taxonomies, sharing with organisms outside the selection is ignored."
+        }
+        h2 { class: "h5", "Uniqueness rules" }
+        ul {
+            li { "A peptide is a target only if it occurs in exactly one of the selected taxonomies; occurring in two or more selected taxonomies (rank species) removes it." }
+            li { "Within that taxonomy the peptide must stem from a single protein. A protein and its isoforms (accession suffix `-N`) count as one protein." }
+            li { "A peptide shared with another protein of the same taxonomy is removed." }
+            li { "Sharing with organisms outside the selected taxonomies is ignored." }
+            li { "Repeats of the peptide within one protein do not affect uniqueness." }
+            li { "Uniqueness is defined by the initial input data of the database (loaded UniProt files, protease, missed cleavages (check start page))." }
+            li { "Highlighted rows: another target has a similar m/z at the same charge, e.g. due to PTMs." }
+        }
+
+        SeparatorLine { label: "Taxonomies" }
+        div { class: "input-group mb-3",
+            span { class: "input-group-text", "Taxonomy search *" }
+            input {
+                r#type: "text",
+                class: "form-control",
+                value: "{taxonomy_search_term}",
+                oninput: move |evt| { taxonomy_search_term.set(evt.value()) },
+                onkeydown: move |evt| {
+                    if evt.key() == Key::Enter {
+                        submit_taxonomy_search();
+                    }
+                },
+            }
+            button {
+                class: "btn btn-primary",
+                r#type: "button",
+                disabled: taxonomy_search_term.read().trim().is_empty() || taxonomies.pending(),
+                onclick: move |_| submit_taxonomy_search(),
+                i { class: "fa-solid fa-search me-2" }
+                "Search"
+            }
+        }
+        if let Some(err) = taxonomy_add_error() {
+            div { class: "alert alert-danger", "{err}" }
+        }
+        div { class: "list-group mb-3",
+            for taxonomy in selected_taxonomies.iter().map(|t| t.clone()) {
+                div { class: "list-group-item d-flex justify-content-between align-items-center",
+                    "{taxonomy.scientific_name} (ID: {taxonomy.id}, Rank: {taxonomy.rank_name.clone().unwrap_or_default()})"
+                    button {
+                        class: "btn btn-danger",
+                        r#type: "button",
+                        onclick: move |_| {
+                            selected_taxonomies.write().retain(|t| t.id != taxonomy.id);
+                            selected_species_ids.write().remove(&taxonomy.id);
+                            // drop targets which are not covered by any remaining taxonomy
+                            let selected_species_ids = selected_species_ids.read();
+                            let target_taxonomy_ids = target_taxonomy_ids.read();
+                            targets.write().retain(|(accession, _)| {
+                                target_taxonomy_ids.get(accession).is_some_and(|species_id| {
+                                    selected_species_ids.values().any(|ids| ids.contains(species_id))
+                                })
+                            });
+                        },
+                        i { class: "fa-solid fa-xmark" }
+                    }
+                }
+            }
+        }
+        if taxonomies.pending() && !taxonomy_search_submitted.read().1.is_empty() {
+            div { class: "mb-3",
+                Spinner {}
+            }
+        } else {
+            match &*taxonomies.read_unchecked() {
+            Some(Ok(Some(found_taxonomies))) => {
+                let mut sorted_taxonomies = found_taxonomies.clone();
+                if let Some((column, direction)) = taxonomy_sort() {
+                    sorted_taxonomies.sort_by(|a, b| {
+                        let ordering = match column {
+                            TaxonomySortColumn::Id => a.id.cmp(&b.id),
+                            TaxonomySortColumn::ScientificName => a
+                                .scientific_name
+                                .to_lowercase()
+                                .cmp(&b.scientific_name.to_lowercase()),
+                        };
+                        match direction {
+                            SortDirection::Ascending => ordering,
+                            SortDirection::Descending => ordering.reverse(),
+                        }
+                    });
+                }
+                let total = sorted_taxonomies.len();
+                let size = taxonomy_page_size();
+                let page_count = total.div_ceil(size).max(1);
+                let current_page = taxonomy_page().min(page_count - 1);
+                let page_taxonomies: Vec<TaxonomyResponse> = sorted_taxonomies
+                    .into_iter()
+                    .skip(current_page * size)
+                    .take(size)
+                    .collect();
+                let direction_of = move |column: TaxonomySortColumn| {
+                    taxonomy_sort().filter(|(c, _)| *c == column).map(|(_, d)| d)
+                };
+                rsx! {
+                    if total > 0 {
+                        div { class: "d-flex align-items-center justify-content-between mb-3",
+                            span { "{total} taxonomies found" }
+                            PageSizeSelect {
+                                id: "taxonomy-page-size",
+                                label: "Taxonomies per page",
+                                page_size: taxonomy_page_size,
+                                page: taxonomy_page,
+                                options: PAGE_SIZE_OPTIONS.to_vec(),
+                            }
+                        }
+                    }
+                    table { class: "table table-striped table-hover",
+                    thead {
+                        tr {
+                            {sortable_th("ID", direction_of(TaxonomySortColumn::Id), EventHandler::new(move |_| {
+                                taxonomy_sort.set(Some(toggle_taxonomy_sort(taxonomy_sort(), TaxonomySortColumn::Id)));
+                                taxonomy_page.set(0);
+                            }))}
+                            {sortable_th("Scientific name", direction_of(TaxonomySortColumn::ScientificName), EventHandler::new(move |_| {
+                                taxonomy_sort.set(Some(toggle_taxonomy_sort(taxonomy_sort(), TaxonomySortColumn::ScientificName)));
+                                taxonomy_page.set(0);
+                            }))}
+                            th { "Rank" }
+                            th { "Select" }
+                        }
+                    }
+                    tbody {
+                        for taxonomy in page_taxonomies {
+                            tr {
+                                td { "{taxonomy.id}" }
+                                td { "{taxonomy.scientific_name}" }
+                                td { "{taxonomy.rank_name.clone().unwrap_or_default()}" }
+                                td {
+                                    button {
+                                        class: "btn btn-sm btn-primary",
+                                        r#type: "button",
+                                        disabled: selected_taxonomies.read().iter().any(|t| t.id == taxonomy.id),
+                                        onclick: move |_| {
+                                            if selected_taxonomies.read().iter().any(|t| t.id == taxonomy.id) {
+                                                return;
+                                            }
+                                            let taxonomy = taxonomy.clone();
+                                            spawn(async move {
+                                                let base_url = app_config
+                                                    .read_unchecked()
+                                                    .as_ref()
+                                                    .map(|config| config.get_macpepdb_base_url().to_string());
+                                                let Some(base_url) = base_url else {
+                                                    taxonomy_add_error.set(Some(GeneralError::ConfigurationNotLoaded.to_string()));
+                                                    return;
+                                                };
+                                                let species = match Client::new(&base_url) {
+                                                    Ok(client) => client.get_sub_species(taxonomy.id).await.map_err(GeneralError::from),
+                                                    Err(err) => Err(GeneralError::from(err)),
+                                                };
+                                                match species {
+                                                    Ok(species) => {
+                                                        taxonomy_add_error.set(None);
+                                                        selected_species_ids.write().insert(
+                                                            taxonomy.id,
+                                                            species.iter().map(|species| species.id).collect(),
+                                                        );
+                                                        selected_taxonomies.write().push(taxonomy);
+                                                    }
+                                                    Err(err) => taxonomy_add_error.set(Some(format!("Error resolving species of {}: {err}", taxonomy.scientific_name))),
+                                                }
+                                            });
+                                        },
+                                        "Add"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    }
+                    Pager { page: taxonomy_page, page_count }
+                }
+            }
+            Some(Ok(None)) => rsx! {
+                div {}
+            },
+            Some(Err(err)) => rsx! {
+                div { "Error fetching taxonomies: {err}" }
+            },
+            None => rsx! {
+                Spinner {}
+            },
+            }
         }
 
         SeparatorLine { label: "Targets (protein accession + charge)" }
@@ -428,6 +629,9 @@ pub fn SrmPrmTargetFinder() -> Element {
                 }
             }
         }
+        if selected_taxonomies.is_empty() {
+            div { class: "alert alert-warning", "Select at least one taxonomy first." }
+        }
         div { class: "input-group mb-3",
             span { class: "input-group-text", "Protein search *" }
             input {
@@ -435,6 +639,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                 class: "form-control",
                 placeholder: "Search by accession or gene name (at least 3 characters)",
                 value: "{protein_search_term}",
+                disabled: selected_taxonomies.is_empty(),
                 oninput: move |evt| protein_search_term.set(evt.value()),
                 onkeydown: move |evt| {
                     if evt.key() == Key::Enter {
@@ -445,7 +650,8 @@ pub fn SrmPrmTargetFinder() -> Element {
             button {
                 class: "btn btn-primary",
                 r#type: "button",
-                disabled: protein_search_term.read().trim().len() < MIN_PROTEIN_SEARCH_TERM_LENGTH
+                disabled: selected_taxonomies.is_empty()
+                    || protein_search_term.read().trim().len() < MIN_PROTEIN_SEARCH_TERM_LENGTH
                     || protein_suggestions.pending(),
                 onclick: move |_| submit_protein_search(),
                 i { class: "fa-solid fa-search me-2" }
@@ -475,12 +681,12 @@ pub fn SrmPrmTargetFinder() -> Element {
         } else {
             match &*protein_suggestions.read_unchecked() {
             Some(Ok(Some(found_proteins)))
-                if found_proteins.iter().any(|protein| applied_review_filter().matches(protein)) =>
+                if found_proteins.iter().any(|protein| applied_review_filter().matches(protein) && in_selected_taxonomy(protein)) =>
             {
                 let filter = applied_review_filter();
                 let mut sorted_proteins: Vec<ProteinResponse<String>> = found_proteins
                     .iter()
-                    .filter(|protein| filter.matches(protein))
+                    .filter(|protein| filter.matches(protein) && in_selected_taxonomy(protein))
                     .cloned()
                     .collect();
                 if let Some(sort) = protein_sort() {
@@ -535,6 +741,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                                 td {
                                     {
                                         let accession = protein.accession.clone();
+                                        let protein_taxonomy_id = protein.taxonomy_id;
                                         let charge_spec = target_charge_specs
                                             .read()
                                             .get(&accession)
@@ -559,6 +766,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                                                     r#type: "button",
                                                     disabled: charge_spec.trim().is_empty() || already_added,
                                                     onclick: move |_| {
+                                                        target_taxonomy_ids.write().insert(accession.clone(), protein_taxonomy_id);
                                                         targets.push((accession.clone(), charge_spec.trim().to_string()));
                                                     },
                                                     "Add"
@@ -576,7 +784,7 @@ pub fn SrmPrmTargetFinder() -> Element {
             }
             Some(Ok(Some(found_proteins))) if !found_proteins.is_empty() => rsx! {
                 div { class: "alert alert-info mb-3",
-                    "{found_proteins.len()} proteins found, but none are in {applied_review_filter().label()}. Change the filter and search again."
+                    "{found_proteins.len()} proteins found, but none are {applied_review_filter().label()} and part of the selected taxonomies. Change the filter or taxonomies and search again."
                 }
             },
             Some(Err(err)) => rsx! {
@@ -587,145 +795,6 @@ pub fn SrmPrmTargetFinder() -> Element {
         }
 
         div {
-            SeparatorLine { label: "Taxonomies" }
-            div { class: "input-group mb-3",
-                span { class: "input-group-text", "Taxonomy search *" }
-                input {
-                    r#type: "text",
-                    class: "form-control",
-                    value: "{taxonomy_search_term}",
-                    oninput: move |evt| { taxonomy_search_term.set(evt.value()) },
-                    onkeydown: move |evt| {
-                        if evt.key() == Key::Enter {
-                            submit_taxonomy_search();
-                        }
-                    },
-                }
-                button {
-                    class: "btn btn-primary",
-                    r#type: "button",
-                    disabled: taxonomy_search_term.read().trim().is_empty() || taxonomies.pending(),
-                    onclick: move |_| submit_taxonomy_search(),
-                    i { class: "fa-solid fa-search me-2" }
-                    "Search"
-                }
-            }
-            div { class: "list-group mb-3",
-                for taxonomy in selected_taxonomies.iter().map(|t| t.clone()) {
-                    div { class: "list-group-item d-flex justify-content-between align-items-center",
-                        "{taxonomy.scientific_name} (ID: {taxonomy.id}, Rank: {taxonomy.rank_name.clone().unwrap_or_default()})"
-                        button {
-                            class: "btn btn-danger",
-                            r#type: "button",
-                            onclick: move |_| {
-                                selected_taxonomies.write().retain(|t| t.id != taxonomy.id);
-                            },
-                            i { class: "fa-solid fa-xmark" }
-                        }
-                    }
-                }
-            }
-            if taxonomies.pending() && !taxonomy_search_submitted.read().1.is_empty() {
-                div { class: "mb-3",
-                    Spinner {}
-                }
-            } else {
-                match &*taxonomies.read_unchecked() {
-                Some(Ok(Some(found_taxonomies))) => {
-                    let mut sorted_taxonomies = found_taxonomies.clone();
-                    if let Some((column, direction)) = taxonomy_sort() {
-                        sorted_taxonomies.sort_by(|a, b| {
-                            let ordering = match column {
-                                TaxonomySortColumn::Id => a.id.cmp(&b.id),
-                                TaxonomySortColumn::ScientificName => a
-                                    .scientific_name
-                                    .to_lowercase()
-                                    .cmp(&b.scientific_name.to_lowercase()),
-                            };
-                            match direction {
-                                SortDirection::Ascending => ordering,
-                                SortDirection::Descending => ordering.reverse(),
-                            }
-                        });
-                    }
-                    let total = sorted_taxonomies.len();
-                    let size = taxonomy_page_size();
-                    let page_count = total.div_ceil(size).max(1);
-                    let current_page = taxonomy_page().min(page_count - 1);
-                    let page_taxonomies: Vec<TaxonomyResponse> = sorted_taxonomies
-                        .into_iter()
-                        .skip(current_page * size)
-                        .take(size)
-                        .collect();
-                    let direction_of = move |column: TaxonomySortColumn| {
-                        taxonomy_sort().filter(|(c, _)| *c == column).map(|(_, d)| d)
-                    };
-                    rsx! {
-                        if total > 0 {
-                            div { class: "d-flex align-items-center justify-content-between mb-3",
-                                span { "{total} taxonomies found" }
-                                PageSizeSelect {
-                                    id: "taxonomy-page-size",
-                                    label: "Taxonomies per page",
-                                    page_size: taxonomy_page_size,
-                                    page: taxonomy_page,
-                                    options: PAGE_SIZE_OPTIONS.to_vec(),
-                                }
-                            }
-                        }
-                        table { class: "table table-striped table-hover",
-                        thead {
-                            tr {
-                                {sortable_th("ID", direction_of(TaxonomySortColumn::Id), EventHandler::new(move |_| {
-                                    taxonomy_sort.set(Some(toggle_taxonomy_sort(taxonomy_sort(), TaxonomySortColumn::Id)));
-                                    taxonomy_page.set(0);
-                                }))}
-                                {sortable_th("Scientific name", direction_of(TaxonomySortColumn::ScientificName), EventHandler::new(move |_| {
-                                    taxonomy_sort.set(Some(toggle_taxonomy_sort(taxonomy_sort(), TaxonomySortColumn::ScientificName)));
-                                    taxonomy_page.set(0);
-                                }))}
-                                th { "Rank" }
-                                th { "Select" }
-                            }
-                        }
-                        tbody {
-                            for taxonomy in page_taxonomies {
-                                tr {
-                                    td { "{taxonomy.id}" }
-                                    td { "{taxonomy.scientific_name}" }
-                                    td { "{taxonomy.rank_name.clone().unwrap_or_default()}" }
-                                    td {
-                                        button {
-                                            class: "btn btn-sm btn-primary",
-                                            r#type: "button",
-                                            disabled: selected_taxonomies.read().iter().any(|t| t.id == taxonomy.id),
-                                            onclick: move |_| {
-                                                if !selected_taxonomies.read().iter().any(|t| t.id == taxonomy.id) {
-                                                    selected_taxonomies.push(taxonomy.clone());
-                                                }
-                                            },
-                                            "Add"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        }
-                        Pager { page: taxonomy_page, page_count }
-                    }
-                }
-                Some(Ok(None)) => rsx! {
-                    div {}
-                },
-                Some(Err(err)) => rsx! {
-                    div { "Error fetching taxonomies: {err}" }
-                },
-                None => rsx! {
-                    Spinner {}
-                },
-                }
-            }
-
             SeparatorLine { label: "Digestion" }
             div { class: "input-group mb-3",
                 span { class: "input-group-text", "Max missed cleavages" }
@@ -931,6 +1000,11 @@ pub fn SrmPrmTargetFinder() -> Element {
 
         match search.value() {
             Some(Ok(results)) => rsx! {
+                if results.read_unchecked().iter().any(|target| target.similar_mz) {
+                    div { class: "alert alert-warning mt-3",
+                        "Highlighted rows: another target has a similar m/z at the same charge (e.g. due to PTMs)."
+                    }
+                }
                 table { class: "table table-striped table-hover",
                     thead {
                         tr {
@@ -946,7 +1020,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                     tbody {
                         for (idx , target) in results.read_unchecked().iter().cloned().enumerate() {
                             if !removed_target_indices.read().contains(&idx) {
-                                tr {
+                                tr { class: if target.similar_mz { "table-warning" } else { "" },
                                     td { "{target.sequence}" }
                                     td { "{target.accession}" }
                                     td { "{target.mz}" }
@@ -975,7 +1049,9 @@ pub fn SrmPrmTargetFinder() -> Element {
                     let remaining = total - removed_target_indices.read().len();
                     rsx! {
                         if total == 0 {
-                            div { class: "alert alert-info", "No unique targets found for the given input." }
+                            div { class: "alert alert-info",
+                                "No peptides match (or the database was built without peptide taxonomy metadata)."
+                            }
                         } else if remaining == 0 {
                             div { class: "alert alert-info", "All targets removed." }
                         }

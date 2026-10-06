@@ -1,9 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Deref;
 use std::sync::Arc;
 
 use crate::mass::{dalton_to_mass_to_charge, to_float};
-use crate::peptide::{IsPeptide, Peptidoform};
+use crate::peptide::{IsPeptide, Peptide, Peptidoform};
 use crate::peptide_search::{PeptideConditionBuilder, PeptideSearch};
 use crate::post_translational_modification::{PTMCollection, PostTranslationalModification};
 use crate::protein_table::ProteinTable;
@@ -126,6 +126,120 @@ fn parse_charge_spec(spec: &str) -> Result<Vec<u8>, String> {
     Ok(charges)
 }
 
+/// m/z tolerance (ppm) below which two targets of the same charge count as similar.
+const SIMILAR_MZ_TOLERANCE_PPM: f64 = 10.0;
+
+/// Result of the taxonomy-array based uniqueness check of a peptide.
+#[derive(Debug, PartialEq, Eq)]
+enum Uniqueness {
+    /// Unique in exactly one selected taxon, no other selected taxon contains it.
+    Unique(i32),
+    /// Contained in exactly one selected taxon, but in more than one protein there. Unique
+    /// only if all of these proteins are isoforms of the target, needs a protein check.
+    CheckProteins(i32),
+    /// Not contained in any selected taxon or shared by multiple selected taxa.
+    Shared,
+}
+
+/// Classifies a peptide by its taxonomy arrays within the selected taxa. Sharing with taxa
+/// outside the selection is ignored.
+///
+/// # Arguments
+/// * `unique_taxonomy_ids` - Taxa in which the peptide occurs in exactly one protein
+/// * `non_unique_taxonomy_ids` - Taxa in which the peptide occurs in more than one protein
+/// * `selected` - Selected (species) taxonomy IDs
+///
+fn classify_uniqueness(
+    unique_taxonomy_ids: &[i32],
+    non_unique_taxonomy_ids: &[i32],
+    selected: &HashSet<i32>,
+) -> Uniqueness {
+    let mut matching = unique_taxonomy_ids
+        .iter()
+        .chain(non_unique_taxonomy_ids)
+        .filter(|id| selected.contains(id));
+    match (matching.next(), matching.next()) {
+        (Some(&id), None) if unique_taxonomy_ids.contains(&id) => Uniqueness::Unique(id),
+        (Some(&id), None) => Uniqueness::CheckProteins(id),
+        _ => Uniqueness::Shared,
+    }
+}
+
+/// Strips an isoform suffix (`-<digits>`) from an accession: `P12345-2` -> `P12345`.
+fn base_accession(accession: &str) -> &str {
+    match accession.rsplit_once('-') {
+        Some((base, suffix))
+            if !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()) =>
+        {
+            base
+        }
+        _ => accession,
+    }
+}
+
+/// Checks if all proteins of the peptide within the selected taxa are the target protein or
+/// its isoforms.
+///
+/// # Arguments
+/// * `protein_ids` - IDs of all proteins containing the peptide
+/// * `proteins` - Resolved proteins (ID -> (accession, taxonomy ID))
+/// * `selected` - Selected (species) taxonomy IDs
+/// * `target_base_accession` - Accession of the target without isoform suffix
+///
+fn only_isoforms_of_target(
+    protein_ids: &[i32],
+    proteins: &HashMap<i32, (String, i32)>,
+    selected: &HashSet<i32>,
+    target_base_accession: &str,
+) -> bool {
+    let mut found_any = false;
+    for protein_id in protein_ids {
+        let Some((accession, taxonomy_id)) = proteins.get(protein_id) else {
+            return false;
+        };
+        if !selected.contains(taxonomy_id) {
+            continue;
+        }
+        if base_accession(accession) != target_base_accession {
+            return false;
+        }
+        found_any = true;
+    }
+    found_any
+}
+
+/// Marks targets which have another target (different sequence) with the same charge and an
+/// m/z within the tolerance, e.g. modified forms colliding with other peptides.
+///
+/// # Arguments
+/// * `targets` - Targets to inspect and mark
+/// * `tolerance_ppm` - Tolerance in ppm
+///
+fn flag_similar_mz(targets: &mut [SrmPrmTarget], tolerance_ppm: f64) {
+    let mut order: Vec<usize> = (0..targets.len()).collect();
+    order.sort_by(|&a, &b| {
+        targets[a]
+            .charge
+            .cmp(&targets[b].charge)
+            .then(targets[a].mz.total_cmp(&targets[b].mz))
+    });
+
+    for i in 0..order.len() {
+        for j in (i + 1)..order.len() {
+            let (a, b) = (order[i], order[j]);
+            if targets[a].charge != targets[b].charge
+                || (targets[b].mz - targets[a].mz) / targets[a].mz * 1e6 > tolerance_ppm
+            {
+                break;
+            }
+            if targets[a].sequence != targets[b].sequence {
+                targets[a].similar_mz = true;
+                targets[b].similar_mz = true;
+            }
+        }
+    }
+}
+
 /// Controller providing SRM/PRM target finding under `/api/tools`.
 pub struct ToolsController;
 
@@ -195,7 +309,7 @@ impl ToolsController {
         // Expand every requested taxonomy to its species subtree; union all resulting
         // species IDs into one sorted, deduped list, reused as the taxonomy scoping filter
         // for every target below.
-        let mut all_species_ids: Vec<i32> = Vec::new();
+        let mut selected_species_ids: HashSet<i32> = HashSet::new();
         for &taxonomy_id in &payload.taxonomies {
             let matching_taxonomy_ids = TaxonomyTable::new(server_state.db_client())
                 .select_sub_species(taxonomy_id)
@@ -207,10 +321,8 @@ impl ToolsController {
             if matching_taxonomy_ids.is_empty() {
                 return Err(Error::TaxonomyNotFound(taxonomy_id));
             }
-            all_species_ids.extend(matching_taxonomy_ids);
+            selected_species_ids.extend(matching_taxonomy_ids);
         }
-        all_species_ids.sort_unstable();
-        all_species_ids.dedup();
 
         // Build the PTM collection once, reused across every target.
         let modifications: Vec<PostTranslationalModification> = match payload
@@ -287,6 +399,16 @@ impl ToolsController {
                 ProteinController::digest_and_fetch_peptides(&protein, server_state.as_ref())
                     .await?;
 
+            // Targets of a protein outside the selected taxa can not be unique within them.
+            if !selected_species_ids.contains(&protein.taxonomy_id()) {
+                continue;
+            }
+            let target_base_accession = base_accession(protein.accession()).to_string();
+
+            // First pass: missed cleavages + cheap uniqueness classification from the taxonomy
+            // arrays. Peptides that are only non-unique because of isoforms need a protein check.
+            let mut classified: Vec<(Peptide, i32, bool)> = Vec::new();
+            let mut pending_protein_ids: HashSet<i32> = HashSet::new();
             for peptide in peptides {
                 // Missed cleavages are calculated on the fly via the protease
                 if server_state
@@ -298,19 +420,55 @@ impl ToolsController {
                     continue;
                 }
 
-                // Check which taxonomy was matched
-                let taxonomy_ids = peptide
-                    .unique_taxonomy_ids()
-                    .iter()
-                    .filter(|&id| all_species_ids.contains(id))
-                    .cloned()
-                    .collect::<Vec<_>>();
-
-                if taxonomy_ids.len() != 1 {
-                    continue; // skip this peptide as it is not unique among the given taxonomies
+                match classify_uniqueness(
+                    peptide.unique_taxonomy_ids(),
+                    peptide.non_unique_taxonomy_ids(),
+                    &selected_species_ids,
+                ) {
+                    Uniqueness::Shared => {}
+                    Uniqueness::Unique(taxonomy_id) => {
+                        classified.push((peptide, taxonomy_id, false))
+                    }
+                    Uniqueness::CheckProteins(taxonomy_id) => {
+                        pending_protein_ids.extend(peptide.protein_ids().as_slice());
+                        classified.push((peptide, taxonomy_id, true));
+                    }
                 }
-                let taxonomy_id = taxonomy_ids[0];
+            }
 
+            // Second pass: resolve the proteins of the remaining candidates (one query per
+            // target). A peptide shared only by the target and its isoforms stays unique.
+            let proteins_by_id: HashMap<i32, (String, i32)> = if pending_protein_ids.is_empty() {
+                HashMap::new()
+            } else {
+                let ids: Vec<i32> = pending_protein_ids.into_iter().collect();
+                ProteinTable::new(server_state.db_client())
+                    .select_by_ids(&ids)
+                    .await?
+                    .try_filter_map(|protein| async move {
+                        Ok(protein.id().map(|id| {
+                            (id, (protein.accession().to_string(), protein.taxonomy_id()))
+                        }))
+                    })
+                    .try_collect()
+                    .await?
+            };
+
+            let verified = classified
+                .into_iter()
+                .filter(|(peptide, _, needs_protein_check)| {
+                    !needs_protein_check
+                        || only_isoforms_of_target(
+                            peptide.protein_ids().as_slice(),
+                            &proteins_by_id,
+                            &selected_species_ids,
+                            &target_base_accession,
+                        )
+                })
+                .map(|(peptide, taxonomy_id, _)| (peptide, taxonomy_id))
+                .collect::<Vec<_>>();
+
+            for (peptide, taxonomy_id) in verified {
                 // Apply the PTM collection to this peptide "on the fly" (in-memory, no DB
                 // round-trip): build the condition(s) around this peptide's own mass so
                 // `PeptideConditionBuilder::finalize` maps onto a real DB partition, then run
@@ -376,6 +534,7 @@ impl ToolsController {
                             charge,
                             taxonomy_id,
                             accession: accession_label.clone(),
+                            similar_mz: false,
                         };
 
                         targets.push(target);
@@ -383,6 +542,8 @@ impl ToolsController {
                 }
             }
         }
+
+        flag_similar_mz(&mut targets, SIMILAR_MZ_TOLERANCE_PPM);
 
         Ok(Json(SrmPrmResponse { targets }).into_response())
     }
@@ -419,5 +580,116 @@ mod tests {
         assert!(parse_charge_spec("abc").is_err());
         assert!(parse_charge_spec("4-2").is_err());
         assert!(parse_charge_spec("2,abc").is_err());
+    }
+
+    fn selected(ids: &[i32]) -> HashSet<i32> {
+        ids.iter().copied().collect()
+    }
+
+    #[test]
+    fn classify_unique_in_single_taxon() {
+        assert_eq!(
+            classify_uniqueness(&[9606], &[], &selected(&[9606, 10090])),
+            Uniqueness::Unique(9606)
+        );
+    }
+
+    #[test]
+    fn classify_ignores_taxa_outside_selection() {
+        assert_eq!(
+            classify_uniqueness(&[9606], &[10090], &selected(&[9606])),
+            Uniqueness::Unique(9606)
+        );
+    }
+
+    #[test]
+    fn classify_shared_between_selected_taxa() {
+        assert_eq!(
+            classify_uniqueness(&[9606], &[10090], &selected(&[9606, 10090])),
+            Uniqueness::Shared
+        );
+        assert_eq!(
+            classify_uniqueness(&[9606, 10090], &[], &selected(&[9606, 10090])),
+            Uniqueness::Shared
+        );
+    }
+
+    #[test]
+    fn classify_non_unique_needs_protein_check() {
+        assert_eq!(
+            classify_uniqueness(&[], &[9606], &selected(&[9606])),
+            Uniqueness::CheckProteins(9606)
+        );
+    }
+
+    #[test]
+    fn classify_empty_arrays_or_no_match() {
+        assert_eq!(
+            classify_uniqueness(&[], &[], &selected(&[9606])),
+            Uniqueness::Shared
+        );
+        assert_eq!(
+            classify_uniqueness(&[10090], &[], &selected(&[9606])),
+            Uniqueness::Shared
+        );
+    }
+
+    #[test]
+    fn base_accession_strips_isoform_suffix() {
+        assert_eq!(base_accession("P12345-2"), "P12345");
+        assert_eq!(base_accession("P12345"), "P12345");
+        assert_eq!(base_accession("P12345-abc"), "P12345-abc");
+    }
+
+    #[test]
+    fn only_isoforms_of_target_cases() {
+        let proteins: HashMap<i32, (String, i32)> = HashMap::from([
+            (1, ("P12345".to_string(), 9606)),
+            (2, ("P12345-2".to_string(), 9606)),
+            (3, ("Q99999".to_string(), 9606)),
+            (4, ("Q99999".to_string(), 10090)),
+        ]);
+        let sel = selected(&[9606]);
+        assert!(only_isoforms_of_target(&[1, 2], &proteins, &sel, "P12345"));
+        assert!(!only_isoforms_of_target(&[1, 3], &proteins, &sel, "P12345"));
+        // protein outside the selected taxa is ignored
+        assert!(only_isoforms_of_target(&[1, 4], &proteins, &sel, "P12345"));
+        // unresolved protein or no protein at all
+        assert!(!only_isoforms_of_target(&[1, 9], &proteins, &sel, "P12345"));
+        assert!(!only_isoforms_of_target(&[], &proteins, &sel, "P12345"));
+    }
+
+    fn target(sequence: &str, mz: f64, charge: u8) -> SrmPrmTarget {
+        SrmPrmTarget {
+            sequence: sequence.to_string(),
+            mz,
+            hydrophobicity: 0.0,
+            charge,
+            taxonomy_id: 9606,
+            accession: "P12345".to_string(),
+            similar_mz: false,
+        }
+    }
+
+    #[test]
+    fn flag_similar_mz_marks_close_targets_of_same_charge() {
+        let mut targets = vec![
+            target("AAAK", 500.0000, 2),
+            target("AAAK[+1.0]", 500.0010, 2), // 2 ppm
+            target("BBBK", 500.0010, 3),       // other charge
+            target("CCCK", 600.0, 2),          // far away
+        ];
+        flag_similar_mz(&mut targets, 10.0);
+        assert!(targets[0].similar_mz);
+        assert!(targets[1].similar_mz);
+        assert!(!targets[2].similar_mz);
+        assert!(!targets[3].similar_mz);
+    }
+
+    #[test]
+    fn flag_similar_mz_ignores_same_sequence() {
+        let mut targets = vec![target("AAAK", 500.0, 2), target("AAAK", 500.0, 2)];
+        flag_similar_mz(&mut targets, 10.0);
+        assert!(!targets[0].similar_mz && !targets[1].similar_mz);
     }
 }

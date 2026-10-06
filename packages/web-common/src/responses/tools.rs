@@ -18,6 +18,10 @@ pub struct SrmPrmTarget {
     /// Originating protein accession, with gene names in parentheses if any
     /// (e.g. `"P12345 (GENE1, GENE2)"`).
     pub accession: String,
+    /// Another target with a different sequence has a similar m/z at the same charge
+    /// (e.g. due to PTMs).
+    #[serde(default)]
+    pub similar_mz: bool,
     // FEATURE
     // pub ion_mobility: Option<f64>,
 }
@@ -65,6 +69,7 @@ mod tests {
                     charge: 2,
                     taxonomy_id: 10090,
                     accession: "P12345 (GENE1)".to_string(),
+                    similar_mz: false,
                 },
                 SrmPrmTarget {
                     sequence: "NCLETPSCKNGFLLDGFPR".to_string(),
@@ -73,6 +78,7 @@ mod tests {
                     charge: 3,
                     taxonomy_id: 9606,
                     accession: "Q9WTP6".to_string(),
+                    similar_mz: true,
                 },
             ],
         };

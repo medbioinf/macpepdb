@@ -250,6 +250,18 @@ impl<'a> Client<'a> {
         self.get(&endpoint).await
     }
 
+    /// Get the species contained in the given taxonomy (the taxonomy itself if it is a species)
+    ///
+    /// # Arguments
+    /// * `taxonomy_id` - Taxonomy ID
+    pub async fn get_sub_species(
+        &self,
+        taxonomy_id: i32,
+    ) -> Result<Vec<TaxonomyResponse>, ApiClientError> {
+        let endpoint = format!("/api/taxonomies/{taxonomy_id}/sub");
+        self.get(&endpoint).await
+    }
+
     /// Get protein
     ///
     /// # Arguments
