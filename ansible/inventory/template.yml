@@ -2,15 +2,17 @@
 # Usage: ansible-playbook -i inventory/<env>.yml web.yml -e macpepdb_action=start
 #   macpepdb_action is required by all roles (not set here). "start" (re)starts containers;
 #   any other value only stops/removes them.
-#   db.yml: the `database` role does not exist in this repo yet, so the database group is a no-op.
+#   Database:  ansible-playbook -i inventory/<env>.yml citus.yml  (macpepdb_action not needed)
 #   api/frontend/caddy vars are read from the FIRST host of their group, keep them identical per group.
 #
 # Groups:
-#   common/docker : base setup + docker, put every host here that should get them
-#   database      : Citus coordinator + workers (db.yml)
-#   api           : macpepdb API containers (web.yml)
-#   frontend      : macpepdb-frontend containers (web.yml)
-#   caddy         : reverse proxy (web.yml)
+#   common/docker     : base setup + docker, put every host here that should get them
+#   citus_common      : parent of citus_coordinator + citus_worker, holds shared PostgreSQL/Citus vars (citus.yml)
+#   citus_coordinator : the single Citus coordinator, holds no shards
+#   citus_worker      : Citus workers, registered with the coordinator in every citus database
+#   api               : macpepdb API containers (web.yml)
+#   frontend          : macpepdb-frontend containers (web.yml)
+#   caddy             : reverse proxy (web.yml)
 all:
   vars:
     ansible_user: ubuntu
@@ -79,3 +81,29 @@ all:
           message: "MaCPepDB is down for maintenance. Please check back later."
       hosts:
         <WEB_HOST>:
+    citus_common:
+      vars:
+        citus_pkg: "postgresql-18-citus-14.1"
+        postgres_version: "18"
+        listen_addresses: "*"
+        # Never commit real credentials. Prefer ansible-vault for the password.
+        # Also written to ~postgres/.pgpass on every node for inter-node connections.
+        db_users:
+          - name: "postgres"
+            password: "CHANGE_ME_TO_SOMETHING_SECURE"
+            role_attr_flags: "SUPERUSER"
+        databases:
+          - name: "postgres"
+          - name: "macpepdb_tryptic"
+          - name: "macpepdb_semi_tryptic"
+        citus_hba_addresses: # CIDR (or samenet) to set inside pg_hba for allowed authentication. Add the API servers here.
+          - samenet
+      children:
+        citus_worker:
+        citus_coordinator:
+    citus_coordinator:
+      hosts:
+        <CITUS_COORDINATOR>:
+    citus_worker:
+      hosts:
+        <CITUS_WORKER_1>: # add more. citus_coordinator should not be a worker.

@@ -1,0 +1,4 @@
+citus_hba_addresses:
+  - samenet
+citus_pkg: postgresql-18-citus-14.1
+postgres_version: "18"

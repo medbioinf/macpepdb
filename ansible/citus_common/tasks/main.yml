@@ -1,0 +1,209 @@
+- name: Increase maximum number of open file descriptors
+  community.general.pam_limits:
+    domain: '*'
+    limit_type: '-'
+    limit_item: nofile
+    value: '65535'
+  become: true
+
+- name: Increase maximum locked memory
+  community.general.pam_limits:
+    domain: '*'
+    limit_type: '-'
+    limit_item: memlock
+    value: '65535'
+  become: true
+
+- name: Create systemd drop-in directory for PostgreSQL
+  ansible.builtin.file:
+    path: /etc/systemd/system/postgresql@{{ postgres_version }}-main.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  become: true
+
+- name: Raise open file descriptor limit for PostgreSQL service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/postgresql@{{ postgres_version }}-main.service.d/limits.conf
+    content: |
+      [Service]
+      LimitNOFILE=65535
+      LimitMEMLOCK=64M
+    owner: root
+    group: root
+    mode: "0644"
+  become: true
+  notify: Restart postgresql
+
+# Before the package install, so needrestart cannot restart PostgreSQL mid-play on the first run.
+- name: Disable automatic restart - postgresql
+  ansible.builtin.lineinfile:
+    path: /etc/needrestart/conf.d/postgresql.conf
+    line: "$nrconf{override_rc}{'postgresql'} = 0;"
+    state: present
+    owner: root
+    group: root
+    mode: "0644"
+    create: true
+  become: true
+
+- name: Check if Citus repository already exists
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/citusdata_community.list
+  register: citus_common_repo_stat
+  become: true
+
+- name: Download Citus installation script
+  ansible.builtin.get_url:
+    url: https://install.citusdata.com/community/deb.sh
+    dest: /tmp/citus_install.sh
+    mode: '0755'
+  become: true
+  when: not citus_common_repo_stat.stat.exists
+
+- name: Execute Citus installation script
+  ansible.builtin.command: /tmp/citus_install.sh
+  args:
+    creates: /etc/apt/sources.list.d/citusdata_community.list
+  become: true
+
+- name: Clean up installation script
+  ansible.builtin.file:
+    path: /tmp/citus_install.sh
+    state: absent
+  become: true
+
+- name: Install citus package
+  ansible.builtin.apt:
+    name:
+      - "{{ citus_pkg }}"
+      - libpq-dev
+      - python3-psycopg2
+    update_cache: true
+    state: present
+  become: true
+
+- name: Set listen_addresses
+  community.postgresql.postgresql_alter_system:
+    param: listen_addresses
+    value: "{{ listen_addresses | default('localhost') }}"
+  become: true
+  become_user: postgres
+  notify: Restart postgresql
+
+- name: Preload citus extension
+  community.postgresql.postgresql_alter_system:
+    param: shared_preload_libraries
+    value: 'citus'
+  become: true
+  become_user: postgres
+  notify: Restart postgresql
+
+- name: Create users (roles)
+  community.postgresql.postgresql_user:
+    login_db: postgres
+    name: "{{ item.name }}"
+    password: "{{ item.password | default(omit) }}"
+    role_attr_flags: "{{ item.role_attr_flags | default(omit) }}"
+    expires: "{{ item.expires | default(omit) }}"
+    configuration: "{{ item.configuration | default(omit) }}"
+    reset_unspecified_configuration: "{{ item.reset_unspecified_configuration | default(omit) }}"
+    comment: "{{ item.comment | default(omit) }}"
+    conn_limit: "{{ item.conn_limit | default(omit) }}"
+  loop: "{{ db_users }}"
+  become: true
+  become_user: postgres
+  tags:
+    - create_users
+
+- name: Create databases
+  community.postgresql.postgresql_db:
+    name: "{{ item.name }}"
+    owner: "{{ item.owner | default(omit) }}"
+    comment: "{{ item.comment | default(omit) }}"
+    template: "{{ item.template | default(omit) }}"
+    encoding: "{{ item.encoding | default(omit) }}"
+    icu_locale: "{{ item.icu_locale | default(omit) }}"
+    lc_collate: "{{ item.lc_collate | default(omit) }}"
+    lc_ctype: "{{ item.lc_ctype | default(omit) }}"
+    locale_provider: "{{ item.locale_provider | default(omit) }}"
+    tablespace: "{{ item.tablespace | default(omit) }}"
+    conn_limit: "{{ item.conn_limit | default(omit) }}"
+  loop: "{{ databases }}"
+  become: true
+  become_user: postgres
+  tags:
+    - create_databases
+
+- name: Look up postgres home directory
+  ansible.builtin.getent:
+    database: passwd
+    key: postgres
+
+- name: Configure .pgpass
+  ansible.builtin.template:
+    src: pgpass.j2
+    dest: "{{ ansible_facts.getent_passwd.postgres[4] }}/.pgpass"
+    owner: postgres
+    group: postgres
+    mode: "0600"
+  no_log: true
+  become: true
+
+- name: Configure pg_hba for cluster and client networks
+  community.postgresql.postgresql_pg_hba:
+    dest: /etc/postgresql/{{ postgres_version }}/main/pg_hba.conf
+    address: "{{ item }}"
+    contype: host
+    databases: all
+    method: scram-sha-256
+    users: "all"
+  loop: "{{ citus_hba_addresses }}"
+  become: true
+  notify: Restart postgresql
+  tags:
+    - hba
+
+- name: Configure pg_hba for local connections
+  community.postgresql.postgresql_pg_hba:
+    dest: /etc/postgresql/{{ postgres_version }}/main/pg_hba.conf
+    contype: local
+    databases: all
+    method: peer
+    users: "all"
+  become: true
+  notify: Restart postgresql
+  tags:
+    - hba
+
+- name: Configure postgresql.conf
+  ansible.builtin.copy:
+    src: custom.conf
+    dest: "/etc/postgresql/{{ postgres_version }}/main/conf.d/custom.conf"
+    owner: postgres
+    group: postgres
+    mode: "0644"
+  become: true
+  become_user: postgres
+  notify: Restart postgresql
+
+- name: Enable and start postgres
+  ansible.builtin.systemd_service:
+    name: postgresql
+    enabled: true
+    state: started
+  become: true
+
+# The citus extension requires the preload setting to be active.
+- name: Apply pending PostgreSQL restart
+  ansible.builtin.meta: flush_handlers
+
+- name: Create extension for databases
+  community.postgresql.postgresql_ext:
+    name: citus
+    login_db: "{{ item.name }}"
+  when: (item.citus is undefined) or item.citus
+  loop: "{{ databases }}"
+  become: true
+  become_user: postgres

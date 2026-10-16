@@ -1,0 +1,4 @@
+{# All nodes share the same users/passwords, so one wildcard line per user covers every host and database. #}
+{% for user in db_users if user.password is defined %}
+*:*:*:{{ user.name | replace('\\', '\\\\') | replace(':', '\\:') }}:{{ user.password | replace('\\', '\\\\') | replace(':', '\\:') }}
+{% endfor %}

@@ -1,0 +1,27 @@
+- name: Set coordinator hostname
+  community.postgresql.postgresql_query:
+    login_db: "{{ item.name }}"
+    query: "SELECT citus_set_coordinator_host('{{ inventory_hostname }}', 5432);"
+  when: (item.citus is undefined) or item.citus
+  loop: "{{ databases }}"
+  become: true
+  become_user: postgres
+
+- name: Exclude coordinator from holding shards
+  community.postgresql.postgresql_query:
+    login_db: "{{ item.name }}"
+    query: "SELECT citus_set_node_property('{{ inventory_hostname }}', 5432, 'shouldhaveshards', false);"
+  when: (item.citus is undefined) or item.citus
+  loop: "{{ databases }}"
+  become: true
+  become_user: postgres
+
+- name: Add workers to all databases
+  community.postgresql.postgresql_query:
+    login_db: "{{ item[0].name }}"
+    query: "SELECT * from citus_add_node('{{ item[1] }}', 5432);"
+  loop: "{{ databases | product(groups['citus_worker']) | list }}"
+  when: item[0].citus | default(true)
+  changed_when: false
+  become: true
+  become_user: postgres
