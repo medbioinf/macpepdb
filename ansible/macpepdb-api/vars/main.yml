@@ -1,0 +1,5 @@
+---
+# vars file for macpepdb-api
+
+log_dir: "{{ hostvars[inventory_hostname]['macpepdb_log_dir'] }}"
+volumes: []

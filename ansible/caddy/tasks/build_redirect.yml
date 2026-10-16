@@ -1,0 +1,54 @@
+- name: Set redirect config template
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <REDIRECT_CONFIG>
+    replace: "{{ lookup('ansible.builtin.file', './redirect.part.caddyfile') }}"
+
+# Redirect source
+- name: Set http redirect source
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <REDIRECT_SOURCE>
+    replace: "http://{{ redirect_source }} <REDIRECT_SOURCE>"
+
+- name: Set https redirect source
+  when:
+    - redirect_target_ssl is defined
+    - redirect_target_ssl is not none
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <REDIRECT_SOURCE>
+    replace: "https://{{ redirect_source }} <REDIRECT_SOURCE>"
+
+- name: Remove redirect source placeholder
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <REDIRECT_SOURCE>
+    replace: ""
+
+## Set certificate for redirect
+- name: Remove certificate placeholder as no ssl is defined for redirect
+  when:
+    - redirect_target_ssl is defined
+    - redirect_target_ssl == "auto"
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <CERTIFICATE>
+    replace: ""
+
+- name: Set certificate paths for redirect
+  when:
+    - redirect_target_ssl is defined
+    - redirect_target_ssl is not none
+    - redirect_target_ssl != "auto"
+  ansible.builtin.lineinfile:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <CERTIFICATE>
+    line: "        tls {{ redirect_target_ssl }}"
+
+# Set redirect target
+- name: Set redirect target
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <REDIRECT_TARGET>
+    replace: "{{ redirect_target }}"

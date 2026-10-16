@@ -1,0 +1,3 @@
+        handle {
+                reverse_proxy <FRONTEND_UPSTREAM_SERVERS>
+        }

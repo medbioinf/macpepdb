@@ -18,3 +18,7 @@ packages/frontend/public/index.css*
 # IDEs
 .zed/
 .vscode/
+
+# Ansible
+/ansible/inventory/*
+!/ansible/inventory/template.yml

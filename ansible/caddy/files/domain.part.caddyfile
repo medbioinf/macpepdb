@@ -1,0 +1,14 @@
+<DOMAIN> {
+
+<CERTIFICATE>
+
+<API_CONFIG>
+
+<FRONTEND_CONFIG>
+
+import common_headers
+}
+
+<REDIRECT_CONFIG>
+
+<DOMAIN_CONFIG>

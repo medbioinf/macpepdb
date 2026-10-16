@@ -1,0 +1,40 @@
+- name: Common
+  hosts: common
+  become: true
+  roles:
+   - common
+  tags:
+   - common
+
+
+- name: Docker
+  hosts: docker
+  become: true
+  roles:
+   - docker
+  tags:
+   - docker
+
+- name: API
+  hosts: api
+  become: true
+  roles:
+   - macpepdb-api
+  tags:
+   - api
+
+- name: Frontend
+  hosts: frontend
+  become: true
+  roles:
+   - macpepdb-frontend
+  tags:
+   - frontend
+
+- name: Caddy
+  hosts: caddy
+  become: true
+  roles:
+   - caddy
+  tags:
+   - caddy

@@ -1,0 +1,105 @@
+---
+# tasks file for macpepdb-frontend
+
+- name: Copy image
+  when:
+    - macpepdb_action == "start"
+    - hostvars[inventory_hostname]['macpepdb_frontend_dockerimage_file'] is not none
+  ansible.builtin.copy:
+    src: "{{ hostvars[inventory_hostname]['macpepdb_frontend_dockerimage_file'] }}"
+    dest: "/tmp/macpepdb-frontend-image-ansible.tar"
+
+- name: Load image
+  when:
+    - macpepdb_action == "start"
+    - hostvars[inventory_hostname]['macpepdb_frontend_dockerimage_file'] is not none
+  community.docker.docker_image_load:
+    path: "/tmp/macpepdb-frontend-image-ansible.tar"
+
+- name: Delete image file
+  when:
+    - macpepdb_action == "start"
+    - hostvars[inventory_hostname]['macpepdb_frontend_dockerimage_file'] is not none
+  community.docker.docker_image_load:
+    path: "/tmp/macpepdb-frontend-image-ansible.tar"
+
+- name: Create frontend config directory
+  ansible.builtin.file:
+    path: "{{ macpepdb_frontend_config_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '755'
+
+- name: Copy basic frontend config
+  ansible.builtin.copy:
+    src: ./config.toml
+    dest: "{{ macpepdb_frontend_config_file }}"
+    mode: '644'
+    force: true
+
+- name: Set public URL
+  ansible.builtin.replace:
+    path: "{{ macpepdb_frontend_config_file }}"
+    regexp: <PUBLIC_URL>
+    replace: "{{ hostvars[(groups['frontend'] | first)]['macpepdb_public_url'] }}"
+
+- name: Set matomo URL
+  when: hostvars[(groups['frontend'] | first)]['macpepdb_matomo_url'] != None
+  ansible.builtin.replace:
+    path: "{{ macpepdb_frontend_config_file }}"
+    regexp: "# matomo_url ="
+    replace: "matomo_url = \"{{ hostvars[(groups['frontend'] | first)]['macpepdb_matomo_url'] }}\""
+
+- name: Set matomo side ID
+  when: hostvars[(groups['frontend'] | first)]['macpepdb_matomo_site_id'] != None
+  ansible.builtin.replace:
+    path: "{{ macpepdb_frontend_config_file }}"
+    regexp: "# matomo_site_id ="
+    replace: "matomo_site_id = {{ hostvars[(groups['frontend'] | first)]['macpepdb_matomo_site_id'] }}"
+
+- name: Set de.NBI survey banner
+  when: hostvars[(groups['frontend'] | first)]['macpepdb_show_denbi_survey_banner'] != None
+  ansible.builtin.replace:
+    path: "{{ macpepdb_frontend_config_file }}"
+    regexp: "# show_denbi_survey_banner ="
+    replace: "show_denbi_survey_banner = true"
+
+- name: Pull image
+  when: macpepdb_action == "start"
+  community.docker.docker_image_pull:
+    name: medbioinfo/macpepdb-frontend
+    tag: local
+    pull: not_present
+
+- name: Check if container exists
+  community.docker.docker_container_info:
+    name: macpepdb-frontend
+  register: container_info
+  ignore_errors: true
+
+- name: Stopping existing container
+  when: container_info.exists
+  community.docker.docker_container:
+    name: macpepdb-frontend
+    state: absent
+    stop_timeout: 60
+
+- name: Start container
+  when: macpepdb_action == "start"
+  community.docker.docker_container:
+    image: "{{ hostvars[inventory_hostname]['macpepdb_frontend_dockerimage'] | default('ghcr.io/medbioinf/macpepdb-frontend:latest') }}"
+    name: macpepdb-frontend
+    # auto_remove: true
+    restart_policy: unless-stopped
+    published_ports:
+      - "{{ hostvars[(groups['frontend'] | first)]['macpepdb_frontend_port'] }}:80"
+    volumes:
+      - "{{ macpepdb_frontend_config_file }}:/usr/share/caddy/assets/config.toml:ro"
+
+- name: Remove dangling images
+  when: macpepdb_action == "start"
+  community.docker.docker_prune:
+    images: true
+    images_filters:
+      dangling: true

@@ -1,0 +1,79 @@
+- name: Set domain config template
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <DOMAIN_CONFIG>
+    replace: "{{ lookup('ansible.builtin.file', './domain.part.caddyfile') }}"
+
+- name: Set HTTP domain
+  when: macpepdb_domain['ssl'] is none
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <DOMAIN>
+    replace: "http://{{ macpepdb_domain['name'] }}"
+
+- name: Set HTTPS domain
+  when: macpepdb_domain['ssl'] is not none
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <DOMAIN>
+    replace: "https://{{ macpepdb_domain['name'] }}"
+
+- name: Remove domain placeholder as no custom ssl is defined
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <DOMAIN>
+    replace: ""
+
+- name: Remove certificate placeholder as no custom ssl is defined
+  when: macpepdb_domain['ssl'] is none or macpepdb_domain['ssl'] == "auto"
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <CERTIFICATE>
+    replace: ""
+
+- name: Set certificate paths
+  when:
+    - macpepdb_domain['ssl'] is not none
+    - macpepdb_domain['ssl'] != "auto"
+  ansible.builtin.lineinfile:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <CERTIFICATE>
+    line: "        tls {{ macpepdb_domain['macpepdb_domain']['ssl'] }}"
+
+## Frontend
+
+- name: Set frontend config template
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <CERTIFICATE>
+
+## Redirects to this domain
+- name: Redircect target protocol
+  when: macpepdb_domain['ssl'] is none
+  ansible.builtin.set_fact:
+    redirect_target_protocol: http
+
+- name: Redircect target protocol
+  when: macpepdb_domain['ssl'] is not none
+  ansible.builtin.set_fact:
+    redirect_target_protocol: https
+
+- name: Set redirects
+  when:
+    - macpepdb_domain['redirects'] is defined
+    - macpepdb_domain['redirects'] | length > 0
+  ansible.builtin.include_tasks:
+    file: build_redirect.yml
+  vars:
+    redirect_source: "{{ macpepdb_domain_redirect.name }}"
+    redirect_target: "{{ redirect_target_protocol }}://{{ macpepdb_domain['name'] }}"
+    redirect_target_ssl: "{{ macpepdb_domain_redirect.ssl }}"
+  loop: "{{ macpepdb_domain['redirects'] }}"
+  loop_control:
+      loop_var: macpepdb_domain_redirect
+
+- name: Remove redirect placeholder
+  ansible.builtin.lineinfile:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <REDIRECT_CONFIG>
+    line: ""

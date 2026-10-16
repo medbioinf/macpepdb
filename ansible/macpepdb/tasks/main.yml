@@ -1,0 +1,83 @@
+#SPDX-License-Identifier: MIT-0
+---
+# tasks file for macpepdb
+
+- name: Copy image
+  when:
+    - macpepdb_action == "start"
+    - hostvars[inventory_hostname]['macpepdb_dockerimage_file'] is not none
+  ansible.builtin.copy:
+    src: "{{ hostvars[inventory_hostname]['macpepdb_dockerimage_file'] }}"
+    dest: "/tmp/macpepdb-image-{{ macpepdb_id }}-ansible.tar"
+
+- name: Load image
+  when:
+    - macpepdb_action == "start"
+    - hostvars[inventory_hostname]['macpepdb_dockerimage_file'] is not none
+  community.docker.docker_image_load:
+    path: "/tmp/macpepdb-image-{{ macpepdb_id }}-ansible.tar"
+
+- name: Delete image file
+  when:
+    - macpepdb_action == "start"
+    - hostvars[inventory_hostname]['macpepdb_dockerimage_file'] is not none
+  community.docker.docker_image_load:
+    path: "/tmp/macpepdb-image-{{ macpepdb_id }}-ansible.tar"
+
+- name: Pull image
+  when: macpepdb_action == "start"
+  community.docker.docker_image_pull:
+    name: medbioinfo/macpepdb
+    tag: local
+    pull: not_present
+
+- name: Create log directory
+  when: macpepdb_action == "start"
+  ansible.builtin.file:
+    path: "{{ log_dir }}"
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: '755'
+
+- name: Check if container exists
+  community.docker.docker_container_info:
+    name: macpepdb-{{ macpepdb_id }}
+  register: container_info
+  ignore_errors: true
+
+- name: Stopping existing container
+  when: container_info.exists
+  community.docker.docker_container:
+    name: macpepdb-{{ macpepdb_id }}
+    state: absent
+    stop_timeout: 60
+
+- name: Start container
+  when: macpepdb_action == "start"
+  community.docker.docker_container:
+    image: "{{ hostvars[inventory_hostname]['macpepdb_dockerimage'] | default('ghcr.io/medbioinf/macpepdb:latest') }}"
+    name: macpepdb-{{ macpepdb_id }}
+    # auto_remove: true
+    user: 1000:1000
+    volumes: "{{ volumes + (hostvars[inventory_hostname]['volumes'] | default([])) }}"
+    restart_policy: unless-stopped
+    # published_ports: "{{ (ports | default([])) + ['0.0.0.0:' ~ prometheus_scraping_port|string ~ ':' ~ prometheus_scraping_port|string] }}"
+    published_ports: "{{ ports }}"
+    ulimits: nofile:4096:65535
+    command: >
+      -vv
+      --terminal
+      --log-rotation daily
+      --prometheus 0.0.0.0:{{ prometheus_scraping_port }}
+      --database-url '{{ macpepdb_database_url }}'
+      {{ macpepdb_cmd }} {{ macpepdb_opts }}
+
+    #--log-file {{ log_dir }}/{{ macpepdb_id }}
+
+- name: Remove dangling images
+  when: macpepdb_action == "start"
+  community.docker.docker_prune:
+    images: true
+    images_filters:
+      dangling: true

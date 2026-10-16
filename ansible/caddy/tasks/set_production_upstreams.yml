@@ -1,0 +1,69 @@
+### API UPSTREAM
+
+- name: Set API config template
+  when: groups['api'] | length > 0
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <API_CONFIG>
+    replace: "{{ lookup('ansible.builtin.file', './api.part.caddyfile') }}"
+
+- name: Set API upstream URLs
+  when: groups['api'] | length > 0
+  ansible.builtin.include_tasks:
+    file: build_upstream_url.yml
+  vars:
+    upstream_hostname: "{{ item }}"
+    upstream_ports: "{{ hostvars[upstream_hostname]['macpepdb_api_ports'] }}"
+    upstream_protocol: h2c
+    upstream_placeholder: <API_UPSTREAM_SERVERS>
+  loop: "{{ query('inventory_hostnames', 'api') }}"
+
+- name: Remove upstream server placeholder
+  when: groups['api'] | length > 0
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: '\s<API_UPSTREAM_SERVERS>'
+    replace: ""
+
+- name: Remove API placeholder
+  when: groups['api'] | length == 0
+  ansible.builtin.lineinfile:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <API_CONFIG>
+    line: ""
+
+
+### FRONTEND UPSTREAM
+
+- name: Set frontend template
+  when: groups['frontend'] | length > 0
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <FRONTEND_CONFIG>
+    replace: "{{ lookup('ansible.builtin.file', './frontend.part.caddyfile') }}"
+
+- name: Set frontend upstream URLs
+  when: groups['frontend'] | length > 0
+  ansible.builtin.include_tasks:
+    file: build_upstream_url.yml
+  vars:
+    upstream_hostname: "{{ item }}"
+    upstream_ports:
+      - "{{ hostvars[upstream_hostname]['macpepdb_frontend_port'] }}"
+    upstream_protocol: http
+    upstream_placeholder: <FRONTEND_UPSTREAM_SERVERS>
+  loop: "{{ query('inventory_hostnames', 'frontend') }}"
+
+- name: Remove frontend server placeholder
+  when: groups['frontend'] | length > 0
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: '\s<FRONTEND_UPSTREAM_SERVERS>'
+    replace: ""
+
+- name: Remove frontend placeholder
+  when: groups['frontend'] | length == 0
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <FRONTEND_CONFIG>
+    replace: ""

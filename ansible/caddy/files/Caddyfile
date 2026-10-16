@@ -1,0 +1,8 @@
+(common_headers) {
+    header /* {
+        -Server
+        -Via
+    }
+}
+
+<DOMAIN_CONFIG>

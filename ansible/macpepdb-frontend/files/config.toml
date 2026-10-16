@@ -1,0 +1,7 @@
+macpepdb_base_url = "<PUBLIC_URL>"
+# Enable Matomo tracking by setting the URL and site ID below
+# Do not forget to add the matomo_url to the CORS allowed origins when serving
+# the frontend.
+# matomo_url =
+# matomo_site_id =
+# show_denbi_survey_banner = 

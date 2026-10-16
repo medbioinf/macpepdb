@@ -1,0 +1,35 @@
+- name: Copy basic Caddy config
+  ansible.builtin.copy:
+    src: ./Caddyfile
+    dest: "{{ macpepdb_caddy_config_file }}"
+    mode: "644"
+    force: true
+
+### Domains
+- name: Configure domains
+  ansible.builtin.include_tasks:
+    file: build_domain.yml
+  loop: "{{ hostvars[(groups['caddy'] | first)]['macpepdb_domains'] }}"
+  vars:
+      macpepdb_domain: "{{ item }}"
+
+- name: Remove domain CONFIG placeholder
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <DOMAIN_CONFIG>
+    replace: ""
+
+### Upstreams
+
+- name: Set production upstreams
+  when: macpepdb_maintenance is not defined or (macpepdb_maintenance is mapping and not macpepdb_maintenance['enabled'])
+  ansible.builtin.include_tasks:
+    file: set_production_upstreams.yml
+
+- name: Set maintenance upstream
+  when:
+    - macpepdb_maintenance is defined
+    - macpepdb_maintenance is mapping
+    - macpepdb_maintenance['enabled']
+  ansible.builtin.include_tasks:
+    file: set_maintenance_upstreams.yml

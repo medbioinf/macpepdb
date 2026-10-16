@@ -1,0 +1,81 @@
+# Inventory template. Copy to e.g. inventory/<env>.yml and replace every <PLACEHOLDER>.
+# Usage: ansible-playbook -i inventory/<env>.yml web.yml -e macpepdb_action=start
+#   macpepdb_action is required by all roles (not set here). "start" (re)starts containers;
+#   any other value only stops/removes them.
+#   db.yml: the `database` role does not exist in this repo yet, so the database group is a no-op.
+#   api/frontend/caddy vars are read from the FIRST host of their group, keep them identical per group.
+#
+# Groups:
+#   common/docker : base setup + docker, put every host here that should get them
+#   database      : Citus coordinator + workers (db.yml)
+#   api           : macpepdb API containers (web.yml)
+#   frontend      : macpepdb-frontend containers (web.yml)
+#   caddy         : reverse proxy (web.yml)
+all:
+  vars:
+    ansible_user: ubuntu
+    # Direct access: use only the key file. Via jump host: also set ansible_ssh_common_args.
+    ansible_ssh_private_key_file: <PATH_TO_PRIVATE_KEY>   # e.g. ~/.ssh/ansible.id_rsa
+    # ansible_ssh_common_args: >-
+    #   -o IdentitiesOnly=yes
+    #   -o StrictHostKeyChecking=accept-new
+    #   -o ProxyCommand="ssh -W %h:%p -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -i <JUMP_HOST_KEY> ubuntu@<JUMP_HOST_IP>"
+
+    # Image tarball on the controller (copied + loaded on target). Set to ~ to pull from registry instead.
+    macpepdb_dockerimage_file: ~            # e.g. /path/to/macpepdb_local.tar
+    macpepdb_dockerimage: ghcr.io/medbioinf/macpepdb:<TAG>
+    macpepdb_frontend_dockerimage_file: ~   # e.g. /path/to/macpepdb_frontend_local.tar
+    macpepdb_frontend_dockerimage: ghcr.io/medbioinf/macpepdb-frontend:<TAG>
+
+  children:
+    common:
+      hosts:
+        <WEB_HOST>:
+
+    docker:
+      hosts:
+        <WEB_HOST>:
+
+    api:
+      vars:
+        macpepdb_log_dir: /var/log/macpepdb/web
+        macpepdb_api_ports:
+          - 6001
+        # "" to disable, else "--matomo-url <URL> --matomo-site-id <ID>"
+        macpepdb_matomo: ""
+        # Never commit real credentials. Prefer ansible-vault for the password.
+        macpepdb_database_url: "postgresql://postgres:<DB_PASSWORD>@<COORDINATOR_HOST>/<DB_NAME>?pool_size=64"
+        macpepdb_concurrent_searches: 32
+        macpepdb_max_client_streams: 2
+      hosts:
+        <WEB_HOST>:
+
+    frontend:
+      vars:
+        macpepdb_frontend_port: 8888
+        macpepdb_frontend_config_dir: /opt/macpepdb/frontend/config
+        macpepdb_public_url: "https://<PUBLIC_DOMAIN>"
+        macpepdb_matomo_url: ~        # e.g. https://matomo.example.org/matomo.php
+        macpepdb_matomo_site_id: ~
+        # Role enables the banner for ANY value except ~ (even false). Use ~ to disable, true to enable.
+        macpepdb_show_denbi_survey_banner: ~
+      hosts:
+        <WEB_HOST>:
+
+    caddy:
+      vars:
+        # Optional: caddy_dockerimage (default caddy:latest), caddy_dockerimage_file (tarball to load)
+        macpepdb_caddy_config_dir: /opt/macpepdb/caddy/config
+        macpepdb_caddy_data_dir: /opt/macpepdb/caddy/data
+        macpepdb_caddyfile_dir: /opt/macpepdb/caddy/caddyfiles
+        macpepdb_domains:
+          - name: <PUBLIC_DOMAIN>
+            ssl: auto                 # "auto" = Let's Encrypt, ~ = plain HTTP (IP/internal hosts)
+            redirects:                # these domains redirect to the one above
+              - name: <ALIAS_DOMAIN>
+                ssl: auto
+        macpepdb_maintenance:
+          enabled: false
+          message: "MaCPepDB is down for maintenance. Please check back later."
+      hosts:
+        <WEB_HOST>:

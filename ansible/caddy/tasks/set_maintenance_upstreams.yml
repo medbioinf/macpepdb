@@ -1,0 +1,26 @@
+### API UPSTREAM
+
+- name: Remove API config placeholder
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: '<API_CONFIG>'
+    replace: ""
+
+
+### FRONTEND UPSTREAM
+
+- name: Set frontend template
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: <FRONTEND_CONFIG>
+    replace: "{{ lookup('ansible.builtin.file', './maintenance.part.caddyfile') }}"
+
+- name: Set maintenance message
+  when:
+    - macpepdb_maintenance is defined
+    - macpepdb_maintenance.enabled is defined
+    - macpepdb_maintenance.enabled
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: '<MAINTENANCE_MESSAGE>'
+    replace: "{{ macpepdb_maintenance.message | default('MacPepDB is currently down for maintenance. Please check back later.') }}"

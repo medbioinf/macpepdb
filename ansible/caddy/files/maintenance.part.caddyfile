@@ -1,0 +1,3 @@
+        handle {
+                respond "<MAINTENANCE_MESSAGE>" 503
+        }

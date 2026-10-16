@@ -1,0 +1,6 @@
+---
+# vars file for macpepdb-frontend
+
+
+macpepdb_frontend_config_dir: "{{ hostvars[(groups['frontend'] | first)]['macpepdb_frontend_config_dir'] }}"
+macpepdb_frontend_config_file: "{{ hostvars[(groups['frontend'] | first)]['macpepdb_frontend_config_dir'] }}/config.toml"

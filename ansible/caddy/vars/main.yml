@@ -1,0 +1,7 @@
+---
+# vars file for caddy
+
+macpepdb_caddy_config_dir: "{{ hostvars[(groups['caddy'] | first)]['macpepdb_caddy_config_dir'] }}"
+macpepdb_caddy_data_dir: "{{ hostvars[(groups['caddy'] | first)]['macpepdb_caddy_data_dir'] }}"
+macpepdb_caddyfile_dir: "{{ hostvars[(groups['caddy'] | first)]['macpepdb_caddyfile_dir'] }}"
+macpepdb_caddy_config_file: "{{ hostvars[(groups['caddy'] | first)]['macpepdb_caddyfile_dir'] }}/Caddyfile"

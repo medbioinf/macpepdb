@@ -155,6 +155,42 @@ cargo run -r -- --database-url postgresql://<user>:<pass>@<host>/<dbname> api [s
 
 Consult the [controller documentation](https://docs.rs/macpepdb/latest/macpepdb/web/index.html) for detailed description of the individual endpoints. 
 
+### Ansible deployment
+
+`ansible/` deploys the web stack (API, frontend, Caddy reverse proxy) as Docker containers. Requires Ansible with the `community.docker` collection on the controller and SSH access to the target hosts.
+
+1. Copy the inventory template and fill in every `<PLACEHOLDER>`:
+
+   ```bash
+   cp ansible/inventory/template.yml ansible/inventory/<env>.yml
+   ```
+
+   | Group      | Purpose                                                                 |
+   | ---------- | ----------------------------------------------------------------------- |
+   | `common`   | Base host setup                                                         |
+   | `docker`   | Docker installation                                                     |
+   | `database` | Citus coordinator and workers (`db.yml`; its `database` role is not yet in the repo) |
+   | `api`      | MaCPepDB API containers, one per port in `macpepdb_api_ports`           |
+   | `frontend` | Frontend container, configured via `macpepdb_public_url`, Matomo, etc.  |
+   | `caddy`    | Reverse proxy, domains and redirects via `macpepdb_domains`             |
+
+   `api`, `frontend` and `caddy` variables are read from the first host of their group, so keep them identical within a group. Keep the DB password out of version control, e.g. with `ansible-vault`.
+
+2. Deploy. `macpepdb_action` is required: `start` (re)creates the containers, any other value only stops and removes them.
+
+   ```bash
+   cd ansible
+   ansible-playbook -i inventory/<env>.yml web.yml -e macpepdb_action=start
+   ```
+
+3. Deploy only parts with tags (`common`, `docker`, `api`, `frontend`, `caddy`):
+
+   ```bash
+   ansible-playbook -i inventory/<env>.yml web.yml -e macpepdb_action=start --tags api,caddy
+   ```
+
+Images are pulled from the registry named in `macpepdb_dockerimage` / `macpepdb_frontend_dockerimage`. To ship a locally built image instead, set the matching `*_dockerimage_file` to a tarball path on the controller. Set `macpepdb_show_denbi_survey_banner` to `~` to hide the survey banner (any other value shows it).
+
 ## Citation
 
 **MaCPepDB: A Database to Quickly Access All Tryptic Peptides of the UniProtKB**  

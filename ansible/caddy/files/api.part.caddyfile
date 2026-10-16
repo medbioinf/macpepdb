@@ -1,0 +1,13 @@
+        handle /api/* {
+                reverse_proxy <API_UPSTREAM_SERVERS> {
+                        lb_policy least_conn
+                        lb_retries 999999
+                        lb_try_duration 10s
+                        lb_try_interval 24h
+                        transport http {
+                                max_conns_per_host <MAX_UPSTREAM_CONNECTIONS>
+                                # HTTP/2 when connecting to backends
+                                versions 1 h2c
+                        }
+                }
+        }

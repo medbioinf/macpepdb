@@ -1,0 +1,27 @@
+- name: Lookup upstream IP
+  ansible.builtin.set_fact:
+    ip: "{{ lookup('community.general.dig', upstream_hostname) }}"
+
+- name: Create URL for Port
+  ansible.builtin.set_fact:
+    url: "{{ upstream_protocol }}://{{ ip }}:{{ port }}"
+  loop: "{{ upstream_ports }}"
+  loop_control:
+    loop_var: port
+  register: api_upstream_urls
+
+- name: Create URL list
+  ansible.builtin.set_fact:
+    api_url_list: "{{ api_upstream_urls.results | map(attribute='ansible_facts.url') | list | join(' ') }}"
+
+- name: Set API upstream URLs
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: "{{ upstream_placeholder }}"
+    replace: "{{ api_url_list }} {{ upstream_placeholder }}"
+
+- name: Set max upstream connections
+  ansible.builtin.replace:
+    path: "{{ macpepdb_caddy_config_file }}"
+    regexp: "<MAX_UPSTREAM_CONNECTIONS>"
+    replace: "{{ hostvars[(groups['api'] | first)]['macpepdb_max_client_streams'] }}"

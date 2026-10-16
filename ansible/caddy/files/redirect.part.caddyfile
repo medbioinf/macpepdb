@@ -1,0 +1,8 @@
+<REDIRECT_SOURCE> {
+        <CERTIFICATE>
+        redir <REDIRECT_TARGET>
+
+        import common_headers
+}
+
+<REDIRECT_CONFIG>

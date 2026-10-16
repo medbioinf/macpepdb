@@ -1,0 +1,18 @@
+#SPDX-License-Identifier: MIT-0
+---
+# tasks file for macpepdb-api
+
+
+- name: Run MaCPepDB web API
+  ansible.builtin.include_role:
+    name: macpepdb
+  vars:
+    macpepdb_id: web-{{ port }}
+    macpepdb_cmd: api
+    macpepdb_opts: " {{ macpepdb_matomo }} --concurrent-searches {{ macpepdb_concurrent_searches }} --max-concurrent-streams-per-connection {{ macpepdb_max_client_streams }}  0.0.0.0:{{ port }} "
+    prometheus_scraping_port: 9490
+    ports:
+      - "{{ port }}:{{ port }}"
+  loop: "{{ hostvars[ (groups['api']|first) ]['macpepdb_api_ports'] }}"
+  loop_control:
+    loop_var: port
