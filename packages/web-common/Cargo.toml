@@ -1,10 +1,10 @@
 [package]
 name = "macpepdb_web_common"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 description = "Shared web API types for macpepdb's backend and frontend"
-license = "BSD-3-Clause"
-repository = "https://github.com/medbioinf/macpepdb"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["macpepdb"]
 

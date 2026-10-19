@@ -1,10 +1,10 @@
 [package]
 name = "macpepdb_tui"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 description = "ratatui dashboard that subscribes to tracing events and metrics recorders for macpepdb"
-license = "BSD-3-Clause"
-repository = "https://github.com/medbioinf/macpepdb"
+license.workspace = true
+repository.workspace = true
 readme = "README.md"
 keywords = ["macpepdb"]
 
