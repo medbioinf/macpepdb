@@ -162,6 +162,51 @@ cargo run -r -- --database-url postgresql://<user>:<pass>@<host>/<dbname> api [s
 
 Consult the [controller documentation](https://docs.rs/macpepdb/latest/macpepdb/web/index.html) for detailed description of the individual endpoints. 
 
+### Frontend
+
+Each release contains `macpepdb-frontend-<version>.tar.gz`, a static bundle of the web frontend. Unpack it and serve it with any web server. Unknown paths must fall back to `index.html`, because the frontend uses client-side routing. The frontend reads its settings at runtime from `assets/config.toml` inside the bundle, so one bundle fits every deployment:
+
+```toml
+# Base URL of the MaCPepDB web API (`macpepdb api`)
+macpepdb_base_url = "http://127.0.0.1:8080"
+
+# Optional: enable Matomo tracking by setting the URL and site ID.
+# Add the Matomo URL to the allowed origins (CSP `connect-src`) of the web server.
+# matomo_url = "https://matomo.example.org/matomo.php"
+# matomo_site_id = 1
+
+# Optional: show the de.NBI survey banner (default: false)
+# show_denbi_survey_banner = true
+```
+
+Minimal Caddy example (`Caddyfile`), serving the unpacked bundle on port 8888:
+
+```caddyfile
+:8888 {
+	root * /path/to/macpepdb-frontend-<version>
+	try_files {path} {path}/ /index.html
+	file_server
+}
+```
+
+Minimal nginx example (`/etc/nginx/conf.d/default.conf`):
+
+```nginx
+server {
+    listen 8888;
+    root /path/to/macpepdb-frontend-<version>;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+These examples set no security headers. The Docker image's [`Caddyfile`](docker/frontend/Caddyfile) shows a hardened setup with a Content Security Policy.
+
+The API must allow the frontend's origin via CORS if both are served from different origins. See [`packages/frontend/config.template.toml`](packages/frontend/config.template.toml) for the template.
+
 ### Ansible deployment
 
 `ansible/` deploys the web stack (API, frontend, Caddy reverse proxy) as Docker containers. Requires Ansible with the `community.docker` collection on the controller and SSH access to the target hosts.
