@@ -78,7 +78,7 @@ urlencoding = "2.1.3"
 uuid = "1.23.1"
 wasm-bindgen = "0.2"
 web-sys = "0.3.77"
-xxhash-rust = "0.8.15"
+xxhash-rust = "0.8.19"
 zerocopy = "0.8.48"
 zstd = "0.13.2"
 
