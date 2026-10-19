@@ -1145,12 +1145,29 @@ async fn shutdown_signal() {
             .expect("failed to install Ctrl+C handler");
     };
 
+    #[cfg(unix)]
     let terminate = async {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
             .expect("failed to install signal handler")
             .recv()
             .await;
     };
+
+    // Windows has no SIGTERM; console close and system shutdown are the closest equivalents
+    #[cfg(windows)]
+    let terminate = async {
+        let mut ctrl_close =
+            tokio::signal::windows::ctrl_close().expect("failed to install signal handler");
+        let mut ctrl_shutdown =
+            tokio::signal::windows::ctrl_shutdown().expect("failed to install signal handler");
+        tokio::select! {
+            _ = ctrl_close.recv() => {},
+            _ = ctrl_shutdown.recv() => {},
+        }
+    };
+
+    #[cfg(not(any(unix, windows)))]
+    let terminate = std::future::pending::<()>();
 
     tokio::select! {
         _ = ctrl_c => {},

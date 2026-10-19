@@ -91,6 +91,13 @@ Table: stats (Citus-distributed by `key`)
 
 \* primary key is bold
 
+## Platform support
+
+Pre-built binaries for Linux (x86_64, aarch64), macOS (x86_64, aarch64) and Windows (x86_64) are attached to each [release](https://github.com/medbioinf/macpepdb/releases).
+
+> [!NOTE]
+> MaCPepDB is only completely tested on Linux. It needs a running PostgreSQL/Citus cluster, which is only available for Linux in our CI. The macOS and Windows binaries compile and are expected to work, but are not tested against a live database.
+
 ## Database deployment
 
 MaCPepDB runs on PostgreSQL with the [Citus](https://www.citusdata.com/) extension. Locally, `docker-compose.yml` brings up a Citus coordinator and worker nodes with `postgres` as distirbuted database
