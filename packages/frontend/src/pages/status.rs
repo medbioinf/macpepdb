@@ -1,4 +1,5 @@
 use dioxus::prelude::*;
+#[cfg(target_arch = "wasm32")]
 use plotly::{
     common::{Font, Line, Marker, Mode, Title},
     layout::{Annotation, Axis},
@@ -17,6 +18,7 @@ use macpepdb_web_common::responses::cluster_health::ClusterHealthResponse;
 /// already precomputed node positions (`x`/`y`); this only shapes them into traces.
 /// `None` entries in the `x`/`y` vectors are Plotly's standard "break the line here" gap marker,
 /// used to draw one disconnected line segment per edge within a single trace.
+#[cfg(target_arch = "wasm32")]
 fn build_cluster_health_plot(data: &ClusterHealthResponse) -> Plot {
     let (mut ok_x, mut ok_y, mut bad_x, mut bad_y) = (vec![], vec![], vec![], vec![]);
     for edge in &data.edges {
@@ -94,9 +96,11 @@ pub fn Status() -> Element {
             Ok(client.get_cluster_health().await?)
         });
 
+    #[cfg(target_arch = "wasm32")]
     use_effect(move || {
         if let Some(Ok(response)) = &*cluster_health.read_unchecked() {
             let plot = build_cluster_health_plot(response);
+
             spawn(async move {
                 plotly::bindings::new_plot("cluster-health-plot", &plot).await;
             });
