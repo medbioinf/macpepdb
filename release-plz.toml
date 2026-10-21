@@ -1,0 +1,13 @@
+[workspace]
+# Only the `macpepdb` package creates tag + GitHub release. The tag triggers build.yml
+# (binaries, docker images, frontend tarball). Other crates are only published to crates.io.
+git_tag_enable = false
+git_release_enable = false
+changelog_update = true
+
+[[package]]
+name = "macpepdb"
+git_tag_enable = true
+git_tag_name = "{{ version }}"
+# build.yml creates the GitHub release with binaries attached
+git_release_enable = false

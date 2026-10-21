@@ -243,6 +243,20 @@ The API must allow the frontend's origin via CORS if both are served from differ
 
 Images are pulled from the registry named in `macpepdb_dockerimage` / `macpepdb_frontend_dockerimage`. To ship a locally built image instead, set the matching `*_dockerimage_file` to a tarball path on the controller. Set `macpepdb_show_denbi_survey_banner` to `~` to hide the survey banner (any other value shows it).
 
+## Releases
+
+Releases are driven by [release-plz](https://release-plz.dev) (`release-plz.toml`, `.github/workflows/release-plz.yml`); no tags are pushed by hand.
+
+1. Every push to `main` opens or updates a release PR with per-crate version bumps and changelogs, derived from [conventional commits](https://www.conventionalcommits.org). Crates without changes (e.g. the leaf crates) are left untouched.
+2. Merging the release PR publishes the changed library crates to crates.io. The frontend (`publish = false`) is never published there.
+3. The merge also tags `macpepdb` as `X.Y.Z`. The tag triggers `.github/workflows/build.yml`, which builds:
+   - release binaries for five targets,
+   - the Docker images `ghcr.io/medbioinf/macpepdb` and `ghcr.io/medbioinf/macpepdb-frontend` (tagged `X.Y.Z` and `latest`),
+   - the frontend tarball,
+   - and a GitHub release with all artifacts and checksums.
+
+Required repository secrets: `CRATESIO_TOKEN` (crates.io publishing) and `RELEASE_PLZ_TOKEN` (PAT or GitHub App token; the default `GITHUB_TOKEN` would not let the tag trigger `build.yml`).
+
 ## Citation
 
 **MaCPepDB: A Database to Quickly Access All Tryptic Peptides of the UniProtKB**  
