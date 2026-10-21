@@ -12,3 +12,6 @@ Implements the Krokhin SSRCalc model:
 
 Reimplemented from the [Thermo Fisher Peptide Analyzer](https://downloads.thermofisher.com/assets/apps/peptide-analyzer/ssrcalc3.js),
 itself a chain of reimplementations from Perl → C → Java → C# → JavaScript going back to 2006.
+
+## Note about development
+This crate is mostly coded by AI as it is just a reimplementation of a reimplementations of a reimplementation ... . Test were still reviewed by humans.

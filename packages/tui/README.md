@@ -214,3 +214,6 @@ The **same key** can appear with multiple kinds — e.g. a counter total *and* a
 
 `Tui::run()` installs both the tracing subscriber (RUST_LOG-aware) and the metrics recorder globally. If you already manage those yourself, use `tui.layer()` + `tui.recorder()` + `tui.run_raw()` instead.
 ```
+
+## Note about development
+This crate is mostly coded by AI as it has no critical role in the correctness of MaCPepDBs data. But it is still reviewed by humans.
