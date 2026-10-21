@@ -3,6 +3,7 @@
 Streaming parser and indexer for [UniProt text dumps](https://web.expasy.org/docs/userman.html) (`.txt`, `.txt.gz`), used by the
 [`macpepdb`](https://github.com/medbioinf/macpepdb) crate's build pipeline to read protein
 records.
+**Note:** The crate [uniprot](https://docs.rs/uniprot/latest/uniprot/) is probably more feature-complete, but it parses XML files, which are much larger than the text dumps.
 
 ## Reading
 
