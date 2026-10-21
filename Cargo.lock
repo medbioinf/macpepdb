@@ -3754,7 +3754,7 @@ dependencies = [
 
 [[package]]
 name = "macpepdb"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "async-compression",
  "async-stream",
@@ -3822,7 +3822,7 @@ dependencies = [
 
 [[package]]
 name = "macpepdb-frontend"
-version = "0.1.0"
+version = "2.0.0"
 dependencies = [
  "async-std",
  "chrono",
@@ -3845,18 +3845,18 @@ dependencies = [
 
 [[package]]
 name = "macpepdb_metrics_peek"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "metrics",
 ]
 
 [[package]]
 name = "macpepdb_peptide_hydrophobicity"
-version = "0.1.0"
+version = "1.0.0"
 
 [[package]]
 name = "macpepdb_tui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "crossterm 0.28.1",
@@ -3872,7 +3872,7 @@ dependencies = [
 
 [[package]]
 name = "macpepdb_uniprot_reader"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-compression",
  "flate2",
@@ -3884,7 +3884,7 @@ dependencies = [
 
 [[package]]
 name = "macpepdb_web_common"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "serde",
  "serde_json",

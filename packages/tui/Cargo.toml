@@ -1,6 +1,6 @@
 [package]
 name = "macpepdb_tui"
-version = "0.1.0"
+version = "1.0.0"
 edition.workspace = true
 description = "ratatui dashboard that subscribes to tracing events and metrics recorders for macpepdb"
 license.workspace = true

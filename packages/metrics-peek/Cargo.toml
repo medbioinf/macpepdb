@@ -1,6 +1,6 @@
 [package]
 name = "macpepdb_metrics_peek"
-version = "0.1.0"
+version = "1.0.0"
 edition.workspace = true
 description = "A metrics::Recorder implementation that calls a user-supplied callback immediately or on a periodic interval (in milliseconds)"
 license.workspace = true

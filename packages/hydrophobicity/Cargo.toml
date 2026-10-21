@@ -1,6 +1,6 @@
 [package]
 name = "macpepdb_peptide_hydrophobicity"
-version = "0.1.0"
+version = "1.0.0"
 edition.workspace = true
 description = "Peptide hydrophobicity prediction (Krokhin et al)"
 license.workspace = true
