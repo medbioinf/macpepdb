@@ -83,6 +83,23 @@ jobs:
         if: always()
         run: docker compose down --remove-orphans
 
+  publish-dry-run:
+    needs: lint
+    if: github.event_name == 'pull_request'
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+
+      - name: Dry-run crates.io publish
+        run: cargo publish --workspace --dry-run
+
   binaries:
     name: binary (${{ matrix.target }})
     needs: test
