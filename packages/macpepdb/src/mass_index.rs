@@ -163,10 +163,8 @@ fn append_bytes(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 /// Decode native-endian `i32`s out of a freshly-decompressed byte buffer (1-byte aligned, so a
 /// zero-copy reinterpret is not sound — copy through `from_ne_bytes`).
 fn bytes_to_i32_vec(bytes: &[u8]) -> Vec<i32> {
-    bytes
-        .chunks_exact(4)
-        .map(|c| i32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
-        .collect()
+    let (chunks, _remainder) = bytes.as_chunks::<4>();
+    chunks.iter().map(|c| i32::from_ne_bytes(*c)).collect()
 }
 
 /// In-place dedup of a `MassPidPair` slice already sorted by mass and holding a single pid (one
