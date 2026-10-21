@@ -438,7 +438,7 @@ pub fn SrmPrmTargetFinder() -> Element {
             li { "Highlighted rows: another target has a similar m/z at the same charge, e.g. due to PTMs." }
         }
 
-        SeparatorLine { label: "Taxonomies" }
+        SeparatorLine { label: "Taxonomies of interest" }
         div { class: "input-group mb-3",
             span { class: "input-group-text", "Taxonomy search *" }
             input {
