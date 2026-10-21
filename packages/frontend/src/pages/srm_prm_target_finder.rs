@@ -28,9 +28,6 @@ use macpepdb_web_common::{
     responses::{protein::ProteinResponse, taxonomy::TaxonomyResponse},
 };
 
-/// Default charge spec pre-filled into the "Add target" charge input.
-const DEFAULT_CHARGE_SPEC: &str = "2";
-
 /// Default max variable modifications
 const DEFAULT_MAX_VAR_MODIFICATIONS: i16 = 2;
 const DEFAULT_MAX_MISSED_CLEAVAGES: i16 = 0;
@@ -187,7 +184,7 @@ pub fn SrmPrmTargetFinder() -> Element {
     let mut protein_search_term = use_signal(String::new);
     // term submitted by button/enter; the counter makes re-submitting the same term re-run the search
     let mut protein_search_submitted = use_signal(|| (0u32, String::new()));
-    // charge spec typed into the suggestion row, keyed by accession (default: DEFAULT_CHARGE_SPEC)
+    // charge spec typed into the suggestion row, keyed by accession
     let mut target_charge_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
     let mut targets: Signal<Vec<(String, String)>> = use_signal(Vec::new);
     // species contained in each selected taxonomy (selected taxonomy ID -> species IDs); proteins are
@@ -742,7 +739,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                                             .read()
                                             .get(&accession)
                                             .cloned()
-                                            .unwrap_or_else(|| DEFAULT_CHARGE_SPEC.to_string());
+                                            .unwrap_or_default();
                                         let already_added = targets.read().iter().any(|(a, c)| a == &accession && c == charge_spec.trim());
                                         let input_accession = accession.clone();
                                         rsx! {
