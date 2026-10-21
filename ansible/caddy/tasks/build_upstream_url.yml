@@ -1,6 +1,13 @@
-- name: Lookup upstream IP
+# Runs on the target host, so its resolver (not the controller's) is used.
+- name: Resolve upstream IP on target host
+  ansible.builtin.getent:
+    database: ahostsv4
+    key: "{{ upstream_hostname }}"
+
+# getent module keys the result dict by the first column, which is the IP.
+- name: Set upstream IP
   ansible.builtin.set_fact:
-    ip: "{{ lookup('community.general.dig', upstream_hostname) }}"
+    ip: "{{ getent_ahostsv4 | list | first }}"
 
 - name: Create URL for Port
   ansible.builtin.set_fact:
