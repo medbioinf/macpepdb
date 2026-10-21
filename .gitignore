@@ -10,6 +10,7 @@ packages/frontend/public/index.css*
 
 # Dev
 *.py
+!/docker/compose/citus-manager/manager.py
 *.index
 
 # Protein files on root level
