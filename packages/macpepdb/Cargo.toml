@@ -5,7 +5,7 @@ edition.workspace = true
 description = "Mass-indexed peptide database: digests UniProt protein files with a protease and answers mass-based peptide searches over a CLI and HTTP API"
 license.workspace = true
 repository.workspace = true
-keywords = ["proteomics", "peptides", "macpepdb", "database", "mass-spectrometry", "bioinformatics"]
+keywords = ["proteomics", "peptides", "macpepdb", "database", "mass-spectrometry"]
 
 [dependencies]
 async-compression = { workspace = true, features = ["gzip", "tokio"] }
