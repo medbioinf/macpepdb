@@ -1,0 +1,271 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [2.0.0](https://github.com/medbioinf/macpepdb/compare/1.1.0...2.0.0) - 2026-10-22
+
+### Fixed
+
+- fix bug where peptidoforms might get skiped unintentionally
+- fix error at optional feature
+- fix formats and update documentation
+- fix empty response streams
+- fix typo
+- fix taxonomy filter
+- fix sql able filter not in sql
+- fix protein/peptide associations
+- fix response
+- fix position
+- fix features
+- fix protein insertion deadlock
+- fix fd limit bug for low system memory scenarios
+- fix array length
+- fix mz to DA
+- fix condition reference
+- fix option strings
+- fix bug in protein insertion error handling
+- fix log level
+- fix cql_size calculation
+- fix protein amount estimation
+- fix ctrl-c twice to exit bug
+- fix and finish tests
+- fix batch type assignment
+- fix peptide filtering
+
+### Other
+
+- reduce number of keywords to five
+- thanks clippy
+- release 2.0.0 and new leaf crates
+- collect metadata on workspace level
+- add pre-build binary CI
+- consider selected review status for peptides uniqueness
+- rework uniquness limitations
+- add missed cleavage limit
+- use debug representation
+- report url
+- Merge branch 'feature-cluster-health'
+- display cluster status
+- allow monitoring multiple instances
+- add method to count peptides conditions for masses and modification combination
+- formatting
+- add hydrophobicity to targets
+- rework SRM/PRM finder, related to #38
+- add benchmark SIMD digest vs regex digest
+- add SRM/PRM target finder
+- start to implement Koina client
+- switch to case insensitive search
+- add scientific names of taxonomies, resolved #37
+- merge queries on same shard
+- batch peptidoforms in producer
+- add exists query
+- make streams send
+- Revert "make streams send"
+- make streams send
+- move serialization into search
+- complete peptidoform client filter
+- remove unsupported filter attribute
+- improve memory footprint of ModifiedSequence
+- better deduplicaiton for peptidoforms
+- introduce buffering to avoid http overhead
+- remove remnants from union all search
+- make output of peptide search changeable
+- distinct lookup per thread
+- make selected peptide columns variable
+- remove union all search
+- check if search is complete#
+- check expected peptides
+- make condition stream multithreaded
+- combine conditions to lower queries
+- reduce allocations due to cloning
+- buffer modificied sequence and materialize later
+- build PTM maps once
+- add integration test
+- reload runtime config on /api/admin/client call
+- new mass partitioning
+- enable performance test to change API settings
+- add endpoint to change some server settings
+- remove unnecessary arguments
+- implement http/2 tuning
+- remove remains for testing
+- force http2 on non TLS connection
+- remove hard coded host
+- remote print of peptidoform
+- add performance test
+- remove debug prints
+- make search type serializable
+- format
+- rename all crates to have the prefix macpepdb
+- update build pipeline
+- document macpepdb
+- prevent out-of-memory error
+- raise max body size
+- add optional build comment
+- make isoform resolving optional
+- remove tempoary module
+- resolve isoforms via comment instead of note
+- support multiple isoforms for one var_seq
+- add TSV download
+- optimize stream
+- add option for matomo
+- make clippy happy
+- enable taxonomy ID filtering
+- add hydrophobicity
+- update frontend to match current API
+- implement isoform resolving
+- compressed mass_index buckets
+- add chemistry controller
+- move partial router creation into controllers
+- add protein controller and search
+- include sequence
+- dedup mass_index in scatter step
+- faster cleave by using prefix mass and unkown
+- remove unnecessary cast
+- implement taxonomy controller
+- Merge branch 'experimental-disk-mass-index'
+- add taxonomies to the database
+- increment protein insertion parameter less frequently
+- rename scratch_dir parameter
+- increment progress bar ever 8192 proteins
+- remove channel, split proteins in even chunks
+- remove unused deps
+- replace arrayqueue with mpsc
+- metrics and bugfixes
+- mass_index compression level set to 1
+- implement semi-specific digest
+- write mass index to disk
+- dedup iterator code into a single generic iterator
+- complete comment
+- association-weighted balancing
+- disjoint contiguous mass partitions
+- move some filter into query
+- add amino acid counts
+- remove unused columns from search select
+- api performance improvements and performance logs
+- tinyvec CompactSequence
+- make search type configurable
+- reimplement more effizient version of MassPartitionMap
+- mass_index improvements
+- shrink vector sized early
+- improve pair alignment and reduce allocation by reusing vector in unsafe
+- replace protein list with count
+- replace Mutex with ArrayQueue
+- reduce memory foodprint
+- increase amount of metrics tracing
+- reduce capacity
+- TUI is now able to display metric multiple times as differen kinds
+- restructure protein access build
+- optimize cleave (masses only)
+- split up mass index optionally
+- write protein_ids into seperate table
+- add test for taxonomy assignment
+- revive review filter
+- add command to show peptide
+- add review status to proteins and peptides
+- change database to default database in compose
+- parallel protein download and parallel mass index sorting
+- implement TryFrom
+- clean up & implement union all based search
+- scylla/cassandra to citus
+- improve progress bar for protein insertion
+- add transport compression
+- move database build from main into separate struct
+- rename blob to blobtable
+- mass_index bug fix and performance improvements
+- make index consumable while iterating
+- add test
+- store mass count
+- use sparse matrix instead of HashMap/HashSet
+- rename module
+- add cli option to get stats
+- save protein and peptide counts
+- rename configuration
+- make proteins insert skipable
+- move global index into Arc<Mutex>>
+- improve mass index throughput
+- add function to get only mass of cleaved peptides before allocation
+- add mass filtering before allocation
+- implement congestion avoidance for inserts
+- implement congestion avoidance for inserts
+- Merge branch 'feature-concurrent-file-reading'
+- remove dashmap to reduce allocations
+- read multiple protein files concurrently
+- move expected peptides into file and rename them properly
+- add async protein reader
+- relax protein reader
+- typos
+- minor fixes
+- replace commitlog_segment_size_in_mb with batch_size_limit (in kb) as optimal value is <=1MB
+- faster peptide insertion by keeping buffer across iterations
+- parallel protein insertion
+- optimize cleave
+- keep proteins in memory for mass indexing and digestion
+- remove debug output
+- add protein IDs
+- partititon by Cassandra max partition size
+- make mimalloc the default allocator
+- maximize batch insert by commit log size
+- add protein associations
+- add taxonomies to peptides
+- support gzipped protein files
+- improve allocation
+- wait for ctrl-c at the end of the database buil
+- print queue status
+- make clippy happy
+- improve performance of 5 bit conversion
+- resolve glob pattern on input files
+- make protease configurable by CLI
+- decrease minimum peptide length
+- improve digest and add test for unspecific cleavage
+- add tokio console feature
+- add tokio console behind a feature
+- added first draft of web api
+- collect various information into Configuration struct
+- avoid copying seqeunces
+- remove size metrics
+- integrate protease
+- move all CQL relevant funtions into table structs
+- implement peptide search
+- switch to batch statement for peptides
+- add tcmalloc
+- make clippy happier
+- remove unnecessary second level of guarded data structure
+- add mimalloc and jemalloc as optional features
+- implement a metrics logger
+- monitor size using metric instead of tracing
+- trace size of mass index and counter
+- allow overflow in debug mode
+- make clippy happy
+- remove unneded option
+- reduce batch size
+- move indexing and partition into memory
+- decrease type of partition
+- making conistency available
+- decrease error size
+- switch to CachingSession
+- add option to simply print stderr
+- remove more unneeded depenencies
+- remove unneeded dependencies
+- implement monitoring
+- insert peptides concurrently
+- remove playground for deku
+- implement partitioning
+- print some numbers
+- correct function name
+- make concurrent implementation for mass indexer
+- implement mass counter
+- upsert remining buffer
+- implement peptide insertion
+- implement mass index
+- implement proteins and clean up database access
+- add db client
+- make sequence impelementation more flexible
+- tidy up to the most computational and storage efficient version
+- optimize 5 bit representation and add CQL option
+- add parameter for selecting sequence type
+- implement lightweight MaCPepDB like database with various sequence representations
