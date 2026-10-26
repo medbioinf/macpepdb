@@ -88,7 +88,7 @@ zerocopy = "0.8.48"
 zstd = "0.13.2"
 
 # workspace
-macpepdb = { path = "packages/macpepdb", version = "2.0.0" }
+macpepdb = { path = "packages/macpepdb", version = "2.0.1" }
 macpepdb-frontend = { path = "packages/frontend" }
 macpepdb_web_common = { path = "packages/web-common", version = "1.0.0" }
 macpepdb_metrics_peek = { path = "packages/metrics-peek", version = "1.0.0" }

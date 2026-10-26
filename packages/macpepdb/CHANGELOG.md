@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1](https://github.com/medbioinf/macpepdb/compare/2.0.0...2.0.1) - 2026-10-26
+
+### Other
+
+- *(macpepdb)* release v2.0.0
+- reduce number of connection for CI
+- remove call of external  tool
+
 ## [2.0.0](https://github.com/medbioinf/macpepdb/compare/1.1.0...2.0.0) - 2026-10-22
 
 ### Fixed
