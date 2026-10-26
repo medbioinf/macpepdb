@@ -189,6 +189,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          # skip docker build-record artifacts (names contain `~`, download fails)
+          pattern: macpepdb-*
           merge-multiple: true
 
       - name: Checksums
