@@ -13,7 +13,8 @@
 //!
 //! Requires a running Citus cluster (`docker compose up -d --scale worker=2`). The DB URL
 //! defaults to `postgresql://postgres@127.0.0.1:5432/postgres` and can be overridden with
-//! `MACPEPDB_TEST_DATABASE_URL`. `db.sql` is applied over that same connection (no `psql`
+//! `MACPEPDB_TEST_DATABASE_URL`; without a query string there, a small connection pool is
+//! used (see `database_url`). `db.sql` is applied over that same connection (no `psql`
 //! needed), statement by statement, so it must not contain `;` inside literals, comments or
 //! `$$` bodies.
 
@@ -38,9 +39,18 @@ use macpepdb::post_translational_modification::{PTMCollection, PostTranslational
 use macpepdb::protease::Protease;
 use macpepdb::sequence::IsSimpleSequence;
 
+/// Connection URL for the test DB. Unless the override already carries a query string, appends
+/// a small `pool_size` and caps Citus' per-query worker connections: the coordinator opens up
+/// to `pool_size * citus.max_adaptive_executor_pool_size` connections to each worker, and the
+/// default (16 * 16) exceeds the dev cluster workers' `max_connections` ("too many clients").
 fn database_url() -> String {
-    std::env::var("MACPEPDB_TEST_DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://postgres@127.0.0.1:5432/postgres".to_string())
+    let url = std::env::var("MACPEPDB_TEST_DATABASE_URL")
+        .unwrap_or_else(|_| "postgresql://postgres@127.0.0.1:5432/postgres".to_string());
+    if url.contains('?') {
+        url
+    } else {
+        format!("{url}?pool_size=4")
+    }
 }
 
 fn repo_root() -> PathBuf {
