@@ -11,10 +11,12 @@
 //! cargo test -p macpepdb --test live_db_peptide_search -- --ignored --nocapture
 //! ```
 //!
-//! Requires a running Citus cluster (`docker compose up -d --scale worker=2`) and `psql` on
-//! PATH. The DB URL defaults to `postgresql://postgres@127.0.0.1:5432/postgres` and can be
-//! overridden with `MACPEPDB_TEST_DATABASE_URL`; `psql` connects to the same host/user,
-//! reading the database name off that URL.
+//! Requires a running Citus cluster (`docker compose up -d --scale worker=2`). The DB URL
+//! defaults to `postgresql://postgres@127.0.0.1:5432/postgres` and can be overridden with
+//! `MACPEPDB_TEST_DATABASE_URL`; without a query string there, a small connection pool is
+//! used (see `database_url`). `db.sql` is applied over that same connection (no `psql`
+//! needed), statement by statement, so it must not contain `;` inside literals, comments or
+//! `$$` bodies.
 
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
@@ -37,9 +39,18 @@ use macpepdb::post_translational_modification::{PTMCollection, PostTranslational
 use macpepdb::protease::Protease;
 use macpepdb::sequence::IsSimpleSequence;
 
+/// Connection URL for the test DB. Unless the override already carries a query string, appends
+/// a small `pool_size` and caps Citus' per-query worker connections: the coordinator opens up
+/// to `pool_size * citus.max_adaptive_executor_pool_size` connections to each worker, and the
+/// default (16 * 16) exceeds the dev cluster workers' `max_connections` ("too many clients").
 fn database_url() -> String {
-    std::env::var("MACPEPDB_TEST_DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://postgres@127.0.0.1:5432/postgres".to_string())
+    let url = std::env::var("MACPEPDB_TEST_DATABASE_URL")
+        .unwrap_or_else(|_| "postgresql://postgres@127.0.0.1:5432/postgres".to_string());
+    if url.contains('?') {
+        url
+    } else {
+        format!("{url}?pool_size=4")
+    }
 }
 
 fn repo_root() -> PathBuf {
@@ -52,21 +63,28 @@ fn repo_root() -> PathBuf {
 }
 
 /// Applies `db.sql` (drops + recreates the schema — this is a rebuildable-from-source DB,
-/// see CLAUDE.md) against the target database via `psql`, so every run starts from a known,
-/// empty state.
-fn reset_schema(database: &str) {
-    let db_sql_path = repo_root().join("db.sql");
-    let status = std::process::Command::new("psql")
-        .args(["-h", "127.0.0.1", "-U", "postgres", "-d", database])
-        .args(["-v", "ON_ERROR_STOP=1", "-f"])
-        .arg(&db_sql_path)
-        .status()
-        .expect("run `psql` to reset the schema — is it on PATH and is the DB reachable?");
-    assert!(
-        status.success(),
-        "`psql -f {}` failed",
-        db_sql_path.display()
-    );
+/// see CLAUDE.md) over the given client, so every run starts from a known, empty state.
+///
+/// Statements are executed one at a time (split on `;`) because `ALTER SYSTEM` can't run
+/// inside a transaction block, which a multi-statement simple query would implicitly open.
+/// This relies on `db.sql` not containing `;` inside string literals, comments or `$$` bodies.
+async fn reset_schema(client: &Client) {
+    let sql = std::fs::read_to_string(repo_root().join("db.sql")).expect("read db.sql");
+    let connection = client.get().await.expect("get connection to reset schema");
+    for statement in sql.split(';') {
+        // Skip the trailing chunk and anything that is only whitespace / `--` comments.
+        let has_sql = statement.lines().any(|line| {
+            let line = line.trim();
+            !line.is_empty() && !line.starts_with("--")
+        });
+        if !has_sql {
+            continue;
+        }
+        connection
+            .batch_execute(statement)
+            .await
+            .unwrap_or_else(|e| panic!("db.sql statement failed: {e}\n{statement}"));
+    }
 }
 
 /// Digests the checked-in E. coli K12 fixture (trypsin, length 6-50, up to 2 missed
@@ -132,7 +150,7 @@ async fn shared_configuration() -> Arc<RuntimeConfiguration> {
                     .await
                     .expect("connect to live DB"),
             );
-            reset_schema(client.database());
+            reset_schema(&client).await;
             Arc::new(build_from_fixture(client).await)
         })
         .await
