@@ -1,0 +1,8 @@
+# Files that execute on the self-hosted CI runner or change what it builds/runs.
+# Changes require approval from the macpepdb team (enable "Require review from Code Owners" in the main ruleset).
+/.github/                @medbioinf/macpepdb
+/docker-compose.yml      @medbioinf/macpepdb
+/docker/                 @medbioinf/macpepdb
+Cargo.toml               @medbioinf/macpepdb
+**/Cargo.toml            @medbioinf/macpepdb
+**/build.rs              @medbioinf/macpepdb

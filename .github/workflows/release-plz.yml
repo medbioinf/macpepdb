@@ -12,18 +12,19 @@ permissions:
 jobs:
   release:
     name: Publish and tag
+    if: github.repository == 'medbioinf/macpepdb'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           # PAT/App token: tags pushed with GITHUB_TOKEN would not trigger build.yml
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Run release-plz release
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5
         with:
           command: release
         env:
@@ -32,20 +33,21 @@ jobs:
 
   release-pr:
     name: Release PR
+    if: github.repository == 'medbioinf/macpepdb'
     runs-on: ubuntu-latest
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           token: ${{ secrets.RELEASE_PLZ_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
 
       - name: Run release-plz release-pr
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@b2baf303c463c223526d52a8a91b0777f052cf3f # v0.5
         with:
           command: release-pr
         env:
