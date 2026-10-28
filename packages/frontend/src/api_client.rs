@@ -250,7 +250,7 @@ impl<'a> Client<'a> {
         self.get(&endpoint).await
     }
 
-    /// Get the species contained in the given taxonomy (the taxonomy itself if it is a species)
+    /// Get the given taxonomy and all its descendants, regardless of rank
     ///
     /// # Arguments
     /// * `taxonomy_id` - Taxonomy ID
@@ -328,7 +328,8 @@ impl<'a> Client<'a> {
     }
 
     /// Runs an SRM/PRM target search: for each (m/z, charge) target, searches the given
-    /// taxonomies (expanded to species) and returns only peptides unique within a species.
+    /// taxonomies (expanded to all sub-taxonomies, e.g. strains) and returns only peptides unique within
+    /// a species; peptides shared by several strains of one species stay unique.
     ///
     /// # Arguments
     /// * `request` - The fully-built SRM/PRM request (targets, tolerances, PTMs, taxonomy

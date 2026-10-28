@@ -17,7 +17,7 @@ use axum::body::Body;
 use axum::extract::{Json, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
-use futures::{StreamExt, TryStreamExt};
+use futures::TryStreamExt;
 use http::StatusCode;
 use macpepdb_web_common::requests::tools::{ReviewStatus, SrmPrmRequest};
 use macpepdb_web_common::responses::tools::{SrmPrmResponse, SrmPrmTarget};
@@ -143,36 +143,43 @@ enum Uniqueness {
 }
 
 /// Classifies a peptide by its taxonomy arrays within the selected taxonomies. Sharing with taxonomies
-/// outside the selection is ignored.
+/// outside the selection is ignored. Taxa mapping to the same group (e.g. strains of one species)
+/// count as one taxon.
 ///
 /// # Arguments
 /// * `unique_taxonomy_ids` - Taxa in which the peptide occurs in exactly one protein
 /// * `non_unique_taxonomy_ids` - Taxa in which the peptide occurs in more than one protein
-/// * `selected` - Selected (species) taxonomy IDs
+/// * `selected` - Selected taxonomy IDs mapped to their group ID
 /// * `review_status` - Review status of the considered proteins
 ///
 fn classify_uniqueness(
     unique_taxonomy_ids: &[i32],
     non_unique_taxonomy_ids: &[i32],
-    selected: &HashSet<i32>,
+    selected: &HashMap<i32, i32>,
     review_status: ReviewStatus,
 ) -> Uniqueness {
-    let mut matching = unique_taxonomy_ids
+    let matching: Vec<i32> = unique_taxonomy_ids
         .iter()
         .chain(non_unique_taxonomy_ids)
-        .filter(|id| selected.contains(id));
-    let (first, second) = (matching.next(), matching.next());
-    if first.is_none() {
+        .copied()
+        .filter(|id| selected.contains_key(id))
+        .collect();
+    let Some(first) = matching.first() else {
         return Uniqueness::Shared;
-    }
+    };
+    let group = selected[first];
+    let single_group = matching.iter().all(|id| selected[id] == group);
     if review_status != ReviewStatus::Both {
         // Excluded proteins can remove sharing, so even several taxa might end up as one.
         return Uniqueness::CheckProteins;
     }
-    match (first, second) {
-        (Some(&id), None) if unique_taxonomy_ids.contains(&id) => Uniqueness::Unique(id),
-        (Some(_), None) => Uniqueness::CheckProteins,
-        _ => Uniqueness::Shared,
+    if !single_group {
+        return Uniqueness::Shared;
+    }
+    if matching.iter().all(|id| unique_taxonomy_ids.contains(id)) {
+        Uniqueness::Unique(group)
+    } else {
+        Uniqueness::CheckProteins
     }
 }
 
@@ -188,40 +195,48 @@ fn base_accession(accession: &str) -> &str {
     }
 }
 
-/// Determines the taxonomy a peptide is unique in by looking at its proteins: considered are the
+/// Determines the taxonomy group a peptide is unique in by looking at its proteins: considered are the
 /// proteins of the selected taxonomies with a matching review status. The peptide is unique if all of
-/// them are the target protein or its isoforms (and therefore in a single taxonomy).
+/// them belong to one group and, within each taxonomy, are the same protein (isoforms of one
+/// accession). Different taxa of one group (e.g. strains) may carry different accessions.
 ///
 /// # Arguments
 /// * `protein_ids` - IDs of all proteins containing the peptide
 /// * `proteins` - Resolved proteins (ID -> (accession, taxonomy ID, is reviewed))
-/// * `selected` - Selected (species) taxonomy IDs
+/// * `selected` - Selected taxonomy IDs mapped to their group ID
 /// * `review_status` - Review status of the considered proteins
 /// * `target_base_accession` - Accession of the target without isoform suffix
 ///
 fn resolve_unique_taxonomy(
     protein_ids: &[i32],
     proteins: &HashMap<i32, (String, i32, bool)>,
-    selected: &HashSet<i32>,
+    selected: &HashMap<i32, i32>,
     review_status: ReviewStatus,
     target_base_accession: &str,
 ) -> Option<i32> {
-    let mut unique_taxon: Option<i32> = None;
+    let mut unique_group: Option<i32> = None;
+    let mut accession_by_taxonomy: HashMap<i32, &str> = HashMap::new();
+    let mut target_found = false;
     for protein_id in protein_ids {
         let (accession, taxonomy_id, is_reviewed) = proteins.get(protein_id)?;
-        if !selected.contains(taxonomy_id) || !review_status.matches(*is_reviewed) {
+        let Some(&group) = selected.get(taxonomy_id) else {
+            continue;
+        };
+        if !review_status.matches(*is_reviewed) {
             continue;
         }
-        if base_accession(accession) != target_base_accession {
+        let base = base_accession(accession);
+        target_found |= base == target_base_accession;
+        if *accession_by_taxonomy.entry(*taxonomy_id).or_insert(base) != base {
             return None;
         }
-        match unique_taxon {
-            None => unique_taxon = Some(*taxonomy_id),
-            Some(taxon) if taxon != *taxonomy_id => return None,
+        match unique_group {
+            None => unique_group = Some(group),
+            Some(unique) if unique != group => return None,
             Some(_) => {}
         }
     }
-    unique_taxon
+    if target_found { unique_group } else { None }
 }
 
 /// Marks targets which have another target (different sequence) with the same charge and an
@@ -275,8 +290,8 @@ impl ToolsController {
 
     /// Searches suitable peptides for SRM/PRM assays: for each requested (protein accession,
     /// charge spec) target, digests the protein in-memory, searches the given taxonomies
-    /// (expanded to their species-level subtree) and returns only peptides that are unique
-    /// within an individual species, at every requested charge.
+    /// (expanded to their full subtree, incl. strains/isolates) and returns only peptides that are
+    /// unique within an individual species (strains of one species count as that species), at every requested charge.
     ///
     /// # Arguments
     /// * `state` - Server state
@@ -322,16 +337,15 @@ impl ToolsController {
         State(server_state): State<Arc<ServerState>>,
         Json(payload): Json<SrmPrmRequest>,
     ) -> Result<Response, Error> {
-        // Expand every requested taxonomy to its species subtree; union all resulting
-        // species IDs into one sorted, deduped list, reused as the taxonomy scoping filter
-        // for every target below.
-        let mut selected_species_ids: HashSet<i32> = HashSet::new();
+        // Expand every requested taxonomy to its subtree (any rank); union all resulting
+        // taxonomy IDs, each mapped to its group (species), into one map reused as the taxonomy
+        // scoping filter for every target below.
+        let mut selected_species_ids: HashMap<i32, i32> = HashMap::new();
         for &taxonomy_id in &payload.taxonomies {
             let matching_taxonomy_ids = TaxonomyTable::new(server_state.db_client())
-                .select_sub_species(taxonomy_id)
+                .select_sub_taxonomies_grouped(taxonomy_id)
                 .await?
-                .map(|taxonomy_result| taxonomy_result.map(|taxonomy| taxonomy.id()))
-                .try_collect::<Vec<i32>>()
+                .try_collect::<Vec<(i32, i32)>>()
                 .await?;
 
             if matching_taxonomy_ids.is_empty() {
@@ -416,7 +430,7 @@ impl ToolsController {
                     .await?;
 
             // Targets of a protein outside the selected taxa can not be unique within them.
-            if !selected_species_ids.contains(&protein.taxonomy_id()) {
+            if !selected_species_ids.contains_key(&protein.taxonomy_id()) {
                 continue;
             }
             if !payload.review_status.matches(protein.is_reviewed()) {
@@ -612,8 +626,8 @@ mod tests {
         assert!(parse_charge_spec("2,abc").is_err());
     }
 
-    fn selected(ids: &[i32]) -> HashSet<i32> {
-        ids.iter().copied().collect()
+    fn selected(ids: &[i32]) -> HashMap<i32, i32> {
+        ids.iter().map(|&id| (id, id)).collect()
     }
 
     use ReviewStatus::{Both, SwissProt};
@@ -683,6 +697,44 @@ mod tests {
     }
 
     #[test]
+    fn classify_strains_of_one_group_count_as_one_taxon() {
+        // 100 and 101 are strains of species 1
+        let sel = HashMap::from([(100, 1), (101, 1), (200, 2)]);
+        assert_eq!(
+            classify_uniqueness(&[100, 101], &[], &sel, Both),
+            Uniqueness::Unique(1)
+        );
+        assert_eq!(
+            classify_uniqueness(&[100], &[101], &sel, Both),
+            Uniqueness::CheckProteins
+        );
+        assert_eq!(
+            classify_uniqueness(&[100, 200], &[], &sel, Both),
+            Uniqueness::Shared
+        );
+    }
+
+    #[test]
+    fn resolve_strains_of_one_group() {
+        let proteins: HashMap<i32, (String, i32, bool)> = HashMap::from([
+            (1, ("P12345".to_string(), 100, true)),
+            (2, ("Q00001".to_string(), 101, true)),
+            (3, ("Q00002".to_string(), 100, true)),
+        ]);
+        let sel = HashMap::from([(100, 1), (101, 1)]);
+        // different accession in another strain of the same group is fine
+        assert_eq!(
+            resolve_unique_taxonomy(&[1, 2], &proteins, &sel, Both, "P12345"),
+            Some(1)
+        );
+        // two accessions within one strain are not
+        assert_eq!(
+            resolve_unique_taxonomy(&[1, 3], &proteins, &sel, Both, "P12345"),
+            None
+        );
+    }
+
+    #[test]
     fn base_accession_strips_isoform_suffix() {
         assert_eq!(base_accession("P12345-2"), "P12345");
         assert_eq!(base_accession("P12345"), "P12345");
@@ -700,7 +752,7 @@ mod tests {
             (6, ("P12345".to_string(), 10090, true)),
         ]);
         let sel = selected(&[9606]);
-        let resolve = |ids: &[i32], sel: &HashSet<i32>, status| {
+        let resolve = |ids: &[i32], sel: &HashMap<i32, i32>, status| {
             resolve_unique_taxonomy(ids, &proteins, sel, status, "P12345")
         };
         assert_eq!(resolve(&[1, 2], &sel, Both), Some(9606));

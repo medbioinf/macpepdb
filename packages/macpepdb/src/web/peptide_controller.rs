@@ -502,7 +502,7 @@ impl PeptideController {
         if let Some(taxonomy_id) = payload.taxonomy_id {
             // Check if taxonomy exists
             let matching_taxonomy_ids = TaxonomyTable::new(server_state.db_client())
-                .select_sub_species(taxonomy_id)
+                .select_sub_taxonomies(taxonomy_id)
                 .await?
                 .map(|taxonomy_result| taxonomy_result.map(|taxonomy| taxonomy.id()))
                 .try_collect::<Vec<i32>>()

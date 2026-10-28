@@ -210,7 +210,7 @@ impl PeptidoformSearchClient {
                 let taxonomy_ids = match taxonomy_id {
                     Some(taxonomy_id) => Some(
                         TaxonomyTable::new(db_client.clone())
-                            .select_sub_species(taxonomy_id)
+                            .select_sub_taxonomies(taxonomy_id)
                             .await?
                             .map(|taxonomy_res| taxonomy_res.map(|taxonomy| taxonomy.id()))
                             .try_collect::<Vec<_>>()

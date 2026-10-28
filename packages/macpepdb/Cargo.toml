@@ -7,6 +7,11 @@ license.workspace = true
 repository.workspace = true
 keywords = ["proteomics", "peptides", "macpepdb", "database", "mass-spectrometry"]
 
+# cargo-binstall: raw binaries attached to the GitHub release (tag has no `v` prefix)
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/{ version }/{ name }-{ target }{ binary-ext }"
+pkg-fmt = "bin"
+
 [dependencies]
 async-compression = { workspace = true, features = ["gzip", "tokio"] }
 async-stream = { workspace = true }

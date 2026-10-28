@@ -92,10 +92,6 @@ impl Taxonomy {
     pub fn rank_name(&self) -> Option<&str> {
         self.rank_name.as_deref()
     }
-
-    pub(crate) fn rank_name_mut(&mut self) -> &mut Option<String> {
-        &mut self.rank_name
-    }
 }
 
 impl Display for Taxonomy {

@@ -1113,7 +1113,7 @@ async fn main() -> Result<(), Error> {
                 let taxonomy = taxonomy.unwrap();
 
                 let mut stream = taxonomy_table
-                    .select_sub_species(taxonomy.id())
+                    .select_sub_taxonomies(taxonomy.id())
                     .await
                     .map_err(|err| Error::TaxonomyTable(Box::new(err)))?;
 

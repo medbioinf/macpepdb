@@ -422,13 +422,14 @@ pub fn SrmPrmTargetFinder() -> Element {
         h1 { "SRM / PRM target finder" }
         p {
             "Finds peptides of the given proteins which are unique for the selected taxonomies. \
-            First select the taxonomies (any rank, resolved to the contained species), then the target proteins and their charges. \
+            First select the taxonomies (any rank; all contained taxonomies down to strains and isolates are included), then the target proteins and their charges. \
             Proteins can only be selected for the selected taxonomies; if a taxonomy is removed, its targets are removed as well. \
             Uniqueness is only judged within the selected taxonomies, sharing with organisms outside the selection is ignored."
         }
         h2 { class: "h5", "Uniqueness rules" }
         ul {
-            li { "A peptide is a target only if it occurs in exactly one of the selected taxonomies; occurring in two or more selected taxonomies (rank species) removes it." }
+            li { "A peptide is a target only if it occurs in exactly one of the selected taxonomies; occurring in two or more selected taxonomies removes it." }
+            li { "Strains, isolates and other sub-taxonomies of one species count as that species: a peptide shared by several strains of the same species stays a target, as long as each strain contributes only a single protein. Without a species in the selected subtree (e.g. a `no rank` node like SARS-CoV-2), the selected taxonomy itself counts as one." }
             li { "Within that taxonomy the peptide must stem from a single protein. A protein and its isoforms (accession suffix `-N`) count as one protein." }
             li { "A peptide shared with another protein of the same taxonomy is removed." }
             li { "Sharing with organisms outside the selected taxonomies is ignored." }

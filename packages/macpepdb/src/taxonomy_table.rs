@@ -59,10 +59,9 @@ static SELECT_WITH_RANK_STATEMENT: LazyLock<String> = LazyLock::new(|| {
 static SELECT_ID_NAME_STATEMENT: LazyLock<String> =
     LazyLock::new(|| format!("SELECT {ID_COL}, {SCIENTIFIC_NAME_COL} FROM {TABLE_NAME}"));
 
-/// Recursive CTE query to select all species-rank descendants of a given taxonomy ID, walking the
-/// `parent_id` tree downward. The rank name is not joined in, since the recursive
-/// query already filters on the species rank ID, so the rank name is filled in manually in
-/// [`TaxonomyTable::select_sub_species`].
+/// Recursive CTE query to select a taxonomy and all its descendants (any rank), walking the
+/// `parent_id` tree downward. Proteins can be attached to nodes of any rank (species, strain,
+/// isolate, `no rank`, ...), so no rank filtering is applied.
 static SELECT_SUB_TAXONOMIES_STATEMENT: LazyLock<String> = LazyLock::new(|| {
     format!(
         "WITH RECURSIVE subtaxonomies AS (
@@ -72,7 +71,25 @@ static SELECT_SUB_TAXONOMIES_STATEMENT: LazyLock<String> = LazyLock::new(|| {
                     SELECT t.{ID_COL}, t.{PARENT_ID_COL}, t.{SCIENTIFIC_NAME_COL}, t.{RANK_ID_COL} \
                     FROM {TABLE_NAME} t \
                     INNER JOIN subtaxonomies s ON s.id = t.parent_id \
-        ) SELECT {ID_COL}, {PARENT_ID_COL}, {SCIENTIFIC_NAME_COL}, {RANK_ID_COL} FROM subtaxonomies WHERE {RANK_ID_COL} = (SELECT {TAXONOMY_RANK_ID_COL} FROM {TAXONOMY_RANK_TABLE} WHERE {TAXONOMY_RANK_NAME_COL} = '{SPECIES}');"
+        ) SELECT s.{ID_COL}, s.{PARENT_ID_COL}, s.{SCIENTIFIC_NAME_COL}, s.{RANK_ID_COL}, {TAXONOMY_RANK_TABLE}.{TAXONOMY_RANK_NAME_COL} AS {RANK_NAME_ALIAS_COL} \
+        FROM subtaxonomies s JOIN {TAXONOMY_RANK_TABLE} ON s.{RANK_ID_COL} = {TAXONOMY_RANK_TABLE}.{TAXONOMY_RANK_ID_COL};"
+    )
+});
+
+/// Like [`SELECT_SUB_TAXONOMIES_STATEMENT`], but only returns `(id, group_id)`. The group is the
+/// nearest species-rank ancestor-or-self within the subtree, falling back to the root of the walk.
+static SELECT_SUB_TAXONOMIES_GROUPED_STATEMENT: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "WITH RECURSIVE subtaxonomies AS (
+            SELECT t.{ID_COL}, CASE WHEN r.{TAXONOMY_RANK_NAME_COL} = '{SPECIES}' THEN t.{ID_COL} ELSE NULL END AS group_id \
+            FROM {TABLE_NAME} t JOIN {TAXONOMY_RANK_TABLE} r ON t.{RANK_ID_COL} = r.{TAXONOMY_RANK_ID_COL} \
+            WHERE t.{ID_COL} = $1 \
+                UNION \
+                    SELECT c.{ID_COL}, CASE WHEN cr.{TAXONOMY_RANK_NAME_COL} = '{SPECIES}' THEN c.{ID_COL} ELSE s.group_id END \
+                    FROM {TABLE_NAME} c \
+                    JOIN {TAXONOMY_RANK_TABLE} cr ON c.{RANK_ID_COL} = cr.{TAXONOMY_RANK_ID_COL} \
+                    INNER JOIN subtaxonomies s ON s.{ID_COL} = c.{PARENT_ID_COL} \
+        ) SELECT {ID_COL}, COALESCE(group_id, $1) FROM subtaxonomies;"
     )
 });
 
@@ -170,13 +187,12 @@ impl TaxonomyTable {
         }))
     }
 
-    /// Streams the species-rank descendants of `taxonomy_id` by walking the `parent_id` tree
-    /// downward with a recursive CTE. The rank name is filled in manually as `"species"` rather
-    /// than joined, since the recursive query already filters on the species rank id.
+    /// Streams `taxonomy_id` and all its descendants (any rank) by walking the `parent_id` tree
+    /// downward with a recursive CTE. Each row includes its rank name.
     ///
     /// # Arguments
-    /// * `taxonomy_id` - Id of the ancestor taxonomy whose species-level descendants to find
-    pub async fn select_sub_species(
+    /// * `taxonomy_id` - Id of the ancestor taxonomy whose descendants to find
+    pub async fn select_sub_taxonomies(
         &self,
         taxonomy_id: i32,
     ) -> Result<impl Stream<Item = Result<Taxonomy, Error>> + Send + use<>, Error> {
@@ -188,14 +204,35 @@ impl TaxonomyTable {
             )
             .await?;
         Ok(stream.map(|row_res| {
-            row_res.map_err(Error::from).and_then(|row| {
-                Taxonomy::try_from(row)
-                    .map(|mut taxonomy| {
-                        *taxonomy.rank_name_mut() = Some(String::from(SPECIES)); // not squeezing a join into the recursive query, just add the rank here manually
-                        taxonomy
-                    })
-                    .map_err(Error::from)
-            })
+            row_res
+                .map_err(Error::from)
+                .and_then(|row| Taxonomy::try_from(row).map_err(Error::from))
+        }))
+    }
+
+    /// Streams `(id, group_id)` for `taxonomy_id` and all its descendants (any rank). The group is
+    /// the nearest species-rank ancestor-or-self within the subtree, or `taxonomy_id` itself if there
+    /// is none, so e.g. strains of one species share a group.
+    ///
+    /// # Arguments
+    /// * `taxonomy_id` - Id of the ancestor taxonomy whose descendants to find
+    pub async fn select_sub_taxonomies_grouped(
+        &self,
+        taxonomy_id: i32,
+    ) -> Result<impl Stream<Item = Result<(i32, i32), Error>> + Send + use<>, Error> {
+        let stream = self
+            .client
+            .query_stream(
+                SELECT_SUB_TAXONOMIES_GROUPED_STATEMENT.as_str(),
+                vec![Box::new(taxonomy_id)],
+            )
+            .await?;
+        Ok(stream.map(|row_res| {
+            let row = row_res.map_err(Error::from)?;
+            Ok((
+                row.try_get::<_, i32>(0).map_err(Error::from)?,
+                row.try_get::<_, i32>(1).map_err(Error::from)?,
+            ))
         }))
     }
 

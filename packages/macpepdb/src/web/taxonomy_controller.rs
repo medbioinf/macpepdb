@@ -168,7 +168,7 @@ impl TaxonomyController {
         Path(id): Path<i32>,
     ) -> Result<(StatusCode, HeaderMap, Body), Error> {
         let taxonomy_stream = TaxonomyTable::new(state.db_client())
-            .select_sub_species(id)
+            .select_sub_taxonomies(id)
             .await?;
 
         let stream = stream! {
