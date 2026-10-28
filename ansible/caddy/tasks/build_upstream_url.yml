@@ -11,10 +11,10 @@
 
 - name: Create URL for Port
   ansible.builtin.set_fact:
-    url: "{{ upstream_protocol }}://{{ ip }}:{{ port }}"
+    url: "{{ upstream_protocol }}://{{ ip }}:{{ upstream_port }}"
   loop: "{{ upstream_ports }}"
   loop_control:
-    loop_var: port
+    loop_var: upstream_port
   register: api_upstream_urls
 
 - name: Create URL list

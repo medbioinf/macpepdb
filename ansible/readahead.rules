@@ -1,0 +1,2 @@
+ACTION=="add|change", SUBSYSTEM=="block", KERNEL=="sda", ATTR{queue/read_ahead_kb}="4096"
+

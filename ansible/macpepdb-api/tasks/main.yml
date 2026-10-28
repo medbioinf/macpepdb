@@ -7,12 +7,12 @@
   ansible.builtin.include_role:
     name: macpepdb
   vars:
-    macpepdb_id: web-{{ port }}
+    macpepdb_id: web-{{ api_port }}
     macpepdb_cmd: api
-    macpepdb_opts: " {{ macpepdb_matomo }} --concurrent-searches {{ macpepdb_concurrent_searches }} --max-concurrent-streams-per-connection {{ macpepdb_max_client_streams }}  0.0.0.0:{{ port }} "
+    macpepdb_opts: " {{ macpepdb_matomo }} --concurrent-searches {{ macpepdb_concurrent_searches }} --max-concurrent-streams-per-connection {{ macpepdb_max_client_streams }}  0.0.0.0:{{ api_port }} "
     prometheus_scraping_port: 9490
     ports:
-      - "{{ port }}:{{ port }}"
+      - "{{ api_port }}:{{ api_port }}"
   loop: "{{ hostvars[ (groups['api']|first) ]['macpepdb_api_ports'] }}"
   loop_control:
-    loop_var: port
+    loop_var: api_port
