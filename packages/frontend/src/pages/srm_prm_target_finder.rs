@@ -147,6 +147,261 @@ fn parse_ptm_position(value: &str) -> PtmPosition {
     }
 }
 
+/// Mass difference between 13C and 12C in Dalton.
+const C13_DELTA: f64 = 1.003_354_837_8;
+/// Mass difference between 15N and 14N in Dalton.
+const N15_DELTA: f64 = 0.997_034_9;
+
+/// Heavy isotopes a residue can be labeled with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Isotope {
+    CarbonNitrogen,
+    Nitrogen,
+    Carbon,
+}
+
+impl Isotope {
+    /// UI label, used as both the `<option>` value and display text.
+    fn label(self) -> &'static str {
+        match self {
+            Isotope::CarbonNitrogen => "13C/15N",
+            Isotope::Nitrogen => "15N",
+            Isotope::Carbon => "13C",
+        }
+    }
+
+    /// Parses an [`Isotope`] from [`Isotope::label`], defaulting to `13C/15N`.
+    fn parse(value: &str) -> Self {
+        match value {
+            "15N" => Isotope::Nitrogen,
+            "13C" => Isotope::Carbon,
+            _ => Isotope::CarbonNitrogen,
+        }
+    }
+}
+
+/// Where in the peptide an isotope label is applied. Unlike PTMs there are no bond positions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LabelPosition {
+    Anywhere,
+    NTerminus,
+    CTerminus,
+}
+
+impl LabelPosition {
+    /// UI label, used as both the `<option>` value and display text (same as PTM positions).
+    fn label(self) -> &'static str {
+        match self {
+            LabelPosition::Anywhere => "Anywhere",
+            LabelPosition::NTerminus => "Terminus-N",
+            LabelPosition::CTerminus => "Terminus-C",
+        }
+    }
+
+    /// Parses a [`LabelPosition`] from [`LabelPosition::label`], defaulting to `Anywhere`.
+    fn parse(value: &str) -> Self {
+        match value {
+            "Terminus-N" => LabelPosition::NTerminus,
+            "Terminus-C" => LabelPosition::CTerminus,
+            _ => LabelPosition::Anywhere,
+        }
+    }
+}
+
+/// Isotope label of an amino acid. Applied to the results after the search, so it is not
+/// part of the search request.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct IsotopeLabel {
+    amino_acid: char,
+    isotope: Isotope,
+    position: LabelPosition,
+}
+
+/// Number of carbon and nitrogen atoms of the amino acid residue (as in a peptide chain).
+fn residue_carbon_nitrogen(amino_acid: char) -> Option<(u32, u32)> {
+    Some(match amino_acid {
+        'G' => (2, 1),
+        'A' => (3, 1),
+        'S' => (3, 1),
+        'P' => (5, 1),
+        'V' => (5, 1),
+        'T' => (4, 1),
+        'C' => (3, 1),
+        'L' => (6, 1),
+        'I' => (6, 1),
+        'N' => (4, 2),
+        'D' => (4, 1),
+        'Q' => (5, 2),
+        'K' => (6, 2),
+        'E' => (5, 1),
+        'M' => (5, 1),
+        'H' => (6, 3),
+        'F' => (9, 1),
+        'R' => (6, 4),
+        'Y' => (9, 1),
+        'W' => (11, 2),
+        _ => return None,
+    })
+}
+
+/// Mass shift in Dalton of `amino_acid` labeled with `isotope`; 0 for unknown amino acids.
+fn label_mass_delta(amino_acid: char, isotope: Isotope) -> f64 {
+    let Some((carbons, nitrogens)) = residue_carbon_nitrogen(amino_acid) else {
+        return 0.0;
+    };
+    let carbon_delta = carbons as f64 * C13_DELTA;
+    let nitrogen_delta = nitrogens as f64 * N15_DELTA;
+    match isotope {
+        Isotope::CarbonNitrogen => carbon_delta + nitrogen_delta,
+        Isotope::Nitrogen => nitrogen_delta,
+        Isotope::Carbon => carbon_delta,
+    }
+}
+
+/// Part of a ProForma sequence: a residue with its trailing modification brackets, or leading
+/// terminal modification text. `delta` is the label mass shift if the residue is labeled.
+#[derive(Clone, Debug, PartialEq)]
+struct SequenceSegment {
+    text: String,
+    delta: Option<f64>,
+}
+
+/// Splits the ProForma `sequence` into segments and resolves the label of each residue.
+///
+/// Every residue gets at most one label: one matching its terminal position (first residue
+/// N-terminus, last residue C-terminus; N wins for single residue peptides) beats an
+/// `Anywhere` label. Modifications in square brackets stay attached to the preceding residue
+/// (or form an unlabeled segment of their own in front of the first residue).
+fn label_segments(sequence: &str, labels: &[IsotopeLabel]) -> Vec<SequenceSegment> {
+    let mut segments: Vec<SequenceSegment> = Vec::with_capacity(sequence.len());
+    let mut bracket_depth = 0usize;
+    for c in sequence.chars() {
+        match c {
+            '[' => {
+                bracket_depth += 1;
+                push_char(&mut segments, c, false);
+            }
+            ']' => {
+                bracket_depth = bracket_depth.saturating_sub(1);
+                push_char(&mut segments, c, false);
+            }
+            c if bracket_depth == 0 && c.is_ascii_uppercase() => push_char(&mut segments, c, true),
+            c => push_char(&mut segments, c, false),
+        }
+    }
+
+    let find = |amino_acid: char, position: LabelPosition| {
+        labels
+            .iter()
+            .find(|label| label.amino_acid == amino_acid && label.position == position)
+    };
+
+    let residue_count = segments.iter().filter(|s| s.delta.is_some()).count();
+    let mut residue_idx = 0usize;
+    for segment in segments.iter_mut() {
+        // residue segments are marked with `Some(0.0)` by `push_char`
+        if segment.delta.is_none() {
+            continue;
+        }
+        let amino_acid = segment.text.chars().next().unwrap_or(' ');
+        let n_terminal = (residue_idx == 0)
+            .then(|| find(amino_acid, LabelPosition::NTerminus))
+            .flatten();
+        let c_terminal = (residue_idx + 1 == residue_count)
+            .then(|| find(amino_acid, LabelPosition::CTerminus))
+            .flatten();
+        segment.delta = n_terminal
+            .or(c_terminal)
+            .or_else(|| find(amino_acid, LabelPosition::Anywhere))
+            .map(|label| label_mass_delta(amino_acid, label.isotope));
+        residue_idx += 1;
+    }
+    segments
+}
+
+/// Appends `c` to the last segment, or starts a new residue segment (`residue` = true, marked
+/// by `Some(0.0)`) / continues the previous one. Helper of [`label_segments`].
+fn push_char(segments: &mut Vec<SequenceSegment>, c: char, residue: bool) {
+    if residue {
+        segments.push(SequenceSegment {
+            text: c.to_string(),
+            delta: Some(0.0),
+        });
+    } else if let Some(last) = segments.last_mut() {
+        last.text.push(c);
+    } else {
+        segments.push(SequenceSegment {
+            text: c.to_string(),
+            delta: None,
+        });
+    }
+}
+
+/// Segments of `sequence` to display: labeled residues carry a delta (shown bold) in the
+/// labeled form, the unlabeled form is one plain segment.
+fn display_segments(
+    sequence: &str,
+    labels: &[IsotopeLabel],
+    labeled: bool,
+) -> Vec<SequenceSegment> {
+    if labeled {
+        label_segments(sequence, labels)
+    } else {
+        vec![SequenceSegment {
+            text: sequence.to_string(),
+            delta: None,
+        }]
+    }
+}
+
+/// Total mass shift in Dalton of the ProForma `sequence` through `labels`.
+fn label_delta(sequence: &str, labels: &[IsotopeLabel]) -> f64 {
+    if labels.is_empty() {
+        return 0.0;
+    }
+    label_segments(sequence, labels)
+        .iter()
+        .filter_map(|segment| segment.delta)
+        .sum()
+}
+
+/// One form (unlabeled or labeled) of a target, shown/exported as its own row.
+#[derive(Clone, Debug, PartialEq)]
+struct TargetForm {
+    labeled: bool,
+    mz: f64,
+    /// Label mass shift in Dalton, 0 for the unlabeled form.
+    delta: f64,
+}
+
+/// Forms of a target: always the unlabeled one, followed by the labeled one if any label
+/// applies to the peptide.
+fn target_forms(sequence: &str, mz: f64, charge: u8, labels: &[IsotopeLabel]) -> Vec<TargetForm> {
+    let mut forms = vec![TargetForm {
+        labeled: false,
+        mz,
+        delta: 0.0,
+    }];
+    let delta = label_delta(sequence, labels);
+    if delta > 0.0 {
+        forms.push(TargetForm {
+            labeled: true,
+            mz: mz + delta / charge.max(1) as f64,
+            delta,
+        });
+    }
+    forms
+}
+
+/// Compound name of a target form in exports: labeled forms are marked to tell them apart.
+fn form_name(sequence: &str, form: &TargetForm) -> String {
+    if form.labeled {
+        format!("{sequence} (labeled)")
+    } else {
+        sequence.to_string()
+    }
+}
+
 /// Saves `contents` as a file download in the browser via a `Blob` + temporary `<a download>`
 /// element, since there is no server response to attach a `Content-Disposition` header to.
 fn trigger_tsv_download(filename: &str, contents: &str) {
@@ -290,6 +545,11 @@ pub fn SrmPrmTargetFinder() -> Element {
     let mut new_ptm_position = use_signal(|| PtmPosition::Anywhere);
     let mut ptm_index = use_signal(|| 0); // Just to have something to use as name
     let mut ptms: Signal<Vec<PostTranslationalModificationRequest>> = use_signal(Vec::new);
+    // isotope labels, applied to the results after the search
+    let mut new_label_amino_acid = use_signal(|| ' ');
+    let mut new_label_isotope = use_signal(|| Isotope::CarbonNitrogen);
+    let mut new_label_position = use_signal(|| LabelPosition::Anywhere);
+    let mut isotope_labels: Signal<Vec<IsotopeLabel>> = use_signal(Vec::new);
     let amino_acids = use_resource(move || async move {
         let app_config = app_config.read_unchecked();
         let macpepdb_base_url = match app_config.as_ref() {
@@ -359,6 +619,7 @@ pub fn SrmPrmTargetFinder() -> Element {
 
         let normalized_collision_energy = *normalized_collision_energy.read_unchecked();
         let taxonomy_names = taxonomy_names.read_unchecked().clone();
+        let labels = isotope_labels.read_unchecked().clone();
 
         let tsv = match vendor {
             MsVendor::ThermoFisher => {
@@ -369,21 +630,23 @@ pub fn SrmPrmTargetFinder() -> Element {
                     if removed_target_indices.read_unchecked().contains(&idx) {
                         continue;
                     }
-                    writeln!(
-                        tsv,
-                        "{}\t{}\t\t{} ({})\t{}\t\t\t{}\t{}",
-                        target.sequence,
-                        target.mz,
-                        taxonomy_names
-                            .get(&target.taxonomy_id)
-                            .map(|id| id.to_string())
-                            .unwrap_or_default(),
-                        target.taxonomy_id,
-                        target.charge,
-                        normalized_collision_energy,
-                        target.accession,
-                    )
-                    .unwrap();
+                    for form in target_forms(&target.sequence, target.mz, target.charge, &labels) {
+                        writeln!(
+                            tsv,
+                            "{}\t{}\t\t{} ({})\t{}\t\t\t{}\t{}",
+                            form_name(&target.sequence, &form),
+                            form.mz,
+                            taxonomy_names
+                                .get(&target.taxonomy_id)
+                                .map(|id| id.to_string())
+                                .unwrap_or_default(),
+                            target.taxonomy_id,
+                            target.charge,
+                            normalized_collision_energy,
+                            target.accession,
+                        )
+                        .unwrap();
+                    }
                 }
                 tsv
             }
@@ -395,21 +658,23 @@ pub fn SrmPrmTargetFinder() -> Element {
                     if removed_target_indices.read_unchecked().contains(&idx) {
                         continue;
                     }
-                    writeln!(
-                        tsv,
-                        "{}\t{}\t\t\t\t\t\t{}\t{}\tSpecies: {} ({})\t{}",
-                        target.mz,
-                        target.charge,
-                        normalized_collision_energy,
-                        target.sequence,
-                        taxonomy_names
-                            .get(&target.taxonomy_id)
-                            .map(|id| id.to_string())
-                            .unwrap_or_default(),
-                        target.taxonomy_id,
-                        target.accession,
-                    )
-                    .unwrap();
+                    for form in target_forms(&target.sequence, target.mz, target.charge, &labels) {
+                        writeln!(
+                            tsv,
+                            "{}\t{}\t\t\t\t\t\t{}\t{}\tSpecies: {} ({})\t{}",
+                            form.mz,
+                            target.charge,
+                            normalized_collision_energy,
+                            form_name(&target.sequence, &form),
+                            taxonomy_names
+                                .get(&target.taxonomy_id)
+                                .map(|id| id.to_string())
+                                .unwrap_or_default(),
+                            target.taxonomy_id,
+                            target.accession,
+                        )
+                        .unwrap();
+                    }
                 }
                 tsv
             }
@@ -949,6 +1214,113 @@ pub fn SrmPrmTargetFinder() -> Element {
                 }
             }
 
+            SeparatorLine { label: "Isotope labeling" }
+            p { class: "text-muted",
+                "Labels are applied to the found targets afterwards; they are not part of the search. \
+                Peptides with labels get an additional labeled row (labeled residues in bold) next to the unlabeled one; both are included in the downloads. \
+                Per residue only one label is applied, a terminal label wins over `Anywhere`. \
+                The highlighting of similar m/z does not consider labels."
+            }
+            div { class: "input-group mb-3",
+                select {
+                    class: "form-control",
+                    oninput: move |evt| {
+                        new_label_amino_acid.set(evt.value().parse().unwrap_or(' '));
+                    },
+                    option { value: " ", "Select amino acid" }
+                    match &*amino_acids.read_unchecked() {
+                        Some(Ok(Some(amino_acids))) => rsx! {
+                            for aa in amino_acids.iter().filter(|aa| residue_carbon_nitrogen(aa.code).is_some()) {
+                                option { value: "{aa.code}", "{aa.code} - {aa.name}" }
+                            }
+                        },
+                        Some(Err(e)) => rsx! {
+                            option { "Error loading amino acids: {e}" }
+                        },
+                        None | Some(Ok(None)) => rsx! {
+                            option { "Loading ..." }
+                        },
+                    }
+                }
+                select {
+                    class: "form-control",
+                    oninput: move |evt| {
+                        new_label_isotope.set(Isotope::parse(&evt.value()));
+                    },
+                    option { value: Isotope::CarbonNitrogen.label(), "{Isotope::CarbonNitrogen.label()}" }
+                    option { value: Isotope::Nitrogen.label(), "{Isotope::Nitrogen.label()}" }
+                    option { value: Isotope::Carbon.label(), "{Isotope::Carbon.label()}" }
+                }
+                select {
+                    class: "form-control",
+                    oninput: move |evt| {
+                        new_label_position.set(LabelPosition::parse(&evt.value()));
+                    },
+                    option { value: LabelPosition::Anywhere.label(), "{LabelPosition::Anywhere.label()}" }
+                    option { value: LabelPosition::NTerminus.label(), "{LabelPosition::NTerminus.label()}" }
+                    option { value: LabelPosition::CTerminus.label(), "{LabelPosition::CTerminus.label()}" }
+                }
+                button {
+                    class: "btn btn-primary",
+                    r#type: "button",
+                    disabled: *new_label_amino_acid.read() == ' ',
+                    onclick: move |_| {
+                        let label = IsotopeLabel {
+                            amino_acid: *new_label_amino_acid.read(),
+                            isotope: *new_label_isotope.read(),
+                            position: *new_label_position.read(),
+                        };
+                        // one label per amino acid and position: replace instead of stacking
+                        isotope_labels
+                            .write()
+                            .retain(|existing| {
+                                existing.amino_acid != label.amino_acid
+                                    || existing.position != label.position
+                            });
+                        isotope_labels.push(label);
+                    },
+                    "Add label"
+                }
+            }
+            div { class: "list-input-group",
+                for (idx , label) in isotope_labels.iter().enumerate() {
+                    div { class: "input-group",
+                        input {
+                            r#type: "text",
+                            class: "form-control",
+                            value: "{label.amino_acid}",
+                            disabled: true,
+                        }
+                        input {
+                            r#type: "text",
+                            class: "form-control",
+                            value: "{label.isotope.label()}",
+                            disabled: true,
+                        }
+                        input {
+                            r#type: "text",
+                            class: "form-control",
+                            value: "{label.position.label()}",
+                            disabled: true,
+                        }
+                        input {
+                            r#type: "text",
+                            class: "form-control",
+                            value: "+{label_mass_delta(label.amino_acid, label.isotope):.5}",
+                            disabled: true,
+                        }
+                        button {
+                            class: "btn btn-danger",
+                            r#type: "button",
+                            onclick: move |_| {
+                                isotope_labels.remove(idx);
+                            },
+                            i { class: "fa-solid fa-xmark" }
+                        }
+                    }
+                }
+            }
+
             SeparatorLine { label: "Normalized collision energy" }
             div { class: "input-group mb-3",
                 span { class: "input-group-text", "NCE" }
@@ -1024,6 +1396,9 @@ pub fn SrmPrmTargetFinder() -> Element {
                             th { "Sequence" }
                             th { "Accession" }
                             th { "m/z" }
+                            if !isotope_labels.read().is_empty() {
+                                th { "Label Δ" }
+                            }
                             th { "Charge" }
                             th { "Hydrophobicity" }
                             th { "Taxonomy" }
@@ -1033,23 +1408,40 @@ pub fn SrmPrmTargetFinder() -> Element {
                     tbody {
                         for (idx , target) in results.read_unchecked().iter().cloned().enumerate() {
                             if !removed_target_indices.read().contains(&idx) {
-                                tr { class: if target.similar_mz { "table-warning" } else { "" },
-                                    td { "{target.sequence}" }
-                                    td { "{target.accession}" }
-                                    td { "{target.mz}" }
-                                    td { "{target.charge}" }
-                                    td { "{target.hydrophobicity:.3}" }
-                                    td {
-                                        "{taxonomy_names.read().get(&target.taxonomy_id).cloned().unwrap_or_else(|| target.taxonomy_id.to_string())}"
-                                    }
-                                    td {
-                                        button {
-                                            class: "btn btn-danger",
-                                            r#type: "button",
-                                            onclick: move |_| {
-                                                removed_target_indices.write().insert(idx);
-                                            },
-                                            i { class: "fa-solid fa-xmark" }
+                                for form in target_forms(&target.sequence, target.mz, target.charge, &isotope_labels.read()) {
+                                    tr { class: if target.similar_mz { "table-warning" } else { "" },
+                                        td {
+                                            for segment in display_segments(&target.sequence, &isotope_labels.read(), form.labeled) {
+                                                if segment.delta.is_some() {
+                                                    b { "{segment.text}" }
+                                                } else {
+                                                    "{segment.text}"
+                                                }
+                                            }
+                                        }
+                                        td { "{target.accession}" }
+                                        td { "{form.mz}" }
+                                        if !isotope_labels.read().is_empty() {
+                                            td {
+                                                if form.labeled {
+                                                    "+{form.delta:.5}"
+                                                }
+                                            }
+                                        }
+                                        td { "{target.charge}" }
+                                        td { "{target.hydrophobicity:.3}" }
+                                        td {
+                                            "{taxonomy_names.read().get(&target.taxonomy_id).cloned().unwrap_or_else(|| target.taxonomy_id.to_string())}"
+                                        }
+                                        td {
+                                            button {
+                                                class: "btn btn-danger",
+                                                r#type: "button",
+                                                onclick: move |_| {
+                                                    removed_target_indices.write().insert(idx);
+                                                },
+                                                i { class: "fa-solid fa-xmark" }
+                                            }
                                         }
                                     }
                                 }
@@ -1080,5 +1472,85 @@ pub fn SrmPrmTargetFinder() -> Element {
                 }
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn label(amino_acid: char, isotope: Isotope, position: LabelPosition) -> IsotopeLabel {
+        IsotopeLabel {
+            amino_acid,
+            isotope,
+            position,
+        }
+    }
+
+    #[test]
+    fn test_label_mass_delta() {
+        // K: 6 C, 2 N
+        assert!(
+            (label_mass_delta('K', Isotope::CarbonNitrogen) - (6.0 * C13_DELTA + 2.0 * N15_DELTA))
+                .abs()
+                < 1e-9
+        );
+        assert!((label_mass_delta('K', Isotope::Nitrogen) - 2.0 * N15_DELTA).abs() < 1e-9);
+        assert!((label_mass_delta('K', Isotope::Carbon) - 6.0 * C13_DELTA).abs() < 1e-9);
+        assert_eq!(label_mass_delta('X', Isotope::Carbon), 0.0);
+    }
+
+    #[test]
+    fn test_label_delta_anywhere_ignores_modifications() {
+        let labels = [label('K', Isotope::Carbon, LabelPosition::Anywhere)];
+        let expected = 2.0 * 6.0 * C13_DELTA;
+        assert!((label_delta("AKC[+57.021464]K", &labels) - expected).abs() < 1e-9);
+        assert_eq!(label_delta("AKK", &[]), 0.0);
+    }
+
+    #[test]
+    fn test_label_delta_terminal() {
+        let labels = [label('K', Isotope::Nitrogen, LabelPosition::CTerminus)];
+        assert!((label_delta("AKAK", &labels) - 2.0 * N15_DELTA).abs() < 1e-9);
+        assert_eq!(label_delta("AKAR", &labels), 0.0);
+
+        let labels = [label('A', Isotope::Nitrogen, LabelPosition::NTerminus)];
+        assert!((label_delta("AAK", &labels) - N15_DELTA).abs() < 1e-9);
+        assert_eq!(label_delta("KAA", &labels), 0.0);
+    }
+
+    #[test]
+    fn test_label_delta_terminal_beats_anywhere() {
+        let labels = [
+            label('K', Isotope::Carbon, LabelPosition::Anywhere),
+            label('K', Isotope::CarbonNitrogen, LabelPosition::CTerminus),
+        ];
+        let expected =
+            label_mass_delta('K', Isotope::Carbon) + label_mass_delta('K', Isotope::CarbonNitrogen);
+        assert!((label_delta("KAK", &labels) - (expected)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn test_label_segments_marks_labeled_residues() {
+        let labels = [label('K', Isotope::Carbon, LabelPosition::Anywhere)];
+        let segments = label_segments("[+42.0]-AC[+57.021464]K", &labels);
+        let texts: Vec<_> = segments.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(texts, ["[+42.0]-", "A", "C[+57.021464]", "K"]);
+        let labeled: Vec<_> = segments.iter().map(|s| s.delta.is_some()).collect();
+        assert_eq!(labeled, [false, false, false, true]);
+    }
+
+    #[test]
+    fn test_target_forms() {
+        let labels = [label('K', Isotope::Carbon, LabelPosition::Anywhere)];
+        let forms = target_forms("AK", 500.0, 2, &labels);
+        assert_eq!(forms.len(), 2);
+        assert!(!forms[0].labeled);
+        assert_eq!(forms[0].mz, 500.0);
+        assert!(forms[1].labeled);
+        assert!((forms[1].mz - (500.0 + 6.0 * C13_DELTA / 2.0)).abs() < 1e-9);
+        // no label applies -> only unlabeled form
+        assert_eq!(target_forms("AR", 500.0, 2, &labels).len(), 1);
+        assert_eq!(target_forms("AK", 500.0, 2, &[]).len(), 1);
     }
 }
