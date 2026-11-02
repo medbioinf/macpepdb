@@ -7,7 +7,7 @@
 # getent module keys the result dict by the first column, which is the IP.
 - name: Set upstream IP
   ansible.builtin.set_fact:
-    ip: "{{ getent_ahostsv4 | list | first }}"
+    ip: "{{ ansible_facts.getent_ahostsv4 | list | first }}"
 
 - name: Create URL for Port
   ansible.builtin.set_fact:
