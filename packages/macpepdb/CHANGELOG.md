@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0](https://github.com/medbioinf/macpepdb/compare/2.0.1...3.0.0) - 2026-11-04
+
+### Other
+
+- bump version due to refactoring
+- rename target finder
+- remove limitation of subspecies lookup to species and subspecies
+
 ## [2.0.1](https://github.com/medbioinf/macpepdb/compare/2.0.0...2.0.1) - 2026-10-26
 
 ### Other
