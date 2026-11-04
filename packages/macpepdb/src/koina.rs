@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use http::StatusCode;
-use macpepdb_web_common::responses::tools::SrmPrmTarget;
+use macpepdb_web_common::responses::tools::Target;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -71,8 +71,8 @@ impl Im2DeepRequest {
     }
 }
 
-impl From<&Vec<SrmPrmTarget>> for Im2DeepRequest {
-    fn from(targets: &Vec<SrmPrmTarget>) -> Self {
+impl From<&Vec<Target>> for Im2DeepRequest {
+    fn from(targets: &Vec<Target>) -> Self {
         let peptide_sequences = targets.iter().map(|t| t.sequence.clone()).collect();
         let precursor_charges = targets.iter().map(|t| t.charge).collect();
         Self::new(peptide_sequences, precursor_charges)

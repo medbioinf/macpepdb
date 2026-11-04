@@ -5,12 +5,12 @@ use macpepdb_web_common::{
         peptide::{SearchRequestBody, SearchRequestMass},
         ptm::PostTranslationalModificationRequest,
         taxonomy::SearchRequestBody as TaxonomySearchRequestBody,
-        tools::SrmPrmRequest,
+        tools::TargetRequest,
     },
     responses::{
         amino_acid::AminoAcidResponse, cluster_health::ClusterHealthResponse,
         configuration::RuntimeConfigurationResponse, peptide::PeptideResponse,
-        protein::ProteinResponse, taxonomy::TaxonomyResponse, tools::SrmPrmResponse,
+        protein::ProteinResponse, taxonomy::TaxonomyResponse, tools::TargetResponse,
     },
 };
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -335,12 +335,12 @@ impl<'a> Client<'a> {
     /// * `request` - The fully-built SRM/PRM request (targets, tolerances, PTMs, taxonomy
     ///   IDs, normalized collision energy)
     ///
-    pub async fn search_srm_prm_targets(
+    pub async fn search_targets(
         &self,
-        request: &SrmPrmRequest,
-    ) -> Result<SrmPrmResponse, ApiClientError> {
+        request: &TargetRequest,
+    ) -> Result<TargetResponse, ApiClientError> {
         self.post(
-            "/api/tools/prm-srm",
+            "/api/tools/target-finder",
             request,
             Some(&[(
                 reqwest::header::ACCEPT,

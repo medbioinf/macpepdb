@@ -88,11 +88,11 @@ pub fn TwoPanes() -> Element {
                         ul { class: "navbar-nav mx-3",
                             li { class: "nav-item",
                                 Link {
-                                    to: Routes::SrmPrmTargetFinder { },
+                                    to: Routes::TargetFinder { },
                                     onclick: close_menu_fn,
                                     class: "nav-link",
                                     i { class: "fa-solid fa-bullseye me-2" }
-                                    "SRM/PRM target finder"
+                                    "Target finder"
                                 }
                             }
                         }

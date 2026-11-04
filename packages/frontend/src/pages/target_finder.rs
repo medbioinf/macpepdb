@@ -23,7 +23,7 @@ use crate::{
 use macpepdb_web_common::{
     requests::{
         ptm::{PostTranslationalModificationRequest, PtmPosition, PtmType},
-        tools::{ReviewStatus, SrmPrmRequest},
+        tools::{ReviewStatus, TargetRequest},
     },
     responses::{protein::ProteinResponse, taxonomy::TaxonomyResponse},
 };
@@ -430,7 +430,7 @@ enum MsVendor {
     Bruker,
 }
 
-pub fn SrmPrmTargetFinder() -> Element {
+pub fn TargetFinder() -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
 
     use_future(move || async move { track_page_visit(vec![]).await });
@@ -572,7 +572,7 @@ pub fn SrmPrmTargetFinder() -> Element {
     // indices of results rows the user removed from the table before export; reset on new search
     let mut removed_target_indices: Signal<HashSet<usize>> = use_signal(HashSet::new);
 
-    // search for SRM/PRM targets
+    // search for targets
     let mut search = use_action(move || async move {
         let app_config = app_config.read_unchecked();
         let macpepdb_base_url = match app_config.as_ref() {
@@ -581,7 +581,7 @@ pub fn SrmPrmTargetFinder() -> Element {
         };
         let client = Client::new(macpepdb_base_url)?;
 
-        let request = SrmPrmRequest {
+        let request = TargetRequest {
             targets: targets.read_unchecked().clone(),
             max_variable_modifications: max_var_modifications.read_unchecked().max(0) as usize,
             ptms: ptms.read_unchecked().clone(),
@@ -594,7 +594,7 @@ pub fn SrmPrmTargetFinder() -> Element {
             review_status: review_filter.read_unchecked().status(),
         };
 
-        let response = client.search_srm_prm_targets(&request).await?;
+        let response = client.search_targets(&request).await?;
 
         let mut distinct_taxonomy_ids: Vec<i32> = response
             .targets
@@ -680,11 +680,11 @@ pub fn SrmPrmTargetFinder() -> Element {
             }
         };
 
-        trigger_tsv_download("macpepdb_srm_prm_targets.tsv", &tsv);
+        trigger_tsv_download("macpepdb_targets.tsv", &tsv);
     };
 
     rsx! {
-        h1 { "SRM / PRM target finder" }
+        h1 { "Target finder" }
         p {
             "Finds peptides of the given proteins which are unique for the selected taxonomies. \
             First select the taxonomies (any rank; all contained taxonomies down to strains and isolates are included), then the target proteins and their charges. \
@@ -1464,7 +1464,7 @@ pub fn SrmPrmTargetFinder() -> Element {
                 }
             },
             Some(Err(err)) => rsx! {
-                div { class: "alert alert-danger", "Error searching for SRM/PRM targets: {err}" }
+                div { class: "alert alert-danger", "Error searching for targets: {err}" }
             },
             None => rsx! {
                 if search.pending() {

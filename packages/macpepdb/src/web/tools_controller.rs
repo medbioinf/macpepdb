@@ -19,13 +19,13 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use futures::TryStreamExt;
 use http::StatusCode;
-use macpepdb_web_common::requests::tools::{ReviewStatus, SrmPrmRequest};
-use macpepdb_web_common::responses::tools::{SrmPrmResponse, SrmPrmTarget};
+use macpepdb_web_common::requests::tools::{ReviewStatus, TargetRequest};
+use macpepdb_web_common::responses::tools::{Target, TargetResponse};
 use thiserror::Error;
 
 static CONTROLLER_PATH: &str = "/api/tools";
 
-static PRM_SRM_ASSAY: &str = "/prm-srm";
+static TARGET_FINDER: &str = "/target-finder";
 
 /// Errors that can occur while handling tool endpoints.
 #[derive(Debug, Error)]
@@ -246,7 +246,7 @@ fn resolve_unique_taxonomy(
 /// * `targets` - Targets to inspect and mark
 /// * `tolerance_ppm` - Tolerance in ppm
 ///
-fn flag_similar_mz(targets: &mut [SrmPrmTarget], tolerance_ppm: f64) {
+fn flag_similar_mz(targets: &mut [Target], tolerance_ppm: f64) {
     let mut order: Vec<usize> = (0..targets.len()).collect();
     order.sort_by(|&a, &b| {
         targets[a]
@@ -278,7 +278,7 @@ impl ToolsController {
     /// Builds the axum router for the tools endpoints, mounted onto the given server state.
     pub fn routes(state: Arc<ServerState>) -> Router<Arc<ServerState>> {
         let router: Router<Arc<ServerState>> =
-            Router::new().route(PRM_SRM_ASSAY, post(Self::srm_prm_target_finder));
+            Router::new().route(TARGET_FINDER, post(Self::target_finder));
 
         router.with_state(state)
     }
@@ -295,11 +295,11 @@ impl ToolsController {
     ///
     /// # Arguments
     /// * `state` - Server state
-    /// * `payload` - The request body, see [SrmPrmRequest]
+    /// * `payload` - The request body, see [TargetRequest]
     ///
     /// # API
     /// ## Request
-    /// * Path: `/api/tools/prm-srm`
+    /// * Path: `/api/tools/target-finder`
     /// * Method: `POST`
     ///
     /// ```json
@@ -314,7 +314,7 @@ impl ToolsController {
     ///     "max_missed_cleavages": 0
     /// }
     /// ```
-    /// See [SrmPrmRequest] for details.
+    /// See [TargetRequest] for details.
     ///
     /// ## Response
     /// ```json
@@ -331,11 +331,11 @@ impl ToolsController {
     ///     ]
     /// }
     /// ```
-    /// See [SrmPrmResponse] for details.
+    /// See [TargetResponse] for details.
     ///
-    pub async fn srm_prm_target_finder(
+    pub async fn target_finder(
         State(server_state): State<Arc<ServerState>>,
-        Json(payload): Json<SrmPrmRequest>,
+        Json(payload): Json<TargetRequest>,
     ) -> Result<Response, Error> {
         // Expand every requested taxonomy to its subtree (any rank); union all resulting
         // taxonomy IDs, each mapped to its group (species), into one map reused as the taxonomy
@@ -392,7 +392,7 @@ impl ToolsController {
         // and `seen_sequences` below already guarantees each peptide contributes each distinct
         // peptidoform sequence at most once — so the same sequence can only reappear because it
         // was legitimately requested at more than one charge, not because of any duplication.
-        let mut targets: Vec<SrmPrmTarget> = Vec::new();
+        let mut targets: Vec<Target> = Vec::new();
         for (accession, charge_spec) in payload.targets {
             let charges = match parse_charge_spec(&charge_spec) {
                 Ok(charges) => charges,
@@ -571,7 +571,7 @@ impl ToolsController {
                     let hydrophobicity =
                         macpepdb_peptide_hydrophobicity::krokhin::score_sequence(&plain_sequence);
                     for &charge in &charges {
-                        let target = SrmPrmTarget {
+                        let target = Target {
                             sequence: peptidoform.sequence().to_string(),
                             mz: dalton_to_mass_to_charge(mass, charge),
                             hydrophobicity,
@@ -589,7 +589,7 @@ impl ToolsController {
 
         flag_similar_mz(&mut targets, SIMILAR_MZ_TOLERANCE_PPM);
 
-        Ok(Json(SrmPrmResponse { targets }).into_response())
+        Ok(Json(TargetResponse { targets }).into_response())
     }
 }
 
@@ -770,8 +770,8 @@ mod tests {
         assert_eq!(resolve(&[1, 6], &selected(&[9606]), Both), Some(9606));
     }
 
-    fn target(sequence: &str, mz: f64, charge: u8) -> SrmPrmTarget {
-        SrmPrmTarget {
+    fn target(sequence: &str, mz: f64, charge: u8) -> Target {
+        Target {
             sequence: sequence.to_string(),
             mz,
             hydrophobicity: 0.0,

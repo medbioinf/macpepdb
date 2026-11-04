@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// One unique SRM/PRM assay target: a peptide digested from a requested protein accession,
 /// matched at a given charge, unique within the given species.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct SrmPrmTarget {
+pub struct Target {
     /// ProForma-annotated sequence (modifications resolved).
     pub sequence: String,
     pub mz: f64,
@@ -27,31 +27,31 @@ pub struct SrmPrmTarget {
 }
 
 // FEATURE
-// impl SrmPrmTarget {
+// impl Target {
 //     pub fn ion_mobility_mut(&mut self) -> &mut Option<f64> {
 //         &mut self.ion_mobility
 //     }
 // }
 
-impl Hash for SrmPrmTarget {
+impl Hash for Target {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.sequence.hash(state);
     }
 }
 
-impl PartialEq for SrmPrmTarget {
+impl PartialEq for Target {
     fn eq(&self, other: &Self) -> bool {
         self.sequence == other.sequence
     }
 }
 
-impl Eq for SrmPrmTarget {}
+impl Eq for Target {}
 
-/// Response body for `POST /api/tools/prm-srm`. Contains only unique targets — a
+/// Response body for `POST /api/tools/target-finder`. Contains only unique targets — a
 /// peptide/species combination that is not unique in that species is omitted entirely.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SrmPrmResponse {
-    pub targets: Vec<SrmPrmTarget>,
+pub struct TargetResponse {
+    pub targets: Vec<Target>,
 }
 
 #[cfg(test)]
@@ -59,10 +59,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn srm_prm_response_round_trips() {
-        let response = SrmPrmResponse {
+    fn target_response_round_trips() {
+        let response = TargetResponse {
             targets: vec![
-                SrmPrmTarget {
+                Target {
                     sequence: "NCLETPSC[+57.021464]KNGFLLDGFPR".to_string(),
                     mz: 1003.5,
                     hydrophobicity: 24.7,
@@ -71,7 +71,7 @@ mod tests {
                     accession: "P12345 (GENE1)".to_string(),
                     similar_mz: false,
                 },
-                SrmPrmTarget {
+                Target {
                     sequence: "NCLETPSCKNGFLLDGFPR".to_string(),
                     mz: 750.25,
                     hydrophobicity: 22.1,
@@ -84,7 +84,7 @@ mod tests {
         };
 
         let json = serde_json::to_string(&response).unwrap();
-        let round_tripped: SrmPrmResponse = serde_json::from_str(&json).unwrap();
+        let round_tripped: TargetResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(round_tripped, response);
     }
 }
