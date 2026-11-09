@@ -21,8 +21,9 @@
   when:
     - macpepdb_action == "start"
     - hostvars[inventory_hostname]['macpepdb_dockerimage_file'] is not none
-  community.docker.docker_image_load:
+  ansible.builtin.file:
     path: "/tmp/macpepdb-image-{{ macpepdb_id }}-ansible.tar"
+    state: absent
 
 - name: Pull image
   when:
