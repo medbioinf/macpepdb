@@ -56,7 +56,7 @@
 - name: Start container
   when: macpepdb_action == "start"
   community.docker.docker_container:
-    image: "{{ hostvars[inventory_hostname]['macpepdb_dockerimage'] | default('ghcr.io/medbioinf/macpepdb:latest') }}"
+    image: "{{ hostvars[inventory_hostname]['macpepdb_dockerimage'] | default('ghcr.io/medbioinf/macpepdb:latest', true) }}"
     name: macpepdb-{{ macpepdb_id }}
     # auto_remove: true
     user: 1000:1000
