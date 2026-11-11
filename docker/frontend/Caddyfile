@@ -12,9 +12,13 @@
         X-Frame-Options SAMEORIGIN
         X-Content-Type-Options nosniff
         Referrer-Policy strict-origin-when-cross-origin
-        Permissions-Policy "geolocation=('none'), midi=('none'), notifications=('none'), push=('none'), sync-xhr=('none'), microphone=('none'), camera=('none'), magnetometer=('none'), gyroscope=('none'), speaker=('none'), vibrate=('none'), fullscreen=('none'), payment=('none')"
-        Access-Control-Allow-Origin "<origin>"
+        Permissions-Policy "geolocation=(), midi=(), notifications=(), push=(), sync-xhr=(), microphone=(), camera=(), magnetometer=(), gyroscope=(), fullscreen=(), payment=()"
+        X-Permitted-Cross-Domain-Policies none
     }
+
+	# Always revalidate entry point and runtime config
+	@revalidate path / /index.html /assets/config.toml
+	header @revalidate Cache-Control "no-cache"
 
 	try_files {path} {path}/ /index.html
 	file_server

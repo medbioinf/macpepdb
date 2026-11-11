@@ -23,8 +23,9 @@
     - macpepdb_action == "start"
     - hostvars[inventory_hostname]['caddy_dockerimage_file'] is defined
     - hostvars[inventory_hostname]['caddy_dockerimage_file'] is not none
-  community.docker.docker_image_load:
+  ansible.builtin.file:
     path: "/tmp/macpepdb-caddy-image-ansible.tar"
+    state: absent
 
 - name: Create Caddy config directory
   ansible.builtin.file:
@@ -45,7 +46,7 @@
   when: macpepdb_action == "start"
   community.docker.docker_image_pull:
     name: caddy
-    tag: 2
+    tag: "2"
     pull: always
 
 - name: Check if container exists
@@ -73,12 +74,12 @@
 - name: Set https port
   when: is_ssl_enabled
   ansible.builtin.set_fact:
-    ports_to_publish: "{{ ports_to_publish + ['443:443'] }}"
+    ports_to_publish: "{{ ports_to_publish + ['443:443', '443:443/udp'] }}"
 
 - name: Start container
   when: macpepdb_action == "start"
   community.docker.docker_container:
-    image: "{{ hostvars[inventory_hostname]['caddy_dockerimage'] | default('caddy:latest') }}"
+    image: "{{ hostvars[inventory_hostname]['caddy_dockerimage'] | default('caddy:2') }}"
     name: macpepdb-caddy
     # auto_remove: true
     restart_policy: unless-stopped
