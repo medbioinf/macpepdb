@@ -3,7 +3,10 @@ name: Rust
 on:
   push:
     tags:
+      # macpepdb (binaries + backend image)
       - '[0-9]+.[0-9]+.[0-9]+'
+      # macpepdb-frontend (frontend image + tarball), released independently
+      - 'frontend-[0-9]+.[0-9]+.[0-9]+'
   pull_request:
     branches:
       - main
@@ -113,7 +116,7 @@ jobs:
   binaries:
     name: binary (${{ matrix.target }})
     needs: test
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 'frontend-')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -156,9 +159,11 @@ jobs:
           if-no-files-found: error
 
   frontend:
-    needs: docker-publish
+    needs: docker-publish-frontend
     runs-on: ubuntu-24.04
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref_name, 'frontend-')
+    env:
+      VERSION: ${{ github.ref_name }}
     steps:
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -169,8 +174,9 @@ jobs:
 
       - name: Extract frontend from the published image
         run: |
-          image="${{ env.REGISTRY }}/medbioinf/macpepdb-frontend:${{ github.ref_name }}"
-          name="macpepdb-frontend-${{ github.ref_name }}"
+          version="${VERSION#frontend-}"
+          image="${{ env.REGISTRY }}/medbioinf/macpepdb-frontend:${version}"
+          name="macpepdb-frontend-${version}"
           container=$(docker create "$image")
           docker cp "$container:/usr/share/caddy/." "$name"
           docker rm "$container"
@@ -179,15 +185,20 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: macpepdb-frontend
-          path: macpepdb-frontend-${{ github.ref_name }}.tar.gz
+          path: macpepdb-frontend-*.tar.gz
           if-no-files-found: error
 
-  github-release:
-    needs: [binaries, frontend]
+  github-release-backend:
+    needs: binaries
+    if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 'frontend-')
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -203,19 +214,55 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "${{ github.ref_name }}" dist/* --generate-notes
+        run: |
+          # previous backend tag, so generated notes do not mix in frontend-* tags
+          prev=$(git tag --list '[0-9]*' --sort=-v:refname | grep -vx "${{ github.ref_name }}" | head -n1 || true)
+          args=()
+          [ -n "$prev" ] && args+=(--notes-start-tag "$prev")
+          gh release create "${{ github.ref_name }}" dist/* \
+            --generate-notes "${args[@]}" \
+            --notes "> **Note:** \`macpepdb\` and \`macpepdb-frontend\` are released independently but are meant to be used together. Use the same major.minor version of both (patch versions may differ). Frontend releases are tagged \`frontend-X.Y.Z\`: https://github.com/${{ github.repository }}/releases"
 
-  docker-publish:
+  github-release-frontend:
+    needs: frontend
+    if: startsWith(github.ref_name, 'frontend-')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: macpepdb-*
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="${{ github.ref_name }}"
+          version="${version#frontend-}"
+          prev=$(git tag --list 'frontend-*' --sort=-v:refname | grep -vx "${{ github.ref_name }}" | head -n1 || true)
+          args=()
+          [ -n "$prev" ] && args+=(--notes-start-tag "$prev")
+          gh release create "${{ github.ref_name }}" dist/* \
+            --title "Frontend ${version}" \
+            --generate-notes "${args[@]}" \
+            --notes "> **Note:** \`macpepdb-frontend\` and \`macpepdb\` are released independently but are meant to be used together. Use the same major.minor version of both (patch versions may differ). Backend releases are tagged \`X.Y.Z\`: https://github.com/${{ github.repository }}/releases"
+
+  docker-publish-backend:
     needs: test
-    if: startsWith(github.ref, 'refs/tags/')
+    if: startsWith(github.ref, 'refs/tags/') && !startsWith(github.ref_name, 'frontend-')
     runs-on: self-hosted
-    strategy:
-      matrix:
-        include:
-          - image: macpepdb
-            dockerfile: docker/macpepdb/Dockerfile
-          - image: macpepdb-frontend
-            dockerfile: docker/frontend/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -230,8 +277,36 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ${{ matrix.dockerfile }}
+          file: docker/macpepdb/Dockerfile
           push: true
           tags: |
-            ${{ env.REGISTRY }}/medbioinf/${{ matrix.image }}:${{ github.ref_name }}
-            ${{ env.REGISTRY }}/medbioinf/${{ matrix.image }}:latest
+            ${{ env.REGISTRY }}/medbioinf/macpepdb:${{ github.ref_name }}
+            ${{ env.REGISTRY }}/medbioinf/macpepdb:latest
+
+  docker-publish-frontend:
+    needs: test
+    if: startsWith(github.ref_name, 'frontend-')
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Strip tag prefix
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#frontend-}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/medbioinf/macpepdb-frontend:${{ steps.version.outputs.version }}
+            ${{ env.REGISTRY }}/medbioinf/macpepdb-frontend:latest
