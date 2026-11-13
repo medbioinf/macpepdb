@@ -20,8 +20,9 @@
   when:
     - macpepdb_action == "start"
     - hostvars[inventory_hostname]['macpepdb_frontend_dockerimage_file'] is not none
-  community.docker.docker_image_load:
+  ansible.builtin.file:
     path: "/tmp/macpepdb-frontend-image-ansible.tar"
+    state: absent
 
 - name: Create frontend config directory
   ansible.builtin.file:
@@ -66,11 +67,14 @@
     replace: "show_denbi_survey_banner = true"
 
 - name: Pull image
-  when: macpepdb_action == "start"
-  community.docker.docker_image_pull:
-    name: medbioinfo/macpepdb-frontend
-    tag: local
-    pull: not_present
+  when:
+    - macpepdb_action == "start"
+    - hostvars[inventory_hostname]['macpepdb_frontend_dockerimage_file'] is none
+  community.docker.docker_image:
+    name: "{{ hostvars[inventory_hostname]['macpepdb_frontend_dockerimage'] | default('ghcr.io/medbioinf/macpepdb-frontend:latest', true) }}"
+    source: pull
+    # re-pull even if the tag exists locally, otherwise mutable tags (latest) stay stale
+    force_source: true
 
 - name: Check if container exists
   community.docker.docker_container_info:

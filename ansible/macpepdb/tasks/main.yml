@@ -32,7 +32,8 @@
   community.docker.docker_image:
     name: "{{ hostvars[inventory_hostname]['macpepdb_dockerimage'] | default('ghcr.io/medbioinf/macpepdb:latest', true) }}"
     source: pull
-    force_source: false
+    # re-pull even if the tag exists locally, otherwise mutable tags (latest) stay stale
+    force_source: true
 
 - name: Create log directory
   when: macpepdb_action == "start"
