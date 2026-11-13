@@ -18,7 +18,7 @@ use macpepdb_web_common::responses::protein::ProteinResponse;
 #[derive(Clone, PartialEq, Props)]
 pub struct ProteinProps {
     /// Protein ID to fetch
-    pub protein_id: String,
+    pub protein_id: ReadSignal<String>,
 }
 
 /// Protein page
@@ -28,7 +28,7 @@ pub struct ProteinProps {
 pub fn Protein(props: ProteinProps) -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
 
-    let protein_id = use_signal(|| props.protein_id.to_owned());
+    let protein_id = props.protein_id;
 
     let protein: Resource<Result<ProteinResponse<PeptideResponse>, GeneralError>> =
         use_resource(move || async move {
@@ -43,7 +43,7 @@ pub fn Protein(props: ProteinProps) -> Element {
             Ok(client.get_protein(protein_id.read().as_str()).await?)
         });
 
-    let uniprot_link = use_signal(|| format!("https://www.uniprot.org/uniprot/{}", protein_id));
+    let uniprot_link = use_memo(move || format!("https://www.uniprot.org/uniprot/{}", protein_id));
 
     let taxonomy_names: Resource<Result<HashMap<i32, String>, GeneralError>> =
         use_resource(move || async move {
@@ -62,9 +62,10 @@ pub fn Protein(props: ProteinProps) -> Element {
             Ok(client.resolve_taxonomy_ids(vec![taxonomy_id]).await?)
         });
 
-    use_future(move || async move {
+    // Re-runs whenever the protein id param changes (param-only navigation)
+    use_resource(move || async move {
         track_page_visit(vec![(
-            protein_id.to_string(),
+            protein_id.read().to_string(),
             ":protein_accession".to_string(),
         )])
         .await
@@ -72,7 +73,7 @@ pub fn Protein(props: ProteinProps) -> Element {
 
     rsx! {
         div {
-            h2 { "Protein: {props.protein_id}" }
+            h2 { "Protein: {protein_id}" }
             match &*protein.read_unchecked() {
                 Some(Ok(protein)) => rsx! {
                     table { class: "table table-striped",
