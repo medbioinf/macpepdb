@@ -1,3 +1,7 @@
+// The `Routable` derive (dioxus-router-macro 0.7.x) emits code that trips `unreachable_code`
+// on recent rustc; the generated code is not ours to change.
+#![allow(unreachable_code)]
+
 use dioxus::prelude::*;
 
 use crate::layouts::two_panes::TwoPanes;

@@ -21,15 +21,18 @@
   when:
     - macpepdb_action == "start"
     - hostvars[inventory_hostname]['macpepdb_dockerimage_file'] is not none
-  community.docker.docker_image_load:
+  ansible.builtin.file:
     path: "/tmp/macpepdb-image-{{ macpepdb_id }}-ansible.tar"
+    state: absent
 
 - name: Pull image
-  when: macpepdb_action == "start"
-  community.docker.docker_image_pull:
-    name: medbioinfo/macpepdb
-    tag: local
-    pull: not_present
+  when:
+    - macpepdb_action == "start"
+    - hostvars[inventory_hostname]['macpepdb_dockerimage_file'] is none
+  community.docker.docker_image:
+    name: "{{ hostvars[inventory_hostname]['macpepdb_dockerimage'] | default('ghcr.io/medbioinf/macpepdb:latest', true) }}"
+    source: pull
+    force_source: false
 
 - name: Create log directory
   when: macpepdb_action == "start"
@@ -56,7 +59,7 @@
 - name: Start container
   when: macpepdb_action == "start"
   community.docker.docker_container:
-    image: "{{ hostvars[inventory_hostname]['macpepdb_dockerimage'] | default('ghcr.io/medbioinf/macpepdb:latest') }}"
+    image: "{{ hostvars[inventory_hostname]['macpepdb_dockerimage'] | default('ghcr.io/medbioinf/macpepdb:latest', true) }}"
     name: macpepdb-{{ macpepdb_id }}
     # auto_remove: true
     user: 1000:1000

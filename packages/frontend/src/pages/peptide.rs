@@ -17,7 +17,7 @@ use macpepdb_web_common::responses::peptide::PeptideResponse;
 #[derive(Clone, PartialEq, Props)]
 pub struct PeptideProps {
     /// Peptide sequence to fetch
-    pub peptide_sequence: String,
+    pub peptide_sequence: ReadSignal<String>,
 }
 
 /// Page for rendering a single peptide
@@ -29,7 +29,7 @@ pub struct PeptideProps {
 // could be recomputed client-side from `sequence` if the feature is wanted back.
 pub fn Peptide(props: PeptideProps) -> Element {
     let app_config = use_context::<Resource<AppConfiguration>>();
-    let peptide_sequence = use_signal(|| props.peptide_sequence.clone());
+    let peptide_sequence = props.peptide_sequence;
 
     let peptide: Resource<Result<PeptideResponse, GeneralError>> =
         use_resource(move || async move {
@@ -89,9 +89,10 @@ pub fn Peptide(props: PeptideProps) -> Element {
             Ok(client.resolve_taxonomy_ids(ids).await?)
         });
 
-    use_future(move || async move {
+    // Re-runs whenever the sequence param changes (param-only navigation)
+    use_resource(move || async move {
         track_page_visit(vec![(
-            peptide_sequence.to_string(),
+            peptide_sequence.read().to_string(),
             ":peptide_sequence".to_string(),
         )])
         .await

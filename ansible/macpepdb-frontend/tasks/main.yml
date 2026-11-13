@@ -88,7 +88,7 @@
 - name: Start container
   when: macpepdb_action == "start"
   community.docker.docker_container:
-    image: "{{ hostvars[inventory_hostname]['macpepdb_frontend_dockerimage'] | default('ghcr.io/medbioinf/macpepdb-frontend:latest') }}"
+    image: "{{ hostvars[inventory_hostname]['macpepdb_frontend_dockerimage'] | default('ghcr.io/medbioinf/macpepdb-frontend:latest', true) }}"
     name: macpepdb-frontend
     # auto_remove: true
     restart_policy: unless-stopped

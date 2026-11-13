@@ -3669,7 +3669,7 @@ dependencies = [
 
 [[package]]
 name = "macpepdb-frontend"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "async-std",
  "chrono",
