@@ -35,6 +35,15 @@ const DEFAULT_MAX_MISSED_CLEAVAGES: i16 = 0;
 /// Minimum length of the accession/gene search term before querying for suggestions.
 const MIN_PROTEIN_SEARCH_TERM_LENGTH: usize = 3;
 
+/// Minimum protein search term length; exact searches may use short terms (e.g. gene `F2`).
+fn min_protein_search_term_length(exact: bool) -> usize {
+    if exact {
+        1
+    } else {
+        MIN_PROTEIN_SEARCH_TERM_LENGTH
+    }
+}
+
 /// Rows per page by default in the protein/taxonomy selection tables.
 const DEFAULT_PAGE_SIZE: usize = 10;
 
@@ -437,11 +446,25 @@ pub fn TargetFinder() -> Element {
 
     // targets: protein accession + charge spec (single int, comma list, or "N-M" range)
     let mut protein_search_term = use_signal(String::new);
+    // exact instead of substring match for the protein search
+    let mut protein_search_exact = use_signal(|| false);
     // term submitted by button/enter; the counter makes re-submitting the same term re-run the search
     let mut protein_search_submitted = use_signal(|| (0u32, String::new()));
     // charge spec typed into the suggestion row, keyed by accession
     let mut target_charge_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
-    let mut targets: Signal<Vec<(String, String)>> = use_signal(Vec::new);
+    // global charge spec, used for every protein without its own charge spec
+    let mut global_charge_spec = use_signal(String::new);
+    // m/z range spec typed into the suggestion row, keyed by accession
+    let mut target_mz_range_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
+    // global m/z range spec, used for every protein without its own m/z range
+    let mut global_mz_range_spec = use_signal(String::new);
+    // hydrophobicity range spec typed into the suggestion row, keyed by accession
+    let mut target_hydrophobicity_range_specs: Signal<HashMap<String, String>> =
+        use_signal(HashMap::new);
+    // global hydrophobicity range spec, used for every protein without its own range
+    let mut global_hydrophobicity_range_spec = use_signal(String::new);
+    // added targets: (accession, charge spec, m/z range spec, hydrophobicity range spec; empty = no restriction)
+    let mut targets: Signal<Vec<(String, String, String, String)>> = use_signal(Vec::new);
     // species contained in each selected taxonomy (selected taxonomy ID -> species IDs); proteins are
     // matched by their species taxonomy
     let mut selected_species_ids: Signal<HashMap<i32, HashSet<i32>>> = use_signal(HashMap::new);
@@ -488,29 +511,38 @@ pub fn TargetFinder() -> Element {
             Ok(Some(found))
         });
 
+    // set synchronously on submit: `Resource::pending` only turns true after the resource restarts
+    // (next effect run), so the spinner would be skipped for a render on the first search
+    let mut protein_search_loading = use_signal(|| false);
     let protein_suggestions: Resource<Result<Option<Vec<ProteinResponse<String>>>, GeneralError>> =
         use_resource(move || async move {
-            let term = protein_search_submitted.read_unchecked().1.clone();
-            if term.len() < MIN_PROTEIN_SEARCH_TERM_LENGTH {
-                return Ok(None);
+            let result = async move {
+                let term = protein_search_submitted.read_unchecked().1.clone();
+                let exact = *protein_search_exact.read_unchecked();
+                if term.len() < min_protein_search_term_length(exact) {
+                    return Ok(None);
+                }
+
+                let app_config = app_config.read_unchecked();
+                let macpepdb_base_url = match app_config.as_ref() {
+                    Some(config) => config.get_macpepdb_base_url(),
+                    None => Err(GeneralError::ConfigurationNotLoaded)?,
+                };
+
+                let client = Client::new(macpepdb_base_url)?;
+
+                let mut proteins = client.search_protein(&term, exact).await?;
+
+                proteins.sort_unstable_by_key(|prot| !prot.is_reviewed);
+
+                protein_page.set(0);
+                protein_sort.set(None);
+
+                Ok(Some(proteins))
             }
-
-            let app_config = app_config.read_unchecked();
-            let macpepdb_base_url = match app_config.as_ref() {
-                Some(config) => config.get_macpepdb_base_url(),
-                None => Err(GeneralError::ConfigurationNotLoaded)?,
-            };
-
-            let client = Client::new(macpepdb_base_url)?;
-
-            let mut proteins = client.search_protein(&term).await?;
-
-            proteins.sort_unstable_by_key(|prot| !prot.is_reviewed);
-
-            protein_page.set(0);
-            protein_sort.set(None);
-
-            Ok(Some(proteins))
+            .await;
+            protein_search_loading.set(false);
+            result
         });
 
     // proteins are only offered for the selected taxonomies
@@ -523,8 +555,9 @@ pub fn TargetFinder() -> Element {
 
     let mut submit_protein_search = move || {
         let term = protein_search_term.read().trim().to_string();
-        if term.len() >= MIN_PROTEIN_SEARCH_TERM_LENGTH {
+        if term.len() >= min_protein_search_term_length(*protein_search_exact.read()) {
             let counter = protein_search_submitted.read().0.wrapping_add(1);
+            protein_search_loading.set(true);
             protein_search_submitted.set((counter, term));
         }
     };
@@ -539,6 +572,8 @@ pub fn TargetFinder() -> Element {
     // post translational modifications
     let mut max_var_modifications = use_signal(|| DEFAULT_MAX_VAR_MODIFICATIONS);
     let mut max_missed_cleavages = use_signal(|| DEFAULT_MAX_MISSED_CLEAVAGES);
+    // one-letter codes of amino acids; peptides containing any of them are excluded
+    let mut excluded_amino_acids: Signal<Vec<char>> = use_signal(Vec::new);
     let mut new_ptm_amino_acid = use_signal(|| ' ');
     let mut new_ptm_mass = use_signal(|| 0.0);
     let mut new_ptm_type = use_signal(|| PtmType::Static);
@@ -582,7 +617,21 @@ pub fn TargetFinder() -> Element {
         let client = Client::new(macpepdb_base_url)?;
 
         let request = TargetRequest {
-            targets: targets.read_unchecked().clone(),
+            targets: targets
+                .read_unchecked()
+                .iter()
+                .map(|(accession, charge, _, _)| (accession.clone(), charge.clone()))
+                .collect(),
+            mz_ranges: targets
+                .read_unchecked()
+                .iter()
+                .map(|(_, _, mz_range, _)| mz_range.clone())
+                .collect(),
+            hydrophobicity_ranges: targets
+                .read_unchecked()
+                .iter()
+                .map(|(_, _, _, hydrophobicity_range)| hydrophobicity_range.clone())
+                .collect(),
             max_variable_modifications: max_var_modifications.read_unchecked().max(0) as usize,
             ptms: ptms.read_unchecked().clone(),
             taxonomies: selected_taxonomies
@@ -591,6 +640,7 @@ pub fn TargetFinder() -> Element {
                 .map(|taxonomy| taxonomy.id)
                 .collect(),
             max_missed_cleavages: max_missed_cleavages.read_unchecked().max(0) as usize,
+            excluded_amino_acids: excluded_amino_acids.read_unchecked().iter().collect(),
             review_status: review_filter.read_unchecked().status(),
         };
 
@@ -869,7 +919,7 @@ pub fn TargetFinder() -> Element {
                             // drop targets which are not covered by any remaining taxonomy
                             let selected_species_ids = selected_species_ids.read();
                             let target_taxonomy_ids = target_taxonomy_ids.read();
-                            targets.write().retain(|(accession, _)| {
+                            targets.write().retain(|(accession, _, _, _)| {
                                 target_taxonomy_ids.get(accession).is_some_and(|species_id| {
                                     selected_species_ids.values().any(|ids| ids.contains(species_id))
                                 })
@@ -906,6 +956,45 @@ pub fn TargetFinder() -> Element {
             div { class: "alert alert-warning", "Select at least one taxonomy first." }
         }
         div { class: "input-group mb-3",
+            span { class: "input-group-text", "Charge state(s) *" }
+            input {
+                r#type: "text",
+                class: "form-control",
+                placeholder: "Global charge, e.g. 2 or 2,3 or 2-4",
+                value: "{global_charge_spec}",
+                oninput: move |evt| global_charge_spec.set(evt.value()),
+            }
+        }
+        small { class: "text-muted px-2 mb-3 d-block",
+            "Charge state(s) used for the peptides of every added protein. To use different charge state(s) for a specific protein, type them into that protein's charge input below."
+        }
+        div { class: "input-group mb-3",
+            span { class: "input-group-text", "m/z range" }
+            input {
+                r#type: "text",
+                class: "form-control",
+                placeholder: "Optional global m/z range, e.g. 400-1200",
+                value: "{global_mz_range_spec}",
+                oninput: move |evt| global_mz_range_spec.set(evt.value()),
+            }
+        }
+        small { class: "text-muted px-2 mb-3 d-block",
+            "Optional: only peptides with an m/z within this range are returned. To use a different range for a specific protein, type it into that protein's m/z range input below."
+        }
+        div { class: "input-group mb-3",
+            span { class: "input-group-text", "Hydrophobicity range" }
+            input {
+                r#type: "text",
+                class: "form-control",
+                placeholder: "Optional global hydrophobicity range, e.g. 10-40",
+                value: "{global_hydrophobicity_range_spec}",
+                oninput: move |evt| global_hydrophobicity_range_spec.set(evt.value()),
+            }
+        }
+        small { class: "text-muted px-2 mb-3 d-block",
+            "Optional: only peptides with a hydrophobicity within this range are returned. To use a different range for a specific protein, type it into that protein's hydrophobicity range input below."
+        }
+        div { class: "input-group mb-3",
             span { class: "input-group-text", "Protein search *" }
             input {
                 r#type: "text",
@@ -924,15 +1013,30 @@ pub fn TargetFinder() -> Element {
                 class: "btn btn-primary",
                 r#type: "button",
                 disabled: selected_taxonomies.is_empty()
-                    || protein_search_term.read().trim().len() < MIN_PROTEIN_SEARCH_TERM_LENGTH
-                    || protein_suggestions.pending(),
+                    || protein_search_term.read().trim().len()
+                        < min_protein_search_term_length(protein_search_exact())
+                    || protein_search_loading(),
                 onclick: move |_| submit_protein_search(),
                 i { class: "fa-solid fa-search me-2" }
                 "Search"
             }
         }
-        if protein_suggestions.pending()
-            && protein_search_submitted.read().1.len() >= MIN_PROTEIN_SEARCH_TERM_LENGTH
+        div { class: "form-check form-switch mb-3",
+            input {
+                class: "form-check-input",
+                r#type: "checkbox",
+                role: "switch",
+                id: "target-finder-exact-search",
+                checked: protein_search_exact(),
+                onchange: move |evt| protein_search_exact.set(evt.checked()),
+            }
+            label { class: "form-check-label", r#for: "target-finder-exact-search",
+                "Exact match (case-sensitive accession or gene name)"
+            }
+        }
+        if protein_search_loading()
+            && protein_search_submitted.read().1.len()
+                >= min_protein_search_term_length(protein_search_exact())
         {
             div { class: "mb-3",
                 Spinner {}
@@ -988,7 +1092,7 @@ pub fn TargetFinder() -> Element {
                                 protein_page.set(0);
                             }))}
                             th { "Reviewed" }
-                            th { "Charge state(s)" }
+                            th { "Charge state(s) and optional m/z range" }
                         }
                     }
                     tbody {
@@ -1001,23 +1105,101 @@ pub fn TargetFinder() -> Element {
                                     {
                                         let accession = protein.accession.clone();
                                         let protein_taxonomy_id = protein.taxonomy_id;
-                                        let charge_spec = target_charge_specs
+                                        let own_charge_spec = target_charge_specs
                                             .read()
                                             .get(&accession)
                                             .cloned()
                                             .unwrap_or_default();
-                                        let already_added = targets.read().iter().any(|(a, c)| a == &accession && c == charge_spec.trim());
+                                        let global_spec = global_charge_spec.read().trim().to_string();
+                                        let charge_spec = if own_charge_spec.trim().is_empty() {
+                                            global_spec.clone()
+                                        } else {
+                                            own_charge_spec.trim().to_string()
+                                        };
+                                        let input_placeholder = if global_spec.is_empty() {
+                                            "Charge, e.g. 2 or 2,3 or 2-4".to_string()
+                                        } else {
+                                            format!("Global: {global_spec} (type to override)")
+                                        };
+                                        let own_mz_range_spec = target_mz_range_specs
+                                            .read()
+                                            .get(&accession)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        let global_mz_spec = global_mz_range_spec.read().trim().to_string();
+                                        let mz_range_spec = if own_mz_range_spec.trim().is_empty() {
+                                            global_mz_spec.clone()
+                                        } else {
+                                            own_mz_range_spec.trim().to_string()
+                                        };
+                                        let mz_placeholder = if global_mz_spec.is_empty() {
+                                            "m/z range, e.g. 400-1200".to_string()
+                                        } else {
+                                            format!("Global: {global_mz_spec} (type to override)")
+                                        };
+                                        let own_hydrophobicity_spec = target_hydrophobicity_range_specs
+                                            .read()
+                                            .get(&accession)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        let global_hydrophobicity_spec = global_hydrophobicity_range_spec
+                                            .read()
+                                            .trim()
+                                            .to_string();
+                                        let hydrophobicity_range_spec = if own_hydrophobicity_spec.trim().is_empty() {
+                                            global_hydrophobicity_spec.clone()
+                                        } else {
+                                            own_hydrophobicity_spec.trim().to_string()
+                                        };
+                                        let hydrophobicity_placeholder = if global_hydrophobicity_spec.is_empty() {
+                                            "Hydrophobicity range, e.g. 10-40".to_string()
+                                        } else {
+                                            format!("Global: {global_hydrophobicity_spec} (type to override)")
+                                        };
+                                        let already_added = targets
+                                            .read()
+                                            .iter()
+                                            .any(|(a, c, m, h)| {
+                                                a == &accession
+                                                    && c == charge_spec.trim()
+                                                    && m == &mz_range_spec
+                                                    && h == &hydrophobicity_range_spec
+                                            });
+                                        let hydrophobicity_input_accession = accession.clone();
                                         let input_accession = accession.clone();
+                                        let mz_input_accession = accession.clone();
                                         rsx! {
                                             div { class: "input-group input-group-sm",
                                                 input {
                                                     r#type: "text",
                                                     class: "form-control",
                                                     style: "min-width: 7rem",
-                                                    placeholder: "Charge, e.g. 2 or 2,3 or 2-4",
-                                                    value: "{charge_spec}",
+                                                    placeholder: "{input_placeholder}",
+                                                    value: "{own_charge_spec}",
                                                     oninput: move |evt| {
                                                         target_charge_specs.write().insert(input_accession.clone(), evt.value());
+                                                    },
+                                                }
+                                                input {
+                                                    r#type: "text",
+                                                    class: "form-control",
+                                                    style: "min-width: 7rem",
+                                                    placeholder: "{mz_placeholder}",
+                                                    value: "{own_mz_range_spec}",
+                                                    oninput: move |evt| {
+                                                        target_mz_range_specs.write().insert(mz_input_accession.clone(), evt.value());
+                                                    },
+                                                }
+                                                input {
+                                                    r#type: "text",
+                                                    class: "form-control",
+                                                    style: "min-width: 7rem",
+                                                    placeholder: "{hydrophobicity_placeholder}",
+                                                    value: "{own_hydrophobicity_spec}",
+                                                    oninput: move |evt| {
+                                                        target_hydrophobicity_range_specs
+                                                            .write()
+                                                            .insert(hydrophobicity_input_accession.clone(), evt.value());
                                                     },
                                                 }
                                                 button {
@@ -1026,7 +1208,7 @@ pub fn TargetFinder() -> Element {
                                                     disabled: charge_spec.trim().is_empty() || already_added,
                                                     onclick: move |_| {
                                                         target_taxonomy_ids.write().insert(accession.clone(), protein_taxonomy_id);
-                                                        targets.push((accession.clone(), charge_spec.trim().to_string()));
+                                                        targets.push((accession.clone(), charge_spec.trim().to_string(), mz_range_spec.clone(), hydrophobicity_range_spec.clone()));
                                                     },
                                                     "Add target"
                                                 }
@@ -1059,7 +1241,16 @@ pub fn TargetFinder() -> Element {
             }
             for (idx , target) in targets.iter().enumerate() {
                 div { class: "list-group-item d-flex justify-content-between align-items-center",
-                    "{target.0}, charge {target.1}"
+                    {
+                        let mut label = format!("{}, charge {}", target.0, target.1);
+                        if !target.2.is_empty() {
+                            label.push_str(&format!(", m/z {}", target.2));
+                        }
+                        if !target.3.is_empty() {
+                            label.push_str(&format!(", hydrophobicity {}", target.3));
+                        }
+                        label
+                    }
                     button {
                         class: "btn btn-danger",
                         r#type: "button",
@@ -1086,6 +1277,54 @@ pub fn TargetFinder() -> Element {
                         max_missed_cleavages
                             .set(evt.value().parse().unwrap_or(DEFAULT_MAX_MISSED_CLEAVAGES))
                     },
+                }
+            }
+
+            div { class: "input-group mb-1",
+                span { class: "input-group-text", "Excluded amino acids" }
+                select {
+                    class: "form-control",
+                    // always reset to the placeholder: selecting an amino acid adds it below
+                    value: " ",
+                    oninput: move |evt| {
+                        if let Ok(code) = evt.value().parse::<char>() {
+                            if code != ' ' && !excluded_amino_acids.read().contains(&code) {
+                                let mut excluded = excluded_amino_acids.write();
+                                excluded.push(code);
+                                excluded.sort_unstable();
+                            }
+                        }
+                    },
+                    option { value: " ", "Select amino acid to exclude" }
+                    match &*amino_acids.read_unchecked() {
+                        Some(Ok(Some(amino_acids))) => rsx! {
+                            for aa in amino_acids.iter().filter(|aa| !excluded_amino_acids.read().contains(&aa.code)) {
+                                option { value: "{aa.code}", "{aa.code} - {aa.name}" }
+                            }
+                        },
+                        Some(Err(e)) => rsx! {
+                            option { "Error loading amino acids: {e}" }
+                        },
+                        None | Some(Ok(None)) => rsx! {
+                            option { "Loading ..." }
+                        },
+                    }
+                }
+            }
+            small { class: "text-muted px-2 mb-2 d-block",
+                "Peptides containing any of the selected amino acids are excluded, e.g. C and M remove all peptides with cysteine or methionine."
+            }
+            div { class: "mb-3",
+                for code in excluded_amino_acids.read().clone() {
+                    span { class: "badge text-bg-secondary me-1 mb-1",
+                        "{code}"
+                        button {
+                            class: "btn-close btn-close-white ms-2",
+                            r#type: "button",
+                            style: "font-size: 0.6rem",
+                            onclick: move |_| excluded_amino_acids.write().retain(|c| *c != code),
+                        }
+                    }
                 }
             }
 

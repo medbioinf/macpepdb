@@ -1,13 +1,18 @@
         handle /api/* {
                 reverse_proxy <API_UPSTREAM_SERVERS> {
                         lb_policy least_conn
+                        # Queue instead of failing: if no upstream is available (restart,
+                        # refused connection), keep retrying for up to 120s before giving up.
                         lb_retries 999999
-                        lb_try_duration 10s
-                        lb_try_interval 24h
+                        lb_try_duration 120s
+                        lb_try_interval 250ms
                         transport http {
+                                # HTTP/1.1 to the API: one request per connection, so this is an exact
+                                # in-flight cap and further requests WAIT for a free connection.
+                                # (With h2c the limit is not enforced and a burst gets REFUSED_STREAM
+                                # from the API, which Caddy can not retry for POST -> 502.)
                                 max_conns_per_host <MAX_UPSTREAM_CONNECTIONS>
-                                # HTTP/2 when connecting to backends
-                                versions 1 h2c
+                                versions 1.1
                         }
                 }
         }

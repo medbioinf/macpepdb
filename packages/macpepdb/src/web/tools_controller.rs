@@ -126,6 +126,53 @@ fn parse_charge_spec(spec: &str) -> Result<Vec<u8>, String> {
     Ok(charges)
 }
 
+/// Parses an inclusive m/z range (`"400-1200"`, decimals allowed). An empty spec means no
+/// restriction and returns `None`.
+///
+/// # Arguments
+/// * `spec` - m/z range as `"lower-upper"`
+///
+fn parse_mz_range(spec: &str) -> Result<Option<(f64, f64)>, String> {
+    parse_float_range(spec, "m/z")
+}
+
+/// Parses an inclusive hydrophobicity range (`"10-40"`, decimals and negative bounds like
+/// `"-5-20"` allowed). An empty spec means no restriction and returns `None`.
+///
+/// # Arguments
+/// * `spec` - hydrophobicity range as `"lower-upper"`
+///
+fn parse_hydrophobicity_range(spec: &str) -> Result<Option<(f64, f64)>, String> {
+    parse_float_range(spec, "hydrophobicity")
+}
+
+/// Parses an inclusive float range `"lower-upper"`. The separator is the first `-` that is
+/// neither the leading sign nor part of an exponent, so negative bounds work.
+fn parse_float_range(spec: &str, label: &str) -> Result<Option<(f64, f64)>, String> {
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return Ok(None);
+    }
+    let bytes = spec.as_bytes();
+    let separator = (1..bytes.len())
+        .find(|&i| bytes[i] == b'-' && !matches!(bytes[i - 1], b'e' | b'E' | b'-' | b'+'));
+    let separator = separator.ok_or_else(|| format!("{label} range must look like `400-1200`"))?;
+    let (lower, upper) = (&spec[..separator], &spec[separator + 1..]);
+    let (lower_trimmed, upper_trimmed) = (lower.trim(), upper.trim());
+    let lower: f64 = lower_trimmed
+        .parse()
+        .map_err(|_| format!("invalid {label} lower bound `{lower_trimmed}`"))?;
+    let upper: f64 = upper_trimmed
+        .parse()
+        .map_err(|_| format!("invalid {label} upper bound `{upper_trimmed}`"))?;
+    if !lower.is_finite() || !upper.is_finite() || lower > upper {
+        return Err(format!(
+            "{label} range lower bound `{lower_trimmed}` must be finite and not greater than upper bound `{upper_trimmed}`"
+        ));
+    }
+    Ok(Some((lower, upper)))
+}
+
 /// m/z tolerance (ppm) below which two targets of the same charge count as similar.
 const SIMILAR_MZ_TOLERANCE_PPM: f64 = 10.0;
 
@@ -308,10 +355,13 @@ impl ToolsController {
     ///         ["P12345", "2"],
     ///         ["Q9WTP6", "2-4"]
     ///     ],
+    ///     "mz_ranges": ["400-1200", ""],
+    ///     "hydrophobicity_ranges": ["10-40", ""],
     ///     "max_variable_modifications": 2,
     ///     "ptms": [],
     ///     "taxonomies": [10090, 9606],
-    ///     "max_missed_cleavages": 0
+    ///     "max_missed_cleavages": 0,
+    ///     "excluded_amino_acids": "CM"
     /// }
     /// ```
     /// See [TargetRequest] for details.
@@ -354,6 +404,25 @@ impl ToolsController {
             selected_species_ids.extend(matching_taxonomy_ids);
         }
 
+        // Amino acid blacklist: one-letter codes, case-insensitive, whitespace/commas ignored.
+        let mut excluded_amino_acids: HashSet<char> = HashSet::new();
+        for c in payload.excluded_amino_acids.chars() {
+            if c.is_whitespace() || c == ',' {
+                continue;
+            }
+            if !c.is_ascii_alphabetic() {
+                return Ok((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!(
+                        "Error while parsing excluded amino acids: invalid character `{c}`"
+                    )),
+                )
+                    .into_response());
+            }
+            excluded_amino_acids.insert(c.to_ascii_uppercase());
+        }
+
         // Build the PTM collection once, reused across every target.
         let modifications: Vec<PostTranslationalModification> = match payload
             .ptms
@@ -393,7 +462,36 @@ impl ToolsController {
         // peptidoform sequence at most once — so the same sequence can only reappear because it
         // was legitimately requested at more than one charge, not because of any duplication.
         let mut targets: Vec<Target> = Vec::new();
-        for (accession, charge_spec) in payload.targets {
+        for (target_idx, (accession, charge_spec)) in payload.targets.into_iter().enumerate() {
+            let mz_range = match parse_mz_range(
+                payload.mz_ranges.get(target_idx).map_or("", String::as_str),
+            ) {
+                Ok(range) => range,
+                Err(err) => {
+                    return Ok((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                        Body::from(format!("Error while parsing m/z range: {err}")),
+                    )
+                        .into_response());
+                }
+            };
+            let hydrophobicity_range = match parse_hydrophobicity_range(
+                payload
+                    .hydrophobicity_ranges
+                    .get(target_idx)
+                    .map_or("", String::as_str),
+            ) {
+                Ok(range) => range,
+                Err(err) => {
+                    return Ok((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                        Body::from(format!("Error while parsing hydrophobicity range: {err}")),
+                    )
+                        .into_response());
+                }
+            };
             let charges = match parse_charge_spec(&charge_spec) {
                 Ok(charges) => charges,
                 Err(err) => {
@@ -443,6 +541,14 @@ impl ToolsController {
             let mut classified: Vec<(Peptide, Option<i32>)> = Vec::new();
             let mut pending_protein_ids: HashSet<i32> = HashSet::new();
             for peptide in peptides {
+                if !excluded_amino_acids.is_empty()
+                    && peptide
+                        .sequence()
+                        .amino_acids()
+                        .any(|aa| excluded_amino_acids.contains(&aa.code()))
+                {
+                    continue;
+                }
                 // Missed cleavages are calculated on the fly via the protease
                 if server_state
                     .configuration()
@@ -570,10 +676,21 @@ impl ToolsController {
                         .collect();
                     let hydrophobicity =
                         macpepdb_peptide_hydrophobicity::krokhin::score_sequence(&plain_sequence);
+                    if let Some((lower, upper)) = hydrophobicity_range
+                        && !(lower..=upper).contains(&(hydrophobicity as f64))
+                    {
+                        continue;
+                    }
                     for &charge in &charges {
+                        let mz = dalton_to_mass_to_charge(mass, charge);
+                        if let Some((lower, upper)) = mz_range
+                            && !(lower..=upper).contains(&mz)
+                        {
+                            continue;
+                        }
                         let target = Target {
                             sequence: peptidoform.sequence().to_string(),
-                            mz: dalton_to_mass_to_charge(mass, charge),
+                            mz,
                             hydrophobicity,
                             charge,
                             taxonomy_id,
@@ -616,6 +733,27 @@ mod tests {
     fn parse_charge_spec_whitespace() {
         assert_eq!(parse_charge_spec(" 2 , 3 ").unwrap(), vec![2, 3]);
         assert_eq!(parse_charge_spec(" 2 - 4 ").unwrap(), vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn parse_mz_range_specs() {
+        assert_eq!(parse_mz_range("").unwrap(), None);
+        assert_eq!(
+            parse_mz_range(" 400 - 1200.5 ").unwrap(),
+            Some((400.0, 1200.5))
+        );
+        assert!(parse_mz_range("400").is_err());
+        assert!(parse_mz_range("1200-400").is_err());
+        assert!(parse_mz_range("a-b").is_err());
+        assert_eq!(
+            parse_hydrophobicity_range("-5.5 - 20").unwrap(),
+            Some((-5.5, 20.0))
+        );
+        assert_eq!(
+            parse_hydrophobicity_range("-20--5").unwrap(),
+            Some((-20.0, -5.0))
+        );
+        assert!(parse_hydrophobicity_range("-5").is_err());
     }
 
     #[test]

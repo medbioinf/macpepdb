@@ -34,6 +34,7 @@ pub fn ProteinSearch() -> Element {
     let mut page = use_signal(|| 0usize);
     let mut page_size = use_signal(|| DEFAULT_PAGE_SIZE);
     let mut sort = use_signal(|| None::<ProteinSort>);
+    let mut exact_search = use_signal(|| false);
 
     let mut proteins = use_action(move || async move {
         let app_config = app_config.read_unchecked();
@@ -42,14 +43,20 @@ pub fn ProteinSearch() -> Element {
             None => return Err(GeneralError::ConfigurationNotLoaded),
         };
 
-        if protein_id.read().len() < MIN_SEARCH_TERM_LENGTH {
-            return Err(ProteinSearchPageError::SearchTermTooShort(MIN_SEARCH_TERM_LENGTH).into());
+        let min_length = if *exact_search.read() {
+            1
+        } else {
+            MIN_SEARCH_TERM_LENGTH
+        };
+        if protein_id.read().len() < min_length {
+            return Err(ProteinSearchPageError::SearchTermTooShort(min_length).into());
         }
 
         let client = Client::new(macpepdb_base_url)?;
 
-        let fetched_proteins: Result<Vec<ProteinResponse<String>>, ApiClientError> =
-            client.search_protein(&protein_id.read()).await;
+        let fetched_proteins: Result<Vec<ProteinResponse<String>>, ApiClientError> = client
+            .search_protein(&protein_id.read(), *exact_search.read())
+            .await;
 
         match fetched_proteins {
             Ok(fetched_proteins) => {
@@ -110,6 +117,19 @@ pub fn ProteinSearch() -> Element {
                 r#type: "button",
                 onclick: move |_| proteins.call(),
                 "Search"
+            }
+        }
+        div { class: "form-check form-switch mb-3",
+            input {
+                class: "form-check-input",
+                r#type: "checkbox",
+                role: "switch",
+                id: "protein-exact-search",
+                checked: exact_search(),
+                onchange: move |evt| exact_search.set(evt.checked()),
+            }
+            label { class: "form-check-label", r#for: "protein-exact-search",
+                "Exact match (case-sensitive accession or gene name, no wildcard search)"
             }
         }
         match proteins.value() {

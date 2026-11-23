@@ -243,10 +243,13 @@ impl ProteinTable {
     /// # Arguments
     /// * `accession` - Optional substring to match against `accession` (case-insensitive)
     /// * `gene` - Optional substring to match against the protein's genes (case-insensitive)
+    /// * `is_exact_search` - If true, `accession` must equal the stored accession and `gene` must equal
+    ///   one of the protein's genes (both case-sensitive) instead of substring matching
     pub async fn search(
         &self,
         accession: Option<&String>,
         gene: Option<&String>,
+        is_exact_search: bool,
     ) -> Result<impl Stream<Item = Result<Protein, Error>> + Send + use<>, Error> {
         if accession.is_none() && gene.is_none() {
             return Err(Error::SearchTerm);
@@ -256,16 +259,26 @@ impl ProteinTable {
         let mut params: Vec<Box<dyn ToSql + Sync + Send>> = Vec::new();
 
         if let Some(accession) = accession {
-            where_clauses.push(format!("{ACCESSION_COL} ILIKE ${}", params.len() + 1));
-            params.push(Box::new(format!("%{}%", accession)));
+            if is_exact_search {
+                where_clauses.push(format!("{ACCESSION_COL} = ${}", params.len() + 1));
+                params.push(Box::new(accession.clone()));
+            } else {
+                where_clauses.push(format!("{ACCESSION_COL} ILIKE ${}", params.len() + 1));
+                params.push(Box::new(format!("%{}%", accession)));
+            }
         }
 
         if let Some(gene) = gene {
-            where_clauses.push(format!(
-                "genes_as_text({GENES_COL}) ILIKE ${}",
-                params.len() + 1
-            ));
-            params.push(Box::new(format!("%{}%", gene)));
+            if is_exact_search {
+                where_clauses.push(format!("${} = ANY({GENES_COL})", params.len() + 1));
+                params.push(Box::new(gene.clone()));
+            } else {
+                where_clauses.push(format!(
+                    "genes_as_text({GENES_COL}) ILIKE ${}",
+                    params.len() + 1
+                ));
+                params.push(Box::new(format!("%{}%", gene)));
+            }
         }
 
         let where_clause = if !where_clauses.is_empty() {

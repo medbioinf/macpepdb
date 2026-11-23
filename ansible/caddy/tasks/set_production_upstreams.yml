@@ -14,7 +14,7 @@
   vars:
     upstream_hostname: "{{ item }}"
     upstream_ports: "{{ hostvars[upstream_hostname]['macpepdb_api_ports'] }}"
-    upstream_protocol: h2c
+    upstream_protocol: http
     upstream_placeholder: <API_UPSTREAM_SERVERS>
   loop: "{{ query('inventory_hostnames', 'api') }}"
 

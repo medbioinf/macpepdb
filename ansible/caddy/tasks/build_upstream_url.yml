@@ -31,4 +31,4 @@
   ansible.builtin.replace:
     path: "{{ macpepdb_caddy_config_file }}"
     regexp: "<MAX_UPSTREAM_CONNECTIONS>"
-    replace: "{{ hostvars[(groups['api'] | first)]['macpepdb_max_client_streams'] }}"
+    replace: "{{ hostvars[(groups['api'] | first)]['macpepdb_max_upstream_connections'] | default(hostvars[(groups['api'] | first)]['macpepdb_max_client_streams']) }}"

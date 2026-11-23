@@ -31,6 +31,16 @@ impl ReviewStatus {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TargetRequest {
     pub targets: Vec<(String, String)>,
+    /// Optional m/z range (`"400-1200"`, inclusive) per target, index-aligned with `targets`.
+    /// Only peptides whose m/z lies within the range are returned. A missing or empty entry
+    /// means no restriction (default: no restrictions).
+    #[serde(default)]
+    pub mz_ranges: Vec<String>,
+    /// Optional hydrophobicity range (`"10-40"`, inclusive, negative bounds allowed e.g.
+    /// `"-5-20"`) per target, index-aligned with `targets`. Only peptides whose hydrophobicity
+    /// lies within the range are returned. A missing or empty entry means no restriction.
+    #[serde(default)]
+    pub hydrophobicity_ranges: Vec<String>,
     pub max_variable_modifications: usize,
     pub ptms: Vec<PostTranslationalModificationRequest>,
     pub taxonomies: Vec<i32>,
@@ -42,6 +52,10 @@ pub struct TargetRequest {
     /// peptides only have to be unique among proteins matching it (default: both).
     #[serde(default)]
     pub review_status: ReviewStatus,
+    /// One-letter codes of amino acids (e.g. `"CM"`); peptides containing any of them are
+    /// excluded (default: none).
+    #[serde(default)]
+    pub excluded_amino_acids: String,
 }
 
 #[cfg(test)]
@@ -56,6 +70,8 @@ mod tests {
                 ("P12345".to_string(), "2".to_string()),
                 ("Q9WTP6".to_string(), "2-4".to_string()),
             ],
+            mz_ranges: vec!["400-1200".to_string(), String::new()],
+            hydrophobicity_ranges: vec!["-5-20".to_string(), String::new()],
             max_variable_modifications: 2,
             ptms: vec![PostTranslationalModificationRequest {
                 name: "Oxidation".to_string(),
@@ -67,6 +83,7 @@ mod tests {
             taxonomies: vec![10090, 9606],
             max_missed_cleavages: 1,
             review_status: ReviewStatus::SwissProt,
+            excluded_amino_acids: "CM".to_string(),
         };
 
         let json = serde_json::to_string(&request).unwrap();
