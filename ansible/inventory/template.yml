@@ -48,7 +48,12 @@ all:
         # Never commit real credentials. Prefer ansible-vault for the password.
         macpepdb_database_url: "postgresql://postgres:<DB_PASSWORD>@<COORDINATOR_HOST>/<DB_NAME>?pool_size=64"
         macpepdb_concurrent_searches: 32
+        # Max HTTP/2 streams (in-flight requests) per connection, enforced by the API.
         macpepdb_max_client_streams: 2
+        # Max connections Caddy opens per API upstream; further requests wait (queue) in Caddy.
+        # Max in-flight requests per API = macpepdb_max_upstream_connections * macpepdb_max_client_streams.
+        # Optional, defaults to macpepdb_max_client_streams.
+        macpepdb_max_upstream_connections: 2
       hosts:
         <WEB_HOST>:
 
