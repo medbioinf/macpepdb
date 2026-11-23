@@ -443,7 +443,12 @@ pub fn TargetFinder() -> Element {
     let mut target_charge_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
     // global charge spec, used for every protein without its own charge spec
     let mut global_charge_spec = use_signal(String::new);
-    let mut targets: Signal<Vec<(String, String)>> = use_signal(Vec::new);
+    // m/z range spec typed into the suggestion row, keyed by accession
+    let mut target_mz_range_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
+    // global m/z range spec, used for every protein without its own m/z range
+    let mut global_mz_range_spec = use_signal(String::new);
+    // added targets: (accession, charge spec, m/z range spec; empty = no restriction)
+    let mut targets: Signal<Vec<(String, String, String)>> = use_signal(Vec::new);
     // species contained in each selected taxonomy (selected taxonomy ID -> species IDs); proteins are
     // matched by their species taxonomy
     let mut selected_species_ids: Signal<HashMap<i32, HashSet<i32>>> = use_signal(HashMap::new);
@@ -584,7 +589,16 @@ pub fn TargetFinder() -> Element {
         let client = Client::new(macpepdb_base_url)?;
 
         let request = TargetRequest {
-            targets: targets.read_unchecked().clone(),
+            targets: targets
+                .read_unchecked()
+                .iter()
+                .map(|(accession, charge, _)| (accession.clone(), charge.clone()))
+                .collect(),
+            mz_ranges: targets
+                .read_unchecked()
+                .iter()
+                .map(|(_, _, mz_range)| mz_range.clone())
+                .collect(),
             max_variable_modifications: max_var_modifications.read_unchecked().max(0) as usize,
             ptms: ptms.read_unchecked().clone(),
             taxonomies: selected_taxonomies
@@ -871,7 +885,7 @@ pub fn TargetFinder() -> Element {
                             // drop targets which are not covered by any remaining taxonomy
                             let selected_species_ids = selected_species_ids.read();
                             let target_taxonomy_ids = target_taxonomy_ids.read();
-                            targets.write().retain(|(accession, _)| {
+                            targets.write().retain(|(accession, _, _)| {
                                 target_taxonomy_ids.get(accession).is_some_and(|species_id| {
                                     selected_species_ids.values().any(|ids| ids.contains(species_id))
                                 })
@@ -919,6 +933,19 @@ pub fn TargetFinder() -> Element {
         }
         small { class: "text-muted px-2 mb-3 d-block",
             "Charge state(s) used for the peptides of every added protein. To use different charge state(s) for a specific protein, type them into that protein's charge input below."
+        }
+        div { class: "input-group mb-3",
+            span { class: "input-group-text", "m/z range" }
+            input {
+                r#type: "text",
+                class: "form-control",
+                placeholder: "Optional global m/z range, e.g. 400-1200",
+                value: "{global_mz_range_spec}",
+                oninput: move |evt| global_mz_range_spec.set(evt.value()),
+            }
+        }
+        small { class: "text-muted px-2 mb-3 d-block",
+            "Optional: only peptides with an m/z within this range are returned. To use a different range for a specific protein, type it into that protein's m/z range input below."
         }
         div { class: "input-group mb-3",
             span { class: "input-group-text", "Protein search *" }
@@ -1003,7 +1030,7 @@ pub fn TargetFinder() -> Element {
                                 protein_page.set(0);
                             }))}
                             th { "Reviewed" }
-                            th { "Charge state(s)" }
+                            th { "Charge state(s) and optional m/z range" }
                         }
                     }
                     tbody {
@@ -1032,8 +1059,28 @@ pub fn TargetFinder() -> Element {
                                         } else {
                                             format!("Global: {global_spec} (type to override)")
                                         };
-                                        let already_added = targets.read().iter().any(|(a, c)| a == &accession && c == charge_spec.trim());
+                                        let own_mz_range_spec = target_mz_range_specs
+                                            .read()
+                                            .get(&accession)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        let global_mz_spec = global_mz_range_spec.read().trim().to_string();
+                                        let mz_range_spec = if own_mz_range_spec.trim().is_empty() {
+                                            global_mz_spec.clone()
+                                        } else {
+                                            own_mz_range_spec.trim().to_string()
+                                        };
+                                        let mz_placeholder = if global_mz_spec.is_empty() {
+                                            "m/z range, e.g. 400-1200".to_string()
+                                        } else {
+                                            format!("Global: {global_mz_spec} (type to override)")
+                                        };
+                                        let already_added = targets
+                                            .read()
+                                            .iter()
+                                            .any(|(a, c, m)| a == &accession && c == charge_spec.trim() && m == &mz_range_spec);
                                         let input_accession = accession.clone();
+                                        let mz_input_accession = accession.clone();
                                         rsx! {
                                             div { class: "input-group input-group-sm",
                                                 input {
@@ -1046,13 +1093,23 @@ pub fn TargetFinder() -> Element {
                                                         target_charge_specs.write().insert(input_accession.clone(), evt.value());
                                                     },
                                                 }
+                                                input {
+                                                    r#type: "text",
+                                                    class: "form-control",
+                                                    style: "min-width: 7rem",
+                                                    placeholder: "{mz_placeholder}",
+                                                    value: "{own_mz_range_spec}",
+                                                    oninput: move |evt| {
+                                                        target_mz_range_specs.write().insert(mz_input_accession.clone(), evt.value());
+                                                    },
+                                                }
                                                 button {
                                                     class: "btn btn-primary",
                                                     r#type: "button",
                                                     disabled: charge_spec.trim().is_empty() || already_added,
                                                     onclick: move |_| {
                                                         target_taxonomy_ids.write().insert(accession.clone(), protein_taxonomy_id);
-                                                        targets.push((accession.clone(), charge_spec.trim().to_string()));
+                                                        targets.push((accession.clone(), charge_spec.trim().to_string(), mz_range_spec.clone()));
                                                     },
                                                     "Add target"
                                                 }
@@ -1085,7 +1142,11 @@ pub fn TargetFinder() -> Element {
             }
             for (idx , target) in targets.iter().enumerate() {
                 div { class: "list-group-item d-flex justify-content-between align-items-center",
-                    "{target.0}, charge {target.1}"
+                    if target.2.is_empty() {
+                        "{target.0}, charge {target.1}"
+                    } else {
+                        "{target.0}, charge {target.1}, m/z {target.2}"
+                    }
                     button {
                         class: "btn btn-danger",
                         r#type: "button",

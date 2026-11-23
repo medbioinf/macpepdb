@@ -31,6 +31,11 @@ impl ReviewStatus {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TargetRequest {
     pub targets: Vec<(String, String)>,
+    /// Optional m/z range (`"400-1200"`, inclusive) per target, index-aligned with `targets`.
+    /// Only peptides whose m/z lies within the range are returned. A missing or empty entry
+    /// means no restriction (default: no restrictions).
+    #[serde(default)]
+    pub mz_ranges: Vec<String>,
     pub max_variable_modifications: usize,
     pub ptms: Vec<PostTranslationalModificationRequest>,
     pub taxonomies: Vec<i32>,
@@ -56,6 +61,7 @@ mod tests {
                 ("P12345".to_string(), "2".to_string()),
                 ("Q9WTP6".to_string(), "2-4".to_string()),
             ],
+            mz_ranges: vec!["400-1200".to_string(), String::new()],
             max_variable_modifications: 2,
             ptms: vec![PostTranslationalModificationRequest {
                 name: "Oxidation".to_string(),
