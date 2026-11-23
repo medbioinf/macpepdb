@@ -43,15 +43,20 @@ pub fn ProteinSearch() -> Element {
             None => return Err(GeneralError::ConfigurationNotLoaded),
         };
 
-        let min_length = if *exact_search.read() { 1 } else { MIN_SEARCH_TERM_LENGTH };
+        let min_length = if *exact_search.read() {
+            1
+        } else {
+            MIN_SEARCH_TERM_LENGTH
+        };
         if protein_id.read().len() < min_length {
             return Err(ProteinSearchPageError::SearchTermTooShort(min_length).into());
         }
 
         let client = Client::new(macpepdb_base_url)?;
 
-        let fetched_proteins: Result<Vec<ProteinResponse<String>>, ApiClientError> =
-            client.search_protein(&protein_id.read(), *exact_search.read()).await;
+        let fetched_proteins: Result<Vec<ProteinResponse<String>>, ApiClientError> = client
+            .search_protein(&protein_id.read(), *exact_search.read())
+            .await;
 
         match fetched_proteins {
             Ok(fetched_proteins) => {

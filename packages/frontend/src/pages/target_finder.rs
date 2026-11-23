@@ -37,7 +37,11 @@ const MIN_PROTEIN_SEARCH_TERM_LENGTH: usize = 3;
 
 /// Minimum protein search term length; exact searches may use short terms (e.g. gene `F2`).
 fn min_protein_search_term_length(exact: bool) -> usize {
-    if exact { 1 } else { MIN_PROTEIN_SEARCH_TERM_LENGTH }
+    if exact {
+        1
+    } else {
+        MIN_PROTEIN_SEARCH_TERM_LENGTH
+    }
 }
 
 /// Rows per page by default in the protein/taxonomy selection tables.
@@ -507,30 +511,38 @@ pub fn TargetFinder() -> Element {
             Ok(Some(found))
         });
 
+    // set synchronously on submit: `Resource::pending` only turns true after the resource restarts
+    // (next effect run), so the spinner would be skipped for a render on the first search
+    let mut protein_search_loading = use_signal(|| false);
     let protein_suggestions: Resource<Result<Option<Vec<ProteinResponse<String>>>, GeneralError>> =
         use_resource(move || async move {
-            let term = protein_search_submitted.read_unchecked().1.clone();
-            let exact = *protein_search_exact.read_unchecked();
-            if term.len() < min_protein_search_term_length(exact) {
-                return Ok(None);
+            let result = async move {
+                let term = protein_search_submitted.read_unchecked().1.clone();
+                let exact = *protein_search_exact.read_unchecked();
+                if term.len() < min_protein_search_term_length(exact) {
+                    return Ok(None);
+                }
+
+                let app_config = app_config.read_unchecked();
+                let macpepdb_base_url = match app_config.as_ref() {
+                    Some(config) => config.get_macpepdb_base_url(),
+                    None => Err(GeneralError::ConfigurationNotLoaded)?,
+                };
+
+                let client = Client::new(macpepdb_base_url)?;
+
+                let mut proteins = client.search_protein(&term, exact).await?;
+
+                proteins.sort_unstable_by_key(|prot| !prot.is_reviewed);
+
+                protein_page.set(0);
+                protein_sort.set(None);
+
+                Ok(Some(proteins))
             }
-
-            let app_config = app_config.read_unchecked();
-            let macpepdb_base_url = match app_config.as_ref() {
-                Some(config) => config.get_macpepdb_base_url(),
-                None => Err(GeneralError::ConfigurationNotLoaded)?,
-            };
-
-            let client = Client::new(macpepdb_base_url)?;
-
-            let mut proteins = client.search_protein(&term, exact).await?;
-
-            proteins.sort_unstable_by_key(|prot| !prot.is_reviewed);
-
-            protein_page.set(0);
-            protein_sort.set(None);
-
-            Ok(Some(proteins))
+            .await;
+            protein_search_loading.set(false);
+            result
         });
 
     // proteins are only offered for the selected taxonomies
@@ -545,6 +557,7 @@ pub fn TargetFinder() -> Element {
         let term = protein_search_term.read().trim().to_string();
         if term.len() >= min_protein_search_term_length(*protein_search_exact.read()) {
             let counter = protein_search_submitted.read().0.wrapping_add(1);
+            protein_search_loading.set(true);
             protein_search_submitted.set((counter, term));
         }
     };
@@ -1002,7 +1015,7 @@ pub fn TargetFinder() -> Element {
                 disabled: selected_taxonomies.is_empty()
                     || protein_search_term.read().trim().len()
                         < min_protein_search_term_length(protein_search_exact())
-                    || protein_suggestions.pending(),
+                    || protein_search_loading(),
                 onclick: move |_| submit_protein_search(),
                 i { class: "fa-solid fa-search me-2" }
                 "Search"
@@ -1021,7 +1034,7 @@ pub fn TargetFinder() -> Element {
                 "Exact match (case-sensitive accession or gene name)"
             }
         }
-        if protein_suggestions.pending()
+        if protein_search_loading()
             && protein_search_submitted.read().1.len()
                 >= min_protein_search_term_length(protein_search_exact())
         {
