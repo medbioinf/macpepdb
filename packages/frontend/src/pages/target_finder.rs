@@ -441,6 +441,8 @@ pub fn TargetFinder() -> Element {
     let mut protein_search_submitted = use_signal(|| (0u32, String::new()));
     // charge spec typed into the suggestion row, keyed by accession
     let mut target_charge_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
+    // global charge spec, used for every protein without its own charge spec
+    let mut global_charge_spec = use_signal(String::new);
     let mut targets: Signal<Vec<(String, String)>> = use_signal(Vec::new);
     // species contained in each selected taxonomy (selected taxonomy ID -> species IDs); proteins are
     // matched by their species taxonomy
@@ -906,6 +908,19 @@ pub fn TargetFinder() -> Element {
             div { class: "alert alert-warning", "Select at least one taxonomy first." }
         }
         div { class: "input-group mb-3",
+            span { class: "input-group-text", "Charge state(s) *" }
+            input {
+                r#type: "text",
+                class: "form-control",
+                placeholder: "Global charge, e.g. 2 or 2,3 or 2-4",
+                value: "{global_charge_spec}",
+                oninput: move |evt| global_charge_spec.set(evt.value()),
+            }
+        }
+        small { class: "text-muted px-2 mb-3 d-block",
+            "Charge state(s) used for the peptides of every added protein. To use different charge state(s) for a specific protein, type them into that protein's charge input below."
+        }
+        div { class: "input-group mb-3",
             span { class: "input-group-text", "Protein search *" }
             input {
                 r#type: "text",
@@ -1001,11 +1016,22 @@ pub fn TargetFinder() -> Element {
                                     {
                                         let accession = protein.accession.clone();
                                         let protein_taxonomy_id = protein.taxonomy_id;
-                                        let charge_spec = target_charge_specs
+                                        let own_charge_spec = target_charge_specs
                                             .read()
                                             .get(&accession)
                                             .cloned()
                                             .unwrap_or_default();
+                                        let global_spec = global_charge_spec.read().trim().to_string();
+                                        let charge_spec = if own_charge_spec.trim().is_empty() {
+                                            global_spec.clone()
+                                        } else {
+                                            own_charge_spec.trim().to_string()
+                                        };
+                                        let input_placeholder = if global_spec.is_empty() {
+                                            "Charge, e.g. 2 or 2,3 or 2-4".to_string()
+                                        } else {
+                                            format!("Global: {global_spec} (type to override)")
+                                        };
                                         let already_added = targets.read().iter().any(|(a, c)| a == &accession && c == charge_spec.trim());
                                         let input_accession = accession.clone();
                                         rsx! {
@@ -1014,8 +1040,8 @@ pub fn TargetFinder() -> Element {
                                                     r#type: "text",
                                                     class: "form-control",
                                                     style: "min-width: 7rem",
-                                                    placeholder: "Charge, e.g. 2 or 2,3 or 2-4",
-                                                    value: "{charge_spec}",
+                                                    placeholder: "{input_placeholder}",
+                                                    value: "{own_charge_spec}",
                                                     oninput: move |evt| {
                                                         target_charge_specs.write().insert(input_accession.clone(), evt.value());
                                                     },
