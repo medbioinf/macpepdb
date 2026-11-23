@@ -341,7 +341,8 @@ impl ToolsController {
     ///     "max_variable_modifications": 2,
     ///     "ptms": [],
     ///     "taxonomies": [10090, 9606],
-    ///     "max_missed_cleavages": 0
+    ///     "max_missed_cleavages": 0,
+    ///     "excluded_amino_acids": "CM"
     /// }
     /// ```
     /// See [TargetRequest] for details.
@@ -382,6 +383,25 @@ impl ToolsController {
                 return Err(Error::TaxonomyNotFound(taxonomy_id));
             }
             selected_species_ids.extend(matching_taxonomy_ids);
+        }
+
+        // Amino acid blacklist: one-letter codes, case-insensitive, whitespace/commas ignored.
+        let mut excluded_amino_acids: HashSet<char> = HashSet::new();
+        for c in payload.excluded_amino_acids.chars() {
+            if c.is_whitespace() || c == ',' {
+                continue;
+            }
+            if !c.is_ascii_alphabetic() {
+                return Ok((
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                    Body::from(format!(
+                        "Error while parsing excluded amino acids: invalid character `{c}`"
+                    )),
+                )
+                    .into_response());
+            }
+            excluded_amino_acids.insert(c.to_ascii_uppercase());
         }
 
         // Build the PTM collection once, reused across every target.
@@ -486,6 +506,14 @@ impl ToolsController {
             let mut classified: Vec<(Peptide, Option<i32>)> = Vec::new();
             let mut pending_protein_ids: HashSet<i32> = HashSet::new();
             for peptide in peptides {
+                if !excluded_amino_acids.is_empty()
+                    && peptide
+                        .sequence()
+                        .amino_acids()
+                        .any(|aa| excluded_amino_acids.contains(&aa.code()))
+                {
+                    continue;
+                }
                 // Missed cleavages are calculated on the fly via the protease
                 if server_state
                     .configuration()

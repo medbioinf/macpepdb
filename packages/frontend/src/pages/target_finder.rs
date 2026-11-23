@@ -546,6 +546,8 @@ pub fn TargetFinder() -> Element {
     // post translational modifications
     let mut max_var_modifications = use_signal(|| DEFAULT_MAX_VAR_MODIFICATIONS);
     let mut max_missed_cleavages = use_signal(|| DEFAULT_MAX_MISSED_CLEAVAGES);
+    // one-letter codes of amino acids; peptides containing any of them are excluded
+    let mut excluded_amino_acids: Signal<Vec<char>> = use_signal(Vec::new);
     let mut new_ptm_amino_acid = use_signal(|| ' ');
     let mut new_ptm_mass = use_signal(|| 0.0);
     let mut new_ptm_type = use_signal(|| PtmType::Static);
@@ -607,6 +609,7 @@ pub fn TargetFinder() -> Element {
                 .map(|taxonomy| taxonomy.id)
                 .collect(),
             max_missed_cleavages: max_missed_cleavages.read_unchecked().max(0) as usize,
+            excluded_amino_acids: excluded_amino_acids.read_unchecked().iter().collect(),
             review_status: review_filter.read_unchecked().status(),
         };
 
@@ -1173,6 +1176,54 @@ pub fn TargetFinder() -> Element {
                         max_missed_cleavages
                             .set(evt.value().parse().unwrap_or(DEFAULT_MAX_MISSED_CLEAVAGES))
                     },
+                }
+            }
+
+            div { class: "input-group mb-1",
+                span { class: "input-group-text", "Excluded amino acids" }
+                select {
+                    class: "form-control",
+                    // always reset to the placeholder: selecting an amino acid adds it below
+                    value: " ",
+                    oninput: move |evt| {
+                        if let Ok(code) = evt.value().parse::<char>() {
+                            if code != ' ' && !excluded_amino_acids.read().contains(&code) {
+                                let mut excluded = excluded_amino_acids.write();
+                                excluded.push(code);
+                                excluded.sort_unstable();
+                            }
+                        }
+                    },
+                    option { value: " ", "Select amino acid to exclude" }
+                    match &*amino_acids.read_unchecked() {
+                        Some(Ok(Some(amino_acids))) => rsx! {
+                            for aa in amino_acids.iter().filter(|aa| !excluded_amino_acids.read().contains(&aa.code)) {
+                                option { value: "{aa.code}", "{aa.code} - {aa.name}" }
+                            }
+                        },
+                        Some(Err(e)) => rsx! {
+                            option { "Error loading amino acids: {e}" }
+                        },
+                        None | Some(Ok(None)) => rsx! {
+                            option { "Loading ..." }
+                        },
+                    }
+                }
+            }
+            small { class: "text-muted px-2 mb-2 d-block",
+                "Peptides containing any of the selected amino acids are excluded, e.g. C and M remove all peptides with cysteine or methionine."
+            }
+            div { class: "mb-3",
+                for code in excluded_amino_acids.read().clone() {
+                    span { class: "badge text-bg-secondary me-1 mb-1",
+                        "{code}"
+                        button {
+                            class: "btn-close btn-close-white ms-2",
+                            r#type: "button",
+                            style: "font-size: 0.6rem",
+                            onclick: move |_| excluded_amino_acids.write().retain(|c| *c != code),
+                        }
+                    }
                 }
             }
 

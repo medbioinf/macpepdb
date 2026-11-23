@@ -47,6 +47,10 @@ pub struct TargetRequest {
     /// peptides only have to be unique among proteins matching it (default: both).
     #[serde(default)]
     pub review_status: ReviewStatus,
+    /// One-letter codes of amino acids (e.g. `"CM"`); peptides containing any of them are
+    /// excluded (default: none).
+    #[serde(default)]
+    pub excluded_amino_acids: String,
 }
 
 #[cfg(test)]
@@ -73,6 +77,7 @@ mod tests {
             taxonomies: vec![10090, 9606],
             max_missed_cleavages: 1,
             review_status: ReviewStatus::SwissProt,
+            excluded_amino_acids: "CM".to_string(),
         };
 
         let json = serde_json::to_string(&request).unwrap();
