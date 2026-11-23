@@ -447,8 +447,13 @@ pub fn TargetFinder() -> Element {
     let mut target_mz_range_specs: Signal<HashMap<String, String>> = use_signal(HashMap::new);
     // global m/z range spec, used for every protein without its own m/z range
     let mut global_mz_range_spec = use_signal(String::new);
-    // added targets: (accession, charge spec, m/z range spec; empty = no restriction)
-    let mut targets: Signal<Vec<(String, String, String)>> = use_signal(Vec::new);
+    // hydrophobicity range spec typed into the suggestion row, keyed by accession
+    let mut target_hydrophobicity_range_specs: Signal<HashMap<String, String>> =
+        use_signal(HashMap::new);
+    // global hydrophobicity range spec, used for every protein without its own range
+    let mut global_hydrophobicity_range_spec = use_signal(String::new);
+    // added targets: (accession, charge spec, m/z range spec, hydrophobicity range spec; empty = no restriction)
+    let mut targets: Signal<Vec<(String, String, String, String)>> = use_signal(Vec::new);
     // species contained in each selected taxonomy (selected taxonomy ID -> species IDs); proteins are
     // matched by their species taxonomy
     let mut selected_species_ids: Signal<HashMap<i32, HashSet<i32>>> = use_signal(HashMap::new);
@@ -594,12 +599,17 @@ pub fn TargetFinder() -> Element {
             targets: targets
                 .read_unchecked()
                 .iter()
-                .map(|(accession, charge, _)| (accession.clone(), charge.clone()))
+                .map(|(accession, charge, _, _)| (accession.clone(), charge.clone()))
                 .collect(),
             mz_ranges: targets
                 .read_unchecked()
                 .iter()
-                .map(|(_, _, mz_range)| mz_range.clone())
+                .map(|(_, _, mz_range, _)| mz_range.clone())
+                .collect(),
+            hydrophobicity_ranges: targets
+                .read_unchecked()
+                .iter()
+                .map(|(_, _, _, hydrophobicity_range)| hydrophobicity_range.clone())
                 .collect(),
             max_variable_modifications: max_var_modifications.read_unchecked().max(0) as usize,
             ptms: ptms.read_unchecked().clone(),
@@ -888,7 +898,7 @@ pub fn TargetFinder() -> Element {
                             // drop targets which are not covered by any remaining taxonomy
                             let selected_species_ids = selected_species_ids.read();
                             let target_taxonomy_ids = target_taxonomy_ids.read();
-                            targets.write().retain(|(accession, _, _)| {
+                            targets.write().retain(|(accession, _, _, _)| {
                                 target_taxonomy_ids.get(accession).is_some_and(|species_id| {
                                     selected_species_ids.values().any(|ids| ids.contains(species_id))
                                 })
@@ -949,6 +959,19 @@ pub fn TargetFinder() -> Element {
         }
         small { class: "text-muted px-2 mb-3 d-block",
             "Optional: only peptides with an m/z within this range are returned. To use a different range for a specific protein, type it into that protein's m/z range input below."
+        }
+        div { class: "input-group mb-3",
+            span { class: "input-group-text", "Hydrophobicity range" }
+            input {
+                r#type: "text",
+                class: "form-control",
+                placeholder: "Optional global hydrophobicity range, e.g. 10-40",
+                value: "{global_hydrophobicity_range_spec}",
+                oninput: move |evt| global_hydrophobicity_range_spec.set(evt.value()),
+            }
+        }
+        small { class: "text-muted px-2 mb-3 d-block",
+            "Optional: only peptides with a hydrophobicity within this range are returned. To use a different range for a specific protein, type it into that protein's hydrophobicity range input below."
         }
         div { class: "input-group mb-3",
             span { class: "input-group-text", "Protein search *" }
@@ -1078,10 +1101,35 @@ pub fn TargetFinder() -> Element {
                                         } else {
                                             format!("Global: {global_mz_spec} (type to override)")
                                         };
+                                        let own_hydrophobicity_spec = target_hydrophobicity_range_specs
+                                            .read()
+                                            .get(&accession)
+                                            .cloned()
+                                            .unwrap_or_default();
+                                        let global_hydrophobicity_spec = global_hydrophobicity_range_spec
+                                            .read()
+                                            .trim()
+                                            .to_string();
+                                        let hydrophobicity_range_spec = if own_hydrophobicity_spec.trim().is_empty() {
+                                            global_hydrophobicity_spec.clone()
+                                        } else {
+                                            own_hydrophobicity_spec.trim().to_string()
+                                        };
+                                        let hydrophobicity_placeholder = if global_hydrophobicity_spec.is_empty() {
+                                            "Hydrophobicity range, e.g. 10-40".to_string()
+                                        } else {
+                                            format!("Global: {global_hydrophobicity_spec} (type to override)")
+                                        };
                                         let already_added = targets
                                             .read()
                                             .iter()
-                                            .any(|(a, c, m)| a == &accession && c == charge_spec.trim() && m == &mz_range_spec);
+                                            .any(|(a, c, m, h)| {
+                                                a == &accession
+                                                    && c == charge_spec.trim()
+                                                    && m == &mz_range_spec
+                                                    && h == &hydrophobicity_range_spec
+                                            });
+                                        let hydrophobicity_input_accession = accession.clone();
                                         let input_accession = accession.clone();
                                         let mz_input_accession = accession.clone();
                                         rsx! {
@@ -1106,13 +1154,25 @@ pub fn TargetFinder() -> Element {
                                                         target_mz_range_specs.write().insert(mz_input_accession.clone(), evt.value());
                                                     },
                                                 }
+                                                input {
+                                                    r#type: "text",
+                                                    class: "form-control",
+                                                    style: "min-width: 7rem",
+                                                    placeholder: "{hydrophobicity_placeholder}",
+                                                    value: "{own_hydrophobicity_spec}",
+                                                    oninput: move |evt| {
+                                                        target_hydrophobicity_range_specs
+                                                            .write()
+                                                            .insert(hydrophobicity_input_accession.clone(), evt.value());
+                                                    },
+                                                }
                                                 button {
                                                     class: "btn btn-primary",
                                                     r#type: "button",
                                                     disabled: charge_spec.trim().is_empty() || already_added,
                                                     onclick: move |_| {
                                                         target_taxonomy_ids.write().insert(accession.clone(), protein_taxonomy_id);
-                                                        targets.push((accession.clone(), charge_spec.trim().to_string(), mz_range_spec.clone()));
+                                                        targets.push((accession.clone(), charge_spec.trim().to_string(), mz_range_spec.clone(), hydrophobicity_range_spec.clone()));
                                                     },
                                                     "Add target"
                                                 }
@@ -1145,10 +1205,15 @@ pub fn TargetFinder() -> Element {
             }
             for (idx , target) in targets.iter().enumerate() {
                 div { class: "list-group-item d-flex justify-content-between align-items-center",
-                    if target.2.is_empty() {
-                        "{target.0}, charge {target.1}"
-                    } else {
-                        "{target.0}, charge {target.1}, m/z {target.2}"
+                    {
+                        let mut label = format!("{}, charge {}", target.0, target.1);
+                        if !target.2.is_empty() {
+                            label.push_str(&format!(", m/z {}", target.2));
+                        }
+                        if !target.3.is_empty() {
+                            label.push_str(&format!(", hydrophobicity {}", target.3));
+                        }
+                        label
                     }
                     button {
                         class: "btn btn-danger",

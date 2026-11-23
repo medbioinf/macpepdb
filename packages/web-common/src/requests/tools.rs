@@ -36,6 +36,11 @@ pub struct TargetRequest {
     /// means no restriction (default: no restrictions).
     #[serde(default)]
     pub mz_ranges: Vec<String>,
+    /// Optional hydrophobicity range (`"10-40"`, inclusive, negative bounds allowed e.g.
+    /// `"-5-20"`) per target, index-aligned with `targets`. Only peptides whose hydrophobicity
+    /// lies within the range are returned. A missing or empty entry means no restriction.
+    #[serde(default)]
+    pub hydrophobicity_ranges: Vec<String>,
     pub max_variable_modifications: usize,
     pub ptms: Vec<PostTranslationalModificationRequest>,
     pub taxonomies: Vec<i32>,
@@ -66,6 +71,7 @@ mod tests {
                 ("Q9WTP6".to_string(), "2-4".to_string()),
             ],
             mz_ranges: vec!["400-1200".to_string(), String::new()],
+            hydrophobicity_ranges: vec!["-5-20".to_string(), String::new()],
             max_variable_modifications: 2,
             ptms: vec![PostTranslationalModificationRequest {
                 name: "Oxidation".to_string(),

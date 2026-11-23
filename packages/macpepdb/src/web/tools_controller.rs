@@ -133,23 +133,41 @@ fn parse_charge_spec(spec: &str) -> Result<Vec<u8>, String> {
 /// * `spec` - m/z range as `"lower-upper"`
 ///
 fn parse_mz_range(spec: &str) -> Result<Option<(f64, f64)>, String> {
+    parse_float_range(spec, "m/z")
+}
+
+/// Parses an inclusive hydrophobicity range (`"10-40"`, decimals and negative bounds like
+/// `"-5-20"` allowed). An empty spec means no restriction and returns `None`.
+///
+/// # Arguments
+/// * `spec` - hydrophobicity range as `"lower-upper"`
+///
+fn parse_hydrophobicity_range(spec: &str) -> Result<Option<(f64, f64)>, String> {
+    parse_float_range(spec, "hydrophobicity")
+}
+
+/// Parses an inclusive float range `"lower-upper"`. The separator is the first `-` that is
+/// neither the leading sign nor part of an exponent, so negative bounds work.
+fn parse_float_range(spec: &str, label: &str) -> Result<Option<(f64, f64)>, String> {
     let spec = spec.trim();
     if spec.is_empty() {
         return Ok(None);
     }
-    let (lower, upper) = spec
-        .split_once('-')
-        .ok_or_else(|| "m/z range must look like `400-1200`".to_string())?;
+    let bytes = spec.as_bytes();
+    let separator = (1..bytes.len())
+        .find(|&i| bytes[i] == b'-' && !matches!(bytes[i - 1], b'e' | b'E' | b'-' | b'+'));
+    let separator = separator.ok_or_else(|| format!("{label} range must look like `400-1200`"))?;
+    let (lower, upper) = (&spec[..separator], &spec[separator + 1..]);
     let (lower_trimmed, upper_trimmed) = (lower.trim(), upper.trim());
     let lower: f64 = lower_trimmed
         .parse()
-        .map_err(|_| format!("invalid m/z lower bound `{lower_trimmed}`"))?;
+        .map_err(|_| format!("invalid {label} lower bound `{lower_trimmed}`"))?;
     let upper: f64 = upper_trimmed
         .parse()
-        .map_err(|_| format!("invalid m/z upper bound `{upper_trimmed}`"))?;
+        .map_err(|_| format!("invalid {label} upper bound `{upper_trimmed}`"))?;
     if !lower.is_finite() || !upper.is_finite() || lower > upper {
         return Err(format!(
-            "m/z range lower bound `{lower_trimmed}` must be finite and not greater than upper bound `{upper_trimmed}`"
+            "{label} range lower bound `{lower_trimmed}` must be finite and not greater than upper bound `{upper_trimmed}`"
         ));
     }
     Ok(Some((lower, upper)))
@@ -338,6 +356,7 @@ impl ToolsController {
     ///         ["Q9WTP6", "2-4"]
     ///     ],
     ///     "mz_ranges": ["400-1200", ""],
+    ///     "hydrophobicity_ranges": ["10-40", ""],
     ///     "max_variable_modifications": 2,
     ///     "ptms": [],
     ///     "taxonomies": [10090, 9606],
@@ -453,6 +472,22 @@ impl ToolsController {
                         StatusCode::UNPROCESSABLE_ENTITY,
                         DEFAULT_ERROR_HEADER_MAP.deref().clone(),
                         Body::from(format!("Error while parsing m/z range: {err}")),
+                    )
+                        .into_response());
+                }
+            };
+            let hydrophobicity_range = match parse_hydrophobicity_range(
+                payload
+                    .hydrophobicity_ranges
+                    .get(target_idx)
+                    .map_or("", String::as_str),
+            ) {
+                Ok(range) => range,
+                Err(err) => {
+                    return Ok((
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        DEFAULT_ERROR_HEADER_MAP.deref().clone(),
+                        Body::from(format!("Error while parsing hydrophobicity range: {err}")),
                     )
                         .into_response());
                 }
@@ -641,6 +676,11 @@ impl ToolsController {
                         .collect();
                     let hydrophobicity =
                         macpepdb_peptide_hydrophobicity::krokhin::score_sequence(&plain_sequence);
+                    if let Some((lower, upper)) = hydrophobicity_range
+                        && !(lower..=upper).contains(&(hydrophobicity as f64))
+                    {
+                        continue;
+                    }
                     for &charge in &charges {
                         let mz = dalton_to_mass_to_charge(mass, charge);
                         if let Some((lower, upper)) = mz_range
@@ -698,10 +738,22 @@ mod tests {
     #[test]
     fn parse_mz_range_specs() {
         assert_eq!(parse_mz_range("").unwrap(), None);
-        assert_eq!(parse_mz_range(" 400 - 1200.5 ").unwrap(), Some((400.0, 1200.5)));
+        assert_eq!(
+            parse_mz_range(" 400 - 1200.5 ").unwrap(),
+            Some((400.0, 1200.5))
+        );
         assert!(parse_mz_range("400").is_err());
         assert!(parse_mz_range("1200-400").is_err());
         assert!(parse_mz_range("a-b").is_err());
+        assert_eq!(
+            parse_hydrophobicity_range("-5.5 - 20").unwrap(),
+            Some((-5.5, 20.0))
+        );
+        assert_eq!(
+            parse_hydrophobicity_range("-20--5").unwrap(),
+            Some((-20.0, -5.0))
+        );
+        assert!(parse_hydrophobicity_range("-5").is_err());
     }
 
     #[test]
