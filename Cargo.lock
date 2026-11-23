@@ -3601,7 +3601,7 @@ dependencies = [
 
 [[package]]
 name = "macpepdb"
-version = "3.1.0"
+version = "3.1.1"
 dependencies = [
  "async-compression",
  "async-stream",
@@ -3731,7 +3731,7 @@ dependencies = [
 
 [[package]]
 name = "macpepdb_web_common"
-version = "2.1.0"
+version = "2.1.1"
 dependencies = [
  "serde",
  "serde_json",

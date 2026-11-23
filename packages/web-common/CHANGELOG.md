@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1](https://github.com/medbioinf/macpepdb/compare/macpepdb_web_common-v2.1.0...macpepdb_web_common-v2.1.1) - 2026-11-23
+
+### Other
+
+- release
+
 ## [2.1.0](https://github.com/medbioinf/macpepdb/compare/macpepdb_web_common-v2.0.0...macpepdb_web_common-v2.1.0) - 2026-11-23
 
 ### Other
