@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.1.0](https://github.com/medbioinf/macpepdb/compare/3.0.0...3.1.0) - 2026-11-23
+
+### Other
+
+- release next minor version
+- implement exact protein search
+- add hydrophobicity filter
+- implement amino acid exclusion filter
+- implement m/z range filter
+
 ## [2.0.1](https://github.com/medbioinf/macpepdb/compare/2.0.0...2.0.1) - 2026-10-26
 
 ### Other
