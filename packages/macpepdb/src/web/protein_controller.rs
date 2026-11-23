@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_stream::stream;
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{DefaultBodyLimit, Json, Path, State};
+use axum::extract::{DefaultBodyLimit, Json, Path, Query, State};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use fallible_iterator::FallibleIterator;
@@ -90,6 +90,14 @@ impl IntoResponse for Error {
 
 /// Controller providing protein lookup, search and ID resolution endpoints under `/api/proteins`.
 pub struct ProteinController;
+
+/// Query parameters of the protein search endpoint.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ProteinSearchParams {
+    /// Match accession/gene exactly (case-sensitive) instead of substring matching.
+    #[serde(default)]
+    pub exact: bool,
+}
 
 impl ProteinController {
     /// Builds the axum router for the protein endpoints, mounted onto the given server state.
@@ -281,11 +289,14 @@ impl ProteinController {
     /// * `db_client` - The database client
     /// * `configuration` - MaCPepDB configuration
     /// * `attribute` - Accession or gene name, will be wrapped in a like-query
+    /// * `params` - Query parameters, see [`ProteinSearchParams`]
     ///
     /// # API
     /// ## Request
-    /// * Path: `/api/proteins/search/{attribute}`
+    /// * Path: `/api/proteins/search/{attribute}?exact=false`
     /// * Method: `GET`
+    /// * `exact` (optional, default `false`): if `true`, the attribute must equal the accession or one of the
+    ///   genes (case-sensitive) instead of being wrapped in a like-query. No minimum length applies.
     ///
     /// ## Response
     /// ```json
@@ -312,12 +323,13 @@ impl ProteinController {
     pub async fn search(
         State(state): State<Arc<ServerState>>,
         Path(attribute): Path<String>,
+        Query(params): Query<ProteinSearchParams>,
     ) -> Result<(StatusCode, HeaderMap, Body), Error> {
-        if attribute.len() < 3 {
+        if attribute.is_empty() || (!params.exact && attribute.len() < 3) {
             return Err(Error::SearchTermTooShort);
         }
         let protein_stream = ProteinTable::new(state.db_client())
-            .search(Some(&attribute), Some(&attribute))
+            .search(Some(&attribute), Some(&attribute), params.exact)
             .await?;
 
         let mut headers = HeaderMap::with_capacity(1);

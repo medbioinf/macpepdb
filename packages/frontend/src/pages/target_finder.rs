@@ -35,6 +35,11 @@ const DEFAULT_MAX_MISSED_CLEAVAGES: i16 = 0;
 /// Minimum length of the accession/gene search term before querying for suggestions.
 const MIN_PROTEIN_SEARCH_TERM_LENGTH: usize = 3;
 
+/// Minimum protein search term length; exact searches may use short terms (e.g. gene `F2`).
+fn min_protein_search_term_length(exact: bool) -> usize {
+    if exact { 1 } else { MIN_PROTEIN_SEARCH_TERM_LENGTH }
+}
+
 /// Rows per page by default in the protein/taxonomy selection tables.
 const DEFAULT_PAGE_SIZE: usize = 10;
 
@@ -437,6 +442,8 @@ pub fn TargetFinder() -> Element {
 
     // targets: protein accession + charge spec (single int, comma list, or "N-M" range)
     let mut protein_search_term = use_signal(String::new);
+    // exact instead of substring match for the protein search
+    let mut protein_search_exact = use_signal(|| false);
     // term submitted by button/enter; the counter makes re-submitting the same term re-run the search
     let mut protein_search_submitted = use_signal(|| (0u32, String::new()));
     // charge spec typed into the suggestion row, keyed by accession
@@ -503,7 +510,8 @@ pub fn TargetFinder() -> Element {
     let protein_suggestions: Resource<Result<Option<Vec<ProteinResponse<String>>>, GeneralError>> =
         use_resource(move || async move {
             let term = protein_search_submitted.read_unchecked().1.clone();
-            if term.len() < MIN_PROTEIN_SEARCH_TERM_LENGTH {
+            let exact = *protein_search_exact.read_unchecked();
+            if term.len() < min_protein_search_term_length(exact) {
                 return Ok(None);
             }
 
@@ -515,7 +523,7 @@ pub fn TargetFinder() -> Element {
 
             let client = Client::new(macpepdb_base_url)?;
 
-            let mut proteins = client.search_protein(&term).await?;
+            let mut proteins = client.search_protein(&term, exact).await?;
 
             proteins.sort_unstable_by_key(|prot| !prot.is_reviewed);
 
@@ -535,7 +543,7 @@ pub fn TargetFinder() -> Element {
 
     let mut submit_protein_search = move || {
         let term = protein_search_term.read().trim().to_string();
-        if term.len() >= MIN_PROTEIN_SEARCH_TERM_LENGTH {
+        if term.len() >= min_protein_search_term_length(*protein_search_exact.read()) {
             let counter = protein_search_submitted.read().0.wrapping_add(1);
             protein_search_submitted.set((counter, term));
         }
@@ -992,15 +1000,30 @@ pub fn TargetFinder() -> Element {
                 class: "btn btn-primary",
                 r#type: "button",
                 disabled: selected_taxonomies.is_empty()
-                    || protein_search_term.read().trim().len() < MIN_PROTEIN_SEARCH_TERM_LENGTH
+                    || protein_search_term.read().trim().len()
+                        < min_protein_search_term_length(protein_search_exact())
                     || protein_suggestions.pending(),
                 onclick: move |_| submit_protein_search(),
                 i { class: "fa-solid fa-search me-2" }
                 "Search"
             }
         }
+        div { class: "form-check form-switch mb-3",
+            input {
+                class: "form-check-input",
+                r#type: "checkbox",
+                role: "switch",
+                id: "target-finder-exact-search",
+                checked: protein_search_exact(),
+                onchange: move |evt| protein_search_exact.set(evt.checked()),
+            }
+            label { class: "form-check-label", r#for: "target-finder-exact-search",
+                "Exact match (case-sensitive accession or gene name)"
+            }
+        }
         if protein_suggestions.pending()
-            && protein_search_submitted.read().1.len() >= MIN_PROTEIN_SEARCH_TERM_LENGTH
+            && protein_search_submitted.read().1.len()
+                >= min_protein_search_term_length(protein_search_exact())
         {
             div { class: "mb-3",
                 Spinner {}

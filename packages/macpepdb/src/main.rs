@@ -200,6 +200,9 @@ enum ProteinCommand {
         accession: Option<String>,
         #[arg(short, long, group = "search_attribute")]
         gene: Option<String>,
+        /// Exact (case-sensitive) match instead of substring match
+        #[arg(short, long)]
+        exact: bool,
     },
 }
 
@@ -949,10 +952,14 @@ async fn main() -> Result<(), Error> {
                     tui.wait().await;
                 }
             }
-            ProteinCommand::Search { accession, gene } => {
+            ProteinCommand::Search {
+                accession,
+                gene,
+                exact,
+            } => {
                 let client = Arc::new(Client::new(&cli.database_url).await.unwrap());
                 let output = ProteinTable::new(client.clone())
-                    .search(accession.as_ref(), gene.as_ref())
+                    .search(accession.as_ref(), gene.as_ref(), exact)
                     .await?
                     .map(|protein_res| {
                         protein_res

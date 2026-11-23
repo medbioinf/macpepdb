@@ -266,12 +266,14 @@ impl<'a> Client<'a> {
     ///
     /// # Arguments
     /// * `search_term` - Protein accession or gene name
+    /// * `exact` - Match accession/gene exactly instead of substring matching
     ///
     pub async fn search_protein(
         &self,
         search_term: &str,
+        exact: bool,
     ) -> Result<Vec<ProteinResponse<String>>, ApiClientError> {
-        let endpoint = format!("/api/proteins/search/{search_term}");
+        let endpoint = format!("/api/proteins/search/{search_term}?exact={exact}");
 
         self.get(&endpoint).await
     }
