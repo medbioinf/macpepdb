@@ -1,9 +1,18 @@
         handle /api/* {
                 reverse_proxy <API_UPSTREAM_SERVERS> {
                         lb_policy least_conn
+                        # Queue instead of failing: if no upstream is available (restart,
+                        # refused connection), keep retrying for up to 120s before giving up.
                         lb_retries 999999
-                        lb_try_duration 10s
-                        lb_try_interval 24h
+                        lb_try_duration 120s
+                        lb_try_interval 250ms
+                        # Active health check on the cheap liveness route. Tolerant settings,
+                        # so a busy (not dead) API is not marked down.
+                        health_uri /api/status
+                        health_interval 5s
+                        health_timeout 10s
+                        health_fails 3
+                        health_passes 1
                         transport http {
                                 max_conns_per_host <MAX_UPSTREAM_CONNECTIONS>
                                 # HTTP/2 when connecting to backends
